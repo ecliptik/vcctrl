@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""vcctrl-cardid -- identify the fitted video card from a doskutsu SDL log.
+
+WHY THIS EXISTS: after a card swap, nothing in the returned artifacts says
+which card produced the numbers. RB.BAT hardcodes `video=S3 ViRGE`, so it will
+keep asserting ViRGE after a Mach64 goes in. And the obvious fix -- ask UniVBE
+-- does not work: UniVBE SHIMS the VBE identity, reporting
+
+    oem_string='Universal VESA VBE 6.70'
+    oem_vendor='SciTech Software, Inc.'
+
+on every card. Asking it what card is fitted returns "SciTech", which is worse
+than a hardcoded string because it looks like a reading.
+
+What DOES discriminate is the shape of what the card can do, which UniVBE
+passes through rather than replaces: the mode list, the framebuffer address,
+the VRAM size, and the engine's own detect probes. This reads those.
+
+An operator declaration (QAVID) says what someone believes is fitted. This
+says what the hardware behaved like. Both are worth having; they answer
+different questions, and the interesting case is when they disagree.
+
+Usage:
+  vcctrl-cardid <sweep>SDL.LOG ...
+"""
+
+import re
+import sys
+
+# Signatures. Each entry: (label, list of (field, expected, weight)).
+# Deliberately NOT a single discriminator -- one probe failing on a card that
+# is otherwise clearly itself should lower confidence, not flip the verdict.
+KNOWN = {
+    "S3 ViRGE/DX": [
+        ("s3_detect", True, 3),
+        ("mode_320x240", True, 2),
+        ("vram_kb", 4096, 1),
+        ("lfb", 0x78000000, 1),
+        ("cirrus_bug", False, 1),
+    ],
+    "ATI Mach64": [
+        ("s3_detect", False, 2),
+        ("mode_320x240", False, 3),
+        ("cirrus_bug", False, 1),
+    ],
+    "Cirrus (onboard)": [
+        ("cirrus_bug", True, 4),
+        ("s3_detect", False, 1),
+    ],
+}
+
+
+def probe(text):
+    f = {}
+    m = re.search(r"total_vram=(\d+)_KB", text)
+    f["vram_kb"] = int(m.group(1)) if m else None
+    m = re.search(r"lfb_addr=0x([0-9A-Fa-f]+)", text)
+    f["lfb"] = int(m.group(1), 16) if m else None
+    f["mode_320x240"] = bool(re.search(r"mode 0x01F8:\s+320x240", text))
+    # None, not False, when the probe did not run. Absence of a log line is
+    # absence of evidence -- it is NOT a negative result, and scoring it as one
+    # made a ViRGE look 3/6 like a Mach64 purely because a shorter cell log
+    # omitted the probe. Same card, same run, different verdict.
+    f["s3_detect"] = True if "s3-vga-detect:" in text else None
+    # "NOT detected" is the negative; a bare mention is the positive.
+    m = re.search(r"cirrus-lfb-aperture-bug:\s*(\S+)", text)
+    f["cirrus_bug"] = (m.group(1).upper() != "NOT") if m else None
+    m = re.search(r"oem_string='([^']*)'", text)
+    f["oem_string"] = m.group(1) if m else None
+    m = re.search(r"oem_vendor='([^']*)'", text)
+    f["oem_vendor"] = m.group(1) if m else None
+    return f
+
+
+def score(f):
+    """Score each card, counting only fields this log actually reports.
+
+    Unknown fields are dropped from BOTH numerator and denominator rather than
+    counted as mismatches, so a log that says less produces a lower-confidence
+    verdict instead of a different one.
+    """
+    out = []
+    for card, sig in KNOWN.items():
+        known = [(k, want, w) for k, want, w in sig if f.get(k) is not None]
+        got = sum(w for k, want, w in known if f[k] == want)
+        total = sum(w for _, _, w in known)
+        out.append((got / total if total else 0.0, got, total, card))
+    out.sort(reverse=True)
+    return out
+
+
+def main(argv):
+    if not argv:
+        print(__doc__)
+        return 2
+    for path in argv:
+        try:
+            text = open(path, errors="replace").read()
+        except OSError as exc:
+            print("%s: %s" % (path, exc))
+            continue
+        f = probe(text)
+        print("== %s ==" % path)
+        if f["oem_vendor"] and "SciTech" in f["oem_vendor"]:
+            print("  VBE identity is UniVBE's, not the card's -- ignoring it,")
+            print("  and reading the capability shape instead.")
+        def show(v):
+            return "not-probed" if v is None else str(v)
+        print("  vram=%s KB  lfb=%s  320x240=%s  s3_probe=%s  cirrus_bug=%s" % (
+            f["vram_kb"],
+            hex(f["lfb"]) if f["lfb"] else None,
+            f["mode_320x240"], show(f["s3_detect"]), show(f["cirrus_bug"])))
+        missing = [k for k in ("s3_detect", "cirrus_bug") if f.get(k) is None]
+        if missing:
+            print("  NOTE: %s absent from this log -- scored as unknown, not as"
+                  % ", ".join(missing))
+            print("  negative. Not every cell emits every probe; prefer the first")
+            print("  cell's log, which carries the fullest startup dump.")
+        ranked = score(f)
+        best, got, total, card = ranked[0]
+        runner = ranked[1][0] if len(ranked) > 1 else 0.0
+        print("  -> %s  (%d/%d signature points)" % (card, got, total))
+        for frac, g, t, name in ranked[1:]:
+            print("     %-18s %d/%d" % (name, g, t))
+        # A verdict that barely beats the runner-up is not a verdict.
+        if best < 0.6 or (best - runner) < 0.25:
+            print("  LOW CONFIDENCE -- signatures are close or weak. Treat the")
+            print("  card as UNKNOWN rather than as the top line, and say so")
+            print("  when handing results on.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
