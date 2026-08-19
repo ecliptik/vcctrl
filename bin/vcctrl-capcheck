@@ -20,6 +20,9 @@ can disagree with the verdict:
               unique==1 means a constant, which is what no-lock looks like.
   brightness  of the selected frame, for scale only -- NEVER as the lock test,
               because a dark screen and a flat-black no-lock are both dim.
+              Each mode change is followed by a VER so there is guaranteed
+              content on screen; otherwise this measures the blank framebuffer
+              the mode set just produced.
 
 Doubles as the acceptance gate the web-KVM session asked for: MODE12 / MODE03
 / MODE12 gives lock, unlock, relock in about ten seconds without burning a
@@ -38,7 +41,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from vcctrl_common import vc, at_prompt  # noqa: E402
+from vcctrl_common import vc, wait_for_prompt  # noqa: E402
 
 SHOTS = os.environ.get("VCCTRL_SHOTS", "/tmp/vcctrl-shots")
 HOST = os.environ.get("VCCTRL_HOST", "usb4vc")
@@ -68,6 +71,16 @@ def characterise(mode_cmd, label):
         vc("type", mode_cmd)
         vc("key", "enter")
         time.sleep(3)
+        # Put something on the screen before photographing it. A mode set
+        # CLEARS the framebuffer, so measuring immediately after was measuring
+        # a blank screen this tool had just created itself -- which reported
+        # brightness 0.0 and looked like a capture problem on the first Mach64
+        # profile. The lock verdict was unaffected, because the duplicate-hash
+        # test does not care whether the screen has content, but the brightness
+        # figure was actively misleading and would have been for every card.
+        vc("type", "VER")
+        vc("key", "enter")
+        time.sleep(2)
     fs, hashes = burst("cap")
     if not fs:
         print("  frames=0  -- ffmpeg returned nothing at all.")
@@ -114,9 +127,14 @@ def main(argv):
         label = argv[argv.index("--label") + 1]
 
     print("== capture profile %s==" % (("[%s] " % label) if label else ""))
-    if not at_prompt():
-        print("REFUSED: not at a DOS prompt. This types mode-change commands,")
-        print("  so it needs a shell reading them.")
+    # wait_for_prompt, not at_prompt. at_prompt asks ONCE, and a single
+    # negative is not evidence the machine is unusable -- the keystroke may
+    # simply have buffered behind whatever DOS was finishing. This refused on
+    # its first real run and an immediate retry succeeded. Same distinction as
+    # FINDINGS bug 6, applied in a tool written after that lesson.
+    if wait_for_prompt(45) is None:
+        print("REFUSED: no DOS prompt within 45s. This types mode-change")
+        print("  commands, so it needs a shell reading them.")
         return 2
     print("  at a prompt: ok")
 

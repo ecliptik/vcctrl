@@ -7,11 +7,16 @@ rewrites C:\\UNIVBE\\UNIVBE.DRV and UVCONFIG.DAT in a couple of seconds, and
 returns straight to the prompt. No screens, no keypresses.
 
 The operator's remembered workflow -- "run uvconfig, press space, press space
-again (I think)" -- did not reproduce. The likeliest reading is that those
-prompts appear only when the DETECTED card differs from the stored config,
-which is exactly the case a swap creates and exactly the case a same-card
-rehearsal cannot produce. His "(I think)" was the honest signal that the
-sequence was uncertain, and it turns out to be conditional rather than fixed.
+again (I think)" -- did not reproduce. I first guessed those prompts appear
+only when the DETECTED card differs from the stored config. **That guess was
+then tested and is wrong:** the ViRGE was swapped for a Mach64 and uvconfig
+ran just as silently. So the prompts come from something else entirely -- a
+different UniVBE version, a different entry point (UNICENTR.EXE is also on the
+card), or an invocation with arguments. Unknown, and recorded as unknown.
+
+Which is exactly why this sends no keys. The condition that triggers the
+interactive path has now survived two attempts to characterise it, so any
+fixed key sequence is being written against a screen nobody has seen.
 
 So this tool does NOT send a key sequence. It runs uvconfig, then looks:
 
@@ -75,8 +80,10 @@ def main(argv):
     reboot = "--no-reboot" not in argv
 
     print("== preflight ==")
-    if not at_prompt():
-        print("REFUSED: target is not at a prompt.")
+    # Wait rather than ask once -- a single negative probe usually means the
+    # keystroke buffered, not that the machine is unusable. See FINDINGS bug 6.
+    if wait_for_prompt(45) is None:
+        print("REFUSED: no prompt within 45s.")
         return 2
     print("  at a prompt: ok")
 
@@ -110,7 +117,7 @@ def main(argv):
     print("  frame: %s" % shot)
     if at_prompt():
         print("  back at a DOS prompt -- uvconfig completed without asking")
-        print("  anything. This is the unchanged-card path.")
+        print("  anything.")
     else:
         print("\n  *** UVCONFIG IS SHOWING SOMETHING AND IS WAITING. ***")
         print("  STOPPING here deliberately, without pressing a key.")

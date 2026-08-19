@@ -219,6 +219,51 @@ def put_manifest(incoming, name, src, before, label):
     return False
 
 
+def inspect_logs(incoming, tags):
+    """Read each collected log for evidence the cell actually ran.
+
+    ARRIVAL IS NOT HEALTH. The analysis session hit a run where all four cells
+    died at graphics init and the envelope was still complete -- four logs, a
+    manifest, a sweep-end banner. Every check this collector makes would have
+    passed. A cell that dies still writes a full artifact and names its own
+    cause on a `[critical] fatal:` line, so the log is the witness and its
+    existence is not.
+
+    Same family as the readiness bug: arrival proved the transfer and said
+    nothing about the sender's state; here it proves the file and says nothing
+    about the run.
+    """
+    print("\n== cell health ==")
+    bad = []
+    for tag in tags:
+        crit = []
+        for suffix in (".LOG", "SDL.LOG"):
+            p = os.path.join(incoming, tag + suffix)
+            if not os.path.exists(p):
+                continue
+            try:
+                with open(p, errors="replace") as f:
+                    for line in f:
+                        if "[critical]" in line or "fatal:" in line:
+                            crit.append(line.strip()[:140])
+            except OSError:
+                pass
+        if crit:
+            bad.append(tag)
+            print("  %-6s FAILED -- %d critical line(s)" % (tag, len(crit)))
+            for c in crit[:2]:
+                print("      %s" % c)
+        else:
+            print("  %-6s clean" % tag)
+    if bad:
+        print("\n  %d of %d cells did NOT complete. The files arrived and the"
+              % (len(bad), len(tags)))
+        print("  envelope looks whole -- it is not. Do not bank these numbers,")
+        print("  and do not retry-and-present: a round with a known hole beats")
+        print("  a round with an unknown substitution.")
+    return bad
+
+
 def main(argv):
     # Line-buffer stdout. These are long jobs that are usually run in the
     # background, and Python block-buffers to a pipe -- which meant a 23-minute
@@ -350,8 +395,14 @@ def main(argv):
         else:
             print("  WARNING: could not arm LEDs; skipped the return reboot.")
 
+    unhealthy = inspect_logs(incoming, ok) if ok else []
+
     print("\n== result ==")
     print("  collected: %s" % (" ".join(ok) if ok else "(none)"))
+    if unhealthy:
+        print("  DID NOT COMPLETE: %s" % " ".join(unhealthy))
+    if unhealthy and not failed:
+        return 1
     if failed:
         print("  MISSING:   %s" % " ".join(failed))
         print("""
