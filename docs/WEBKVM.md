@@ -366,18 +366,45 @@ DOS text mode 03h (720x400 @70) never locks; the game's 320x240 and mode 12h
 frames during normal operation -- at every reboot, at the boot menu, and
 between cells on a payload without the `MODE12` line.
 
-`vcctrld` must therefore treat "no frames" as an expected state, not a fault:
+The `vcctrl` session mapped where a persistent open gets stressed hardest, and
+it is worse than "the occasional reboot":
 
-- No frame for **2 s** -> publish `{"state":"nosignal"}` to browsers, which
-  show a "no signal / not locked" panel rather than a frozen last frame. A
-  frozen last frame is exactly the failure mode that makes a KVM lie.
-- No frame for **10 s** -> kill and respawn ffmpeg, reopening the device. Cheap
-  and it recovers the case where the stick wedges after a mode change.
-- Log every transition with a timestamp. When a sweep is being watched, "the
-  picture went away at 19:22:04" is diagnostic data.
+- **Every cell boundary in a `DKTCAP` sweep.** The BAT flips back to mode 12h
+  after each cell, so a four-cell sweep is **eight mode transitions in about
+  twelve minutes.** That is a soak test that arrives free with any real run.
+- **A genuine unlockable state, not merely a transition** -- anything running
+  `VGACAP\MODE03`, or a profile booting without the mode-12h line. This can
+  persist indefinitely and is *correct*.
+- **POST**, where the signal disappears and comes back with different timing.
+
+So "no frames" must be treated as **possibly correct and indefinite**:
+
+- No frame for **2 s** -> publish `{"state":"nosignal"}`. Browsers show a "no
+  signal / not locked" panel rather than a frozen last frame. A frozen last
+  frame is exactly the failure mode that makes a KVM lie.
+- No frame for **10 s** -> respawn ffmpeg once, **then back off**: 10 s, 30 s,
+  60 s, capped. The peer session's correction, and it is a real one -- a flat
+  10 s retry sitting against text mode 03h would churn the device forever
+  against a state that is not a fault. The respawn exists for a wedged stick,
+  and a wedged stick is rare; unlocked is routine.
+- Never escalate a no-lock into an error state or a notification. It is a
+  reading, not a failure.
+- Log every transition with a timestamp. "The picture went away at 19:22:04" is
+  diagnostic data when a sweep is being watched.
+
+There is a cheap improvement available once the daemon is merged (sec. 2): the
+input capability knows when a keystroke that changes video mode was injected,
+so it can hint the video capability that a transition is expected. Worth doing,
+but **the watchdog must be correct without the hint** -- the operator can change
+mode at the physical keyboard, and a sweep changes it without anyone typing.
 
 **Do not report "nosignal" as "the machine is off".** That inference is exactly
 the mistake PLAN sec. 4.1 records, one level up.
+
+**Acceptance test, offered by the peer session:** `MODE12` / `MODE03` / `MODE12`
+at a DOS prompt gives lock, unlock, relock in about ten seconds, without
+burning a sweep. That is the gate for step 2 -- run it against a build before
+trusting the streamer across a real run.
 
 ### 4.6 What automation calls instead
 
@@ -647,7 +674,9 @@ detects the prompt (`at_prompt`, commit 340b16d) and the boot profile is
 readable via `SET`.
 
 Throughput measured by the peer session: ~880 KB/s, 10/10 byte-identical over
-nine files. The CF reader on the Pi stays as the recovery path (PLAN sec. 5.6)
+nine files. **Do not promise that figure with viewers attached** -- the Pi's
+stream and the g2k's transfer share the wifi, and this is the one place where a
+viewer measurably costs the harness something (sec. 11, q4). The CF reader on the Pi stays as the recovery path (PLAN sec. 5.6)
 and is worth exposing as a second, manual route -- it works when the network
 does not, which is exactly when you need it.
 
@@ -713,18 +742,42 @@ it and can go first if the device is busy.
    step 6. Shapes what the UI can offer.
 2. **Is autorepeat generated downstream?** Same measurement. Gets a stuck key
    or a doubled key if guessed wrong (5.4).
-3. **Does the stick survive a long-lived open across mode changes?** Every
-   capture to date has been a fresh open. A persistent owner is a new condition
-   for this device and the watchdog in 4.5 exists because the answer might be
-   no. **This is the main technical risk in the plan** -- if the stick needs a
-   reopen per mode change, the streamer still works, but "seamless across a
-   reboot" becomes "a two-second gap at each mode change."
-4. **Does a persistent capture cost enough CPU to perturb a measurement?**
-   The fps matrix is the whole point of the rig. Passthrough MJPEG should be
-   nearly free, but *nearly free* is an assertion until it is measured against
-   a banked anchor. **Ask the benchmarking session before running the streamer
-   during a scored sweep**, and default `vcctrld` to idle-when-no-viewers if it
-   turns out to matter.
+3. **Does the stick survive a long-lived open across mode changes?** Still
+   unknown -- every capture on this rig has been a fresh open, and the peer
+   session cannot answer it either. **This remains the main technical risk in
+   the plan.** Section 4.5 has the stress cases and the ten-second acceptance
+   test. If the stick needs a reopen per transition the streamer still works,
+   but "seamless across a reboot" degrades to "a gap at each mode change."
+4. **Can a viewer perturb a scored measurement?** ~~Open.~~ **Structurally, no
+   -- and the framing was wrong.** From the peer session:
+
+   > A viewer cannot perturb a scored measurement, because there is no shared
+   > resource between the Pi and the g2k. The capture stick is a passive tap on
+   > the VGA line with passthrough to the monitor. Whatever load it presents to
+   > the g2k's RAMDAC is a property of the cable being plugged in, and is
+   > identical whether the Pi is decoding frames, encoding them, or sitting
+   > idle with the device closed. The only wire between Pi and g2k is the PS/2
+   > keyboard, and nothing in the streamer touches it.
+
+   That is right, and it relocates the question: the `-c:v copy` argument is
+   about **Pi CPU**, which is a "does the Pi keep up" problem and not a matrix
+   problem. Two things keep it from being closed outright:
+
+   - **It assumes the stick is a passive tap, and nobody has opened it.** It has
+     monitor passthrough and carries audio, which is consistent with passive,
+     but that is inference from behaviour. Recorded here rather than buried,
+     per this repo's own rule that a label is not a proof: if the stick turns
+     out to do anything active on the VGA side, the argument collapses.
+   - **One second-order path the argument does not cover:** Pi and g2k share the
+     **network**. A viewer streaming over wifi contends with an mTCP transfer to
+     the g2k. This cannot touch a scored cell -- those are network-TSR-free by
+     design (PLAN sec. 5) -- but it can slow a file transfer, so section 8
+     should not promise 880 KB/s with three browsers attached.
+
+   The peer session is running the empirical check anyway -- RB with a viewer
+   attached versus RB without, ~25 minutes -- and raising it with the
+   benchmarking session itself. Correct call: it should come from the session
+   that executes it.
 5. **Does the mouse work at all?** (9)
 6. Framerate: the stick offers 60 fps at 640x480. Is 60 worth double the
    frames, given the source is a DOS box? Probably 30. Measure.
