@@ -188,3 +188,68 @@ Steps 1-2 are the operator's. Everything from 3 is the harness's.
 - **Swap frequency**: if cards get swapped often, the BIOS `Video shadow`
   setting (currently Enabled, shadowing C000-C7FF) is per-card and worth
   re-checking after each swap. If rarely, ignore it.
+
+
+---
+
+## Mach64 result: both modes are usable, and the choice is observability vs 3%
+
+Measured 2026-08-19 with patch 0317 installed (build 31ff9cef5336).
+
+### The card offers two working configurations
+
+| | mode | capture during gameplay | fps |
+|---|---|---|---|
+| default | 512x384 (`0x01F3`) | **no lock** | 28.6 28.5 26.5 30.4 |
+| `DOSKUTSU_PIN_NATIVE_MODE=0` | 640x480 (`0x0101`) | **works** | 27.7 (one cell) |
+
+The pin suppresses VBE mode-sets that change VRAM dimensions after the first.
+With it engaged, mode-set #3's request for 640x480 is refused and the card
+stays at 512x384 -- a mode outside the capture stick's 60 Hz range. Stood down,
+#3 executes and the card lands at 640x480, which the stick locks natively:
+
+    pin ENGAGED     #1 512x384   (#3 suppressed)
+    pin STOOD DOWN  #1 512x384   #3 640x480   <- ran
+
+### The two modes are measurement-comparable
+
+This is the part that makes the choice cheap. The game does **not** scale to
+fill either mode -- `center-oversized` centres the 320x240 logical screen 1:1
+and clears the margins once. So both configurations flush the same 76800 bytes
+per frame, do the same drawcalls, and run the same present path
+(`direct-vesa: presents=0` in both, because centring forces a partial present
+either way).
+
+By the analysis session's rule -- **the discriminator is drawn area and
+drawcall count, not display mode** -- these are the same workload. The ~3%
+gap is a real but small cost, not a different experiment.
+
+### Operating guidance
+
+- **640x480 when the run needs to be seen**: debugging a wedge, verifying a
+  visual defect, watching a sweep, anything where a still frame is evidence.
+- **512x384 for a blind run** where video output is already trusted and the 3%
+  is worth having.
+
+Since there are no banked Mach64 figures older than today, there is no
+compatibility reason to prefer 512x384; the choice is genuinely free.
+
+### Not yet settled
+
+**27.7 is one cell, not a pair.** It sits inside the spread of the four RB
+cells, so 3% is an estimate rather than a measurement. A paired run would
+settle it and costs one sweep.
+
+### The in-code comment this refutes
+
+`patches/SDL/0012`'s rationale says of hardware without native 320x240:
+
+> mode-set #1 already picks the 640x480 fallback so the suppression never
+> triggers. Harmless on that target.
+
+Both halves are false on this card. Mode-set #1 picks **512x384**, because
+closest-match to 320x240 prefers it over 640x480 -- so the suppression does
+fire. And standing it down is safe: the upper-left rendering bug the pin
+guards against does not reappear, because `center-oversized` post-dates the
+pin and handles the oversized surface correctly. Verified by looking at the
+frame, not by inferring it.
