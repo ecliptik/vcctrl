@@ -30,6 +30,7 @@ Usage:
   vcctrl-collect <SWEEP> <machine-digit> [options]
   vcctrl-collect --tags GMN,GMF          [options]
 
+  --power-on        bring the target up if it is off, instead of refusing
   --already-net     skip the reboot; the machine is already in NET
   --stay-net        leave it in NET afterwards (default: reboot to the
                     menu default, which is measurement-clean)
@@ -44,8 +45,11 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from vcctrl_common import (  # noqa: E402
+    vc, vc_json, leds, wait_led, at_prompt, arm_leds, ensure_powered)
+
 CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
-VCCTRL = os.path.join(HERE, "vcctrl")
 DEFAULT_INCOMING = os.path.expanduser("~/doskutsu-netiter/incoming")
 
 # NET is menu item 5. The digit alone does not commit the selection -- it only
@@ -71,157 +75,19 @@ CALL_COST_S = 1.5
 #
 # Extra "5<Enter>" pairs landing at a live prompt are harmless; DOS answers
 # "Bad command or file name" and carries on.
-MENU_SPAM_WINDOW_S = 40         # from the reboot edge; POST-to-menu varies
+# Bounded two ways on purpose. The window alone was not enough: budgeted at
+# 40 s it ran 71 s, because vcctrl calls block far longer during POST than the
+# 1.76 s they take at idle. Every overrun keystroke lands in the BIOS buffer,
+# which fills at 15 and then beeps once per rejection -- audible from the next
+# room -- and the survivors flush into the prompt as "Bad command or file
+# name". Measured shape of a reboot: caps-clear edge, then RDYPULSE about 12 s
+# later, with the 5 s menu somewhere inside that. 20 s of cover is generous.
+MENU_SPAM_WINDOW_S = 20
+MENU_SPAM_MAX_ATTEMPTS = 12
 REBOOT_EDGE_TIMEOUT_S = 45      # measured at t+9 s; this is deliberate slack
 READY_TIMEOUT_S = 150           # measured ~11 s post-POST, POST itself varies
 PUT_TIMEOUT_S = 90              # 880 KB/s measured; a log pair is under 400 KB
 SETTLE_S = 3.0
-
-
-def vc(*args, check=True):
-    r = subprocess.run([VCCTRL] + list(args), capture_output=True, text=True)
-    if check and r.returncode != 0:
-        raise RuntimeError("vcctrl %s failed: %s" % (" ".join(args), r.stderr.strip()))
-    return r.stdout.strip()
-
-
-def vc_json(*args):
-    out = vc(*args)
-    return json.loads(out) if out else {}
-
-
-def leds():
-    return vc_json("leds").get("leds", {})
-
-
-def wait_led(name, want, timeout, poll=1.0):
-    """Block until LED `name` reads `want`. Returns elapsed seconds, or None.
-
-    LEVEL-triggered, so it is only safe when the starting level is known --
-    which is what arm_leds() is for. Across a power cycle it is NOT safe: see
-    wait_cold_boot().
-    """
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        if leds().get(name) == want:
-            return time.time() - t0
-        time.sleep(poll)
-    return None
-
-
-def wait_cold_boot(timeout=240):
-    """Wait for a machine that was powered OFF to reach a live prompt.
-
-    Cannot use wait_led on a level, and the reason is worth stating because it
-    reads as working: /sys/class/leds on the Pi RETAINS THE LAST STATE the host
-    published, and a host that is off publishes nothing. So after `power on`
-    the LEDs still read whatever they read before the power was cut -- which,
-    if the last thing the machine did was fire RDYPULSE, is scrolllock=1. A
-    level check for "scrolllock is 1" therefore returns TRUE IMMEDIATELY,
-    reporting a machine ready 2.5 s after power-on that has not begun to POST.
-    Observed exactly that on 2026-08-19.
-
-    An edge pair is immune: POST clears the LEDs, so wait for scrolllock to go
-    0 (proving POST has happened and the reading is now this boot's, not the
-    last one's), and only then for RDYPULSE to set it to 1.
-    """
-    t0 = time.time()
-    if wait_led("scrolllock", False, timeout, poll=0.0) is None:
-        return None
-    print("  POST cleared the LEDs at t+%.1fs -- readings are now this boot's"
-          % (time.time() - t0))
-    if wait_led("scrolllock", True, timeout - (time.time() - t0), poll=0.0) is None:
-        return None
-    return time.time() - t0
-
-
-def at_prompt():
-    """Is DOS at a prompt and accepting input? Uses the LED channel, not the
-    screen, so it works when capture is unavailable. Safe only when no sweep
-    is running.
-
-    Closed-loop, not timed -- same reasoning as arm_leds(). A fixed sleep here
-    races an ssh round-trip nobody measured, and a false negative aborts
-    collection on a healthy machine.
-    """
-    before = bool(leds().get("capslock"))
-    vc("key", "capslock")
-    flipped = wait_led("capslock", not before, 8, poll=0.0) is not None
-    if flipped:
-        vc("key", "capslock")      # restore
-        wait_led("capslock", before, 8, poll=0.0)
-    return flipped
-
-
-def arm_leds():
-    """Put the two signal LEDs into the states that make the next boot's
-    transitions unambiguous.
-
-    Caps Lock ARMED HIGH: POST clears it, so caps 1 -> 0 is the reboot edge.
-    If it were already 0 the edge would be invisible and we would sit waiting
-    for a reboot that had already happened.
-
-    Scroll Lock ARMED LOW: RDYPULSE.COM sets it as the last line of AUTOEXEC,
-    so scroll 0 -> 1 means the prompt is live. Same argument in reverse.
-    """
-    for name, want in (("capslock", True), ("scrolllock", False)):
-        if bool(leds().get(name)) is want:
-            continue
-        vc("key", name)
-        # Wait for the toggle to come back rather than sleeping a guessed
-        # interval. An earlier version slept 0.5 s here and then re-read; the
-        # read is an ssh round-trip of its own, so the whole thing raced and
-        # arm_leds() would report failure on a machine that had toggled fine
-        # a moment later. Nothing about this channel is fast enough to assume.
-        if wait_led(name, want, 15, poll=0.0) is None:
-            print("  could not set %s to %s" % (name, want))
-            return False
-    st = leds()
-    return bool(st.get("capslock")) and not st.get("scrolllock")
-
-
-def reboot_into_net():
-    print("== reboot into NET ==")
-    if not arm_leds():
-        raise SystemExit("REFUSED: could not arm the LEDs. Without a known "
-                         "starting state\n  neither the reboot edge nor the "
-                         "readiness pulse can be trusted.")
-    print("  LEDs armed: caps=1 (reboot edge), scroll=0 (readiness pulse)")
-
-    vc("combo", "ctrl", "alt", "delete")
-    edge = wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S, poll=0.5)
-    if edge is None:
-        raise SystemExit("REFUSED: no reboot edge within %ds. Ctrl-Alt-Del only "
-                         "works at a\n  prompt, never in-game -- SDL3's DOS "
-                         "backend owns INT 09h. If a cell is\n  still running, "
-                         "this is the expected failure and the machine is fine."
-                         % REBOOT_EDGE_TIMEOUT_S)
-    print("  reboot edge at t+%.1fs" % edge)
-
-    print("  blanketing the menu window with '%s'+Enter for %ds"
-          % (NET_MENU_ITEM, MENU_SPAM_WINDOW_S))
-    t0 = time.time()
-    attempts = 0
-    while time.time() - t0 < MENU_SPAM_WINDOW_S:
-        # One call, not two: the client taps a sequence, so this is ~1.5 s
-        # rather than ~3 s, which is what keeps the cadence inside 5 s.
-        vc("key", NET_MENU_ITEM, "enter", check=False)
-        attempts += 1
-    print("  %d attempts over %.1fs (%.1fs apart)"
-          % (attempts, time.time() - t0, (time.time() - t0) / max(attempts, 1)))
-
-    t1 = time.time()
-    if wait_led("scrolllock", True, READY_TIMEOUT_S, poll=0.0) is None:
-        raise SystemExit(
-            "REFUSED: no RDYPULSE within %ds of the reboot edge.\n"
-            "  Either the machine did not reach a prompt, or C:\\DRIVERS\\RDYPULSE.COM\n"
-            "  is missing -- both AUTOEXEC call sites are IF EXIST guarded, so a\n"
-            "  deleted COM looks exactly like a hang from here. Check with capture\n"
-            "  before power-cycling." % READY_TIMEOUT_S)
-    print("  RDYPULSE at t+%.1fs -- AUTOEXEC complete, prompt live"
-          % (time.time() - t1))
-    time.sleep(SETTLE_S)
-    return True
 
 
 def snapshot(incoming):
@@ -286,6 +152,7 @@ def main(argv):
     if "--incoming" in argv:
         incoming = argv[argv.index("--incoming") + 1]
     already_net = "--already-net" in argv
+    allow_power_on = "--power-on" in argv
     stay_net = "--stay-net" in argv
 
     if argv[0] == "--tags":
@@ -319,9 +186,8 @@ def main(argv):
         raise SystemExit("REFUSED: incoming directory %s does not exist." % incoming)
     print("  incoming: %s" % incoming)
 
-    pw = vc_json("power", "state").get("power", {})
-    if not pw.get("on"):
-        raise SystemExit("REFUSED: target is powered off. Run: vcctrl power on")
+    if not ensure_powered(allow_power_on):
+        return 2
 
     if not already_net:
         if not at_prompt():
@@ -358,7 +224,7 @@ def main(argv):
         # sweep ran with the packet driver resident.
         if arm_leds():
             vc("combo", "ctrl", "alt", "delete")
-            if wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S, poll=0.5) is None:
+            if wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S) is None:
                 print("  WARNING: no reboot edge; machine may still be in NET.")
             elif wait_led("scrolllock", True, READY_TIMEOUT_S) is None:
                 print("  WARNING: no RDYPULSE; machine may not have reached a prompt.")
@@ -388,4 +254,12 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        # Line-buffered output means `| head` closes the pipe under us. That is
+        # the reader's choice, not an error worth a traceback.
+        os._exit(0)
+    except KeyboardInterrupt:
+        sys.stderr.write("\ninterrupted -- the target is left as it was\n")
+        os._exit(130)

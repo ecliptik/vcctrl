@@ -23,9 +23,11 @@ side's own contract. That contract is the reason this looks the way it does:
 
 Usage:
   vcctrl-sweep <SWEEP> <machine-digit> [--dry-run] [--no-power-recovery]
-                                       [--collect]
+                                       [--collect] [--power-on]
   vcctrl-sweep --list
 
+  --power-on  bring the target up if it is off, instead of refusing. Uses an
+              LED edge pair, not a level -- see vcctrl_common.wait_cold_boot.
   --collect   on completion, hand off to vcctrl-collect: reboot into NET,
               PUT every cell log, and confirm each one landed. Without it the
               sweep ends with the logs still on the card.
@@ -38,8 +40,11 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from vcctrl_common import (  # noqa: E402
+    vc, vc_json, at_prompt, ensure_powered)
+
 CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
-VCCTRL = os.path.join(HERE, "vcctrl")
 
 # Screen must be still for this long before the runner will believe a sweep has
 # ended. During a cell the game renders continuously; at a prompt the screen is
@@ -50,18 +55,6 @@ STILL_SECONDS = 45
 # span has elapsed. Guards against a slow first cell reading as "done".
 EARLIEST_COMPLETION = 0.5
 POLL_SECONDS = 15
-
-
-def vc(*args, check=True):
-    r = subprocess.run([VCCTRL] + list(args), capture_output=True, text=True)
-    if check and r.returncode != 0:
-        raise RuntimeError("vcctrl %s failed: %s" % (" ".join(args), r.stderr.strip()))
-    return r.stdout.strip()
-
-
-def vc_json(*args):
-    out = vc(*args)
-    return json.loads(out) if out else {}
 
 
 def grab(tag):
@@ -122,7 +115,7 @@ def load_conf():
         return json.load(f)
 
 
-def preflight(conf, sweep, machine):
+def preflight(conf, sweep, machine, allow_power_on=False):
     print("== preflight ==")
     if sweep in conf["denied"]:
         raise SystemExit("REFUSED: %s is deny-listed.\n  %s" % (sweep, conf["denied"][sweep]))
@@ -140,45 +133,9 @@ def preflight(conf, sweep, machine):
         raise SystemExit("REFUSED: USB4VC is not holding our input devices: %s" % held)
     print("  input devices held by USB4VC: ok")
 
-    pw = vc_json("power", "state").get("power", {})
-    print("  mains: %s (%s)" % ("ON" if pw.get("on") else "OFF", pw.get("alias")))
-    if not pw.get("on"):
-        raise SystemExit("REFUSED: target is powered off. Run: vcctrl power on")
+    if not ensure_powered(allow_power_on):
+        raise SystemExit(2)
     return conf["sweeps"][sweep], conf["machines"][machine]
-
-
-def at_prompt():
-    """Is DOS sitting at a command prompt and accepting input?
-
-    Safe to call ONLY when no sweep is running. Uses the LED return channel
-    rather than the screen, so it works even if capture is unavailable.
-
-    Closed-loop, not timed. An earlier version toggled, slept 1.0 s, and
-    re-read -- but the re-read is an ssh round-trip of its own, so the sleep
-    was racing an interval nobody had measured. It happened to pass because
-    the surrounding calls padded it; that is luck, not correctness. A false
-    negative here aborts a sweep on a healthy machine.
-    """
-    before = bool(vc_json("leds").get("leds", {}).get("capslock"))
-    vc("key", "capslock")
-    flipped = _wait_caps(not before, 8) is not None
-    if flipped:
-        vc("key", "capslock")      # restore
-        _wait_caps(before, 8)
-    return flipped
-
-
-def _wait_caps(want, timeout):
-    """Wait for capslock to read `want`. Returns elapsed seconds, or None.
-
-    No sleep between polls: each poll is already a ~1.5 s ssh round-trip, so
-    an added delay only makes the loop coarser than the thing it measures.
-    """
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        if bool(vc_json("leds").get("leds", {}).get("capslock")) is want:
-            return time.time() - t0
-    return None
 
 
 def main(argv):
@@ -208,8 +165,9 @@ def main(argv):
     dry = "--dry-run" in argv
     recover = "--no-power-recovery" not in argv
     collect = "--collect" in argv
+    allow_power_on = "--power-on" in argv
 
-    spec, mach = preflight(conf, sweep, machine)
+    spec, mach = preflight(conf, sweep, machine, allow_power_on)
     budget = spec["timeout_min"] * 60
     print("  sweep %s: %d cells, budget %d min, machine %s (%s)" %
           (sweep, spec["cells"], spec["timeout_min"], mach["tag"], mach["name"]))
@@ -313,4 +271,12 @@ def on_timeout(sweep, mach, recover):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        # Line-buffered output means `| head` closes the pipe under us. That is
+        # the reader's choice, not an error worth a traceback.
+        os._exit(0)
+    except KeyboardInterrupt:
+        sys.stderr.write("\ninterrupted -- the target is left as it was\n")
+        os._exit(130)

@@ -44,13 +44,17 @@ takes keystrokes long past the menu, which is what produced the burst of PC
 speaker beeps the operator heard (buffer full, one beep per rejected key), and
 the "Bad command or file name" flood at the prompt.
 
-  - [ ] Bound the loop by attempt count as well as wall clock, so a run of
-        slow calls cannot extend it indefinitely.
-  - [ ] Stop early once RDYPULSE has fired -- but read it only between
-        attempts, never inside the 5 s window, or bug 1 comes straight back.
-  - [ ] Measure how long a `key` call actually takes *during* POST, rather
-        than assuming the idle figure holds. That number is currently unknown
-        and every timeout here is guessed against it.
+  - [x] Bound the loop by attempt count as well as wall clock. Now capped at
+        12 attempts AND 20 s, down from an unbounded 40 s window. The 20 s
+        comes from the measured shape of a reboot: caps-clear edge, then
+        RDYPULSE about 12 s later, with the 5 s menu somewhere inside.
+  - [ ] ~~Stop early once RDYPULSE has fired~~ **Rejected.** Reading the LEDs
+        between attempts costs another 1.5 s call and pushes the cadence back
+        out toward the 5 s window it must beat -- reintroducing bug 1 to save
+        a few seconds. The attempt cap solves the overrun without touching
+        the property that made the fix work.
+  - [ ] Measure how long a `key` call actually takes *during* POST. Still
+        unknown, and every timeout in the harness is guessed against it.
 
 ## Bug 2 -- `arm_leds()` slept instead of waiting
 
@@ -67,11 +71,12 @@ sleeping a guessed interval.
 one toggle. It does not exercise:
 
   - [ ] The adverse starting state -- caps=0 AND scroll=1, so both keys need
-        toggling. Force it by hand and confirm arming succeeds.
+        toggling. Force it by hand and confirm arming succeeds. **Queued for
+        after RB.**
   - [ ] The genuine-failure path -- a machine that will not toggle at all
         should fail the 15 s wait and return False, not hang. Test by arming
         against a machine that is at a *game* rather than a prompt, where
-        SDL3 owns INT 09h and the LEDs will not move.
+        SDL3 owns INT 09h and the LEDs will not move. **Queued for after RB.**
   - [ ] That 15 s is enough. It is three to ten calls' worth, which looks
         generous, but nothing has measured the worst case.
 
@@ -97,10 +102,10 @@ the improvised path where this bug bit, and it bit the harness author rather
 than a user. Writing the guard and leaving it unreachable is not a fix; it
 just moves the bug out of the file you are reading.
 
-  - [ ] Add `--power-on` to `vcctrl-sweep` and `vcctrl-collect`: power on,
-        then `wait_cold_boot()`, instead of refusing. The cold path becomes
-        code that is reviewed and reused, rather than something retyped at a
-        prompt each time.
+  - [x] Add `--power-on` to `vcctrl-sweep` and `vcctrl-collect`: power on,
+        then `wait_cold_boot()`, instead of refusing. Landed as
+        `vcctrl_common.ensure_powered()`; the cold path is now code that is
+        reviewed and reused rather than retyped at a prompt each time.
   - [ ] Prove it against the exact trap: leave the machine powered off with
         scrolllock latched at 1 (which is the *normal* state after a clean
         shutdown, since RDYPULSE is the last thing that runs), then power on
@@ -138,8 +143,9 @@ as the LED moves rather than always paying the full sleep.
 
 **Status: not yet exercised.** It is on the same list as bug 2:
 
-  - [ ] Confirm it still returns True at a live prompt (the running RB sweep
-        will exercise this on its completion probe).
+  - [ ] Confirm it still returns True at a live prompt. The running RB sweep
+        exercises the OLD copy -- it loaded before the fix -- so this needs a
+        run of its own.
   - [ ] Confirm it returns False, without hanging, against a machine in-game
         where SDL3 owns INT 09h and the LEDs cannot move.
 
@@ -159,3 +165,22 @@ remaining hits are all in the launch sequence (`CD \DOSKUTSU`, `QA n`,
 `SET DKTCAP=1`), where the sleeps pace typing into DOS rather than wait for an
 observable state -- those are legitimate, but they are also unverified, and
 each one is a place where a slow machine desynchronises the harness silently.
+
+
+---
+
+## Bug 5, in a sense -- the helpers existed twice
+
+The reason bug 4 was in two files is that `vc`, `vc_json`, `leds`, `wait_led`,
+`at_prompt` and `arm_leds` had all been written once and copied. A fix to one
+copy left the other wrong, indefinitely, because the wrong one kept working.
+
+All six now live in `bin/vcctrl_common.py` and both tools import them. Each is
+defined exactly once, verified by grep. That is the actual fix for bug 4 --
+closing the loop in `at_prompt` twice would have left the same trap set for
+whoever writes the third tool.
+
+Landed alongside: `--power-on` on both tools, a `BrokenPipeError` guard (line
+buffering made `| head` produce a traceback), and a `KeyboardInterrupt` guard
+that says the target was left untouched, since the natural worry on Ctrl-C
+mid-sweep is what state the machine was abandoned in.
