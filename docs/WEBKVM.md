@@ -871,6 +871,43 @@ it and can go first if the device is busy.
 
 ---
 
+## 11.1 Two failure families, and the design rules that pre-empt them
+
+Added at the peer session's suggestion, and it is the most portable thing in
+this document. Between two sessions in one day this rig produced **six** timing
+bugs, and every one of them belongs to one of two families:
+
+**1. A tuned interval standing in for a fact the system could be asked for.**
+The watchdog is the example this document produced twice: a flat 10 s ffmpeg
+respawn, then a 10/30/60 backoff, both of them guessing at "is the capture
+wedged" when the process's liveness answers it exactly (4.5). Both fixes
+*removed* an interval rather than retuning one, and that is the tell.
+
+> **Rule: prefer a liveness check to a timer.** If you are choosing a number,
+> ask first whether something can be interrogated instead. A retuned interval
+> is the same bug at a different frequency.
+
+**2. A signal read as something adjacent to what it means.** The LED level
+attests "the host published a state at some point", and was read as "the host
+is up" -- true only across an edge, and wrong at 2.5 s after power-on. Frame
+brightness attests "these pixels are dark", and was read as "the screen is
+dark", when a flat-black no-lock produces the same reading (4.4). The USB
+descriptor's `0x0602` attests "the vendor's firmware says digital audio", and
+was read as "there is no analog input" -- wrong, and it stopped an
+investigation for a while.
+
+> **Rule: ask what a signal attests, not what it correlates with.** When the
+> two differ, the gap is where the bug lives. Where a reading cannot
+> distinguish two states, say so and return "unknown" -- `grab()` returning
+> `(None, None)` rather than the least-black frame is this rule applied.
+
+Neither rule would have been derived from the individual bugs; both were
+visible only once the bugs were lined up. **The next one will not look like
+either of these**, which is the argument for writing the families down rather
+than the instances.
+
+---
+
 ## 12. What this deliberately does not do
 
 - **No transcoding in the MVP.** The Pi passes bytes through. Every codec
@@ -947,6 +984,14 @@ make the handover reviewable rather than a request to take it on trust:
   `CQDA  \1DOSKUTSU`. That corrupts a sweep launch silently and looks like a
   DOS quirk. §13.3's rule about holding `Devices.lock` across a logical
   operation is the fix; this is the test that proves it.
+
+  **Run it repeatedly with long homogeneous strings, not once** -- forty `a`s
+  against forty `b`s, many trials, asserting each arrival is homogeneous. A
+  race of this shape passes most single trials even with the lock entirely
+  absent, and a green check on the one item that matters would be the worst
+  possible acceptance result. **Include a control** that proves the test can
+  detect the failure it claims to: run two unlocked writers and assert the
+  same check fails. Implemented in `tests/test_core.py`.
 - **p99 of `vcctrl key` with three viewers attached is not materially worse
   than with none.** This is how rule 1 in section 2 gets settled -- by
   measurement rather than by argument. If it moves, rule 1 is not holding, and

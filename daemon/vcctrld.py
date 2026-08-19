@@ -77,6 +77,47 @@ for _c in "abcdefghijklmnopqrstuvwxyz":
 for _d in "0123456789":
     NAMED_KEYS[_d] = getattr(e, "KEY_%s" % _d)
 
+# The table above is a *typing* table: it covers what `type` needs, and
+# punctuation was reachable only through CHARMAP. A KVM has to address every
+# physical key by name for keydown/keyup, so the rest of the US PS/2 layout
+# goes in here.
+#
+# Safe against USB4VC's classification checks (usb4vc_usb_scan.py): these are
+# all KEY_*, none appear in gamepad_event_code_name_list (:877), and
+# KEY_ENTER/KEY_Y (:913) are already present above.
+#
+# NOTE these names are what the daemon accepts. Whether the STM32 protocol
+# board emits a PS/2 scancode for each of them is a separate question and is
+# NOT answerable from this side -- the Pi forwards raw evdev (type, code,
+# value) and the mapping lives in the board's firmware. See docs/WEBKVM.md
+# sec. 5.2; it needs measuring at the g2k, not asserting here.
+NAMED_KEYS.update({
+    "minus": e.KEY_MINUS, "equal": e.KEY_EQUAL,
+    "leftbrace": e.KEY_LEFTBRACE, "rightbrace": e.KEY_RIGHTBRACE,
+    "backslash": e.KEY_BACKSLASH, "semicolon": e.KEY_SEMICOLON,
+    "apostrophe": e.KEY_APOSTROPHE, "grave": e.KEY_GRAVE,
+    "comma": e.KEY_COMMA, "dot": e.KEY_DOT, "period": e.KEY_DOT,
+    "slash": e.KEY_SLASH,
+    # aliases matching the printed keycap, so a UI can send what it shows
+    "-": e.KEY_MINUS, "=": e.KEY_EQUAL, "[": e.KEY_LEFTBRACE,
+    "]": e.KEY_RIGHTBRACE, "\\": e.KEY_BACKSLASH, ";": e.KEY_SEMICOLON,
+    "'": e.KEY_APOSTROPHE, "`": e.KEY_GRAVE, ",": e.KEY_COMMA,
+    ".": e.KEY_DOT, "/": e.KEY_SLASH,
+    # keypad -- a real concern on this box: DOS software reads the numeric
+    # keypad distinctly from the number row.
+    "kpasterisk": e.KEY_KPASTERISK, "kpminus": e.KEY_KPMINUS,
+    "kpplus": e.KEY_KPPLUS, "kpdot": e.KEY_KPDOT, "kpenter": e.KEY_KPENTER,
+    "kpslash": e.KEY_KPSLASH,
+    # the rest of a 101-key board
+    "sysrq": e.KEY_SYSRQ, "printscreen": e.KEY_SYSRQ, "prtsc": e.KEY_SYSRQ,
+    "pause": e.KEY_PAUSE, "break": e.KEY_PAUSE,
+    "menu": e.KEY_COMPOSE, "compose": e.KEY_COMPOSE,
+    "leftmeta": e.KEY_LEFTMETA, "rightmeta": e.KEY_RIGHTMETA,
+    "102nd": e.KEY_102ND,
+})
+for _i in range(0, 10):
+    NAMED_KEYS["kp%d" % _i] = getattr(e, "KEY_KP%d" % _i)
+
 # US layout: char -> (keycode, needs_shift)
 _UNSHIFTED = {
     " ": e.KEY_SPACE, "-": e.KEY_MINUS, "=": e.KEY_EQUAL,
@@ -207,6 +248,9 @@ class Devices(object):
             name="vcctrl virtual mouse",
             vendor=VENDOR, product=MOUSE_PRODUCT, version=1)
         self.lock = threading.Lock()
+        # Keys currently held by keydown with no matching keyup. Tracked so a
+        # disconnecting client cannot strand one down (see release_all).
+        self.held = set()
         self.led_paths = self._find_led_paths()
 
     def _find_led_paths(self):
@@ -303,6 +347,47 @@ class Devices(object):
                 self.kbd.syn()
                 time.sleep(pace)
 
+    def keydown(self, name):
+        """Press and hold. The matching keyup may never come -- see release_all.
+
+        Unlike key/type/hold/combo this does NOT bracket a complete operation,
+        so it takes the lock only for the single event. That is safe because a
+        lone press is atomic; it is the multi-event operations that must not
+        interleave.
+        """
+        code = NAMED_KEYS.get(name.lower())
+        if code is None:
+            raise ValueError("unknown key: %s" % name)
+        with self.lock:
+            self.kbd.write(e.EV_KEY, code, 1)
+            self.kbd.syn()
+            self.held.add(code)
+
+    def keyup(self, name):
+        code = NAMED_KEYS.get(name.lower())
+        if code is None:
+            raise ValueError("unknown key: %s" % name)
+        with self.lock:
+            self.kbd.write(e.EV_KEY, code, 0)
+            self.kbd.syn()
+            self.held.discard(code)
+
+    def release_all(self, pace=DEFAULT_PACE_S):
+        """Release every key held via keydown. Returns how many.
+
+        The web KVM must call this when a viewer's socket closes. A dropped
+        wifi connection mid-keypress would otherwise leave a key down at the
+        g2k forever, which at a DOS prompt types until the buffer fills.
+        """
+        with self.lock:
+            codes = sorted(self.held)
+            for code in codes:
+                self.kbd.write(e.EV_KEY, code, 0)
+                self.kbd.syn()
+                time.sleep(pace)
+            self.held.clear()
+        return len(codes)
+
     def mouse_move(self, dx, dy, pace=DEFAULT_PACE_S):
         with self.lock:
             if dx:
@@ -346,29 +431,151 @@ def usb4vc_holds_us():
     return want
 
 
-def handle(devs, req):
-    cmd = req.get("cmd")
-    pace = float(req.get("pace", DEFAULT_PACE_S))
-    if cmd == "status":
-        return {"ok": True,
-                "keyboard": devs.kbd.device.path,
-                "mouse": devs.mouse.device.path,
-                "usb4vc": usb4vc_holds_us(),
-                "led_paths": devs.led_paths,
-                "leds": devs.read_leds()}
-    if cmd == "key":
-        devs.key(req["keys"], pace)
-    elif cmd == "type":
-        devs.type_text(req["text"], pace)
-    elif cmd == "hold":
-        devs.hold(req["key"], float(req["ms"]), pace)
-    elif cmd == "combo":
-        devs.combo(req["keys"], pace)
-    elif cmd == "mouse_move":
-        devs.mouse_move(req.get("dx", 0), req.get("dy", 0), pace)
-    elif cmd == "mouse_click":
-        devs.mouse_click(req.get("button", "left"), pace)
-    elif cmd == "power":
+# ---------------------------------------------------------------- capabilities
+#
+# One daemon owns every device on this rig, and capabilities are how that stays
+# manageable. See docs/WEBKVM.md sec. 2 for why a single owner rather than a
+# daemon per device: arbitration. The moment a browser exists there are two
+# independent things that can type at the g2k, and only a single owner can hold
+# the rule that stops them colliding.
+#
+# This is a registry, deliberately NOT a plugin loader: capabilities are listed
+# in a table below, in this file. No discovery, no dynamic import. The value is
+# that each one owns a device and can fail alone; a loader is a feature to add
+# when something outside this repo needs to plug in, and nothing does.
+#
+# Three rules make the merge safe, and all three are load-bearing:
+#
+#   1. The input path takes no LOGICAL dependency on any other capability, and
+#      is scheduled ahead of all of them. It must stay possible to type at the
+#      g2k with everything else broken. Note this is a claim about scheduling
+#      as well as dependency: one Python process means a keystroke can queue
+#      behind another capability's work even with no dependency between them.
+#      What protects it is keeping pure-Python per-request work small, and it
+#      is settled by measurement (p99 of `key` under load), not by this comment.
+#   2. A capability that raises is unloaded, not fatal. The core catches at the
+#      module boundary. A dead video pipeline must never cost the keyboard.
+#   3. Anything that can take the process down stays out of process. ffmpeg
+#      will be a subprocess. Rule 3 does not cover memory -- an OOM kills the
+#      process as dead as a segfault -- so anything buffering frames caps
+#      itself in BYTES, not in items.
+
+
+class Capability(object):
+    """One device or concern. Subclasses declare a name and a command map."""
+
+    name = None
+
+    def __init__(self, devs):
+        self.devs = devs
+
+    def commands(self):
+        """Return {command_name: handler(req) -> dict}."""
+        return {}
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+class InputCapability(Capability):
+    """Keyboard and mouse over the USB4VC PS/2 bridge.
+
+    Rule 1 applies to this class specifically: nothing here may import,
+    call into, or wait on any other capability.
+    """
+
+    name = "input"
+
+    def commands(self):
+        return {
+            "key": self._key, "type": self._type, "hold": self._hold,
+            "combo": self._combo, "keydown": self._keydown,
+            "keyup": self._keyup, "release_all": self._release_all,
+            "mouse_move": self._mouse_move, "mouse_click": self._mouse_click,
+        }
+
+    def _key(self, req):
+        self.devs.key(req["keys"], _pace(req))
+        return {"ok": True}
+
+    def _type(self, req):
+        self.devs.type_text(req["text"], _pace(req))
+        return {"ok": True}
+
+    def _hold(self, req):
+        self.devs.hold(req["key"], float(req["ms"]), _pace(req))
+        return {"ok": True}
+
+    def _combo(self, req):
+        self.devs.combo(req["keys"], _pace(req))
+        return {"ok": True}
+
+    def _keydown(self, req):
+        self.devs.keydown(req["key"])
+        return {"ok": True}
+
+    def _keyup(self, req):
+        self.devs.keyup(req["key"])
+        return {"ok": True}
+
+    def _release_all(self, req):
+        return {"ok": True, "released": self.devs.release_all(_pace(req))}
+
+    def _mouse_move(self, req):
+        self.devs.mouse_move(req.get("dx", 0), req.get("dy", 0), _pace(req))
+        return {"ok": True}
+
+    def _mouse_click(self, req):
+        self.devs.mouse_click(req.get("button", "left"), _pace(req))
+        return {"ok": True}
+
+
+class LedsCapability(Capability):
+    """The PS/2 LED return channel -- non-video proof a keystroke landed.
+
+    Reads only; the LEDs are written by USB4VC from what the DOS host sends
+    back over PS/2. Touches no lock and blocks nothing.
+    """
+
+    name = "leds"
+
+    def commands(self):
+        return {"leds": self._leds, "ledwait": self._ledwait}
+
+    def _leds(self, req):
+        return {"ok": True, "leds": self.devs.read_leds()}
+
+    def _ledwait(self, req):
+        # Blocks for up to `timeout`. Safe to block only because serve() is
+        # threaded -- before that, this stalled every other client.
+        before = self.devs.read_leds()
+        deadline = time.time() + float(req.get("timeout", 5.0))
+        while time.time() < deadline:
+            now = self.devs.read_leds()
+            if now != before:
+                return {"ok": True, "changed": True,
+                        "before": before, "after": now}
+            time.sleep(0.02)
+        return {"ok": True, "changed": False, "before": before,
+                "after": self.devs.read_leds()}
+
+
+class PowerCapability(Capability):
+    """Mains control for the target, via the Kasa EP10.
+
+    Touches no device and holds no lock, so it runs fully concurrently with
+    input -- which matters, because `cycle` blocks for 15 s.
+    """
+
+    name = "power"
+
+    def commands(self):
+        return {"power": self._power}
+
+    def _power(self, req):
         cfg = load_config()
         host = req.get("host") or cfg.get("kasa_host")
         if not host:
@@ -391,56 +598,138 @@ def handle(devs, req):
             return {"ok": False, "error": "unknown power action: %r" % action}
         time.sleep(0.5)
         return {"ok": True, "power": power_state(host)}
-    elif cmd == "leds":
-        return {"ok": True, "leds": devs.read_leds()}
-    elif cmd == "ledwait":
-        before = devs.read_leds()
-        deadline = time.time() + float(req.get("timeout", 5.0))
-        while time.time() < deadline:
-            now = devs.read_leds()
-            if now != before:
-                return {"ok": True, "changed": True,
-                        "before": before, "after": now}
-            time.sleep(0.02)
-        return {"ok": True, "changed": False, "before": before,
-                "after": devs.read_leds()}
-    else:
+
+
+# The registry. A table in the source, in load order. Video, web, audio, reset
+# and files join this list; each is one entry and touches nothing above it.
+CAPABILITIES = [InputCapability, LedsCapability, PowerCapability]
+
+
+def _pace(req):
+    return float(req.get("pace", DEFAULT_PACE_S))
+
+
+class Registry(object):
+    """Instantiates capabilities and dispatches commands to them.
+
+    Rule 2 lives here: a capability that raises during start is recorded as
+    failed and the daemon carries on without it.
+    """
+
+    def __init__(self, devs):
+        self.caps = {}
+        self.failed = {}
+        self.routes = {}
+        for cls in CAPABILITIES:
+            try:
+                cap = cls(devs)
+                cap.start()
+            except Exception as exc:
+                self.failed[cls.name] = "%s: %s" % (type(exc).__name__, exc)
+                sys.stderr.write("capability %s failed to start: %s\n" % (
+                    cls.name, self.failed[cls.name]))
+                continue
+            self.caps[cls.name] = cap
+            for cmd, fn in cap.commands().items():
+                self.routes[cmd] = (cls.name, fn)
+
+    def dispatch(self, cmd, req):
+        route = self.routes.get(cmd)
+        if route is None:
+            return None
+        _name, fn = route
+        return fn(req)
+
+    def report(self):
+        out = {name: {"ok": True} for name in self.caps}
+        for name, err in self.failed.items():
+            out[name] = {"ok": False, "error": err}
+        return out
+
+
+def handle(devs, registry, req):
+    cmd = req.get("cmd")
+
+    # `status` predates the registry and its exact shape is a compatibility
+    # contract -- the peer session's tooling parses it. Do NOT add keys here;
+    # capability health is reported by `caps` precisely so this stays
+    # byte-identical to what it returned before the refactor.
+    if cmd == "status":
+        return {"ok": True,
+                "keyboard": devs.kbd.device.path,
+                "mouse": devs.mouse.device.path,
+                "usb4vc": usb4vc_holds_us(),
+                "led_paths": devs.led_paths,
+                "leds": devs.read_leds()}
+
+    if cmd == "caps":
+        return {"ok": True, "capabilities": registry.report()}
+
+    resp = registry.dispatch(cmd, req)
+    if resp is None:
+        # Error text preserved verbatim from before the refactor: callers
+        # branch on `ok` and some match on the message.
         return {"ok": False, "error": "unknown command: %r" % cmd}
-    return {"ok": True}
+    return resp
 
 
-def serve(devs):
+def _serve_one(conn, devs, registry):
+    try:
+        buf = b""
+        while b"\n" not in buf:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        if not buf.strip():
+            return
+        try:
+            resp = handle(devs, registry, json.loads(buf.decode("utf-8")))
+        except Exception as exc:
+            resp = {"ok": False, "error": "%s: %s" % (
+                type(exc).__name__, exc)}
+        conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+def serve(devs, registry):
+    """One thread per connection.
+
+    Why: the daemon used to handle one request at a time, to completion. A
+    `power cycle` blocked it for 15 s and `ledwait 5` for 5 s, so the keyboard
+    froze whenever anything slow ran -- including the operator's own click on
+    the power button. Unusable behind a browser.
+
+    What threading does NOT break, and the reason it is safe: every multi-event
+    operation in Devices already takes `self.lock` for the WHOLE operation, not
+    per event. `type_text` holds it across the entire string. So two concurrent
+    `type` calls serialise into two intact strings rather than interleaving
+    into one corrupt one. That property is now load-bearing and is an
+    acceptance test (docs/WEBKVM.md sec. 13.2) -- if anyone ever narrows one of
+    those locks to per-event, `CD \\DOSKUTSU` and `QA 1` start arriving as
+    `CQDA  \\1DOSKUTSU`, which corrupts a sweep launch silently and looks like
+    a DOS quirk rather than a bug here.
+    """
     if os.path.exists(SOCKET_PATH):
         os.unlink(SOCKET_PATH)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(SOCKET_PATH)
     os.chmod(SOCKET_PATH, 0o666)
     srv.listen(8)
-    sys.stderr.write("vcctrld ready: kbd=%s mouse=%s leds=%s\n" % (
+    sys.stderr.write("vcctrld ready: kbd=%s mouse=%s leds=%s caps=%s\n" % (
         devs.kbd.device.path, devs.mouse.device.path,
-        sorted(devs.led_paths)))
+        sorted(devs.led_paths), sorted(registry.caps)))
+    if registry.failed:
+        sys.stderr.write("vcctrld degraded: %s\n" % (sorted(registry.failed),))
     sys.stderr.flush()
     while True:
         conn, _ = srv.accept()
-        try:
-            buf = b""
-            while b"\n" not in buf:
-                chunk = conn.recv(65536)
-                if not chunk:
-                    break
-                buf += chunk
-            if not buf.strip():
-                continue
-            try:
-                resp = handle(devs, json.loads(buf.decode("utf-8")))
-            except Exception as exc:
-                resp = {"ok": False, "error": "%s: %s" % (
-                    type(exc).__name__, exc)}
-            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
-        except Exception:
-            pass
-        finally:
-            conn.close()
+        t = threading.Thread(target=_serve_one, args=(conn, devs, registry),
+                             daemon=True)
+        t.start()
 
 
 def main():
@@ -455,7 +744,8 @@ def main():
     if not all(held.values()):
         sys.stderr.write("warning: USB4VC has not opened %s\n" % (
             [k for k, v in held.items() if not v],))
-    serve(devs)
+    registry = Registry(devs)
+    serve(devs, registry)
     return 0
 
 

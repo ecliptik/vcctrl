@@ -19,12 +19,16 @@ USAGE = """usage: vcctrl <command> [args]
   key <name>...             tap keys in sequence      (enter esc f1 a 1)
   type <text>               type literal text         (type "CD \\\\DOSKUTSU")
   hold <key> <ms>           press, dwell, release     (hold left 800)
+  keydown <key>             press and hold, no release
+  keyup <key>               release a key held by keydown
+  release-all               release every key held by keydown
   combo <key>...            chord                     (combo ctrl alt delete)
   mouse move <dx> <dy>
   mouse click [left|right|middle]
   leds                      read PS/2 LED return channel
   ledwait [timeout_s]       block until LED state changes
   power [state|on|off|cycle]  smart-plug mains control for the target
+  caps                      capability health (input, leds, power, ...)
 
 options:
   --pace <seconds>          inter-event gap (default 0.012)
@@ -94,6 +98,14 @@ def main(argv):
         else:
             sys.stderr.write(USAGE)
             return 2
+    elif cmd == "keydown":
+        req = {"cmd": "keydown", "key": rest[0]}
+    elif cmd == "keyup":
+        req = {"cmd": "keyup", "key": rest[0]}
+    elif cmd in ("release-all", "release_all"):
+        req = {"cmd": "release_all"}
+    elif cmd == "caps":
+        req = {"cmd": "caps"}
     elif cmd == "leds":
         req = {"cmd": "leds"}
     elif cmd == "power":
