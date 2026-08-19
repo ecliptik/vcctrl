@@ -223,11 +223,91 @@ Two things it buys:
   the COM a null result cannot distinguish those -- the same class of ambiguity
   phase 1 exists to remove.
 
-**This needs an operator decision.** `AUTOEXEC.BAT` lives on the CF outside the
-QA payload, so the edit is the operator's, and it affects every boot including
-manual ones. The COM itself is useful without the AUTOEXEC change -- run
-manually at the prompt it still serves as the discriminator -- so the two can be
-decided separately.
+**This needs an operator decision.** `AUTOEXEC.BAT` is tracked in `~/git/g2k`
+and pushed by `scripts/push-to-card.sh` from an explicit manifest, so the edit
+must go through that repo -- a hand edit on the card is silently reverted. It
+also affects every boot including manual ones.
+
+**Status: the COM does not exist yet.** It was offered and never commissioned.
+Everything below is design, not implementation.
+
+### "The last line" is not well defined -- three placements, three meanings
+
+The g2k session read the file: 82 lines, SETs and PATH, `GoTo %config%` at line
+12, eight profile blocks, a `:COMMON` tail from line 63 ending:
+
+```
+77  ECHO %config% configuration loaded
+78  IF "%config%"=="VIBRAWIN" WIN
+79  IF "%config%"=="JAZZWIN"  WIN
+80  GOTO END
+82  :END
+```
+
+| placement | meaning |
+|---|---|
+| **after line 77, before the WIN launches** | DOS-ready for every profile reaching `:COMMON`. **This is the intended semantics.** |
+| after line 79 | for the two WIN profiles, fires only when *Windows exits* -- possibly hours later. The literal reading of "last line", and wrong. |
+| in `:END` | as above, plus it fires for `CLEAN`. |
+
+**Recommendation: after line 77.**
+
+### `CLEAN` bypasses `:COMMON` entirely
+
+Line 61 is `GOTO END`, so a pulse anywhere in `:COMMON` is silent under `CLEAN`.
+
+`CLEAN` is the bare recovery profile -- precisely the boot path the harness
+would use after a bad build (sec. 5). A harness that cannot tell when `CLEAN` is
+ready is typing blind into the one path that matters most when things have
+already gone wrong. **Recommend giving `:CLEAN` its own pulse line**, noting the
+fair objection that `CLEAN`'s contract is "no drivers loaded" and running a COM
+is still running code -- though a non-resident COM leaves no footprint.
+Operator's call.
+
+### F5 / F8 -- absence of the pulse does not mean hung
+
+F5 skips `AUTOEXEC.BAT` entirely; F8 lets an operator step past individual
+lines. **The harness must treat a missing pulse as "unknown boot path", not as
+a wedge.** Otherwise a routine F5 recovery boot reads as a crash and triggers
+the escalation ladder against a perfectly healthy machine.
+
+### Channel separation: Scroll Lock for readiness, Caps Lock for reboot
+
+The reboot detector arms **Caps Lock** because POST clears it (sec. 3). If the
+readiness COM also pulsed Caps Lock the two channels would alias, and the
+harness could not tell a reboot edge from a ready edge.
+
+**The COM should pulse Scroll Lock**, which nothing else in this rig uses. That
+keeps three independent signals on one wire: NumLock (POST, set by BIOS), Caps
+Lock (reboot detector, harness-armed), Scroll Lock (DOS-ready, COM-driven).
+
+### The ODI stack must be gated, or it destroys the TSR-free invariant
+
+`bootstrap-cf.sh` puts the ODI load **before** `GoTo %config%` -- unconditional,
+every profile. Landing that as-is would make the default boot network-TSR-laden,
+destroying the exact invariant that protects the ~157 banked fps measurements
+(sec. 5). That would reintroduce through the front door the problem that
+`LOADPKT.BAT` was just corrected for.
+
+Two workable shapes, the first preferred: a **dedicated profile** (e.g.
+`[VIBRANET]` mirroring `[VIBRA]` plus the ODI lines), leaving every existing
+profile byte-identical in memory layout; or an **IF gate in `:COMMON`** in the
+style of the existing `:SKIPUNI` gate.
+
+The asymmetry that makes this clean: **the LED COM is safe unconditionally
+because it runs and exits with no resident footprint; the network stack is not.
+Pulse everywhere, network only where asked for.**
+
+### What landing it requires
+
+- The COM file, its intended DOS path and 8.3 name.
+- Confirmation it is non-resident -- runs, pulses, exits, hooks nothing. (By
+  construction it would be: poll `0x64`, write `0xED` to `0x60`, write the
+  bitmask, `INT 21h/4Ch`.)
+- **A new manifest line as well as the file.** The sync manifest currently
+  lists only `CONFIG.SYS`, `AUTOEXEC.BAT`, `README.TXT`, `CLAUDE.md`,
+  `WINDOWS/SYSTEM.INI`. A tracked file missing from the manifest fails silently
+  by simply never reaching the card.
 
 ---
 
