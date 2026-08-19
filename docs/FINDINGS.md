@@ -265,3 +265,33 @@ machine-readable.
 CONFIG.SYS output still is not capturable: it runs before AUTOEXEC, so the boot
 menu and driver loading remain invisible. Fixing that would need a device
 driver, and is almost certainly not worth it.
+
+## 14. End-to-end recovery works, but boot time is not constant  [measured]
+
+`vcctrl power cycle` -> POST edge -> prompt -> typed command echoed back, with
+no human involvement. Total 90 s from command to a verified-live prompt.
+
+**But POST timing varied significantly between the two boots:**
+
+| boot | power applied to POST edge |
+|---|---|
+| cold start (plug had been off) | **26 s** |
+| `power cycle` (6 s off) | **44 s** |
+
+Same machine, same profile, 18 s apart. Most likely the 6 s outage is too short
+to fully discharge the PicoRC's 12 V brick and picoPSU, so the board sees a
+marginal rather than clean start. It could also be BIOS memory-test variation.
+
+Consequences for the harness:
+
+- **Lengthen the default off period** beyond 6 s. A supply that has not fully
+  drained is the classic cause of a machine that comes back oddly or not at
+  all, and this is the recovery path of last resort -- it needs to be the most
+  reliable thing in the system, not the fastest.
+- **Do not hard-code a readiness delay.** 45 s was right once and would have
+  been 18 s short the second time. Until `RDYPULSE.COM` exists, readiness must
+  be polled rather than assumed, with generous margin.
+
+This is exactly the case the readiness pulse was designed for: the POST edge is
+observable and early, the prompt is not observable at all, and the gap between
+them is not a constant.

@@ -37,7 +37,12 @@ CONFIG_PATH = "/opt/vcctrl/config.json"
 # Seconds the rails stay down during a power cycle. The g2k is an AT-style
 # PicoRC setup with no soft-off, so it boots as soon as power returns; the delay
 # is only to let the supply drain rather than to satisfy any handshake.
-POWER_CYCLE_OFF_S = 6.0
+#
+# Raised from 6 s after measuring POST at 26 s from a cold start but 44 s after
+# a 6 s cycle -- most likely the 12 V brick and picoPSU had not fully
+# discharged. This is the recovery path of last resort, so it should be the
+# most reliable thing in the system rather than the fastest.
+POWER_CYCLE_OFF_S = 15.0
 
 VENDOR = 0x1209
 KBD_PRODUCT = 0xDEA1
