@@ -161,6 +161,8 @@ class Handler(BaseHTTPRequestHandler):
                         if part.startswith("since="):
                             since = int(part[6:] or 0)
                 return self._json(self.cap.call("events", {"since": since}))
+            if path == "/stream.mjpg":
+                return self._mjpeg()
             if path == "/ws":
                 return self._websocket()
             return self._json({"error": "not found"}, 404)
@@ -186,6 +188,63 @@ class Handler(BaseHTTPRequestHandler):
                                "error": "command not exposed: %r" % cmd}, 403)
         return self._json(self.cap.call(cmd, req))
 
+    def _mjpeg(self):
+        """multipart/x-mixed-replace -- the fallback that needs no JavaScript.
+
+        An <img src="/stream.mjpg"> animates on its own: the browser does the
+        decoding, the compositing and the pacing. No WebSocket, no canvas, no
+        createImageBitmap. That makes it the transport most likely to survive a
+        browser this code has never run against -- which is the whole reason it
+        exists, after the WebSocket path came up blank on an iPhone and the
+        server-side handshake was provably fine.
+
+        Slower to first frame than the socket and it cannot carry input, so the
+        page uses it only when the socket has not delivered.
+        """
+        vid = self.cap.video()
+        if vid is None:
+            return self._json({"error": "no video capability"}, 503)
+        # Paced lower than the socket by default. A detailed screen is ~70 KB
+        # a frame, so 30 fps is ~17 Mbit/s -- fine on the LAN, unkind to a
+        # phone on cellular going through the tailnet. The socket path stays at
+        # full rate; this one is the compatibility route, not the good one.
+        fps = 15.0
+        if "?" in self.path:
+            for part in self.path.split("?", 1)[1].split("&"):
+                if part.startswith("fps="):
+                    try:
+                        fps = max(1.0, min(30.0, float(part[4:])))
+                    except ValueError:
+                        pass
+        boundary = "vcctrlframe"
+        self.send_response(200)
+        self.send_header("Content-Type",
+                         "multipart/x-mixed-replace; boundary=%s" % boundary)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        with self.cap.lock:
+            self.cap.clients += 1
+        last_t = 0.0
+        try:
+            while True:
+                with vid.lock:
+                    item = vid.ring[-1] if vid.ring else None
+                if item is not None and item[0] > last_t:
+                    last_t = item[0]
+                    self.wfile.write(
+                        ("--%s\r\nContent-Type: image/jpeg\r\n"
+                         "Content-Length: %d\r\n\r\n"
+                         % (boundary, len(item[1]))).encode())
+                    self.wfile.write(item[1])
+                    self.wfile.write(b"\r\n")
+                time.sleep(1.0 / fps)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            with self.cap.lock:
+                self.cap.clients -= 1
+
     # -- websocket ----------------------------------------------------------
 
     def _websocket(self):
@@ -199,7 +258,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "Upgrade")
         self.send_header("Sec-WebSocket-Accept", accept)
         self.end_headers()
-        self.cap.serve_ws(self.connection)
+        self.cap.serve_ws(self.connection,
+                          agent=self.headers.get("User-Agent"))
 
 
 class Server(ThreadingHTTPServer):
@@ -235,6 +295,10 @@ class WebCapability(object):
         self.port = port
         self.httpd = None
         self.clients = 0
+        self.ws_opened = 0
+        self.ws_closed = 0
+        self.ws_last_error = None
+        self.ws_last_agent = None
         self.lock = threading.Lock()
 
     def start(self):
@@ -270,6 +334,9 @@ class WebCapability(object):
                 "last_event_age_s": act.get("last_event_age_s"),
                 "seq": act.get("seq"),
                 "viewers": self.clients,
+                "ws": {"opened": self.ws_opened, "closed": self.ws_closed,
+                       "last_error": self.ws_last_error,
+                       "last_agent": self.ws_last_agent},
                 "caps": self.registry.report()}
 
     def page(self):
@@ -278,19 +345,25 @@ class WebCapability(object):
 
     # -- the stream ---------------------------------------------------------
 
-    def serve_ws(self, sock):
+    def serve_ws(self, sock, agent=None):
         with self.lock:
             self.clients += 1
+            self.ws_opened += 1
+            self.ws_last_agent = agent
         stop = threading.Event()
         held = set()
         try:
             threading.Thread(target=self._ws_input, args=(sock, stop, held),
                              daemon=True).start()
             self._ws_frames(sock, stop)
+        except Exception as exc:
+            with self.lock:
+                self.ws_last_error = "%s: %s" % (type(exc).__name__, exc)
         finally:
             stop.set()
             with self.lock:
                 self.clients -= 1
+                self.ws_closed += 1
             # Release anything this viewer was holding. A dropped wifi
             # connection mid-keypress must not leave a key down at the g2k,
             # where at a DOS prompt it types until the buffer fills.

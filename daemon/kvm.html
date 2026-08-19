@@ -1,96 +1,155 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>g2k</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   :root {
     --bg:#14161a; --panel:#1c1f26; --line:#2b303a; --fg:#dfe3ea;
     --dim:#8a93a3; --ok:#5ac27a; --warn:#e0b341; --bad:#e05c5c;
-    --accent:#7aa2f7; --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --accent:#7aa2f7;
+    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --safe-b: env(safe-area-inset-bottom, 0px);
   }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
-  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
-           padding:8px 14px; background:var(--panel);
-           border-bottom:1px solid var(--line); }
-  h1 { font-size:14px; font-weight:600; margin:0; letter-spacing:.02em; }
-  .pill { font:12px/1 var(--mono); padding:5px 9px; border-radius:999px;
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; }
+  body { background:var(--bg); color:var(--fg); overflow:hidden;
+         font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
+         -webkit-text-size-adjust:100%; }
+
+  #app { display:flex; flex-direction:column; height:100%; }
+
+  header { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+           padding:6px 10px; padding-top:calc(6px + env(safe-area-inset-top,0px));
+           background:var(--panel); border-bottom:1px solid var(--line);
+           flex:none; }
+  h1 { font-size:13px; font-weight:600; margin:0 4px 0 0; }
+  .pill { font:11px/1 var(--mono); padding:5px 8px; border-radius:999px;
           border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
-  .pill.on  { color:var(--ok);   border-color:#2c5c3c; }
-  .pill.off { color:var(--bad);  border-color:#5c2c2c; }
-  .pill.mid { color:var(--warn); border-color:#5c4c2c; }
-  .grow { flex:1; }
-  button { font:12px/1 system-ui,sans-serif; color:var(--fg);
-           background:#232833; border:1px solid var(--line); border-radius:6px;
-           padding:6px 10px; cursor:pointer; }
-  button:hover { border-color:var(--accent); }
-  button.danger:hover { border-color:var(--bad); color:#ffb4b4; }
-  main { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:0;
-         height:calc(100vh - 45px); }
-  @media (max-width:900px){ main{ grid-template-columns:1fr; height:auto; } }
-  #stage { position:relative; display:flex; align-items:center;
-           justify-content:center; background:#000; min-height:50vh;
+  .pill.on{color:var(--ok);border-color:#2c5c3c}
+  .pill.off{color:var(--bad);border-color:#5c2c2c}
+  .pill.mid{color:var(--warn);border-color:#5c4c2c}
+  .grow{flex:1}
+
+  /* The screen. Fixed 4:3 so a phone shows the whole thing rather than a
+     letterbox of black, and it never grows past half the viewport. */
+  #stage { position:relative; background:#000; flex:none;
+           aspect-ratio:4/3; max-height:48vh; width:100%;
+           display:flex; align-items:center; justify-content:center;
            overflow:hidden; }
-  canvas { max-width:100%; max-height:100%; image-rendering:pixelated;
-           display:block; }
+  #stage img, #stage canvas { width:100%; height:100%; object-fit:contain;
+           image-rendering:pixelated; display:block; }
   #veil { position:absolute; inset:0; display:none; flex-direction:column;
-          align-items:center; justify-content:center; gap:8px;
-          background:rgba(10,11,14,.82); text-align:center; padding:20px; }
+          align-items:center; justify-content:center; gap:6px; padding:16px;
+          background:rgba(10,11,14,.85); text-align:center; }
   #veil.show { display:flex; }
-  #veil .big { font:600 15px var(--mono); color:var(--warn); }
-  #veil .sub { color:var(--dim); max-width:46ch; font-size:13px; }
-  aside { border-left:1px solid var(--line); background:var(--panel);
-          display:flex; flex-direction:column; min-height:0; }
+  #veil .big { font:600 14px var(--mono); color:var(--warn); }
+  #veil .sub { color:var(--dim); font-size:12px; max-width:44ch; }
+
+  /* Key bar: horizontally scrollable so every key stays reachable on a
+     narrow screen without wrapping into a wall of buttons. */
+  #keys { flex:none; display:flex; gap:5px; overflow-x:auto; padding:7px 8px;
+          background:var(--panel); border-bottom:1px solid var(--line);
+          scrollbar-width:none; }
+  #keys::-webkit-scrollbar { display:none; }
+  #keys button { flex:none; }
+
+  button { font:12px/1 system-ui,sans-serif; color:var(--fg); background:#232833;
+           border:1px solid var(--line); border-radius:7px; padding:9px 11px;
+           cursor:pointer; min-height:36px; touch-action:manipulation; }
+  button:active { background:#2d3442; }
+  button.sticky { border-color:var(--accent); color:var(--accent);
+                  background:#20283a; }
+  button.danger:active { border-color:var(--bad); color:#ffb4b4; }
+  button.primary { border-color:var(--ok); color:var(--ok); }
+
+  #body { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
+          padding-bottom:calc(12px + var(--safe-b)); }
+  @media (min-width:900px) {
+    #app { display:grid; grid-template-columns:minmax(0,1fr) 340px;
+           grid-template-rows:auto 1fr; height:100vh; }
+    header { grid-column:1/-1; }
+    #stage { grid-row:2; aspect-ratio:auto; max-height:none; height:100%; }
+    #keys { grid-column:1; grid-row:3; }
+    #body { grid-column:2; grid-row:2/4; border-left:1px solid var(--line);
+            background:var(--panel); }
+  }
+
   section { padding:10px 12px; border-bottom:1px solid var(--line); }
   h2 { font:600 11px/1 system-ui; letter-spacing:.09em; text-transform:uppercase;
        color:var(--dim); margin:0 0 8px; }
   .row { display:flex; gap:6px; flex-wrap:wrap; }
   .kv { display:flex; justify-content:space-between; gap:10px;
-        font:12px/1.7 var(--mono); }
+        font:12px/1.8 var(--mono); }
   .kv span:last-child { color:var(--dim); }
-  #log { flex:1; overflow-y:auto; padding:8px 12px; font:11px/1.6 var(--mono);
-         min-height:160px; }
-  #log div { display:flex; gap:8px; padding:1px 0; }
+  #log { padding:6px 12px; font:11px/1.55 var(--mono); }
+  #log div { display:flex; gap:7px; padding:1px 0; }
   #log .t { color:#5b6373; flex:none; }
-  #log .k { flex:none; width:11ch; }
+  #log .k { flex:none; width:10ch; overflow:hidden; }
   #log .d { color:var(--dim); word-break:break-all; }
   .k-cmd{color:var(--accent)} .k-lock{color:var(--warn)}
   .k-taint{color:var(--bad);font-weight:600} .k-vid{color:var(--ok)}
-  #kbd { border:1px solid var(--line); border-radius:6px; padding:7px 9px;
-         font-size:12px; color:var(--dim); cursor:pointer; }
-  #kbd.armed { border-color:var(--ok); color:var(--ok); }
+
+  /* Off-screen but focusable: focusing it is what summons the iOS keyboard.
+     It must not be display:none or hidden, or the keyboard will not appear. */
+  #ghost { position:absolute; opacity:0; height:1px; width:1px;
+           padding:0; border:0; left:-9999px; top:0;
+           font-size:16px; /* <16px makes iOS zoom the page on focus */ }
 </style>
 
-<header>
-  <h1>g2k</h1>
-  <span id="p-video" class="pill">video …</span>
-  <span id="p-lock"  class="pill">lock …</span>
-  <span id="p-power" class="pill">power …</span>
-  <span id="p-fps"   class="pill">– fps</span>
-  <span class="grow"></span>
-  <div id="kbd" tabindex="0">click to capture keyboard</div>
-</header>
+<div id="app">
+  <header>
+    <h1>g2k</h1>
+    <span id="p-video" class="pill">video …</span>
+    <span id="p-lock"  class="pill">lock …</span>
+    <span id="p-power" class="pill">power …</span>
+    <span id="p-xport" class="pill">…</span>
+    <span class="grow"></span>
+    <button id="kbtn" class="primary">⌨ Keyboard</button>
+  </header>
 
-<main>
   <div id="stage">
     <canvas id="screen" width="640" height="480"></canvas>
+    <img id="mjpeg" style="display:none" alt="">
     <div id="veil">
-      <div class="big" id="veil-title">no signal</div>
+      <div class="big" id="veil-title">connecting…</div>
       <div class="sub" id="veil-sub"></div>
       <div class="sub" id="veil-age"></div>
     </div>
   </div>
 
-  <aside>
+  <div id="keys">
+    <button data-mod="lctrl">Ctrl</button>
+    <button data-mod="lalt">Alt</button>
+    <button data-mod="lshift">Shift</button>
+    <button data-key="esc">Esc</button>
+    <button data-key="tab">Tab</button>
+    <button data-key="enter">↵</button>
+    <button data-key="backspace">⌫</button>
+    <button data-key="up">↑</button>
+    <button data-key="down">↓</button>
+    <button data-key="left">←</button>
+    <button data-key="right">→</button>
+    <button data-key="f1">F1</button><button data-key="f2">F2</button>
+    <button data-key="f3">F3</button><button data-key="f4">F4</button>
+    <button data-key="f5">F5</button><button data-key="f6">F6</button>
+    <button data-key="f7">F7</button><button data-key="f8">F8</button>
+    <button data-key="f9">F9</button><button data-key="f10">F10</button>
+    <button data-combo="ctrl,alt,delete" class="danger">C-A-Del</button>
+  </div>
+
+  <div id="body">
     <section>
-      <h2>Send</h2>
+      <h2>Type</h2>
       <div class="row">
-        <button data-combo="ctrl,alt,delete" class="danger">Ctrl-Alt-Del</button>
-        <button data-key="esc">Esc</button>
-        <button data-key="enter">Enter</button>
-        <button data-key="f8">F8</button>
-        <button data-key="tab">Tab</button>
+        <input id="line" placeholder="type a command, press send"
+               autocapitalize="off" autocorrect="off" spellcheck="false"
+               style="flex:1;min-width:140px;font:13px var(--mono);
+                      background:#12141a;color:var(--fg);
+                      border:1px solid var(--line);border-radius:7px;
+                      padding:9px 10px">
+        <button id="sendline" class="primary">Send ↵</button>
       </div>
     </section>
 
@@ -100,6 +159,7 @@
         <button data-power="on">On</button>
         <button data-power="off" class="danger">Off</button>
         <button data-power="cycle" class="danger">Cycle</button>
+        <button id="refresh">Refresh video</button>
       </div>
     </section>
 
@@ -109,54 +169,168 @@
       <div class="kv"><span>last event</span><span id="s-lastev">–</span></div>
       <div class="kv"><span>frames</span><span id="s-frames">–</span></div>
       <div class="kv"><span>viewers</span><span id="s-viewers">–</span></div>
+      <div class="kv"><span>transport</span><span id="s-xport">–</span></div>
     </section>
 
     <h2 style="padding:10px 12px 0">Activity</h2>
     <div id="log"></div>
-  </aside>
-</main>
+  </div>
+</div>
+
+<input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
+       autocomplete="off" enterkeyhint="enter">
 
 <script>
-// ---------------------------------------------------------------- elements
 const $ = id => document.getElementById(id);
 const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
-const veil = $('veil');
+const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 
-// ---------------------------------------------------------------- video
-let frames = 0, lastFrameAt = 0, fpsWin = [];
-let ws, wsAlive = false;
+// ------------------------------------------------------------------ transport
+// Two paths, because the WebSocket came up blank on an iPhone while the
+// server-side handshake was provably fine, and a KVM that shows nothing is
+// worth less than one that shows something a little later. The socket is
+// preferred (full rate, carries input); if it has not delivered a frame within
+// a few seconds, an <img> pointed at multipart/x-mixed-replace takes over --
+// no JS decoding, no canvas, the browser does all of it.
+let ws, wsAlive = false, xport = 'connecting', frames = 0, fpsWin = [];
+let firstFrameTimer = null;
+
+function setXport(x) {
+  xport = x;
+  const label = {ws:'websocket', mjpeg:'mjpeg fallback',
+                 connecting:'connecting…', down:'no video'}[x] || x;
+  $('s-xport').textContent = label;
+  pill('p-xport', x === 'ws' ? 'on' : x === 'mjpeg' ? 'mid' : 'off', label);
+}
+
+function gotFrame() {
+  frames++;
+  const now = performance.now();
+  fpsWin.push(now);
+  while (fpsWin.length && now - fpsWin[0] > 2000) fpsWin.shift();
+  if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
+}
+
+function useMjpeg(why) {
+  if (xport === 'mjpeg') return;
+  setXport('mjpeg');
+  addLine(new Date(), 'transport', 'websocket ' + why + ' — using mjpeg', 'k-lock');
+  cv.style.display = 'none';
+  img.style.display = '';
+  // Cache-buster: without it Safari may reuse a dead stream on reconnect.
+  img.src = '/stream.mjpg?fps=15&t=' + Date.now();
+  img.onload = gotFrame;
+}
 
 function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  let sock;
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    sock = new WebSocket(`${proto}://${location.host}/ws`);
+  } catch (e) { useMjpeg('threw: ' + e); return; }
+  ws = sock;
   ws.binaryType = 'arraybuffer';
+
+  // If the socket opens but never delivers, that is still a failure. Judge on
+  // frames, not on the connection state -- the difference matters here.
+  firstFrameTimer = setTimeout(() => useMjpeg('delivered no frame in 4s'), 4000);
+
   ws.onopen = () => { wsAlive = true; };
-  ws.onclose = () => { wsAlive = false; setTimeout(connect, 1000); };
-  ws.onerror = () => { try { ws.close(); } catch(e){} };
+  ws.onerror = () => { useMjpeg('errored'); };
+  ws.onclose = () => {
+    wsAlive = false;
+    if (xport !== 'mjpeg') setTimeout(connect, 1500);
+  };
   ws.onmessage = ev => {
-    if (typeof ev.data === 'string') return;      // state notice
-    const blob = new Blob([ev.data], {type:'image/jpeg'});
-    // createImageBitmap decodes off the main thread. Both target browsers
-    // support it; drawing a decoded bitmap keeps the paint cheap.
-    createImageBitmap(blob).then(bmp => {
-      if (cv.width !== bmp.width || cv.height !== bmp.height) {
-        cv.width = bmp.width; cv.height = bmp.height;
-      }
+    if (typeof ev.data === 'string') return;
+    if (xport === 'mjpeg') return;
+    if (xport !== 'ws') { setXport('ws'); img.style.display='none'; cv.style.display=''; }
+    createImageBitmap(new Blob([ev.data], {type:'image/jpeg'})).then(bmp => {
+      if (cv.width !== bmp.width) { cv.width = bmp.width; cv.height = bmp.height; }
       ctx.drawImage(bmp, 0, 0);
       bmp.close();
-      frames++; lastFrameAt = performance.now();
-      fpsWin.push(lastFrameAt);
-      while (fpsWin.length && lastFrameAt - fpsWin[0] > 2000) fpsWin.shift();
-    }).catch(()=>{});
+      gotFrame();
+    }).catch(() => useMjpeg('could not decode a frame'));
   };
 }
+setXport('connecting');
 connect();
 
-// ---------------------------------------------------------------- keyboard
-// Keyboard Lock is Chromium-only, so in Firefox and Safari the browser and OS
-// keep their reserved chords -- Cmd-anything on Safari, Ctrl-W/T/N and F11 on
-// Firefox. preventDefault covers the rest. The Send buttons exist for what it
-// cannot: that is a limitation of the platform, not of the daemon.
+$('refresh').onclick = () => {
+  if (xport === 'mjpeg') img.src = '/stream.mjpg?fps=15&t=' + Date.now();
+  else { try { ws.close(); } catch(e){} connect(); }
+};
+
+// ------------------------------------------------------------------ input
+function send(o) {
+  if (wsAlive && xport === 'ws') { ws.send(JSON.stringify(o)); return; }
+  // The mjpeg path carries no input, so fall back to the HTTP command
+  // endpoint. Slower per keystroke, but it means input never depends on
+  // which video transport happened to win.
+  if (o.t === 'down') post('keydown', {key:o.k});
+  else if (o.t === 'up') post('keyup', {key:o.k});
+}
+
+async function post(cmd, body) {
+  try {
+    const r = await fetch('/cmd', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({cmd}, body))});
+    const j = await r.json();
+    if (!j.ok) note(j.error || 'refused');
+    return j;
+  } catch (e) { note(String(e)); }
+}
+
+// Sticky modifiers. Tap Ctrl, then a key: the pair goes as one chord. This is
+// how a touch screen sends a chord at all, and on desktop it covers the chords
+// Firefox and Safari reserve for themselves -- Keyboard Lock is Chromium-only,
+// so those keys never reach the page however it is written.
+const mods = new Set();
+function tapKey(k) {
+  if (mods.size) {
+    post('combo', {keys:[...mods, k]});
+    mods.clear();
+    document.querySelectorAll('[data-mod]').forEach(b => b.classList.remove('sticky'));
+  } else {
+    post('key', {keys:[k]});
+  }
+}
+document.querySelectorAll('[data-mod]').forEach(b => b.onclick = () => {
+  const m = b.dataset.mod;
+  if (mods.has(m)) { mods.delete(m); b.classList.remove('sticky'); }
+  else { mods.add(m); b.classList.add('sticky'); }
+});
+document.querySelectorAll('[data-key]').forEach(b => b.onclick = () => tapKey(b.dataset.key));
+document.querySelectorAll('[data-combo]').forEach(b => b.onclick = () =>
+  post('combo', {keys:b.dataset.combo.split(',')}));
+document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
+  const a = b.dataset.power;
+  if (a !== 'on' && !confirm(`Power ${a} the g2k?\n\nIf a sweep is running this will destroy it.`)) return;
+  post('power', {action:a});
+});
+
+// -- the line box: the reliable way to type on a phone -----------------------
+// A virtual keyboard does not produce usable keydown events for every key, and
+// autocorrect rewrites text after the fact. Sending a whole line on submit
+// sidesteps both, and it matches how you actually drive DOS: a command, then
+// Enter.
+$('sendline').onclick = sendLine;
+$('line').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); sendLine(); }
+});
+async function sendLine() {
+  const el = $('line'), s = el.value;
+  if (!s) { post('key', {keys:['enter']}); return; }
+  await post('type', {text:s});
+  await post('key', {keys:['enter']});
+  el.value = '';
+}
+
+// -- live keyboard ----------------------------------------------------------
+// Desktop: capture physical keys by e.code. Mobile: focusing the off-screen
+// input summons the system keyboard, and its characters arrive as `input`
+// events rather than as usable keydowns.
 const CODE = {
   Enter:'enter', Escape:'esc', Backspace:'backspace', Tab:'tab', Space:'space',
   ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
@@ -169,168 +343,130 @@ const CODE = {
   BracketRight:'rightbrace', Backslash:'backslash', Semicolon:'semicolon',
   Quote:'apostrophe', Backquote:'grave', Comma:'comma', Period:'dot',
   Slash:'slash', IntlBackslash:'102nd', ContextMenu:'menu',
-  MetaLeft:'leftmeta', MetaRight:'rightmeta', Pause:'pause',
-  PrintScreen:'sysrq',
+  MetaLeft:'leftmeta', MetaRight:'rightmeta', Pause:'pause', PrintScreen:'sysrq',
   NumpadAdd:'kpplus', NumpadSubtract:'kpminus', NumpadMultiply:'kpasterisk',
   NumpadDivide:'kpslash', NumpadDecimal:'kpdot', NumpadEnter:'kpenter',
 };
 for (let i=1;i<=12;i++) CODE['F'+i] = 'f'+i;
 for (const c of 'abcdefghijklmnopqrstuvwxyz') CODE['Key'+c.toUpperCase()] = c;
-for (let i=0;i<=9;i++) { CODE['Digit'+i] = ''+i; CODE['Numpad'+i] = 'kp'+i; }
+for (let i=0;i<=9;i++) { CODE['Digit'+i]=''+i; CODE['Numpad'+i]='kp'+i; }
 
 let armed = false;
-const kbdBox = $('kbd');
 function setArmed(v) {
   armed = v;
-  kbdBox.classList.toggle('armed', v);
-  kbdBox.textContent = v ? 'keyboard captured — click away to release'
-                         : 'click to capture keyboard';
+  $('kbtn').classList.toggle('sticky', v);
+  $('kbtn').textContent = v ? '⌨ capturing' : '⌨ Keyboard';
+  if (v) ghost.focus({preventScroll:true}); else ghost.blur();
 }
-kbdBox.addEventListener('click', () => { setArmed(true); kbdBox.focus(); });
-kbdBox.addEventListener('blur', () => { if (armed) { setArmed(false); send({t:'release'}); }});
+$('kbtn').onclick = () => setArmed(!armed);
+ghost.addEventListener('blur', () => { if (armed) setArmed(false); });
 
-function send(o) { if (wsAlive) ws.send(JSON.stringify(o)); }
+// Text from a virtual keyboard, dictation or autocorrect.
+ghost.addEventListener('input', () => {
+  const s = ghost.value;
+  ghost.value = '';
+  if (s) post('type', {text:s});
+});
+ghost.addEventListener('keydown', e => {
+  const k = CODE[e.code] || (e.key === 'Enter' ? 'enter'
+            : e.key === 'Backspace' ? 'backspace' : null);
+  // Printable characters are left to the `input` event above; sending them
+  // here as well would type everything twice.
+  if (!k || (e.key.length === 1 && !e.ctrlKey && !e.altKey)) return;
+  e.preventDefault();
+  tapKey(k);
+});
 
 addEventListener('keydown', e => {
-  if (!armed) return;
+  if (!armed || e.target === ghost || e.target === $('line')) return;
   const k = CODE[e.code];
   if (!k) return;
   e.preventDefault();
-  if (e.repeat) return;   // the target does its own repeat; doubling here
-  send({t:'down', k});     // would type twice at a DOS prompt
+  if (e.repeat) return;
+  send({t:'down', k});
 }, {capture:true});
-
 addEventListener('keyup', e => {
-  if (!armed) return;
+  if (!armed || e.target === ghost || e.target === $('line')) return;
   const k = CODE[e.code];
   if (!k) return;
   e.preventDefault();
   send({t:'up', k});
 }, {capture:true});
 
-// ---------------------------------------------------------------- buttons
-document.querySelectorAll('[data-key]').forEach(b =>
-  b.onclick = () => post('key', {keys:[b.dataset.key]}));
-document.querySelectorAll('[data-combo]').forEach(b =>
-  b.onclick = () => post('combo', {keys:b.dataset.combo.split(',')}));
-document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
-  const a = b.dataset.power;
-  // Confirm before cutting mains. This is a 1995 machine that may have a
-  // sweep on it, and a stray click is expensive.
-  if (a !== 'on' && !confirm(`Power ${a} the g2k?\n\nIf a sweep is running this will destroy it.`)) return;
-  post('power', {action:a});
-});
-
-async function post(cmd, body) {
-  try {
-    const r = await fetch('/cmd', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(Object.assign({cmd}, body))});
-    const j = await r.json();
-    if (!j.ok) note(j.error || 'refused');
-  } catch (e) { note(String(e)); }
-}
-
-// ---------------------------------------------------------------- log
+// ------------------------------------------------------------------ log
 let seq = 0;
 const logEl = $('log');
 const CLS = k => k.startsWith('lock.broken') ? 'k-taint'
-              : k.startsWith('lock') || k === 'input.refused' ? 'k-lock'
-              : k.startsWith('video') ? 'k-vid' : 'k-cmd';
-
-function note(text) { addLine(new Date(), 'ui', text, 'k-lock'); }
+  : (k.startsWith('lock') || k === 'input.refused') ? 'k-lock'
+  : k.startsWith('video') ? 'k-vid' : 'k-cmd';
+function note(t) { addLine(new Date(), 'ui', t, 'k-lock'); }
 function addLine(d, kind, detail, cls) {
   const row = document.createElement('div');
   row.innerHTML = `<span class="t">${d.toTimeString().slice(0,8)}</span>`
-    + `<span class="k ${cls||CLS(kind)}">${kind}</span>`
-    + `<span class="d"></span>`;
+    + `<span class="k ${cls||CLS(kind)}">${kind}</span><span class="d"></span>`;
   row.lastChild.textContent = detail || '';
-  logEl.appendChild(row);
-  while (logEl.children.length > 400) logEl.removeChild(logEl.firstChild);
-  logEl.scrollTop = logEl.scrollHeight;
+  logEl.insertBefore(row, logEl.firstChild);
+  while (logEl.children.length > 250) logEl.removeChild(logEl.lastChild);
 }
-
 async function pollEvents() {
   try {
-    const r = await fetch('/events?since=' + seq);
-    const j = await r.json();
+    const j = await (await fetch('/events?since=' + seq)).json();
     if (j.missed) note('— gap in log, some events were not seen —');
     for (const e of (j.events||[])) {
       seq = Math.max(seq, e.seq);
-      let d = e.detail || '';
-      if (e.kind === 'cmd') d = `${e.cmd} ${d}`.trim() + (e.by ? `  ←${e.by}` : '');
-      else d = Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
-                 .map(([k,v])=>`${k}=${v}`).join(' ');
+      let d = e.kind === 'cmd' ? `${e.cmd} ${e.detail||''}`.trim() + (e.by?`  ←${e.by}`:'')
+            : Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
+                .map(([k,v])=>`${k}=${v}`).join(' ');
       addLine(new Date(e.t*1000), e.kind, d);
     }
   } catch (e) {}
 }
 
-// ---------------------------------------------------------------- status
-const fmtAge = s => s == null ? '–'
-  : s < 90 ? s.toFixed(0)+'s'
+// ------------------------------------------------------------------ status
+const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
   : s < 5400 ? (s/60).toFixed(1)+'m' : (s/3600).toFixed(1)+'h';
-
+function pill(id, cls, text) {
+  const el = $(id); el.className = 'pill ' + cls; el.textContent = text;
+}
 async function pollState() {
   let j;
   try { j = await (await fetch('/state.json')).json(); }
   catch (e) { pill('p-video','off','daemon unreachable'); return; }
-
   const v = j.video || {};
-  // A frozen last frame is what makes a KVM lie, so an unlocked stream is
-  // covered and captioned rather than left looking live.
   if (v.state === 'locked') {
     pill('p-video','on','video locked'); veil.classList.remove('show');
   } else {
     pill('p-video','mid','video ' + (v.state||'?'));
-    const T = {nosignal:'no signal', frozen:'frozen — no live picture'};
+    const T = {nosignal:'no signal', frozen:'frozen — not live',
+               starting:'waiting for first frame'};
     $('veil-title').textContent = T[v.state] || v.state || '—';
     $('veil-sub').textContent = v.state === 'frozen'
-      ? 'Frames are still arriving, but every one is byte-identical, so the '
+      ? 'Frames are still arriving but every one is byte-identical, so the '
       + 'source is repeating rather than drawing. DOS text mode 03h does this. '
-      + 'The image behind this notice is real but not live.'
+      + 'The image behind this is real, but not live.'
       : v.state === 'nosignal'
-      ? 'No frames are arriving. On this rig that is often correct rather than '
-      + 'a fault: with the Mach64 fitted, a game run at 512x384 is outside the '
-      + 'capture stick entirely.'
+      ? 'No frames are arriving. On this rig that is often correct: with the '
+      + 'Mach64 fitted, a game run at 512x384 is outside the capture stick.'
       : '';
     $('veil-age').textContent = v.last_frame_age_s != null
       ? 'last frame ' + fmtAge(v.last_frame_age_s) + ' ago' : '';
     veil.classList.add('show');
   }
-
   const L = j.lock || {};
-  if (L.owner) pill('p-lock','mid',`input held by ${L.owner} · ${fmtAge(L.held_s)}`);
-  else pill('p-lock','on','input free');
-
+  pill('p-lock', L.owner ? 'mid' : 'on',
+       L.owner ? `held by ${L.owner}` : 'input free');
   const inf = j.inflight || [];
-  $('s-inflight').textContent = inf.length
-    ? `${inf[0].cmd} · ${fmtAge(inf[0].age_s)}` : 'idle';
-  $('s-lastev').textContent  = fmtAge(j.last_event_age_s);
-  $('s-frames').textContent  = v.frames ?? '–';
+  $('s-inflight').textContent = inf.length ? `${inf[0].cmd} · ${fmtAge(inf[0].age_s)}` : 'idle';
+  $('s-lastev').textContent = fmtAge(j.last_event_age_s);
+  $('s-frames').textContent = v.frames ?? '–';
   $('s-viewers').textContent = j.viewers ?? '–';
-  $('p-fps').textContent = (fpsWin.length ? (fpsWin.length/2).toFixed(0) : 0) + ' fps';
 }
-
-function pill(id, cls, text) {
-  const el = $(id);
-  el.className = 'pill ' + cls;
-  el.textContent = text;
-}
-
 async function pollPower() {
-  try {
-    const r = await fetch('/cmd', {method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({cmd:'power', action:'state'})});
-    const j = await r.json();
-    if (j.ok) pill('p-power', j.power.on ? 'on':'off',
-                   'power ' + (j.power.on ? 'on':'off'));
-  } catch (e) {}
+  const j = await post('power', {action:'state'});
+  if (j && j.ok) pill('p-power', j.power.on?'on':'off', 'power ' + (j.power.on?'on':'off'));
 }
-
-setInterval(pollState, 1000);
-setInterval(pollEvents, 1000);
-setInterval(pollPower, 15000);
+setInterval(pollState, 1500);
+setInterval(pollEvents, 1500);
+setInterval(pollPower, 20000);
 pollState(); pollEvents(); pollPower();
 </script>
