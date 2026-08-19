@@ -671,8 +671,79 @@ keystroke injection points (sec. 5.1). It does mean the network channel can
 only be driven from the prompt, never mid-sweep -- which was already true of
 everything else.
 
-`LOADPKT.BAT` / `UNLOADPKT.BAT` exist so a measured run can be network-TSR-free,
-preserving the conventional-memory picture the whole fps matrix was taken under.
+### DO NOT run `LOADPKT.BAT` or `UNLOADPKT.BAT`  **[corrected 2026-08-19]**
+
+An earlier version of this section said those scripts let a measured run be
+network-TSR-free. **That was wrong.** Both are 11:14 relics of the abandoned
+E100PKT attempt, predating the ODI path that landed at 13:49:
+
+    LOADPKT.BAT:    C:\MTCP\E100PKT.COM /i 60
+    UNLOADPKT.BAT:  C:\MTCP\E100PKT.COM /u
+
+That is the driver with the ~15-minute EEPROM hang. Running `LOADPKT` walks
+straight into the documented dead end, and its comments assert `packetint 0x60`,
+contradicting `TCP.CFG`'s `0x7E`. `bootstrap-cf.sh` never copies them to the
+card -- they are orphans in the tarball only because the whole `dos/` directory
+was swept.
+
+**There is no implemented or proven unload path for the ODI stack.** LSL /
+E100BODI / ODIPKT are designed to load at boot and stay; whether they support
+unloading at all is unverified.
+
+### The discipline that actually protects the fps matrix
+
+The default boot is **already network-TSR-free** -- the card's `AUTOEXEC.BAT`
+has no network lines and `MTCPCFG` is unset, both confirmed by reading the live
+machine. That is precisely the conventional-memory picture the ~157 banked
+measurements were taken under.
+
+So: **load the stack manually for a transfer, then reboot before any measured
+run. Never load TSRs and measure in the same boot.** This is stronger than an
+unload path would have been, because it needs nothing to work correctly.
+
+### Other traps in the tarball's `dos/` directory
+
+- **`CONFIG.SYS.merged` and `AUTOEXEC.BAT.merged` encode the NDIS2 dead end**
+  (PROTMAN.DOS, E100B.DOS, DIS_PKT.DOS, NETBIND.COM) -- the path that fails
+  "Error 45". Do not apply them. Authoritative sources are
+  `GATEWAY2000-DOS-NETWORKING.md` sections 5-6, or `bootstrap-cf.sh`.
+- **`GET.BAT`/`PUT.BAT` in `dos/` are the RAM-disk variants**, pulling into
+  `%RAMDRV%` via XMSDSK. The doc's section 9 versions supersede them and run
+  from `C:\DOSKUTSU` on the CF instead -- because the SDL3 DOS backend writes
+  its log next to the EXE, and from a RAM disk a hang loses the logs. **For any
+  QA sweep, use the section 9 variants** so logs survive a freeze.
+
+**Disambiguation rule for anything else found in that bundle: later file, more
+correct.** 11:14 = E100PKT attempt, 12:32 = NDIS2 attempt, 13:49 = ODI success
+plus `bootstrap-cf.sh`, 15:52 = the final writeup.
+
+### `AUTOEXEC.BAT` is repo-managed -- never hand-edit the card
+
+The card's `AUTOEXEC.BAT` and `CONFIG.SYS` are tracked in `~/git/g2k` and pushed
+by `scripts/push-to-card.sh` from an explicit manifest. **An edit made directly
+on the card is silently overwritten at the next sync.**
+
+This matters because **two separate AUTOEXEC changes are currently pending from
+two different sessions**, and neither is aware of the other:
+
+1. The doskutsu session's proposed `0xED` LED-pulse line as the last line of
+   AUTOEXEC, giving the harness a true DOS-ready signal (sec. 2.1).
+2. This session's ODI stack lines, if the operator wants networking at boot.
+
+Both must go through `~/git/g2k`, not the card, and ideally as one coordinated
+change rather than two that overwrite each other. Flagged to both sessions.
+
+### Verified: the card's `C:\NET` matches the tarball
+
+The nine file sizes read off the live machine match the staged files in the
+reference bundle byte for byte and sum to exactly 152,684 -- the total DOS
+reported. (DOS's "11 file(s)" counts `.` and `..`.) So the card's copy is the
+same build as `net/` in `g2k-net-2026-08-18.tar.gz`, and the two can be treated
+as one known quantity rather than two unknowns.
+
+`C:\MTCP` is still unconfirmed on the card -- `bootstrap-cf.sh` writes both
+directories in one run, so it very likely exists, but that is inference from the
+script rather than a reading.
 
 Static IP in the g2k docs is 192.0.2.117, gateway/nameserver 192.0.2.1.
 
@@ -681,9 +752,46 @@ Reference bundle: `/tmp/g2k-net-2026-08-18.tar.gz` on this host, sha256
 `GATEWAY2000-DOS-NETWORKING.md` plus the drivers, mTCP suite and both sides'
 scripts.
 
-**Still unverified:** whether `C:\MTCP\` exists on the card alongside
-`C:\NET\`, and whether the AUTOEXEC actually loads the stack at boot -- the
-`SET` dump showed no `MTCPCFG`, so it currently does not.
+**Still unverified:** whether `C:\MTCP\` exists on the card. The AUTOEXEC does
+not load the stack at boot -- the `SET` dump showed no `MTCPCFG` under either
+profile -- which is the desired state, see the discipline note above.
+
+### Bring-up sequence, prompt-safe
+
+All at a real command prompt, one line each, never mid-sweep:
+
+```
+DIR C:\MTCP\PKTTOOL.EXE          confirm the mTCP suite exists
+TYPE C:\MTCP\TCP.CFG             read back packetint and ipaddr
+CD \NET
+C:\NET\LSL.COM
+C:\NET\E100BODI.COM
+C:\NET\ODIPKT.COM 0 0x7E
+SET MTCPCFG=C:\MTCP\TCP.CFG
+C:\MTCP\PKTTOOL.EXE scan
+C:\MTCP\PING.EXE 192.0.2.1
+```
+
+Expected: E100BODI prints PCI 8086/1229, Slot 7, IRQ 10, Port FCC0, MAC
+00D0B74494F5, 100 Mbps full duplex, Frame ETHERNET_II. ODIPKT prints "Using
+Ethernet framing, class 1" then "ODIPKT is installed and ready." PKTTOOL scan
+reports Name: ODIPKT, Class 1, Type 71 at 0x7E. PING gets replies with ttl=64.
+
+Failure signatures: "Cannot get MLID control entry" = board argument was 1, must
+be 0. "Could not setup packet driver ... interrupt 0x%X" = `TCP.CFG`'s
+`packetint` disagrees with where ODIPKT installed; `PKTTOOL scan` reports the
+real vector. E100BODI reporting no link is a cable or switch problem.
+
+**IP discrepancy to resolve on the wire:** the writeup and staged `TCP.CFG` say
+`192.0.2.117`; `BOOTSTRAP.md`'s plan says `192.0.2.50`. **The card's own
+`TCP.CFG` is authoritative** -- hence `TYPE` in the sequence above. Gateway and
+nameserver are `192.0.2.1`; FTP host `192.0.2.10` port 2121, login
+`USER/PASSWORD_FROM_ENV`.
+
+**Arm Caps Lock before the `E100BODI` line.** Link negotiation takes a few
+seconds, so a machine that stops answering the LED toggle for minutes is hung
+rather than slow -- a cheap blind liveness check for the failure most worth
+catching here (sec. 2.1).
 
 ### Original plan, superseded
 
