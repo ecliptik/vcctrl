@@ -654,6 +654,14 @@ def handle(devs, registry, req):
     # contract -- the peer session's tooling parses it. Do NOT add keys here;
     # capability health is reported by `caps` precisely so this stays
     # byte-identical to what it returned before the refactor.
+    #
+    # The sharper reason, from the vcctrl session, is not "it would break a
+    # caller today" -- their preflight reads status["usb4vc"] and would not
+    # notice. It is that adding capability health here makes `status` a dict
+    # whose truthiness varies with unrelated subsystem health, and then someone
+    # writing the obvious `all(status.values())` gets a preflight that refuses
+    # to run a sweep because the web UI is down. Keeping them separate means
+    # that mistake is not available to make.
     if cmd == "status":
         return {"ok": True,
                 "keyboard": devs.kbd.device.path,

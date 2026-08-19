@@ -430,6 +430,15 @@ it is worse than "the occasional reboot":
   `VGACAP\MODE03`, or a profile booting without the mode-12h line. This can
   persist indefinitely and is *correct*.
 - **POST**, where the signal disappears and comes back with different timing.
+- **A card on which `nosignal` is the correct steady state, indefinitely.**
+  PLAN sec. 4 predicts the Mach64 under UniVBE runs 512x384 at ~77 Hz, which
+  cannot be double-scanned and sits outside the stick's 60 Hz-only firmware
+  table. If that prediction holds, then with that card installed the streamer
+  never receives a frame **and nothing is wrong.** This is the strongest
+  argument for the liveness rule below: a timer-driven respawn would churn the
+  device forever against a correct state, for as long as that card is in the
+  machine. The `vcctrl` session is measuring it now with
+  `bin/vcctrl-capcheck`.
 
 So "no frames" must be treated as **possibly correct and indefinite**:
 
@@ -1001,10 +1010,11 @@ make the handover reviewable rather than a request to take it on trust:
   question 8 -- do not assume it, run it.
 - After a daemon restart, `usb4vc_holds_us()` reports both devices held. A
   restart is not free (13.3) and this is how you confirm it recovered.
-- `vcctrl-sweep`, `vcctrl-collect` and `vcctrl-uvconfig` run unmodified against
-  the new daemon. (`vcctrl-cardid` reads log files and never touches the
-  daemon, so it is out of scope. Both tools landed after this plan's first
-  draft.)
+- `vcctrl-sweep`, `vcctrl-collect`, `vcctrl-uvconfig` and `vcctrl-capcheck` run
+  unmodified against the new daemon. (`vcctrl-cardid` reads log files and never
+  touches the daemon, so it is out of scope. All of these landed after this
+  plan's first draft; check the current contents of `bin/` rather than this
+  list, which will go stale again.)
 
 The last one cannot be verified from this side alone -- it needs the peer
 session's actual tooling against the actual machine. **That is the natural
@@ -1035,6 +1045,13 @@ does not quietly drop one:
   across a whole logical operation and not per-event.
 - **The `vcctrl` CLI contract is frozen.** ~157 banked fps measurements sit
   behind the peer session's tooling.
+- **`status` and `caps` stay separate commands.** Not because a caller would
+  break today, but because merging them makes `status` a dict whose truthiness
+  varies with unrelated subsystem health -- and then `all(status.values())`,
+  which is the obvious thing to write, becomes a preflight that refuses to run
+  a sweep because the web UI is down. Confirmed by the peer session, whose
+  preflight would not have noticed the change and would have inherited the
+  trap.
 
 ### 13.4 What is not in this
 

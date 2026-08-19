@@ -111,10 +111,18 @@ def test_concurrent_type():
     bad = 0
     for _ in range(TRIALS):
         d = make_devices(delay=0.00002)
-        # Lowercase deliberately. CHARMAP maps "A" to (KEY_A, shift=True), so
+        # Lowercase deliberately, and this comment is the point of the test as
+        # much as the assertion is. CHARMAP maps "A" to (KEY_A, shift=True), so
         # an uppercase string emits KEY_LEFTSHIFT between every letter and the
-        # run-detector below would score a correctly-locked run as interleaved.
-        # Caught by this test failing 25/25 on its first run.
+        # run-detector below scores a correctly-locked run as interleaved.
+        # This test failed 25/25 on its first run for exactly that reason.
+        #
+        # Left here rather than silently fixed because the next person writing
+        # an input test will reach for uppercase -- it is more visually
+        # distinct in a log -- and will hit the same thing. Note how close that
+        # was to being "fixed" by loosening the assertion below, which would
+        # have left a green check on the one item that can silently corrupt a
+        # sweep launch. The control case is what made that impossible.
         ts = [threading.Thread(target=d.type_text, args=("a" * N, 0.0)),
               threading.Thread(target=d.type_text, args=("b" * N, 0.0))]
         for t in ts:
