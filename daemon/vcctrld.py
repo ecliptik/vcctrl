@@ -18,6 +18,7 @@ Constraints read out of the USB4VC source, all load-bearing:
   - one event per device per loop pass      (:772), 5 ms idle sleep (:766)
 """
 
+import collections
 import errno
 import glob
 import json
@@ -461,6 +462,141 @@ def usb4vc_holds_us():
 #      itself in BYTES, not in items.
 
 
+# The commands the input lock gates. Everything else is ungated on purpose:
+# observation is never gated (docs/WEBKVM.md sec. 2), and `power` is
+# deliberately in the ungated set because cutting mains is how you rescue a
+# sweep that has wedged past the point where input would help.
+GATED_COMMANDS = frozenset([
+    "key", "type", "hold", "combo", "keydown", "keyup", "release_all",
+    "mouse_move", "mouse_click",
+])
+
+
+class Bus(object):
+    """Ring of recent events, published by every command the daemon runs.
+
+    This is what makes the browser show *the harness typed RB at 19:22:04 and
+    took the input lock* rather than only *the screen changed* -- the
+    difference between the automation working and the automation thinking it
+    is working. Three stuck-failures on 2026-08-19 would all have been visible
+    here with no video at all.
+
+    Bounded by count rather than bytes, unlike the frame ring: events are
+    small fixed-shape dicts, so count IS a bound on memory here. The frame
+    ring's byte cap exists because frame size varies by two orders of
+    magnitude and an OOM takes the uinput devices down with it.
+    """
+
+    def __init__(self, cap=2000):
+        self.lock = threading.Lock()
+        self.seq = 0
+        self.events = collections.deque(maxlen=cap)
+
+    def publish(self, kind, **fields):
+        with self.lock:
+            self.seq += 1
+            ev = {"seq": self.seq, "t": time.time(), "kind": kind}
+            ev.update(fields)
+            self.events.append(ev)
+            return ev
+
+    def since(self, seq, limit=200):
+        with self.lock:
+            out = [ev for ev in self.events if ev["seq"] > seq]
+            newest = self.seq
+            oldest = self.events[0]["seq"] if self.events else 0
+        # `missed` tells a reconnecting client it fell off the back of the ring
+        # rather than letting it believe it has a complete history.
+        return {"events": out[:limit], "seq": newest,
+                "missed": seq != 0 and seq + 1 < oldest}
+
+
+class Activity(object):
+    """In-flight commands and their age.
+
+    "harness has been in ledwait for 14 minutes" is the operator's question
+    rendered in one line, and it needs nothing but a start time.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.inflight = {}
+        self.next_id = 0
+
+    def begin(self, cmd):
+        with self.lock:
+            self.next_id += 1
+            self.inflight[self.next_id] = (cmd, time.time())
+            return self.next_id
+
+    def end(self, ident):
+        with self.lock:
+            self.inflight.pop(ident, None)
+
+    def report(self):
+        now = time.time()
+        with self.lock:
+            return sorted(
+                ({"cmd": c, "age_s": round(now - t0, 3)}
+                 for c, t0 in self.inflight.values()),
+                key=lambda d: -d["age_s"])
+
+
+class Arbiter(object):
+    """The input lock. Gates input only -- never observation.
+
+    Unheld by default, and while unheld every input command behaves exactly as
+    it did before this existed. Nothing in the existing tooling acquires it, so
+    adopting it is opt-in and this can land without touching a sweep.
+    """
+
+    def __init__(self, bus):
+        self.lock = threading.Lock()
+        self.bus = bus
+        self.owner = None
+        self.since = None
+
+    def acquire(self, owner, force=False):
+        with self.lock:
+            if self.owner is not None and self.owner != owner and not force:
+                return {"ok": False, "error": "input locked by %r since %.0f"
+                        % (self.owner, self.since), "locked_by": self.owner}
+            broke = self.owner if (self.owner and self.owner != owner) else None
+            self.owner, self.since = owner, time.time()
+        if broke:
+            # A break is the tainting event. Published so it lands in the run's
+            # log rather than living only in whoever clicked the button's head.
+            self.bus.publish("lock.broken", broke=broke, by=owner, taint=True)
+        self.bus.publish("lock.acquired", owner=owner)
+        return {"ok": True, "owner": owner}
+
+    def release(self, owner=None, force=False):
+        with self.lock:
+            if self.owner is None:
+                return {"ok": True, "owner": None}
+            if owner != self.owner and not force:
+                return {"ok": False, "error": "input locked by %r" % self.owner,
+                        "locked_by": self.owner}
+            was, self.owner, self.since = self.owner, None, None
+        self.bus.publish("lock.released", owner=was, forced=bool(force))
+        return {"ok": True, "owner": None, "was": was}
+
+    def check(self, who):
+        """None if `who` may send input, else the refusal to return."""
+        with self.lock:
+            if self.owner is None or self.owner == who:
+                return None
+            return {"ok": False,
+                    "error": "input locked by %r since %.0f"
+                             % (self.owner, self.since),
+                    "locked_by": self.owner, "held_s": time.time() - self.since}
+
+    def status(self):
+        with self.lock:
+            return {"owner": self.owner,
+                    "held_s": (time.time() - self.since) if self.since else None}
+
+
 class Capability(object):
     """One device or concern. Subclasses declare a name and a command map."""
 
@@ -617,6 +753,9 @@ class Registry(object):
     """
 
     def __init__(self, devs):
+        self.bus = Bus()
+        self.activity = Activity()
+        self.arbiter = Arbiter(self.bus)
         self.caps = {}
         self.failed = {}
         self.routes = {}
@@ -638,13 +777,61 @@ class Registry(object):
         if route is None:
             return None
         _name, fn = route
-        return fn(req)
+
+        # Gating and event publishing are central rather than per-capability,
+        # so a new capability cannot forget either. A capability that wants to
+        # be gated only has to name its command in GATED_COMMANDS.
+        if cmd in GATED_COMMANDS:
+            refusal = self.arbiter.check(req.get("as"))
+            if refusal is not None:
+                self.bus.publish("input.refused", cmd=cmd,
+                                 locked_by=refusal["locked_by"],
+                                 by=req.get("as"))
+                return refusal
+
+        ident = self.activity.begin(cmd)
+        t0 = time.time()
+        try:
+            resp = fn(req)
+        except Exception as exc:
+            self.bus.publish("cmd.error", cmd=cmd, by=req.get("as"),
+                             error="%s: %s" % (type(exc).__name__, exc))
+            raise
+        finally:
+            self.activity.end(ident)
+        self.bus.publish("cmd", cmd=cmd, by=req.get("as"),
+                         ok=bool(resp.get("ok")),
+                         ms=round((time.time() - t0) * 1000.0, 1),
+                         detail=_summarise(cmd, req))
+        return resp
 
     def report(self):
         out = {name: {"ok": True} for name in self.caps}
         for name, err in self.failed.items():
             out[name] = {"ok": False, "error": err}
         return out
+
+
+def _summarise(cmd, req):
+    """One short human-readable field for the activity log.
+
+    Deliberately the literal text for `type`: the operator watching a sweep
+    needs to see WHAT was typed, since "the harness typed something" does not
+    distinguish a correct launch from a wrong one. Truncated, because a log
+    line is not a transcript.
+    """
+    if cmd == "type":
+        t = req.get("text", "")
+        return t if len(t) <= 60 else t[:57] + "..."
+    if cmd in ("key", "combo"):
+        return " ".join(req.get("keys", []))
+    if cmd in ("keydown", "keyup", "hold"):
+        return req.get("key", "")
+    if cmd == "power":
+        return req.get("action", "state")
+    if cmd == "mouse_move":
+        return "%s,%s" % (req.get("dx", 0), req.get("dy", 0))
+    return ""
 
 
 def handle(devs, registry, req):
@@ -672,6 +859,45 @@ def handle(devs, registry, req):
 
     if cmd == "caps":
         return {"ok": True, "capabilities": registry.report()}
+
+    if cmd == "events":
+        return dict({"ok": True},
+                    **registry.bus.since(int(req.get("since", 0)),
+                                         int(req.get("limit", 200))))
+
+    if cmd == "activity":
+        # Everything the browser needs to answer "is it stuck": what is running
+        # and for how long, what holds the input lock, and how long since
+        # anything at all happened. Silence and wedged are indistinguishable
+        # without that last one.
+        latest = registry.bus.since(max(0, registry.bus.seq - 1), 1)["events"]
+        return {"ok": True,
+                "inflight": registry.activity.report(),
+                "lock": registry.arbiter.status(),
+                "last_event_age_s": (round(time.time() - latest[0]["t"], 3)
+                                     if latest else None),
+                "seq": registry.bus.seq}
+
+    if cmd == "lock":
+        action = req.get("action", "status")
+        who = req.get("as")
+        if action == "status":
+            return dict({"ok": True}, **registry.arbiter.status())
+        if action == "acquire":
+            if not who:
+                return {"ok": False, "error": "lock acquire needs 'as'"}
+            return registry.arbiter.acquire(who)
+        if action == "release":
+            return registry.arbiter.release(who)
+        if action == "break":
+            # Break-glass. Taints the run by design -- see docs/WEBKVM.md
+            # sec. 2. The taint is published to the bus, not merely returned,
+            # so it lands in the run's log rather than only in the reply to
+            # whoever clicked the button.
+            if not who:
+                return {"ok": False, "error": "lock break needs 'as'"}
+            return registry.arbiter.acquire(who, force=True)
+        return {"ok": False, "error": "unknown lock action: %r" % action}
 
     resp = registry.dispatch(cmd, req)
     if resp is None:

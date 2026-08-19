@@ -55,7 +55,8 @@ Answered by the operator before writing this:
 | Capture device during sweeps | **Streamer owns `/dev/video0` always**; `shot`/sweep read through it |
 | Video transport | **MJPEG over WebSocket now**, WebRTC later if measurement disappoints |
 | Access | **Tailscale only** -- no LAN bind, no password |
-| v1 scope | **Video + keyboard + power.** Mouse and files come after |
+| v1 scope | **Video + keyboard + power + activity log.** Mouse and files come after |
+| Arbitration | **Locked with break-glass** -- input refused while a sweep holds the lock, explicit override marks the run tainted |
 | Daemon shape | **One daemon named `vcctrl`**, capability modules, browser and Claude as equal clients (sec. 2) |
 | Sequencing | Core built in the `webkvm` worktree, then **handed to the `vcctrl` session to finish and layer into testing** (sec. 13) |
 | Purpose | **Independent verification**, not remote convenience -- observation is never gated, and a correct still beats smooth video |
@@ -284,15 +285,22 @@ With that fixed, the remaining rule is a question for the operator and the
 benchmarking session, because it is a comparability judgement about the fps
 matrix rather than an engineering one. The choice:
 
-- **(a) Locked, with break-glass.** While a sweep holds the input lock, browser
-  keyboard is refused, with a visible banner naming what holds it. An explicit
-  "take control" button breaks the lock and **marks the run tainted** in its
-  log. Recommended: it makes the destructive case deliberate and self-
-  documenting, and a tainted run is recoverable where a silently corrupted one
-  is not.
-- **(b) Advisory.** Input always allowed, every injection recorded, runs
-  flagged after the fact. Simpler, but it makes the operator responsible for
-  remembering that typing during a sweep invalidates it.
+**Decided by the operator: (a), locked with break-glass.** While a sweep holds
+the input lock, browser keyboard is refused with a banner naming what holds it.
+An explicit "take control" button breaks the lock and **marks the run tainted**
+in its log. It makes the destructive case deliberate and self-documenting, and
+a tainted run is recoverable where a silently corrupted one is not. The
+rejected alternative was advisory -- input always allowed, runs flagged
+afterwards -- which puts the operator in charge of remembering that typing
+during a sweep invalidates the comparability of ~157 banked measurements.
+
+**Compatibility rule that makes this safe to land now: the lock is unheld by
+default, and with no lock held every input command behaves exactly as it does
+today.** Nothing in the existing tooling acquires it, so nothing changes until
+something opts in. The gate applies to input only -- `leds`, `power`, `status`,
+`caps`, `events` and `activity` are never gated, `power` deliberately so, since
+cutting mains is how you rescue a sweep that has wedged past the point where
+input helps.
 
 Either way, **the event bus is the part that serves the original request, and
 it does more work than its size suggests.** Every injected keystroke, power
@@ -311,9 +319,9 @@ at all*. Two cheap additions make it answer the operator's question directly:
 - **Show the last event's age even when nothing is happening.** Silence and
   wedged look identical unless the clock is on screen.
 
-**Recommended for v1** on the strength of the requirement above, though the
-operator scoped v1 as video + keyboard + power before it was stated -- so this
-is a proposal, not a silent addition.
+**In v1, by the operator's decision**, on the strength of the requirement
+above -- it was proposed rather than assumed, since v1 was scoped before that
+requirement was stated.
 
 ### The single most important design constraint
 
@@ -911,7 +919,7 @@ built at all until someone has seen a cursor move.
 | 6 | Input capability: `keydown`/`keyup`, full key table, the input lock | 1 |
 | 7 | Keyboard coverage sweep -- measure what the STM32 actually delivers (5.2) | 5, 6 |
 | 8 | **Keyboard in the browser**, macro bar, sticky modifiers, release-all-on-disconnect | 7 |
-| 9 | Power panel + live LEDs + **activity log and current-operation age** (sec. 2) | 4, 6 |
+| 9 | Power panel + live LEDs + **activity log and current-operation age** (sec. 2), **in v1** | 4, 6 |
 | 10 | **v1 done.** Measure real glass-to-glass latency and write it down | 5, 8, 9 |
 | 11 | Mouse capability: hardware test, then Pointer Lock | 10 + a cursor that moved |
 | 12 | Files capability: NET-prompt-gated FTP, CF fallback | 10 |

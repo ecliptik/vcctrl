@@ -54,6 +54,8 @@ class FakeDev(object):
     def __init__(self, log, delay=0.0):
         self.log = log
         self.delay = delay
+        # `status` reads devs.kbd.device.path; the fake needs it to answer.
+        self.device = type("D", (), {"path": "/dev/input/event0"})()
 
     def write(self, etype, code, value):
         if self.delay:
@@ -283,6 +285,116 @@ def test_status_shape():
                            "usb4vc"], sorted(resp))
 
 
+def test_lock_default_unheld():
+    """The compatibility property: with no lock held, input behaves exactly as
+    it did before the arbiter existed. Nothing in the existing tooling passes
+    an `as`, so this is what lets the lock land without touching a sweep."""
+    print("\nlock: unheld by default")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    check("nothing holds the lock", reg.arbiter.status()["owner"] is None)
+    resp = vcctrld.handle(d, reg, {"cmd": "type", "text": "DIR"})
+    check("input works with no 'as' while unlocked", resp == {"ok": True}, resp)
+
+
+def test_lock_gating():
+    print("\nlock: gating and break-glass")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+
+    got = vcctrld.handle(d, reg, {"cmd": "lock", "action": "acquire",
+                                  "as": "sweep-RB"})
+    check("sweep takes the lock", got["ok"] and got["owner"] == "sweep-RB")
+
+    refused = vcctrld.handle(d, reg, {"cmd": "type", "text": "oops"})
+    check("browser input refused while sweep holds it",
+          refused["ok"] is False and refused["locked_by"] == "sweep-RB")
+    check("refusal names the holder, not just 'busy'",
+          "sweep-RB" in refused["error"])
+
+    ok = vcctrld.handle(d, reg, {"cmd": "type", "text": "RB", "as": "sweep-RB"})
+    check("the lock holder can still type", ok == {"ok": True}, ok)
+
+    # Observation is NEVER gated -- the invariant from sec. 2. A browser that
+    # goes dark because a sweep is running removes the whole point of the tool.
+    for cmd in ("status", "caps", "leds", "events", "activity"):
+        r = vcctrld.handle(d, reg, {"cmd": cmd})
+        check("%s is not gated by the lock" % cmd, r.get("ok") is True)
+
+    # Break-glass.
+    brk = vcctrld.handle(d, reg, {"cmd": "lock", "action": "break",
+                                  "as": "operator"})
+    check("break-glass transfers the lock",
+          brk["ok"] and brk["owner"] == "operator")
+    evs = reg.bus.since(0, 500)["events"]
+    taints = [e for e in evs if e["kind"] == "lock.broken"]
+    check("the break published a taint event",
+          len(taints) == 1 and taints[0]["taint"] is True and
+          taints[0]["broke"] == "sweep-RB", taints)
+    after = vcctrld.handle(d, reg, {"cmd": "type", "text": "now mine",
+                                    "as": "operator"})
+    check("operator can type after breaking in", after == {"ok": True})
+
+
+def test_event_bus():
+    print("\nevent bus")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    vcctrld.handle(d, reg, {"cmd": "type", "text": "CD \\DOSKUTSU"})
+    vcctrld.handle(d, reg, {"cmd": "key", "keys": ["enter"]})
+    out = reg.bus.since(0, 500)
+    kinds = [e["kind"] for e in out["events"]]
+    check("commands are published", kinds.count("cmd") == 2, kinds)
+    typed = [e for e in out["events"] if e.get("detail") == "CD \\DOSKUTSU"]
+    check("the log records WHAT was typed, not just that something was",
+          len(typed) == 1, [e.get("detail") for e in out["events"]])
+    check("seq is monotonic",
+          [e["seq"] for e in out["events"]] ==
+          sorted(e["seq"] for e in out["events"]))
+    check("since() filters", reg.bus.since(out["seq"], 500)["events"] == [])
+    check("no missed flag on a complete history", out["missed"] is False)
+
+    # A client that fell off the back of the ring must be told, not left to
+    # believe it has a complete history.
+    small = vcctrld.Bus(cap=3)
+    for i in range(10):
+        small.publish("cmd", cmd="x%d" % i)
+    check("missed flag set when the ring wrapped past the client",
+          small.since(1, 100)["missed"] is True)
+
+
+def test_activity_age():
+    """'harness has been in ledwait for 14 minutes' is the operator's question
+    in one line. Test it reports an in-flight command while it is still
+    running, which needs a second thread."""
+    print("\nactivity: in-flight age")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    seen = {}
+    started = threading.Event()
+
+    def slow(req):
+        started.set()
+        time.sleep(0.25)
+        return {"ok": True}
+
+    reg.routes["slowcmd"] = ("test", slow)
+    t = threading.Thread(target=reg.dispatch, args=("slowcmd", {}))
+    t.start()
+    started.wait(2.0)
+    time.sleep(0.05)
+    seen = vcctrld.handle(d, reg, {"cmd": "activity"})
+    t.join()
+    inflight = [i for i in seen["inflight"] if i["cmd"] == "slowcmd"]
+    check("a running command appears in flight with an age",
+          len(inflight) == 1 and inflight[0]["age_s"] > 0.0, seen["inflight"])
+    after = vcctrld.handle(d, reg, {"cmd": "activity"})
+    check("it clears when finished",
+          not [i for i in after["inflight"] if i["cmd"] == "slowcmd"])
+    check("last_event_age_s is reported",
+          after["last_event_age_s"] is not None)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -291,6 +403,10 @@ if __name__ == "__main__":
     test_registry()
     test_rule_2_isolation()
     test_status_shape()
+    test_lock_default_unheld()
+    test_lock_gating()
+    test_event_bus()
+    test_activity_age()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)

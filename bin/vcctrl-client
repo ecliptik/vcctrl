@@ -29,9 +29,16 @@ USAGE = """usage: vcctrl <command> [args]
   ledwait [timeout_s]       block until LED state changes
   power [state|on|off|cycle]  smart-plug mains control for the target
   caps                      capability health (input, leds, power, ...)
+  events [since]            activity log since a sequence number
+  activity                  what is running, for how long, and who holds input
+  lock [status|acquire|release|break] --as NAME
+                            input arbitration. Unheld by default; while held,
+                            input from anyone else is refused. `break` takes it
+                            by force and MARKS THE RUN TAINTED.
 
 options:
   --pace <seconds>          inter-event gap (default 0.012)
+  --as <name>               identify the caller to the input lock
 """
 
 
@@ -57,11 +64,16 @@ def call(req):
 
 def main(argv):
     pace = None
+    who = None
     args = []
     i = 0
     while i < len(argv):
         if argv[i] == "--pace":
             pace = float(argv[i + 1])
+            i += 2
+            continue
+        if argv[i] == "--as":
+            who = argv[i + 1]
             i += 2
             continue
         args.append(argv[i])
@@ -106,6 +118,12 @@ def main(argv):
         req = {"cmd": "release_all"}
     elif cmd == "caps":
         req = {"cmd": "caps"}
+    elif cmd == "events":
+        req = {"cmd": "events", "since": int(rest[0]) if rest else 0}
+    elif cmd == "activity":
+        req = {"cmd": "activity"}
+    elif cmd == "lock":
+        req = {"cmd": "lock", "action": rest[0] if rest else "status"}
     elif cmd == "leds":
         req = {"cmd": "leds"}
     elif cmd == "power":
@@ -122,6 +140,8 @@ def main(argv):
 
     if pace is not None:
         req["pace"] = pace
+    if who is not None:
+        req["as"] = who
 
     resp = call(req)
     if resp is None:
