@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""vcctrl-cell -- run ONE doskutsu cell by hand, with the checks that matter.
+
+Not a sweep runner. This is for the diagnostic single cells that the campaign
+actually needed most often -- try a lever, look at the screen, get one number.
+Every guard here exists because its absence cost a run on 2026-08-19.
+
+WHAT WENT WRONG, AND WHAT EACH GUARD ANSWERS
+
+1. `COPY CFGS\\OPL3.CFG DOSKUTSU.CFG` PROMPTS to overwrite. The prompt ate the
+   first character of the NEXT typed command, and the rest of that line was
+   lost -- so DOSKUTSU_TAS_REPLAY was never set, no reel drove the game, and
+   the cell sat on the title screen until it was power-cycled. The `> NUL`
+   redirect does not suppress a prompt; it only hides the copy's own output.
+   Guard: answer the prompt explicitly, and set every variable BEFORE the copy
+   so a stray prompt cannot swallow one.
+
+2. "The prompt came back" is not "the command worked." A failed SET returns to
+   the prompt exactly like a successful one. Three cells were lost to a check
+   that could only ever return one answer.
+   Guard: read the environment back and PARSE it, rather than screenshotting
+   it and trusting a human to look. The screenshot was taken and not read.
+
+3. A cell that dies instantly and a cell that runs for 149 s are the same
+   observation behind a fixed wait.
+   Guard: confirm the machine is NOT at a prompt shortly after launch.
+
+4. Two scripts polling at_prompt at once corrupt each other -- each toggles
+   Caps Lock, which is the signal the other is reading.
+   Guard: a lock file. This refuses to run rather than interleave.
+
+Usage:
+  vcctrl-cell <TAG> [--set VAR=VAL]... [--ticks N] [--cfg NAME] [--shot-at S]
+"""
+
+import os
+import re
+import sys
+import time
+import importlib.util
+from importlib.machinery import SourceFileLoader
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from vcctrl_common import vc, at_prompt, wait_for_prompt  # noqa: E402
+
+_l = SourceFileLoader("sw", os.path.join(HERE, "vcctrl-sweep"))
+_s = importlib.util.spec_from_loader("sw", _l)
+_m = importlib.util.module_from_spec(_s)
+sys.modules["sw"] = _m
+_l.exec_module(_m)
+grab = _m.grab
+
+LOCK = "/tmp/vcctrl-machine.lock"
+
+
+def acquire():
+    """One driver at a time. Two at_prompt pollers toggle the same Caps Lock
+    and read each other's toggles as their own answer."""
+    if os.path.exists(LOCK):
+        try:
+            pid = int(open(LOCK).read().strip())
+            os.kill(pid, 0)
+            print("REFUSED: pid %d already holds the machine (%s)." % (pid, LOCK))
+            print("  Two drivers polling at_prompt corrupt each other's reads.")
+            return False
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass          # stale lock
+    open(LOCK, "w").write(str(os.getpid()))
+    return True
+
+
+def release():
+    try:
+        os.unlink(LOCK)
+    except OSError:
+        pass
+
+
+def cmd(line, timeout=60):
+    vc("type", line)
+    vc("key", "enter")
+    time.sleep(0.5)
+    return wait_for_prompt(timeout) is not None
+
+
+def read_env_text():
+    """Read the machine's environment off the screen and return the raw OCR.
+
+    This is the guard that would have caught the lost TAS_REPLAY. Capturing
+    the screen was never the problem -- the screenshot existed and was never
+    read. So it is parsed here, and a mismatch stops the run rather than
+    relying on someone noticing.
+    """
+    cmd("SET")
+    shot, _ = grab("cell-env")
+    if shot is None:
+        return None, None
+    try:
+        from PIL import Image
+        import pytesseract
+        return shot, pytesseract.image_to_string(Image.open(shot))
+    except Exception:
+        return shot, None
+
+
+def main(argv):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
+    if not argv or argv[0].startswith("-"):
+        print(__doc__)
+        return 2
+    tag = argv[0].upper()
+    sets, ticks, cfg, shot_at = [], "30000", "OPL3.CFG", 45
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--set":
+            sets.append(argv[i + 1]); i += 2
+        elif argv[i] == "--ticks":
+            ticks = argv[i + 1]; i += 2
+        elif argv[i] == "--cfg":
+            cfg = argv[i + 1]; i += 2
+        elif argv[i] == "--shot-at":
+            shot_at = int(argv[i + 1]); i += 2
+        else:
+            i += 1
+
+    if not acquire():
+        return 2
+    try:
+        print("== cell %s ==" % tag)
+        if wait_for_prompt(60) is None:
+            print("REFUSED: not at a prompt."); return 2
+        if not cmd("CD \\DOSKUTSU"):
+            print("REFUSED: could not reach C:\\DOSKUTSU"); return 2
+
+        # Variables FIRST. If anything later prompts, it cannot eat a SET.
+        wanted = {"DOSKUTSU_TAS_REPLAY": "QA.TAS",
+                  "DOSKUTSU_TAS_PRNG_SEED": "12345",
+                  "DOSKUTSU_TAS_AUTO_EXIT_TICK": ticks,
+                  "DOSKUTSU_LOG_TAG": tag}
+        for s in sets:
+            k, _, v = s.partition("=")
+            wanted[k.upper()] = v
+
+        print("-- clearing and setting environment --")
+        if not cmd("CALL CLRENV", 90):
+            print("REFUSED: CLRENV did not finish."); return 2
+        for k, v in wanted.items():
+            if not cmd("SET %s=%s" % (k, v)):
+                print("REFUSED: no prompt after SET %s" % k); return 2
+
+        # THEN the copy, with its prompt answered explicitly. Plain `> NUL`
+        # hides the copy's output, not its question.
+        print("-- config, answering the overwrite prompt explicitly --")
+        vc("type", "COPY CFGS\\%s DOSKUTSU.CFG" % cfg)
+        vc("key", "enter")
+        time.sleep(2.0)
+        vc("key", "y")                 # answers the prompt if it appeared
+        vc("key", "enter")             # harmless extra Enter if it did not
+        if wait_for_prompt(60) is None:
+            print("REFUSED: no prompt after COPY."); return 2
+
+        print("-- verifying the environment actually took --")
+        shot, text = read_env_text()
+        print("   screenshot: %s" % shot)
+        if text is None:
+            print("   NO OCR -- cannot verify programmatically.")
+            print("   *** LOOK AT %s BEFORE TRUSTING THIS RUN ***" % shot)
+        else:
+            # OCR on this console font is imperfect -- it reads CLRENV as
+            # CLRENU and truncates long names -- so exact value matching would
+            # cry wolf. Match on the variable NAME with a generous prefix,
+            # which is enough to catch the real failure: a SET that never
+            # happened produces no line at all.
+            up = text.upper().replace(" ", "")
+            missing = []
+            for k in wanted:
+                stem = k[:max(12, len(k) - 4)].replace("_", "")
+                if stem.replace("_", "") not in up.replace("_", ""):
+                    missing.append(k)
+            for k in sorted(wanted):
+                print("     %-32s %s" % (k, "ok" if k not in missing else "NOT FOUND"))
+
+            # The specific signature of the bug that cost a cell: a copy
+            # overwrite prompt sitting in the transcript means it ate whatever
+            # was typed next.
+            if "YES/NO/AL" in up or "OVERWRIT" in up or "QUERURIT" in up:
+                print("   *** AN OVERWRITE PROMPT IS ON SCREEN ***")
+                print("   It consumes the next character typed. Whatever command")
+                print("   followed it was truncated. Do not trust this cell.")
+                return 1
+            if missing:
+                print("   REFUSED: %d variable(s) not found in the environment."
+                      % len(missing))
+                print("   This is the failure that cost a cell on 2026-08-19 --")
+                print("   a prompt ate the SET and the prompt still came back.")
+                return 1
+            print("   all %d variables present" % len(wanted))
+
+        print("-- launch --")
+        t0 = time.time()
+        vc("type", "DOSKUTSU.EXE")
+        vc("key", "enter")
+        time.sleep(12)
+        if at_prompt():
+            print("   *** CELL DID NOT START -- prompt 12s after launch ***")
+            s2, _ = grab("cell-%s-failed" % tag)
+            print("   screen: %s" % s2)
+            return 1
+        print("   confirmed running")
+
+        time.sleep(max(0, shot_at - (time.time() - t0)))
+        shot, mean = grab("cell-%s" % tag)
+        print("   mid-cell capture: %s (brightness %s)"
+              % (shot, "%.1f" % mean if mean is not None else "NO LOCK"))
+
+        w = wait_for_prompt(400)
+        if w is None:
+            print("   NO PROMPT after %.0fs -- cell may be stuck." % (time.time() - t0))
+            return 1
+        print("== done in %.0fs ==" % (time.time() - t0))
+        return 0
+    finally:
+        release()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        release()
+        sys.stderr.write("\ninterrupted -- target left as it was\n")
+        os._exit(130)
