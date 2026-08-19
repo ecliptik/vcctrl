@@ -210,3 +210,58 @@ apart with nothing touched.
 Fix: tap the sound card line-out with a passive Y-splitter (fixed level,
 speakers keep working). Failing that, play a known reference at session start
 and normalise against it.
+
+## 12. Mains power control via Kasa -- no wiring needed  [measured]
+
+The g2k runs from a PicoRC (12 V brick -> picoPSU -> AT rails). A TP-Link Kasa
+EP10 on the wall supersedes both the J31 reset-header plan and the PicoRC
+switch-header relay: same recovery capability, no soldering, no GPIO.
+
+**No library required.** The EP10 speaks the legacy TP-Link protocol on port
+9999: a 4-byte big-endian length prefix plus an XOR-autokey cipher seeded at
+171. About twenty lines of pure Python, entirely local, no cloud account. If a
+firmware update ever moves it to KLAP on port 80, this breaks and needs
+`python-kasa`.
+
+    vcctrl power state|on|off|cycle [secs]
+
+`cycle` is unconditional by design -- a wedged machine can report "on" while
+being useless, so cycle means cycle rather than "on if off".
+
+**The plug's Kasa alias is "retro-rig-plug" and is deliberately not renamed.**
+Recorded in `/opt/vcctrl/config.json` because nobody looking at the Kasa app
+would otherwise connect that name to a 1995 PC.
+
+### The machine boots unaided from mains  [measured]
+
+PicoRC is AT-style with no soft-off, so restoring mains is a complete power-on:
+
+| event | time from `power on` |
+|---|---|
+| POST edge (Caps cleared, NumLock set) | **26 s** |
+| DOS prompt | roughly 45 s total (operator: 15-20 s after POST) |
+
+So `vcctrl power on` needs no button press, and the escalation ladder finally
+has a working recovery step for a hung cell -- the case Ctrl-Alt-Del cannot
+reach because SDL owns INT 09h (finding 7).
+
+**Detecting the boot without video:** write `1` to the Caps Lock sysfs node
+before powering on. POST clears Caps and sets NumLock, so the edge is
+unambiguous and arrives ~20 s before the console is readable. Note the arming
+must be a direct sysfs write, not a keystroke -- with the machine off there is
+no host to process a keypress.
+
+## 13. Mode 12h at boot makes the whole boot capturable  [measured]
+
+Setting BIOS mode 12h early in AUTOEXEC, before the TSR loads, means every line
+it prints is visible to the capture stick. Confirmed on the first cold boot:
+CuteMouse, the PicoGUS firmware switch, MSCDEX, and the `[PGSB] ready.` line
+all readable, where previously the console was in text mode 03h and invisible.
+
+That `[%config%] ready.` line is also the provenance witness the g2k session
+recommended -- the booted profile, printed by the machine itself, and now
+machine-readable.
+
+CONFIG.SYS output still is not capturable: it runs before AUTOEXEC, so the boot
+menu and driver loading remain invisible. Fixing that would need a device
+driver, and is almost certainly not worth it.

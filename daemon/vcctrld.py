@@ -32,6 +32,12 @@ from evdev import UInput, ecodes as e
 
 SOCKET_PATH = "/run/vcctrl.sock"
 USB4VC_LOG = "/home/pi/usb4vc/usb4vc_debug_log.txt"
+CONFIG_PATH = "/opt/vcctrl/config.json"
+
+# Seconds the rails stay down during a power cycle. The g2k is an AT-style
+# PicoRC setup with no soft-off, so it boots as soon as power returns; the delay
+# is only to let the supply drain rather than to satisfy any handshake.
+POWER_CYCLE_OFF_S = 6.0
 
 VENDOR = 0x1209
 KBD_PRODUCT = 0xDEA1
@@ -97,6 +103,81 @@ for _d in "0123456789":
 MOUSE_BUTTONS = {
     "left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE,
 }
+
+
+# ---------------------------------------------------------------- power
+
+def load_config():
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _kasa_encrypt(text):
+    key = 171
+    out = bytearray()
+    for b in text.encode():
+        key ^= b
+        out.append(key)
+    return struct.pack(">I", len(out)) + bytes(out)
+
+
+def _kasa_decrypt(data):
+    key = 171
+    out = bytearray()
+    for c in data:
+        out.append(key ^ c)
+        key = c
+    return out.decode(errors="replace")
+
+
+def kasa_send(host, payload, timeout=5.0):
+    """Legacy TP-Link smart-home protocol on port 9999.
+
+    4-byte big-endian length prefix plus an XOR-autokey cipher seeded at 171.
+    No dependency and no cloud account -- the EP10 speaks this directly on the
+    LAN. Newer Kasa firmware may move to KLAP on port 80, in which case this
+    stops working and needs the python-kasa library instead.
+    """
+    sock = socket.create_connection((host, 9999), timeout)
+    try:
+        sock.sendall(_kasa_encrypt(json.dumps(payload)))
+        hdr = b""
+        while len(hdr) < 4:
+            chunk = sock.recv(4 - len(hdr))
+            if not chunk:
+                raise IOError("short header from %s" % host)
+            hdr += chunk
+        want = struct.unpack(">I", hdr)[0]
+        buf = b""
+        while len(buf) < want:
+            chunk = sock.recv(want - len(buf))
+            if not chunk:
+                break
+            buf += chunk
+        return json.loads(_kasa_decrypt(buf))
+    finally:
+        sock.close()
+
+
+def power_state(host):
+    info = kasa_send(host, {"system": {"get_sysinfo": {}}})
+    info = info["system"]["get_sysinfo"]
+    return {"on": bool(info.get("relay_state")),
+            "alias": info.get("alias"),
+            "model": info.get("model"),
+            "on_time_s": info.get("on_time"),
+            "rssi": info.get("rssi")}
+
+
+def power_set(host, on):
+    resp = kasa_send(host, {"system": {"set_relay_state": {"state": 1 if on else 0}}})
+    err = resp.get("system", {}).get("set_relay_state", {}).get("err_code")
+    if err not in (0, None):
+        raise IOError("kasa set_relay_state err_code=%s" % err)
+    return err
 
 
 class Devices(object):
@@ -282,6 +363,29 @@ def handle(devs, req):
         devs.mouse_move(req.get("dx", 0), req.get("dy", 0), pace)
     elif cmd == "mouse_click":
         devs.mouse_click(req.get("button", "left"), pace)
+    elif cmd == "power":
+        cfg = load_config()
+        host = req.get("host") or cfg.get("kasa_host")
+        if not host:
+            return {"ok": False, "error":
+                    "no kasa_host configured (set it in %s)" % CONFIG_PATH}
+        action = req.get("action", "state")
+        if action == "state":
+            return {"ok": True, "power": power_state(host)}
+        if action == "on":
+            power_set(host, True)
+        elif action == "off":
+            power_set(host, False)
+        elif action == "cycle":
+            # Deliberately unconditional: a wedged machine may report on while
+            # being useless, so cycle means cycle rather than "on if off".
+            power_set(host, False)
+            time.sleep(float(req.get("off_seconds", POWER_CYCLE_OFF_S)))
+            power_set(host, True)
+        else:
+            return {"ok": False, "error": "unknown power action: %r" % action}
+        time.sleep(0.5)
+        return {"ok": True, "power": power_state(host)}
     elif cmd == "leds":
         return {"ok": True, "leds": devs.read_leds()}
     elif cmd == "ledwait":

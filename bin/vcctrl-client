@@ -24,6 +24,7 @@ USAGE = """usage: vcctrl <command> [args]
   mouse click [left|right|middle]
   leds                      read PS/2 LED return channel
   ledwait [timeout_s]       block until LED state changes
+  power [state|on|off|cycle]  smart-plug mains control for the target
 
 options:
   --pace <seconds>          inter-event gap (default 0.012)
@@ -95,6 +96,11 @@ def main(argv):
             return 2
     elif cmd == "leds":
         req = {"cmd": "leds"}
+    elif cmd == "power":
+        action = rest[0] if rest else "state"
+        req = {"cmd": "power", "action": action}
+        if action == "cycle" and len(rest) > 1:
+            req["off_seconds"] = float(rest[1])
     elif cmd == "ledwait":
         req = {"cmd": "ledwait",
                "timeout": float(rest[0]) if rest else 5.0}
