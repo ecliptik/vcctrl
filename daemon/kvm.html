@@ -40,6 +40,9 @@
            overflow:hidden; }
   #stage img, #stage canvas { width:100%; height:100%; object-fit:contain;
            image-rendering:pixelated; display:block; }
+  /* The last live picture, shown behind the notice when the stream is not
+     live. Dimmed so it can never be mistaken for the current screen. */
+  #stale { position:absolute; inset:0; filter:grayscale(.6) brightness(.55); }
   #stage.armed { outline:2px solid var(--ok); outline-offset:-2px; }
   #stage { cursor:pointer; }
   #hint { position:absolute; left:0; right:0; bottom:0; padding:5px 8px;
@@ -123,6 +126,7 @@
   <div id="stage">
     <canvas id="screen" width="640" height="480"></canvas>
     <img id="mjpeg" style="display:none" alt="">
+    <img id="stale" style="display:none" alt="">
     <div id="grab"><span>click to capture keyboard</span></div>
     <div id="hint">keyboard captured — press <b>Ctrl + Alt + Shift</b> to release</div>
     <div id="veil">
@@ -549,6 +553,36 @@ async function pollEvents() {
   } catch (e) {}
 }
 
+// The last frame that was positively live, dimmed, behind the notice. Without
+// it the viewer gets a black rectangle, which is indistinguishable from a
+// machine that is switched off -- and the freshest real picture is often the
+// most useful thing on screen, especially with the Mach64 fitted, where a
+// whole game run never locks and the prompts either side are all there is.
+let staleAt = 0;
+async function showStale() {
+  const el = $('stale');
+  if (Date.now() - staleAt > 5000) {
+    staleAt = Date.now();
+    try {
+      const r = await fetch('/lastgood.jpg?t=' + staleAt);
+      if (r.ok) {
+        const age = Number(r.headers.get('X-Frame-Age'));
+        el.src = URL.createObjectURL(await r.blob());
+        el.style.display = '';
+        $('veil-age').textContent = 'showing the last live picture, '
+          + fmtAge(age) + ' old';
+        return;
+      }
+    } catch (e) {}
+    el.style.display = 'none';
+    $('veil-age').textContent = 'no live picture has been seen yet';
+  }
+}
+function hideStale() {
+  $('stale').style.display = 'none';
+  staleAt = 0;
+}
+
 // ------------------------------------------------------------------ status
 const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
   : s < 5400 ? (s/60).toFixed(1)+'m' : (s/3600).toFixed(1)+'h';
@@ -561,7 +595,9 @@ async function pollState() {
   catch (e) { pill('p-video','off','daemon unreachable'); return; }
   const v = j.video || {};
   if (v.state === 'locked') {
-    pill('p-video','on','video locked'); veil.classList.remove('show');
+    pill('p-video','on','video locked');
+    veil.classList.remove('show');
+    hideStale();
   } else {
     pill('p-video','mid','video ' + (v.state||'?'));
     const T = {nosignal:'no signal', frozen:'frozen — not live',
@@ -569,14 +605,14 @@ async function pollState() {
     $('veil-title').textContent = T[v.state] || v.state || '—';
     $('veil-sub').textContent = v.state === 'frozen'
       ? 'Frames are still arriving but every one is byte-identical, so the '
-      + 'source is repeating rather than drawing. DOS text mode 03h does this. '
-      + 'The image behind this is real, but not live.'
+      + 'capture stick is repeating rather than drawing. DOS text mode 03h '
+      + 'does this, and what it repeats is a flat black frame — not the last '
+      + 'real screen.'
       : v.state === 'nosignal'
       ? 'No frames are arriving. On this rig that is often correct: with the '
       + 'Mach64 fitted, a game run at 512x384 is outside the capture stick.'
       : '';
-    $('veil-age').textContent = v.last_frame_age_s != null
-      ? 'last frame ' + fmtAge(v.last_frame_age_s) + ' ago' : '';
+    showStale();
     veil.classList.add('show');
   }
   const L = j.lock || {};

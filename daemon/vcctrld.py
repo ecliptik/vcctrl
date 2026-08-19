@@ -1015,6 +1015,22 @@ class VideoCapability(Capability):
             else:
                 new = "frozen" if frozen else "locked"
 
+            # While the picture IS live, keep the newest frame as the last
+            # known-good one. Cheap -- a reference copy, no decode -- and it
+            # has to happen here rather than in shot(), because the whole point
+            # is to have a picture available when nobody is asking for one.
+            #
+            # Measured why this matters: during DOS text mode 03h the stick
+            # emits a constant FLAT BLACK frame, not a stale copy of the last
+            # real screen. So a viewer in that state has nothing to look at
+            # unless something kept the last live frame, and "black rectangle"
+            # is indistinguishable from a powered-off machine.
+            if new == "locked":
+                with self.lock:
+                    if self.ring:
+                        t, f = self.ring[-1]
+                        self.last_good = (t, f, None)
+
             if new != state:
                 with self.lock:
                     self.state = new
@@ -1142,6 +1158,14 @@ class VideoCapability(Capability):
             return {"ok": True, "picture": False, "state": state,
                     "reason": "nothing has been positively picture yet"}
         t, frame, mean = lg
+        if mean is None:
+            try:
+                from PIL import Image, ImageStat
+                im = Image.open(io.BytesIO(frame))
+                im.draft("L", (im.size[0] // 8, im.size[1] // 8))
+                mean = ImageStat.Stat(im.convert("L")).mean[0]
+            except Exception:
+                mean = None
         return {"ok": True, "picture": True, "state": state, "stale": True,
                 "mean": mean, "t": t, "age_s": round(time.time() - t, 3),
                 "jpeg": base64.b64encode(frame).decode()}
