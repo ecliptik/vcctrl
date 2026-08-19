@@ -1162,7 +1162,54 @@ does not quietly drop one:
   preflight would not have noticed the change and would have inherited the
   trap.
 
-### 13.4 What is not in this
+### 13.4 Verified on hardware -- 2026-08-19
+
+Deployed to the Pi and run against the live g2k (Mach64, PGSB profile, mode 12h
+console, capture locked). Results against the 13.2 checklist:
+
+| criterion | result |
+|---|---|
+| `leds` byte-identical | **identical** |
+| `power state` byte-identical | identical but for `on_time_s`, a live counter |
+| error path byte-identical | **identical** -- `error: ValueError: unknown key: nosuchkey` |
+| `status` byte-identical | differs in one field, and **not because of the refactor** -- see below |
+| USB4VC holds both devices after restart | **yes**, keyboard and mouse both true |
+| two concurrent `type` calls stay intact | **yes, on real hardware** -- see below |
+| observation ungated while locked | **yes** -- `leds`, `activity`, `status`, `caps`, `events` all answered |
+| break-glass publishes a taint | **yes** -- `lock.broken {broke: sweep-test, by: operator-browser, taint: true}` |
+
+**The `status` difference is `led_paths`, and it was worth checking rather than
+explaining away.** The paths moved from `input6::capslock` to `input8::capslock`
+across the deploy, which looks exactly like a refactor regression. It is not:
+restarting the daemon again moved them to `input10`, so the index increments on
+every restart because each restart creates fresh uinput devices. It would have
+differed identically across a restart of the old daemon. **Tested, not
+asserted** -- the hypothesis was cheap to falsify and stating it without the
+second restart would have been a guess wearing a conclusion's clothes.
+
+**The concurrent-`type` result is the one that mattered**, and hardware gave
+better evidence than the unit test could:
+
+    C:\>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+Two intact runs of 30, read off the screen through the full uinput -> USB4VC ->
+STM32 -> PS/2 -> DOS path. The event log carries the corroborating measurement:
+the two calls took **727.8 ms and 1456.3 ms** -- the second is almost exactly
+twice the first, because it waited on `Devices.lock` rather than interleaving
+with it. The screen shows the outcome; the timing shows the mechanism.
+
+Still outstanding from 13.2, because they need the peer session's tooling
+rather than this side: `vcctrl-sweep`, `vcctrl-collect`, `vcctrl-uvconfig`,
+`vcctrl-cell` and `vcctrl-capcheck` running unmodified, and p99 of `vcctrl key`
+under viewer load, which cannot be measured before viewers exist.
+
+**One CLI difference that is not byte-identical and should not be missed:** the
+usage text printed for an unrecognised command has grown, because `keydown`,
+`keyup`, `release-all`, `caps`, `events`, `activity` and `lock` were added to
+it. No caller should be matching on usage text, but "byte-identical output" was
+the promise and this is the one place it does not hold.
+
+### 13.5 What is not in this
 
 Video, web, HTTP, WebSocket, browser, mouse-over-Pointer-Lock, files. Those are
 sections 4 through 9 and steps 2 onward. **This is the core refactor and
