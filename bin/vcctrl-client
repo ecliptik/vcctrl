@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""vcctrl -- client for vcctrld. Runs on the Pi; talks to /run/vcctrl.sock.
+
+The VM-side `vcctrl` is a shell wrapper that ssh's here and runs this. Keeping
+all logic on this side is deliberate: timing (key dwell, event pacing) must
+never cross the network, and it means moving Claude onto the Pi later changes
+nothing but which wrapper you call.
+"""
+
+import json
+import socket
+import sys
+
+SOCKET_PATH = "/run/vcctrl.sock"
+
+USAGE = """usage: vcctrl <command> [args]
+
+  status                    device paths, USB4VC hold state, LED state
+  key <name>...             tap keys in sequence      (enter esc f1 a 1)
+  type <text>               type literal text         (type "CD \\\\DOSKUTSU")
+  hold <key> <ms>           press, dwell, release     (hold left 800)
+  combo <key>...            chord                     (combo ctrl alt delete)
+  mouse move <dx> <dy>
+  mouse click [left|right|middle]
+  leds                      read PS/2 LED return channel
+  ledwait [timeout_s]       block until LED state changes
+
+options:
+  --pace <seconds>          inter-event gap (default 0.012)
+"""
+
+
+def call(req):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(SOCKET_PATH)
+    except OSError as exc:
+        sys.stderr.write("cannot reach vcctrld at %s: %s\n" % (
+            SOCKET_PATH, exc))
+        sys.stderr.write("is it running?  sudo systemctl status vcctrld\n")
+        return None
+    s.sendall((json.dumps(req) + "\n").encode("utf-8"))
+    buf = b""
+    while b"\n" not in buf:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    s.close()
+    return json.loads(buf.decode("utf-8"))
+
+
+def main(argv):
+    pace = None
+    args = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--pace":
+            pace = float(argv[i + 1])
+            i += 2
+            continue
+        args.append(argv[i])
+        i += 1
+
+    if not args or args[0] in ("-h", "--help", "help"):
+        sys.stdout.write(USAGE)
+        return 0
+
+    cmd, rest = args[0], args[1:]
+    if cmd == "status":
+        req = {"cmd": "status"}
+    elif cmd == "key":
+        req = {"cmd": "key", "keys": rest}
+    elif cmd == "type":
+        req = {"cmd": "type", "text": " ".join(rest)}
+    elif cmd == "hold":
+        req = {"cmd": "hold", "key": rest[0],
+               "ms": float(rest[1].rstrip("ms") or 0)}
+    elif cmd == "combo":
+        # accept "ctrl alt delete" or "ctrl-alt-delete"
+        keys = rest if len(rest) > 1 else rest[0].split("-")
+        req = {"cmd": "combo", "keys": keys}
+    elif cmd == "mouse":
+        if not rest:
+            sys.stderr.write(USAGE)
+            return 2
+        if rest[0] == "move":
+            req = {"cmd": "mouse_move", "dx": int(rest[1]),
+                   "dy": int(rest[2])}
+        elif rest[0] == "click":
+            req = {"cmd": "mouse_click",
+                   "button": rest[1] if len(rest) > 1 else "left"}
+        else:
+            sys.stderr.write(USAGE)
+            return 2
+    elif cmd == "leds":
+        req = {"cmd": "leds"}
+    elif cmd == "ledwait":
+        req = {"cmd": "ledwait",
+               "timeout": float(rest[0]) if rest else 5.0}
+    else:
+        sys.stderr.write(USAGE)
+        return 2
+
+    if pace is not None:
+        req["pace"] = pace
+
+    resp = call(req)
+    if resp is None:
+        return 1
+    if not resp.get("ok"):
+        sys.stderr.write("error: %s\n" % resp.get("error"))
+        return 1
+    if len(resp) > 1:
+        sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

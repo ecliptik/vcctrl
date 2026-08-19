@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# vcctrl -- VM-side wrapper. Forwards to the daemon host over ssh.
+#
+# Deliberately thin: it holds no logic, so the same command works unchanged if
+# Claude Code ever runs on the Pi itself (call `vcctrl` there directly).
+set -euo pipefail
+
+VCCTRL_HOST="${VCCTRL_HOST:-usb4vc}"
+
+if [[ $# -eq 0 ]]; then
+  exec ssh "$VCCTRL_HOST" vcctrl --help
+fi
+
+# Quote each argument so shell metacharacters survive the ssh round trip.
+# Without this, `vcctrl type "CD \DOSKUTSU"` loses its backslash and quoting.
+quoted=()
+for a in "$@"; do
+  quoted+=("$(printf '%q' "$a")")
+done
+
+exec ssh "$VCCTRL_HOST" vcctrl "${quoted[@]}"
