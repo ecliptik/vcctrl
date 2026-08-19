@@ -152,14 +152,33 @@ def at_prompt():
 
     Safe to call ONLY when no sweep is running. Uses the LED return channel
     rather than the screen, so it works even if capture is unavailable.
+
+    Closed-loop, not timed. An earlier version toggled, slept 1.0 s, and
+    re-read -- but the re-read is an ssh round-trip of its own, so the sleep
+    was racing an interval nobody had measured. It happened to pass because
+    the surrounding calls padded it; that is luck, not correctness. A false
+    negative here aborts a sweep on a healthy machine.
     """
-    before = vc_json("leds").get("leds", {})
+    before = bool(vc_json("leds").get("leds", {}).get("capslock"))
     vc("key", "capslock")
-    time.sleep(1.0)
-    after = vc_json("leds").get("leds", {})
-    vc("key", "capslock")          # restore
-    time.sleep(0.5)
-    return before.get("capslock") != after.get("capslock")
+    flipped = _wait_caps(not before, 8) is not None
+    if flipped:
+        vc("key", "capslock")      # restore
+        _wait_caps(before, 8)
+    return flipped
+
+
+def _wait_caps(want, timeout):
+    """Wait for capslock to read `want`. Returns elapsed seconds, or None.
+
+    No sleep between polls: each poll is already a ~1.5 s ssh round-trip, so
+    an added delay only makes the loop coarser than the thing it measures.
+    """
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if bool(vc_json("leds").get("leds", {}).get("capslock")) is want:
+            return time.time() - t0
+    return None
 
 
 def main(argv):

@@ -138,14 +138,19 @@ def wait_cold_boot(timeout=240):
 def at_prompt():
     """Is DOS at a prompt and accepting input? Uses the LED channel, not the
     screen, so it works when capture is unavailable. Safe only when no sweep
-    is running."""
-    before = leds()
+    is running.
+
+    Closed-loop, not timed -- same reasoning as arm_leds(). A fixed sleep here
+    races an ssh round-trip nobody measured, and a false negative aborts
+    collection on a healthy machine.
+    """
+    before = bool(leds().get("capslock"))
     vc("key", "capslock")
-    time.sleep(1.0)
-    after = leds()
-    vc("key", "capslock")
-    time.sleep(0.5)
-    return before.get("capslock") != after.get("capslock")
+    flipped = wait_led("capslock", not before, 8, poll=0.0) is not None
+    if flipped:
+        vc("key", "capslock")      # restore
+        wait_led("capslock", before, 8, poll=0.0)
+    return flipped
 
 
 def arm_leds():
