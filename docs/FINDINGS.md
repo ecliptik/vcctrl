@@ -295,3 +295,42 @@ Consequences for the harness:
 This is exactly the case the readiness pulse was designed for: the POST edge is
 observable and early, the prompt is not observable at all, and the gap between
 them is not a constant.
+
+## 15. The autonomous sweep loop closes  [measured]
+
+`vcctrl-sweep MINE 1` launched a real QA sweep unattended: preflight, QA tag,
+DKTCAP, launch, banner capture, PAUSE keypress, and the sweep ran to completion
+(`MINE DONE -- logs GMN and GMF`). Logs were then collected over the network and
+carry real data -- `mode-tick-stat n=79 phase=mode_draw_scene`, answering the
+question the sweep's own banner poses about whether patch 0312 took.
+
+FTP throughput over the ODI stack measured at **~880 KB/s** (236 KB in 0.274 s,
+296 KB in 0.333 s), so a 7.8 MB binary moves in roughly 9 seconds. The CF swap
+is genuinely retired for iteration.
+
+### Two mistakes in my own instrumentation, both worth keeping
+
+**A glob that matched its own output.** `grab()` burst-captured to `sw*.jpg` and
+then saved the selected frame as `sweep-poll.jpg` in the same directory --
+which `sw*.jpg` also matches. The next poll picked its own previous output as
+the "brightest frame" and tried to copy a file onto itself. Burst frames now use
+a distinct `vcraw` prefix and are cleared each poll.
+
+**Comparing the wrong frames.** A diagnostic reported an 11% pixel difference on
+a screen that was provably static, which looked like capture noise defeating
+change detection. It was not: it compared the *first and last raw frames of a
+burst*, and the first frames of a burst are the flat-black settle frames. Against
+a known-static prompt, comparing the *selected brightest* frame of each burst
+gives **0.0% difference at every threshold from >8 to >48**.
+
+So the change-detection threshold needed no adjustment; the measurement did. The
+lesson generalises past this bug: when an instrument reports noise, check that it
+is measuring the thing it claims to measure before tuning it to tolerate the
+noise. Tuning would have masked a real signal.
+
+### Still manual in the runner
+
+Collection is not yet automated -- it currently needs a reboot into NET and a
+`PUT` per tag, driven by hand. The reboot and blind profile selection both work
+(`CONFIG=NET` confirmed by reading the environment back), so this is wiring
+rather than an unknown.

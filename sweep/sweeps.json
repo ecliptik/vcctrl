@@ -1,0 +1,27 @@
+{
+  "_comment": "Per-sweep wall-clock budgets. Spans measured by the doskutsu session from rounds M/N/O (POD-83, Am5x86, DX2-66, DX2-50) and I/J/K (DX2-66). Timeouts are ~2x the slowest machine. Duration is a function of cell count and CPU, near-independent of what the cells do: cells are tick-driven against a fixed QA.TAS reel, so wall-clock is set by tick count, not by the code under test.",
+  "machines": {
+    "1": {"tag": "G", "name": "Pentium OverDrive 83"},
+    "2": {"tag": "A", "name": "Am5x86-133"},
+    "3": {"tag": "6", "name": "486DX2-66"},
+    "4": {"tag": "5", "name": "486DX2-50"}
+  },
+  "sweeps": {
+    "RB":    {"cells": 4, "timeout_min": 23, "measured": "9m11s POD / 11m31s DX2-50"},
+    "ADIAG": {"cells": 4, "timeout_min": 22, "measured": "10m16s DX2-66"},
+    "WC":    {"cells": 3, "timeout_min": 18, "measured": "7m11s POD"},
+    "TAB":   {"cells": 3, "timeout_min": 18, "measured": "7m59s DX2-66"},
+    "LEV":   {"cells": 3, "timeout_min": 17, "measured": "6m54s POD"},
+    "DEEP":  {"cells": 2, "timeout_min": 17, "measured": "6m40s POD"},
+    "MINE":  {"cells": 2, "timeout_min": 12, "measured": "4m49s POD"},
+    "FINE":  {"cells": 2, "timeout_min": 12, "measured": "5m25s DX2-66"}
+  },
+  "denied": {
+    "RECORD": "TAS reel recording tool. Has TWO PAUSE calls because a human plays the route being recorded. An autonomous runner would hang at the second one.",
+    "VB": "Listening sweep. Prints 'listen for X' and depends on a human judging audio. Capture can detect silence but cannot judge correctness.",
+    "EAR": "Listening sweep, same reasoning as VB.",
+    "GAP": "Not DKTCAP-enabled; no measured span.",
+    "PROVE": "Not DKTCAP-enabled; no measured span.",
+    "BDIAG": "Not DKTCAP-enabled; no measured span."
+  }
+}

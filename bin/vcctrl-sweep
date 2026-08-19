@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""vcctrl-sweep -- drive a doskutsu QA sweep on the g2k unattended.
+
+Runs on the VM. Orchestrates vcctrl (input + capture + power) around the DOS
+side's own contract. That contract is the reason this looks the way it does:
+
+  * The harness drives SWEEPS, NOT CELLS. Inside a sweep there is no shell
+    reading a command line -- the BAT is still executing -- so a keystroke sent
+    mid-sweep lands in the BIOS buffer and is either eaten by the next PAUSE or
+    leaks into the next cell's game process. There are exactly two reliable
+    injection points: the single PAUSE at the top of a sweep, and the real
+    prompt between sweeps.
+
+  * Therefore liveness during a sweep may NEVER be probed by keyboard. It is
+    judged from wall-clock against a measured budget (primary) and frame-delta
+    on the capture stick (secondary, corroborating only). A cell can legitimately
+    hold a near-static frame for a long stretch, so frame-delta alone would
+    manufacture false wedges.
+
+  * A timeout is not necessarily a wedge. A stale Organya cache legitimately
+    runs 3-4x long, and no amount of rebooting fixes it. Classification comes
+    before escalation.
+
+Usage:
+  vcctrl-sweep <SWEEP> <machine-digit> [--dry-run] [--no-power-recovery]
+  vcctrl-sweep --list
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
+VCCTRL = os.path.join(HERE, "vcctrl")
+
+# Screen must be still for this long before the runner will believe a sweep has
+# ended. During a cell the game renders continuously; at a prompt the screen is
+# static. Between cells the console is static only for seconds, so a window this
+# wide will not mistake an inter-cell gap for completion.
+STILL_SECONDS = 45
+# Do not even start looking for completion until this fraction of the measured
+# span has elapsed. Guards against a slow first cell reading as "done".
+EARLIEST_COMPLETION = 0.5
+POLL_SECONDS = 15
+
+
+def vc(*args, check=True):
+    r = subprocess.run([VCCTRL] + list(args), capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise RuntimeError("vcctrl %s failed: %s" % (" ".join(args), r.stderr.strip()))
+    return r.stdout.strip()
+
+
+def vc_json(*args):
+    out = vc(*args)
+    return json.loads(out) if out else {}
+
+
+def grab(tag):
+    """Capture a frame. Returns (path, mean_brightness) or (None, None).
+
+    Takes a burst and keeps the brightest non-flat frame: the capture path
+    emits intermittent flat-black frames while correctly locked, so a single
+    grab is not evidence of what is on screen.
+    """
+    sp = os.environ.get("VCCTRL_SHOTS", "/tmp/vcctrl-shots")
+    os.makedirs(sp, exist_ok=True)
+    subprocess.run(
+        ["ssh", os.environ.get("VCCTRL_HOST", "usb4vc"),
+         "rm -f /tmp/vcraw*.jpg; timeout 60 ffmpeg -hide_banner -loglevel error "
+         "-f v4l2 -input_format mjpeg -video_size 640x480 -i /dev/video0 "
+         "-frames:v 16 -vf fps=8 -y /tmp/vcraw%02d.jpg"],
+        capture_output=True)
+    import glob, shutil
+    # Clear last poll's raw frames first. The burst prefix is deliberately
+    # distinct from the saved-frame names: an earlier version globbed "sw*"
+    # and matched its own output, then tried to copy a file onto itself.
+    for old_raw in glob.glob(os.path.join(sp, "vcraw*.jpg")):
+        os.unlink(old_raw)
+    subprocess.run(["scp", "-q",
+                    "%s:/tmp/vcraw*.jpg" % os.environ.get("VCCTRL_HOST", "usb4vc"),
+                    sp], capture_output=True)
+    try:
+        from PIL import Image, ImageStat
+        fs = glob.glob(os.path.join(sp, "vcraw*.jpg"))
+        if not fs:
+            return None, None
+        scored = [(ImageStat.Stat(Image.open(f).convert("L")).mean[0], f) for f in fs]
+        scored.sort(reverse=True)
+        mean, best = scored[0]
+        dest = os.path.join(sp, "%s.jpg" % tag)
+        shutil.copy(best, dest)
+        return dest, mean
+    except ImportError:
+        return None, None
+
+
+def frame_signature(path):
+    """Coarse fingerprint of a frame, for change detection between polls."""
+    from PIL import Image
+    im = Image.open(path).convert("L").resize((32, 24))
+    return list(im.getdata())
+
+
+def sig_differs(a, b, threshold=8):
+    if a is None or b is None:
+        return True
+    diff = sum(1 for x, y in zip(a, b) if abs(x - y) > threshold)
+    return diff > len(a) * 0.02
+
+
+def load_conf():
+    with open(CONF) as f:
+        return json.load(f)
+
+
+def preflight(conf, sweep, machine):
+    print("== preflight ==")
+    if sweep in conf["denied"]:
+        raise SystemExit("REFUSED: %s is deny-listed.\n  %s" % (sweep, conf["denied"][sweep]))
+    if sweep not in conf["sweeps"]:
+        raise SystemExit("REFUSED: %s has no measured span, so no defensible timeout.\n"
+                         "  A timeout guessed too tight turns a healthy sweep into a\n"
+                         "  spurious wedge and then a power cycle. Measure it attended first."
+                         % sweep)
+    if machine not in conf["machines"]:
+        raise SystemExit("REFUSED: unknown machine digit %r" % machine)
+
+    st = vc_json("status")
+    held = st.get("usb4vc", {})
+    if not all(held.values()):
+        raise SystemExit("REFUSED: USB4VC is not holding our input devices: %s" % held)
+    print("  input devices held by USB4VC: ok")
+
+    pw = vc_json("power", "state").get("power", {})
+    print("  mains: %s (%s)" % ("ON" if pw.get("on") else "OFF", pw.get("alias")))
+    if not pw.get("on"):
+        raise SystemExit("REFUSED: target is powered off. Run: vcctrl power on")
+    return conf["sweeps"][sweep], conf["machines"][machine]
+
+
+def at_prompt():
+    """Is DOS sitting at a command prompt and accepting input?
+
+    Safe to call ONLY when no sweep is running. Uses the LED return channel
+    rather than the screen, so it works even if capture is unavailable.
+    """
+    before = vc_json("leds").get("leds", {})
+    vc("key", "capslock")
+    time.sleep(1.0)
+    after = vc_json("leds").get("leds", {})
+    vc("key", "capslock")          # restore
+    time.sleep(0.5)
+    return before.get("capslock") != after.get("capslock")
+
+
+def main(argv):
+    conf = load_conf()
+    if not argv or argv[0] == "--list":
+        print("sweeps with a measured span (runnable):")
+        for k, v in sorted(conf["sweeps"].items()):
+            print("  %-6s %d cells  timeout %2d min   (%s)" %
+                  (k, v["cells"], v["timeout_min"], v["measured"]))
+        print("\ndeny-listed:")
+        for k, v in sorted(conf["denied"].items()):
+            print("  %-6s %s" % (k, v))
+        return 0
+
+    if len(argv) < 2:
+        print(__doc__)
+        return 2
+    sweep, machine = argv[0].upper(), argv[1]
+    dry = "--dry-run" in argv
+    recover = "--no-power-recovery" not in argv
+
+    spec, mach = preflight(conf, sweep, machine)
+    budget = spec["timeout_min"] * 60
+    print("  sweep %s: %d cells, budget %d min, machine %s (%s)" %
+          (sweep, spec["cells"], spec["timeout_min"], mach["tag"], mach["name"]))
+
+    if not at_prompt():
+        raise SystemExit("REFUSED: target did not answer the LED probe -- it is not at a\n"
+                         "  prompt, or something is still running. Not typing into that.")
+    print("  target is at a prompt: ok")
+
+    if dry:
+        print("\n-- dry run, stopping before launch --")
+        return 0
+
+    print("\n== launch ==")
+    vc("type", "CD \\DOSKUTSU"); vc("key", "enter"); time.sleep(1)
+    vc("type", "QA %s" % machine); vc("key", "enter"); time.sleep(3)
+    vc("type", "SET DKTCAP=1"); vc("key", "enter"); time.sleep(2)
+    vc("type", "%s %s" % (sweep, machine)); vc("key", "enter")
+    time.sleep(10)
+
+    shot, mean = grab("sweep-banner")
+    print("  banner captured: %s (brightness %.1f)" % (shot, mean or -1))
+    print("  CHECK THIS IMAGE for '[DKTCAP=1] capture session:' before trusting the run.")
+
+    print("  pressing the PAUSE key -- from here the keyboard is OFF LIMITS")
+    vc("key", "space")
+    t0 = time.time()
+
+    print("\n== monitor (%d min budget) ==" % spec["timeout_min"])
+    last_sig, still_since = None, None
+    while True:
+        elapsed = time.time() - t0
+        if elapsed > budget:
+            print("\n!! TIMEOUT after %.1f min" % (elapsed / 60))
+            return on_timeout(sweep, mach, recover)
+        time.sleep(POLL_SECONDS)
+        shot, mean = grab("sweep-poll")
+        sig = frame_signature(shot) if shot else None
+        changed = sig_differs(last_sig, sig)
+        last_sig = sig
+        if changed:
+            still_since = None
+        elif still_since is None:
+            still_since = time.time()
+        still = 0 if still_since is None else time.time() - still_since
+        print("  t+%5.1f min  brightness %5.1f  %s  still %ds" %
+              (elapsed / 60, mean or -1, "changing" if changed else "static", still))
+
+        if elapsed > budget * EARLIEST_COMPLETION and still >= STILL_SECONDS:
+            print("\n== screen static for %ds past %.0f%% of budget -- probing ==" %
+                  (STILL_SECONDS, EARLIEST_COMPLETION * 100))
+            if at_prompt():
+                print("\n== COMPLETE after %.1f min ==" % (elapsed / 60))
+                grab("sweep-done")
+                print("  logs are on the CF card under C:\\DOSKUTSU\\LOGS")
+                print("  collect them by rebooting into NET and running PUT")
+                return 0
+            print("  no prompt -- still running, continuing to watch")
+            still_since = None
+
+
+def on_timeout(sweep, mach, recover):
+    """A timeout is not necessarily a wedge. Classify before escalating."""
+    print("  classifying before escalating...")
+    grab("sweep-timeout")
+    print("""
+  A timeout has THREE common causes and only one is fixed by rebooting:
+
+    1. Stale Organya cache -- the cell cold-renders and sits on a loading
+       screen for minutes. Runs 3-4x long. A reboot does NOT fix this; the
+       cache must be re-rendered. The engine logs a cache-key line at startup
+       and a mismatch is the signature.
+    2. A genuine wedge -- reboot is the fix.
+    3. The budget was wrong for this machine.
+
+  Check sweep-timeout.jpg before doing anything. If it shows a loading screen
+  rather than a frozen frame, this is case 1 and power-cycling will loop
+  forever without fixing it.
+""")
+    if not recover:
+        print("  --no-power-recovery set: stopping without touching the machine.")
+        return 1
+    print("  NOT power-cycling automatically: cause is unclassified, and cycling")
+    print("  a stale-cache run would burn the night without fixing anything.")
+    print("  To recover manually:  vcctrl power cycle")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
