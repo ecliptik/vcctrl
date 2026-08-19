@@ -23,7 +23,12 @@ side's own contract. That contract is the reason this looks the way it does:
 
 Usage:
   vcctrl-sweep <SWEEP> <machine-digit> [--dry-run] [--no-power-recovery]
+                                       [--collect]
   vcctrl-sweep --list
+
+  --collect   on completion, hand off to vcctrl-collect: reboot into NET,
+              PUT every cell log, and confirm each one landed. Without it the
+              sweep ends with the logs still on the card.
 """
 
 import json
@@ -175,6 +180,7 @@ def main(argv):
     sweep, machine = argv[0].upper(), argv[1]
     dry = "--dry-run" in argv
     recover = "--no-power-recovery" not in argv
+    collect = "--collect" in argv
 
     spec, mach = preflight(conf, sweep, machine)
     budget = spec["timeout_min"] * 60
@@ -185,6 +191,12 @@ def main(argv):
         raise SystemExit("REFUSED: target did not answer the LED probe -- it is not at a\n"
                          "  prompt, or something is still running. Not typing into that.")
     print("  target is at a prompt: ok")
+
+    if collect:
+        spec_tags = spec.get("tags")
+        if not spec_tags:
+            raise SystemExit("REFUSED: --collect but %s has no tags in sweeps.json." % sweep)
+        print("  will collect: %s" % " ".join(mach["tag"] + t for t in spec_tags))
 
     if dry:
         print("\n-- dry run, stopping before launch --")
@@ -231,9 +243,17 @@ def main(argv):
             if at_prompt():
                 print("\n== COMPLETE after %.1f min ==" % (elapsed / 60))
                 grab("sweep-done")
-                print("  logs are on the CF card under C:\\DOSKUTSU\\LOGS")
-                print("  collect them by rebooting into NET and running PUT")
-                return 0
+                if not collect:
+                    print("  logs are on the CF card under C:\\DOSKUTSU\\LOGS")
+                    print("  collect them with:  vcctrl-collect %s %s" % (sweep, machine))
+                    return 0
+                # Hand off rather than reimplement. The collector reboots, and
+                # a reboot is only safe from the prompt we have just proven is
+                # live -- so this is the one moment it can be started with no
+                # further checking.
+                print("\n-- handing off to vcctrl-collect --")
+                return subprocess.call(
+                    [os.path.join(HERE, "vcctrl-collect"), sweep, machine])
             print("  no prompt -- still running, continuing to watch")
             still_since = None
 

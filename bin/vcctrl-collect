@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""vcctrl-collect -- bring a sweep's logs back off the g2k, unattended.
+
+Runs on the VM, after a sweep has finished and the machine is sitting at a
+prompt. Reboots into the NET profile, runs PUT for each of the sweep's cell
+tags, and confirms each file by watching the FTP server's incoming directory.
+
+Two design choices worth knowing before changing anything here.
+
+REBOOT RATHER THAN LOAD-AT-PROMPT.  The obvious cheaper route is to load the
+ODI stack from the prompt the sweep left us at, skipping the reboot entirely.
+That is NOT done, for two reasons. The stack has no proven prompt-load path --
+LSL/E100BODI/ODIPKT are designed to load from AUTOEXEC and stay, and nothing
+has ever verified they initialise correctly against a machine whose sound TSRs
+are already resident. And it has no unload path at all, so a machine that had
+the stack loaded by hand could not be returned to a measurement-clean state
+without the reboot we were trying to avoid. Ctrl-Alt-Del costs about 43 s.
+That is cheap enough that guessing is not worth it.
+
+CONFIRMATION COMES FROM THE FILESYSTEM, NOT THE SCREEN.  PUT prints a success
+line, and the console is in mode 12h so that line is capturable -- but reading
+it would mean OCR, and an OCR misread would silently mark a missing log as
+collected. The FTP server runs on this host, so the arrival of the file in
+incoming/ is directly observable. That single check also proves everything
+upstream of it: the reboot took, the NET profile was selected, the ODI stack
+loaded, the packet driver answered, and the log existed to be sent. Nothing
+else needs verifying because nothing else can be true if the file is there.
+
+Usage:
+  vcctrl-collect <SWEEP> <machine-digit> [options]
+  vcctrl-collect --tags GMN,GMF          [options]
+
+  --already-net     skip the reboot; the machine is already in NET
+  --stay-net        leave it in NET afterwards (default: reboot to the
+                    menu default, which is measurement-clean)
+  --incoming <dir>  FTP landing directory
+                    (default ~/doskutsu-netiter/incoming)
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
+VCCTRL = os.path.join(HERE, "vcctrl")
+DEFAULT_INCOMING = os.path.expanduser("~/doskutsu-netiter/incoming")
+
+# NET is menu item 5. The digit alone does not commit the selection -- it only
+# highlights -- so every attempt is digit-then-Enter. See FINDINGS sec. 8.
+NET_MENU_ITEM = "5"
+
+# The CONFIG.SYS menu is invisible to the capture stick (it runs in text mode
+# 03h before AUTOEXEC sets mode 12h) and times out in 5 s. So selection is
+# blind: send the digit repeatedly across the window in which the menu might be
+# up, and stop as soon as RDYPULSE says we are past it. Landing a few extra
+# "5<Enter>" pairs at a live prompt is harmless -- DOS answers "Bad command or
+# file name" and carries on.
+MENU_SPAM_EVERY_S = 2.0
+REBOOT_EDGE_TIMEOUT_S = 45      # measured at t+9 s; this is deliberate slack
+READY_TIMEOUT_S = 150           # measured ~11 s post-POST, POST itself varies
+PUT_TIMEOUT_S = 90              # 880 KB/s measured; a log pair is under 400 KB
+SETTLE_S = 3.0
+
+
+def vc(*args, check=True):
+    r = subprocess.run([VCCTRL] + list(args), capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise RuntimeError("vcctrl %s failed: %s" % (" ".join(args), r.stderr.strip()))
+    return r.stdout.strip()
+
+
+def vc_json(*args):
+    out = vc(*args)
+    return json.loads(out) if out else {}
+
+
+def leds():
+    return vc_json("leds").get("leds", {})
+
+
+def wait_led(name, want, timeout, poll=1.0):
+    """Block until LED `name` reads `want`. Returns elapsed seconds, or None."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if leds().get(name) == want:
+            return time.time() - t0
+        time.sleep(poll)
+    return None
+
+
+def at_prompt():
+    """Is DOS at a prompt and accepting input? Uses the LED channel, not the
+    screen, so it works when capture is unavailable. Safe only when no sweep
+    is running."""
+    before = leds()
+    vc("key", "capslock")
+    time.sleep(1.0)
+    after = leds()
+    vc("key", "capslock")
+    time.sleep(0.5)
+    return before.get("capslock") != after.get("capslock")
+
+
+def arm_leds():
+    """Put the two signal LEDs into the states that make the next boot's
+    transitions unambiguous.
+
+    Caps Lock ARMED HIGH: POST clears it, so caps 1 -> 0 is the reboot edge.
+    If it were already 0 the edge would be invisible and we would sit waiting
+    for a reboot that had already happened.
+
+    Scroll Lock ARMED LOW: RDYPULSE.COM sets it as the last line of AUTOEXEC,
+    so scroll 0 -> 1 means the prompt is live. Same argument in reverse.
+    """
+    st = leds()
+    if not st.get("capslock"):
+        vc("key", "capslock")
+        time.sleep(0.5)
+    if leds().get("scrolllock"):
+        vc("key", "scrolllock")
+        time.sleep(0.5)
+    st = leds()
+    return bool(st.get("capslock")) and not st.get("scrolllock")
+
+
+def reboot_into_net():
+    print("== reboot into NET ==")
+    if not arm_leds():
+        raise SystemExit("REFUSED: could not arm the LEDs. Without a known "
+                         "starting state\n  neither the reboot edge nor the "
+                         "readiness pulse can be trusted.")
+    print("  LEDs armed: caps=1 (reboot edge), scroll=0 (readiness pulse)")
+
+    vc("combo", "ctrl", "alt", "delete")
+    edge = wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S, poll=0.5)
+    if edge is None:
+        raise SystemExit("REFUSED: no reboot edge within %ds. Ctrl-Alt-Del only "
+                         "works at a\n  prompt, never in-game -- SDL3's DOS "
+                         "backend owns INT 09h. If a cell is\n  still running, "
+                         "this is the expected failure and the machine is fine."
+                         % REBOOT_EDGE_TIMEOUT_S)
+    print("  reboot edge at t+%.1fs" % edge)
+
+    print("  selecting menu item %s (digit + Enter, every %.0fs until ready)"
+          % (NET_MENU_ITEM, MENU_SPAM_EVERY_S))
+    t0 = time.time()
+    last_spam = 0.0
+    while time.time() - t0 < READY_TIMEOUT_S:
+        if leds().get("scrolllock"):
+            print("  RDYPULSE at t+%.1fs -- AUTOEXEC complete, prompt live"
+                  % (time.time() - t0))
+            time.sleep(SETTLE_S)
+            return True
+        if time.time() - last_spam >= MENU_SPAM_EVERY_S:
+            vc("key", NET_MENU_ITEM, check=False)
+            vc("key", "enter", check=False)
+            last_spam = time.time()
+        time.sleep(0.5)
+
+    raise SystemExit(
+        "REFUSED: no RDYPULSE within %ds of the reboot edge.\n"
+        "  Either the machine did not reach a prompt, or C:\\DRIVERS\\RDYPULSE.COM\n"
+        "  is missing -- both AUTOEXEC call sites are IF EXIST guarded, so a\n"
+        "  deleted COM looks exactly like a hang from here. Check with capture\n"
+        "  before power-cycling." % READY_TIMEOUT_S)
+
+
+def snapshot(incoming):
+    """Record what is already in incoming/, so a stale file from a previous
+    run cannot be mistaken for a fresh arrival."""
+    out = {}
+    for n in os.listdir(incoming):
+        p = os.path.join(incoming, n)
+        try:
+            st = os.stat(p)
+            out[n] = (st.st_mtime, st.st_size)
+        except OSError:
+            pass
+    return out
+
+
+def arrived(incoming, name, before):
+    p = os.path.join(incoming, name)
+    if not os.path.exists(p):
+        return False
+    st = os.stat(p)
+    return before.get(name) != (st.st_mtime, st.st_size)
+
+
+def put_tag(incoming, tag, before):
+    """Run PUT for one tag and wait for its log pair to land."""
+    want = ["%s.LOG" % tag, "%sSDL.LOG" % tag]
+    # C:\MTCP is not in PATH -- see the g2k README. Full path, not a CD, so the
+    # working directory the sweep left us in does not matter.
+    vc("type", "C:\\MTCP\\PUT.BAT %s" % tag)
+    vc("key", "enter")
+
+    t0 = time.time()
+    got = set()
+    while time.time() - t0 < PUT_TIMEOUT_S:
+        for n in want:
+            if n not in got and arrived(incoming, n, before):
+                got.add(n)
+                print("      %-16s %8d bytes  t+%.1fs"
+                      % (n, os.path.getsize(os.path.join(incoming, n)),
+                         time.time() - t0))
+        if len(got) == len(want):
+            return True, got
+        time.sleep(2.0)
+    return False, got
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__)
+        return 0
+
+    incoming = DEFAULT_INCOMING
+    if "--incoming" in argv:
+        incoming = argv[argv.index("--incoming") + 1]
+    already_net = "--already-net" in argv
+    stay_net = "--stay-net" in argv
+
+    if argv[0] == "--tags":
+        tags = [t.strip().upper() for t in argv[1].split(",") if t.strip()]
+        label = "ad-hoc"
+    else:
+        if len(argv) < 2:
+            print(__doc__)
+            return 2
+        sweep, machine = argv[0].upper(), argv[1]
+        with open(CONF) as f:
+            conf = json.load(f)
+        if sweep not in conf["sweeps"]:
+            raise SystemExit("REFUSED: unknown sweep %s" % sweep)
+        if machine not in conf["machines"]:
+            raise SystemExit("REFUSED: unknown machine digit %r" % machine)
+        spec = conf["sweeps"][sweep]
+        if "tags" not in spec:
+            raise SystemExit("REFUSED: %s has no tags in sweeps.json, so there "
+                             "is nothing\n  defensible to ask for. See "
+                             "_tags_comment for how to derive them." % sweep)
+        mtag = conf["machines"][machine]["tag"]
+        tags = [mtag + t for t in spec["tags"]]
+        label = "%s on machine %s (%s)" % (sweep, mtag,
+                                           conf["machines"][machine]["name"])
+
+    print("== collect: %s ==" % label)
+    print("  tags: %s" % " ".join(tags))
+
+    if not os.path.isdir(incoming):
+        raise SystemExit("REFUSED: incoming directory %s does not exist." % incoming)
+    print("  incoming: %s" % incoming)
+
+    pw = vc_json("power", "state").get("power", {})
+    if not pw.get("on"):
+        raise SystemExit("REFUSED: target is powered off. Run: vcctrl power on")
+
+    if not already_net:
+        if not at_prompt():
+            raise SystemExit("REFUSED: target did not answer the LED probe. It is "
+                             "not at a\n  prompt, or something is still running. "
+                             "Not rebooting that.")
+        print("  target is at a prompt: ok")
+        reboot_into_net()
+    else:
+        print("  --already-net: assuming the NET profile is booted")
+        if not at_prompt():
+            raise SystemExit("REFUSED: target did not answer the LED probe.")
+
+    before = snapshot(incoming)
+
+    print("\n== transfer ==")
+    ok, failed = [], []
+    for tag in tags:
+        print("  PUT %s" % tag)
+        good, got = put_tag(incoming, tag, before)
+        if good:
+            ok.append(tag)
+        else:
+            failed.append(tag)
+            missing = [n for n in ("%s.LOG" % tag, "%sSDL.LOG" % tag) if n not in got]
+            print("      TIMEOUT after %ds -- missing %s"
+                  % (PUT_TIMEOUT_S, ", ".join(missing)))
+        before = snapshot(incoming)
+
+    if not stay_net:
+        print("\n== return to the menu default ==")
+        # No digit: the 5 s menu timeout lands on PGSB, which is
+        # measurement-clean. Leaving the machine in NET would mean the next
+        # sweep ran with the packet driver resident.
+        if arm_leds():
+            vc("combo", "ctrl", "alt", "delete")
+            if wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S, poll=0.5) is None:
+                print("  WARNING: no reboot edge; machine may still be in NET.")
+            elif wait_led("scrolllock", True, READY_TIMEOUT_S) is None:
+                print("  WARNING: no RDYPULSE; machine may not have reached a prompt.")
+            else:
+                print("  back at a prompt on the default profile.")
+        else:
+            print("  WARNING: could not arm LEDs; skipped the return reboot.")
+
+    print("\n== result ==")
+    print("  collected: %s" % (" ".join(ok) if ok else "(none)"))
+    if failed:
+        print("  MISSING:   %s" % " ".join(failed))
+        print("""
+  A missing log is a real signal, not necessarily a transfer fault. The
+  likeliest cause is that the cell never wrote one -- it died at sdl_init, or
+  the sweep stopped early. Look for the tag under C:\\DOSKUTSU\\LOGS on the
+  card before assuming the network was at fault; PUT cannot send a file that
+  is not there, and it fails quietly when asked to.""")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

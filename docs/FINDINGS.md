@@ -328,9 +328,38 @@ lesson generalises past this bug: when an instrument reports noise, check that i
 is measuring the thing it claims to measure before tuning it to tolerate the
 noise. Tuning would have masked a real signal.
 
-### Still manual in the runner
+### Collection is now wired, and NOT YET RUN ON HARDWARE
 
-Collection is not yet automated -- it currently needs a reboot into NET and a
-`PUT` per tag, driven by hand. The reboot and blind profile selection both work
-(`CONFIG=NET` confirmed by reading the environment back), so this is wiring
-rather than an unknown.
+`bin/vcctrl-collect` reboots into NET, runs `PUT` per cell tag, and confirms
+each file by watching the FTP server's `incoming/` directory. `vcctrl-sweep
+--collect` hands off to it at the moment the sweep is proven complete.
+
+**Written 2026-08-19 against a powered-off machine. Every primitive it uses is
+measured -- the reboot edge (sec. 7), blind menu selection (sec. 8), RDYPULSE,
+and `PUT` itself, which returned real logs by hand. The composition is not.**
+First run should be watched.
+
+Two choices in it that are not obvious:
+
+**It reboots rather than loading the ODI stack at the prompt.** Loading at the
+prompt would skip a 43 s reboot, and was the obvious optimisation. It is not
+done because the stack has no proven prompt-load path and *no unload path at
+all* -- so a machine that loaded it by hand could not be returned to a
+measurement-clean state without the reboot being avoided. The saving was
+illusory.
+
+**Confirmation is a file appearing on this host, not a line read off the
+screen.** The console is in mode 12h and `PUT`'s success line is capturable,
+but reading it needs OCR, and an OCR misread would mark a missing log as
+collected -- the one error mode that silently corrupts a result set. The FTP
+server runs here, so arrival is directly observable, and that single check
+transitively proves the reboot took, NET was selected, the ODI stack loaded,
+the packet driver answered, and the log existed. Nothing else needs a check
+because nothing else can be true if the file is there.
+
+### Log tags come from the BATs, not from memory
+
+`sweeps.json` now carries each sweep's cell tags. They were derived by grepping
+`SET DOSKUTSU_LOG_TAG=%QAM%...` out of the r16 payload's BATs. Counting
+`DOSKUTSU.EXE` lines to get cell counts does **not** work -- the BATs mention
+the binary in comments, which inflates `TAB` to 4 cells and `DEEP` to 3.
