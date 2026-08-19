@@ -538,6 +538,46 @@ Note this is the second time `CLRENV` has been the thing protecting the matrix
 5.5a) could not reach a cell either. That file does more load-bearing work than
 its 204 dull lines suggest, and should not be "simplified".
 
+### The signal path is through a volume knob -- levels are NOT reproducible
+
+**Operator clarification 2026-08-19:** the stick's audio input is fed from the
+**headphone output of the powered speakers**, not from a line-out. The speakers'
+line-out was tried first and produced silence.
+
+This works, but it puts a **variable analog gain stage in the measurement path**,
+and everything measured today sits downstream of it. The -30.8 dB figure, and
+the `wiimidi` A/B at -31.3 vs -25.4 dB, are all relative to one knob position.
+
+Consequences that must shape the silence-detection pass:
+
+- **No absolute dB threshold is safe.** A knob turned down reads as a silent
+  cell. That is a false failure that would burn an unattended run and then not
+  reproduce, which is the worst diagnostic shape.
+- **Cross-session comparison of levels is invalid** unless the knob provably did
+  not move, which nothing can establish.
+- **Headphone out is amplified**, so clipping is plausible at high volume and
+  the noise/distortion profile differs from a clean line-out. Headroom is still
+  uncharacterised; one config peaked at -13.6 dB.
+
+Two ways to make it sound, in order of preference:
+
+1. **Tap the sound card's line-out directly with a passive Y-splitter** -- one
+   leg to the speakers, one to the stick. Fixed level, independent of the knob,
+   and it restores the speakers to normal use. This is the real fix and costs a
+   few pounds.
+2. **Calibrate per session.** Play a known reference at session start and
+   normalise every subsequent measurement against it. Needs no hardware and
+   survives a moved knob, but adds a step to every run and cannot detect the
+   knob moving *mid*-session.
+
+Until one of those exists, the harness may compare *within* a single capture
+(silence vs signal, spectral shape, A/B of two configs captured minutes apart)
+but must not compare across sessions or apply a fixed threshold.
+
+Why the speakers' line-out gave silence is unresolved -- on many powered speaker
+sets that jack is inactive, unpowered, or a second speaker tap rather than a
+true line output. Not worth chasing if option 1 is taken.
+
 ### Consequences
 
 - **Sec. 5.2's "the ear cells stay human, permanently" is withdrawn.** It was

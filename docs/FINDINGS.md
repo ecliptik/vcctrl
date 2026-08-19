@@ -195,3 +195,18 @@ confirmed by ear as the title music.
 Two independent faults had to be fixed together -- wrong boot profile (no DAC
 present at all) and wrong cabling -- which is why changing one at a time kept
 producing silence and appearing to confirm the false conclusion.
+
+## 11. Audio levels are not reproducible -- a volume knob is in the path
+
+The capture stick's audio input is fed from the **headphone output of the
+powered speakers** (the speakers' line-out produced silence). That places a
+variable analog gain stage upstream of every measurement.
+
+**Never apply an absolute dB threshold.** A turned-down knob is indistinguishable
+from a silent cell, and that false failure would not reproduce afterwards.
+Compare only within a single capture, or between captures known to be minutes
+apart with nothing touched.
+
+Fix: tap the sound card line-out with a passive Y-splitter (fixed level,
+speakers keep working). Failing that, play a known reference at session start
+and normalise against it.
