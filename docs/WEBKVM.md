@@ -28,6 +28,7 @@ Answered by the operator before writing this:
 | Access | **Tailscale only** -- no LAN bind, no password |
 | v1 scope | **Video + keyboard + power.** Mouse and files come after |
 | Daemon shape | **One daemon named `vcctrl`**, capability modules, browser and Claude as equal clients (sec. 2) |
+| Sequencing | The core refactor is **split out as its own handoff** to the `vcctrl` session (sec. 13) |
 
 Added by the operator mid-planning: *having the option to select between video
 delivery would be nice, which we can add later, as well as other video tweaks
@@ -714,7 +715,7 @@ built at all until someone has seen a cursor move.
 | step | deliverable | gated on |
 |---|---|---|
 | 0 | Coordinate with the `vcctrl` session on a window to take `/dev/video0` | it is actively driving the machine |
-| 1 | **Core refactor**: capability registry, threaded `serve()`, input path isolated from everything else. No new features | nothing |
+| 1 | **Core refactor** -- handed to the `vcctrl` session, spec in sec. 13: threaded `serve()`, capability registry, existing behaviour moved into modules, no new features | nothing |
 | 2 | Video capability: ffmpeg pipe, frame split, ring, `shot`/`burst`/`state` on the existing socket | 0, 1 |
 | 3 | `vcctrl shot` reads the ring, with fallback to today's ffmpeg path; `grab()` shim offered to the peer | 2 |
 | 4 | HTTP capability + `tailscale serve` HTTPS + `/shot.jpg` + the event bus | 2 |
@@ -808,3 +809,105 @@ it and can go first if the device is busy.
   something outside this repo needs to plug in, and nothing does (sec. 2).
 - **No change to the `vcctrl` CLI contract.** ~157 banked fps measurements sit
   behind the peer session's tooling. The daemon grows; the CLI does not move.
+
+---
+
+## 13. Handoff -- the core refactor as a discrete work item
+
+**Operator's direction:** land the daemon rename/merge as its own piece of
+work, handed to the `vcctrl` session at a good stopping place.
+
+This section exists to be handed over on its own. It is step 1 of section 10,
+written so it can be executed without reading the rest of this document.
+
+### 13.1 There is no file to rename
+
+Worth stating first, because "rename the daemon to `vcctrld`" sounds like a
+move and is not one. Every name is **already correct and stays put**:
+
+| thing | name | changes? |
+|---|---|---|
+| daemon source | `daemon/vcctrld.py` | no |
+| systemd unit | `vcctrld.service` | no |
+| socket | `/run/vcctrl.sock` | no |
+| CLI on the Pi | `/usr/local/bin/vcctrl` | no |
+| CLI on the VM | `bin/vcctrl` | no |
+
+What changes is **what `vcctrld` owns**. It stops being "the input server" and
+becomes the lead daemon: input, video, power, LEDs, and later web, audio, reset
+and files, each a capability module behind one API. The earlier draft of this
+plan proposed a second daemon called `vckvmd`; that is dropped (sec. 2). So the
+work is a scope change and a restructure, and the fact that no path moves is
+the point -- the peer session's tooling keeps working across it untouched.
+
+### 13.2 The work, in landable order
+
+Each item is independently committable and independently revertable.
+
+1. **Thread `serve()`.** One thread per connection. `Devices.lock` already
+   serialises the actual device writes, so the emission path is safe as-is;
+   `power` and `ledwait` touch no device and genuinely want concurrency. This
+   is the item that unblocks everything interactive, and it is small.
+2. **Capability registry.** A table in the source -- name, init, command map,
+   shutdown. No discovery, no dynamic import (sec. 2). The core dispatches by
+   command name and **catches at the module boundary**: a capability that
+   raises is marked failed and reported in `status`, never fatal.
+3. **Move existing behaviour into modules** -- `input`, `power`, `leds` -- with
+   **no behaviour change at all.** This is the risky-looking step that must be
+   provably boring; see the acceptance criteria.
+4. **Add `keydown` / `keyup` and the full US PS/2 key table** (sec. 5.1). New
+   surface, no existing surface touched.
+
+Items 1-4 need **no access to the capture stick**. That is deliberate: this
+work can proceed while the machine is busy with PicoGUS consolidation, the
+Vibra fit, the video-card swap and Round P, without anyone giving up
+`/dev/video0`. The video capability (step 2 of sec. 10) is where the device
+window is needed, and it comes after.
+
+### 13.3 Acceptance criteria
+
+All testable, and all worth running rather than reasoning about:
+
+- `vcctrl status | type | key | hold | combo | mouse | leds | ledwait | power`
+  produce **byte-identical output** before and after the refactor.
+- A `power cycle` in flight (15 s of rails-down) does **not** block a
+  concurrent `vcctrl type`. This is the one that proves item 1.
+- With the video capability deliberately faulted or unloaded, `vcctrl type`
+  still lands at the g2k. This is the rule-1 test from sec. 2, and it is open
+  question 8 -- do not assume it, run it.
+- After a daemon restart, `usb4vc_holds_us()` reports both devices held. A
+  restart is not free (13.4) and this is how you confirm it recovered.
+- `vcctrl-sweep` and `vcctrl-collect` run unmodified against the new daemon.
+
+### 13.4 Constraints that must not be broken
+
+All of these are already load-bearing in the current daemon and are recorded
+here so a restructure does not quietly drop one:
+
+- **The uinput devices stay open for the process lifetime.** USB4VC only
+  discovers input devices on its 0.75 s scan (`usb4vc_usb_scan.py:946`), so a
+  device created per-request is invisible for up to 0.75 s and the first
+  keystrokes are silently lost. This is why a daemon crash is worse than a
+  restart, and why item 3 is the step to be careful with.
+- **Do not disturb USB4VC's device classification.** Name must not contain
+  "motion" (`:896`); the keyboard needs `KEY_ENTER` and `KEY_Y` (`:913`); the
+  mouse needs `BTN_LEFT` and `EV_REL` (`:911`); neither may declare gamepad
+  buttons (`:877`). Extending the key table for item 4 must not trip these.
+- **`ctrl-alt-del.target` stays masked.** The virtual keyboard is a keyboard to
+  the Pi as well as to the g2k; without the mask, `vcctrl combo ctrl alt delete`
+  reboots the Pi. Found the hard way -- see `docs/FINDINGS.md`.
+- **Keep the pacing semantics.** `DEFAULT_PACE_S = 0.012` exists because USB4VC
+  drains one event per device per loop pass with a 5 ms idle sleep (`:772`,
+  `:766`). Threading `serve()` must not let two clients interleave events on
+  one device faster than that -- `Devices.lock` is what prevents it, so hold it
+  across a whole logical operation and not per-event.
+- **The `vcctrl` CLI contract is frozen.** ~157 banked fps measurements sit
+  behind the peer session's tooling.
+
+### 13.5 What is explicitly not in this handoff
+
+Video, web, HTTP, WebSocket, browser, mouse-over-Pointer-Lock, files. Those are
+sections 4 through 9 and steps 2 onward. **This item is the core refactor and
+nothing else** -- the whole reason to split it out is that it lands while the
+surface is still small enough to verify against the existing tooling in
+isolation.
