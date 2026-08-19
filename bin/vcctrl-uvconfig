@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""vcctrl-uvconfig -- run UniVBE's uvconfig after a video card swap, closed-loop.
+
+WHAT UVCONFIG ACTUALLY DOES, measured on the ViRGE 2026-08-19 rather than
+assumed: with the card unchanged it runs **silently and non-interactively**,
+rewrites C:\\UNIVBE\\UNIVBE.DRV and UVCONFIG.DAT in a couple of seconds, and
+returns straight to the prompt. No screens, no keypresses.
+
+The operator's remembered workflow -- "run uvconfig, press space, press space
+again (I think)" -- did not reproduce. I first guessed those prompts appear
+only when the DETECTED card differs from the stored config. **That guess was
+then tested and is wrong:** the ViRGE was swapped for a Mach64 and uvconfig
+ran just as silently. So the prompts come from something else entirely -- a
+different UniVBE version, a different entry point (UNICENTR.EXE is also on the
+card), or an invocation with arguments. Unknown, and recorded as unknown.
+
+Which is exactly why this sends no keys. The condition that triggers the
+interactive path has now survived two attempts to characterise it, so any
+fixed key sequence is being written against a screen nobody has seen.
+
+So this tool does NOT send a key sequence. It runs uvconfig, then looks:
+
+  * back at a DOS prompt  -> done, nothing was asked
+  * anything else on screen -> STOP and surface the frame
+
+Refusing the unknown path is the whole point. A fixed "space, space" would
+work on the silent path by doing nothing visible and would press blindly into
+whatever a swap actually shows -- and UniVBE's config screens include mode
+tables where a wrong keypress selects a different refresh rate. Being wrong
+here is not a crash; it is a machine that boots fine and drives the monitor
+slightly wrong, which is the kind of wrong that gets measured.
+
+uvconfig GENERATES a driver; UNIVBE.EXE loads it at TSR-load time from
+AUTOEXEC. A resident TSR keeps the driver it started with, so a reboot is
+required for the new config to take effect. This does that too, and confirms
+the prompt afterwards.
+
+Usage:
+  vcctrl-uvconfig [--no-backup] [--no-reboot]
+"""
+
+import os
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from vcctrl_common import (  # noqa: E402
+    vc, at_prompt, wait_for_prompt, arm_leds, wait_led)
+
+sys.path.insert(0, HERE)
+
+
+def grab(tag):
+    """Capture a frame. Imported lazily from the sweep runner to avoid
+    duplicating the settle-frame logic a third time."""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    loader = SourceFileLoader("sweepmod", os.path.join(HERE, "vcctrl-sweep"))
+    spec = importlib.util.spec_from_loader("sweepmod", loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["sweepmod"] = mod
+    loader.exec_module(mod)
+    return mod.grab(tag)
+
+
+def dos(line, settle=2.0):
+    vc("type", line)
+    vc("key", "enter")
+    time.sleep(settle)
+
+
+def main(argv):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
+
+    backup = "--no-backup" not in argv
+    reboot = "--no-reboot" not in argv
+
+    print("== preflight ==")
+    # Wait rather than ask once -- a single negative probe usually means the
+    # keystroke buffered, not that the machine is unusable. See FINDINGS bug 6.
+    if wait_for_prompt(45) is None:
+        print("REFUSED: no prompt within 45s.")
+        return 2
+    print("  at a prompt: ok")
+
+    shot, mean = grab("uv-before")
+    if shot is None:
+        print("REFUSED: capture is not locked. Every check below is read off")
+        print("  the screen, so running blind here would prove nothing.")
+        return 2
+    print("  capture locked (brightness %.1f)" % mean)
+
+    if backup:
+        print("\n== backup ==")
+        dos("COPY C:\\UNIVBE\\UNIVBE.DRV C:\\UNIVBE\\UNIVBE.BAK")
+        dos("Y")            # answer any overwrite prompt; harmless if none
+        dos("COPY C:\\UNIVBE\\UVCONFIG.DAT C:\\UNIVBE\\UVCONFIG.BAK")
+        dos("Y")
+        print("  UNIVBE.BAK / UVCONFIG.BAK written")
+        print("  rollback: COPY C:\\UNIVBE\\UNIVBE.BAK C:\\UNIVBE\\UNIVBE.DRV")
+
+    print("\n== uvconfig ==")
+    dos("CD \\UNIVBE")
+    dos("UVCONFIG", settle=10.0)
+
+    shot, mean = grab("uv-after")
+    if shot is None:
+        print("  NO SIGNAL after uvconfig. It may have set a mode the capture")
+        print("  stick cannot lock (it is 60Hz-only firmware). STOPPING --")
+        print("  the machine is probably fine but this tool is now blind.")
+        return 1
+
+    print("  frame: %s" % shot)
+    if at_prompt():
+        print("  back at a DOS prompt -- uvconfig completed without asking")
+        print("  anything.")
+    else:
+        print("\n  *** UVCONFIG IS SHOWING SOMETHING AND IS WAITING. ***")
+        print("  STOPPING here deliberately, without pressing a key.")
+        print("  Look at %s and drive it by hand." % shot)
+        print("  This is the swap path the rehearsal could not reproduce; the")
+        print("  screens are unknown, and UniVBE's config pages include mode")
+        print("  tables where a wrong key picks a different refresh rate.")
+        return 1
+
+    if not reboot:
+        print("\n  --no-reboot: the new UNIVBE.DRV is on disk but NOT in effect.")
+        print("  The resident TSR is still running the previous driver.")
+        return 0
+
+    print("\n== reboot (the new driver only loads at TSR-load time) ==")
+    if not arm_leds():
+        print("  WARNING: could not arm LEDs; not rebooting blind.")
+        return 1
+    vc("combo", "ctrl", "alt", "delete")
+    edge = wait_led("capslock", False, 60)
+    if edge is None:
+        print("  REFUSED: no reboot edge.")
+        return 1
+    print("  reboot edge at t+%.1fs" % edge)
+    if wait_led("scrolllock", True, 200) is None:
+        print("  REFUSED: no RDYPULSE.")
+        return 1
+    waited = wait_for_prompt(90)
+    if waited is None:
+        print("  REFUSED: RDYPULSE fired but no prompt.")
+        return 1
+    print("  prompt live")
+
+    shot, mean = grab("uv-post-reboot")
+    if shot is None:
+        print("  NO SIGNAL after reboot -- the new driver may have changed the")
+        print("  video timing beyond what the capture stick locks. Check the")
+        print("  monitor; roll back with the .BAK copies if needed.")
+        return 1
+    print("  capture still locked (brightness %.1f)" % mean)
+    print("\n== done ==")
+    print("  Next: run a sweep and pass its SDL log to vcctrl-cardid, so the")
+    print("  card is identified from behaviour rather than from who fitted it.")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        os._exit(0)
+    except KeyboardInterrupt:
+        sys.stderr.write("\ninterrupted -- the target is left as it was\n")
+        os._exit(130)

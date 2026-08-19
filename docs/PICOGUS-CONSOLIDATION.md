@@ -1,8 +1,7 @@
 # Collapsing the three PicoGUS boot profiles into one
 
-**Status: proposal. Nothing has been changed.** Drafted 2026-08-19 while the
-RB sweep ran; the verification section is deliberately unfinished and gets
-appended once RB's result is in hand.
+**Status: step 1 DONE and proven on hardware 2026-08-19. Steps 2 and 3 not
+started.** `SETMODE.BAT` is on the card and verified byte-identical.
 
 ## The question
 
@@ -122,3 +121,71 @@ Worth being honest that the win is modest:
 Which points at something worth saying plainly: **step 1 captures most of the
 value and carries almost none of the risk.** If steps 2 and 3 never happen,
 the machine is still better off.
+
+
+---
+
+## Step 1 result -- SETMODE.BAT works, all three modes
+
+Tested on the POD-83 from a PGSB boot, 2026-08-19. Each transition captured
+and read off the screen rather than assumed:
+
+    PGSB boot  ->  SETMODE GUS
+        picogus-sb-dbopl3 -> "Rebooting to fw: GUS..." -> picogus-gus v4.1.1
+        GUS mode: Audio buffer: 4 samples; DMA interval: 12 us   <- /gusdma 12 took
+        Running in GUS mode on port 240
+        [SETMODE] GUS ready.  ULTRASND=240,3,3,7,7
+
+    SETMODE ADLIB
+        picogus-gus -> "Rebooting to fw: ADLIB..." -> picogus-adlib v4.1.1
+        [SETMODE] ADLIB ready.
+
+    SETMODE SB
+        picogus-adlib -> "Rebooting to fw: SB..." -> picogus-sb-dbopl3 v4.1.1
+        Running in Sound Blaster 2.0 mode on port 220, IRQ 7, DMA 3
+        AdLib port 388
+        [SETMODE] SB ready.  BLASTER=A220 I7 D3 P330 T3
+
+Two things worth noting from the readback. The SB line reports **IRQ 7, DMA 3**,
+matching the physical jumpers and the BLASTER string -- so `/sbenv` really did
+program the card's registers, which is the step that is easy to omit and silent
+when omitted. And the GUS line reports the 12 us DMA interval, so the second
+`pgusinit` call took as well.
+
+The env vars are echoed *expanded* by design, so the capture shows the
+environment change directly and no separate `SET` readback is needed.
+
+### What this does NOT prove
+
+Step 2 remains untouched: **nobody has measured whether a switched card gives
+the same fps as a booted one.** Everything above shows the firmware and the
+environment land in the right state. That is necessary and not sufficient --
+the whole question is whether anything subtle differs, and only a paired sweep
+answers it.
+
+## Amendment: parameterise the hardware, do not hardcode it
+
+The operator's point, and it is the right one: `QA n` already parameterises the
+**CPU** -- it sets `QAM`, which drives the log tag and `cpu=` in the manifest.
+The video card gets no such treatment; `RB.BAT` simply hardcodes
+`video=S3 ViRGE`. That asymmetry is the bug, not the specific wrong string.
+
+So the fix is not "detect the card" but **"declare it the same way the CPU is
+declared"**:
+
+    SET QAVID=VIRGE        (or MACH64 / CIRRUS)
+    SET QASND=PICOGUS      (or PICOGUS+VIBRA)
+
+    ECHO video_declared=%QAVID% >> LOGS\%QAM%RB.NFO
+    ECHO sound_declared=%QASND% >> LOGS\%QAM%RB.NFO
+
+An unset variable produces an obviously empty field, which reads as "nobody
+said" -- strictly better than a stale string that reads as "ViRGE" forever.
+
+**Why not detect it instead:** the analysis session checked, and `UNIVBE.EXE`
+would attest *UniVBE*, not the card -- it shims the VBE identity, reporting
+`oem_string='Universal VESA VBE 6.70'`. A detected constant that looks like a
+reading is worse than an honest declaration. The real discriminators are
+fingerprints already in the SDL log (the `320x240` mode's presence, `lfb_addr`,
+`total_vram`, the s3/cirrus detect lines), and building that table is the
+proper job for the card-swap work.

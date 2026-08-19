@@ -430,3 +430,123 @@ Blanketing the menu window fills the BIOS 15-key buffer, and DOS beeps once per
 rejected keystroke. The operator heard a burst of beeps after the POST beep and
 asked about it. Harmless, stops when the window closes -- but on a 30-year-old
 machine an unexplained beep burst reads as a fault, so it is worth expecting.
+
+## 18. The caret does not escape anything in MS-DOS 6.22  [measured 2026-08-19]
+
+`^` is a **cmd.exe** escape character. COMMAND.COM has no escape mechanism at
+all, and the eight sweep BATs writing `-^>` to mean a literal arrow were never
+correct -- everyone reading them, this session included, assumed the idiom
+worked because it looked like the idiom that works on Windows.
+
+Settled on the machine rather than argued:
+
+    C:\>DEL C:\arrow
+    File not found                       <- clean slate
+
+    C:\>ECHO caret test -^> arrow
+
+    C:\>DIR C:\arrow
+    ARROW              15  08-19-26  11:32a
+
+**The file was created.** 15 bytes is exactly `caret test -^` plus CRLF: the
+caret went in as literal text and the `>` redirected regardless.
+
+Consequence: any DOS batch reaching for `^` to escape `<`, `>` or `|` is
+silently broken, and the failure is invisible because the redirect target is
+usually a plausible-looking word from the middle of the message. The only
+reliable fix is to **reword so no bare `<` or `>` exists outside a real
+redirect**, which is what the analysis session did across 21 BATs.
+
+### The redirect audit that found it needs to be by parse, not by pattern
+
+Grepping for arrow shapes found four bad lines in `RB.BAT`. Parsing every line
+for a redirect target found many more, including the one that mattered:
+
+    CLRENV.BAT:4   REM (env > CFG by design). CALLed by every cell BAT ...
+
+**COMMAND.COM parses redirection inside REM comments.** A REM produces no
+output, so this creates an empty file and nothing else -- which is why the
+stray `CFG` was 0 bytes while `ADLIB` was 64. The size was the clue that it
+came from a REM rather than an ECHO. And because `CLRENV` is CALLed by every
+cell of every sweep, a file named `CFG` has been created before every
+measurement ever taken on this rig.
+
+No arrow-shaped search would ever have found it. The general rule: **audit for
+the effect, not for the syntax you expect to cause it.**
+
+### A related DOS limit worth carrying
+
+`DIR` shows one `ADLIB`, not the two the arrow audit predicted: DOS filenames
+are case-insensitive 8.3, so `adlib` and `ADLIB` are the same file and the
+later ECHO simply overwrote the earlier one. And COMMAND.COM truncates a
+command line past **127 characters**, which nearly shipped a truncation bug
+inside the fix for a truncation bug.
+
+## 19. The harness DoSed its own control host  [diagnosed 2026-08-19]
+
+The Pi became unreachable for ~30 minutes mid-campaign. The symptom set was
+unusual and worth recognising again:
+
+    ping                 fine, 0% loss, 7 ms
+    TCP port 22          accepts the connection
+    SSH banner           never sent
+    the Pi               never rebooted; it recovered on its own
+
+Kernel networking alive, userspace stalled. The cause, from `dmesg`:
+
+    [12:48:03] systemd[1]: systemd-journald.service: Watchdog timeout (limit 3min)!
+    [12:51:03] ... [12:54:04] ... [12:57:04] ... [13:00:04] ... [13:06:05]
+
+**journald hung**, and systemd's watchdog fired every three minutes through
+the entire window. Isolated earlier hits at 10:33, 10:36, 10:39, 11:22 and
+12:27 show it had been degrading for hours first.
+
+### Why a hung logger takes down remote access
+
+sshd, PAM and systemd-logind all write to journald. When journald stops
+draining its socket, **writers block**. So sshd completes the TCP handshake in
+the kernel and then blocks trying to log the connection, before it can send a
+banner. That is why the port answered and the session never started.
+
+It is also why nothing could be diagnosed live: **the component that failed
+was the component that records failures.** The first search for logs of the
+event returned "no entries", which read as "nothing happened" and actually
+meant "nothing could be written". Another instance of absence of signal not
+being absence of output.
+
+### The cause was this repo's own design
+
+`bin/vcctrl` made a **fresh ssh connection per call**, and every ssh spawns a
+full systemd user session -- dbus, pulseaudio, roughly twenty journal lines per
+call. The harness makes a call per keystroke. Measured 676 journal entries in
+one ten-minute window, written to an SD card, on a 920 MB Pi.
+
+So the rig's control plane generated enough logging to wedge the logger, which
+then blocked the control plane. Nothing was leaking and nothing was broken --
+the design simply did not scale to the rate the automation drove it at.
+
+### The fix, and it pays twice
+
+ssh `ControlMaster` with `ControlPersist`: one authenticated connection reused
+by every later call. Session setup happens once instead of thousands of times.
+
+    before   1.52 - 2.55 s per call
+    after    0.19 - 0.24 s per call, mean 0.21
+
+**That 1.5 s figure is the same number behind four separate timing bugs in
+sec. 17.** The instrumentation cost that produced them was mostly ssh session
+setup, and it was avoidable the whole time. Timeouts tuned against the old
+figure are now generous rather than wrong, which is the safe direction.
+
+Also added `ConnectTimeout` and `ServerAlive*`, because the outage presented as
+calls that never returned -- indistinguishable from a long-running cell, which
+is why a wedged host went unnoticed for thirteen minutes.
+
+### The generalisable part
+
+**A monitoring channel that costs the monitored system real work is part of the
+load.** The harness watched the Pi by connecting to it, and connecting was
+expensive enough to be the fault. Worth checking wherever an observer shares
+resources with the observed -- and it is the strongest argument yet for the
+persistent-daemon architecture the web-KVM work is building, which removes the
+per-call connection entirely rather than making it cheaper.

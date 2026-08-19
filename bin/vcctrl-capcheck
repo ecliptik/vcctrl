@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""vcctrl-capcheck -- characterise what the capture stick does on this card.
+
+Not a pass/fail gate. The point is to produce a per-card CAPTURE PROFILE as
+data, because on a new video card "the harness cannot see it" is a finding
+about the rig, not a tooling failure to be worked around quietly.
+
+The stick is 60 Hz-only firmware. On the S3 ViRGE, measured: BIOS mode 12h
+(640x480@60) locks, DOS text mode 03h (720x400@70) does not and returns flat
+black. That is why AUTOEXEC sets mode 12h at boot. Whether the same holds on
+the Mach64 or the onboard Cirrus is unknown -- their BIOS timings differ, and
+the Mach64 is specifically predicted to be the awkward one.
+
+For each mode it reports lock state plus the evidence behind it, so a reader
+can disagree with the verdict:
+
+  frames      how many came back at all
+  unique      distinct md5s. Settle frames are bit-identical; real picture
+              never repeats, because analog sampling noise differs per frame.
+              unique==1 means a constant, which is what no-lock looks like.
+  brightness  of the selected frame, for scale only -- NEVER as the lock test,
+              because a dark screen and a flat-black no-lock are both dim.
+              Each mode change is followed by a VER so there is guaranteed
+              content on screen; otherwise this measures the blank framebuffer
+              the mode set just produced.
+
+Doubles as the acceptance gate the web-KVM session asked for: MODE12 / MODE03
+/ MODE12 gives lock, unlock, relock in about ten seconds without burning a
+sweep. Leaves the machine in mode 12h, which is where the harness needs it.
+
+Usage:
+  vcctrl-capcheck [--label TEXT]
+"""
+
+import hashlib
+import glob
+import os
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from vcctrl_common import vc, wait_for_prompt  # noqa: E402
+
+SHOTS = os.environ.get("VCCTRL_SHOTS", "/tmp/vcctrl-shots")
+HOST = os.environ.get("VCCTRL_HOST", "usb4vc")
+
+
+def burst(tag, n=16):
+    """Raw burst. Returns (list of paths, list of md5s). No selection here --
+    the whole point is to look at the distribution."""
+    os.makedirs(SHOTS, exist_ok=True)
+    subprocess.run(
+        ["ssh", HOST,
+         "rm -f /tmp/vcraw*.jpg; timeout 60 ffmpeg -hide_banner -loglevel error "
+         "-f v4l2 -input_format mjpeg -video_size 640x480 -i /dev/video0 "
+         "-frames:v %d -vf fps=8 -y /tmp/vcraw%%02d.jpg" % n],
+        capture_output=True)
+    for old in glob.glob(os.path.join(SHOTS, "vcraw*.jpg")):
+        os.unlink(old)
+    subprocess.run(["scp", "-q", "%s:/tmp/vcraw*.jpg" % HOST, SHOTS],
+                   capture_output=True)
+    fs = sorted(glob.glob(os.path.join(SHOTS, "vcraw*.jpg")))
+    return fs, [hashlib.md5(open(f, "rb").read()).hexdigest() for f in fs]
+
+
+def characterise(mode_cmd, label):
+    print("\n-- %s --" % label)
+    if mode_cmd:
+        vc("type", mode_cmd)
+        vc("key", "enter")
+        time.sleep(3)
+        # Put something on the screen before photographing it. A mode set
+        # CLEARS the framebuffer, so measuring immediately after was measuring
+        # a blank screen this tool had just created itself -- which reported
+        # brightness 0.0 and looked like a capture problem on the first Mach64
+        # profile. The lock verdict was unaffected, because the duplicate-hash
+        # test does not care whether the screen has content, but the brightness
+        # figure was actively misleading and would have been for every card.
+        vc("type", "VER")
+        vc("key", "enter")
+        time.sleep(2)
+    fs, hashes = burst("cap")
+    if not fs:
+        print("  frames=0  -- ffmpeg returned nothing at all.")
+        print("  VERDICT: NO SIGNAL (device produced no frames)")
+        return {"mode": label, "frames": 0, "unique": 0, "verdict": "no-frames"}
+
+    uniq = len(set(hashes))
+    live = [f for f, h in zip(fs, hashes) if hashes.count(h) == 1]
+    mean = None
+    if live:
+        try:
+            from PIL import Image, ImageStat
+            mean = max(ImageStat.Stat(Image.open(f).convert("L")).mean[0]
+                       for f in live)
+        except ImportError:
+            pass
+
+    if uniq == 1:
+        verdict = "no-lock"
+        note = ("every frame identical -- the capture path is emitting a "
+                "constant, which is what it does when it cannot lock")
+    elif len(live) == 0:
+        verdict = "no-lock"
+        note = "no non-repeating frame in the burst"
+    else:
+        verdict = "locked"
+        note = "%d non-repeating frames" % len(live)
+
+    print("  frames=%d  unique=%d  live=%d  brightness=%s"
+          % (len(fs), uniq, len(live),
+             ("%.1f" % mean) if mean is not None else "n/a"))
+    print("  VERDICT: %s -- %s" % (verdict.upper(), note))
+    return {"mode": label, "frames": len(fs), "unique": uniq,
+            "live": len(live), "brightness": mean, "verdict": verdict}
+
+
+def main(argv):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
+    label = ""
+    if "--label" in argv:
+        label = argv[argv.index("--label") + 1]
+
+    print("== capture profile %s==" % (("[%s] " % label) if label else ""))
+    # wait_for_prompt, not at_prompt. at_prompt asks ONCE, and a single
+    # negative is not evidence the machine is unusable -- the keystroke may
+    # simply have buffered behind whatever DOS was finishing. This refused on
+    # its first real run and an immediate retry succeeded. Same distinction as
+    # FINDINGS bug 6, applied in a tool written after that lesson.
+    if wait_for_prompt(45) is None:
+        print("REFUSED: no DOS prompt within 45s. This types mode-change")
+        print("  commands, so it needs a shell reading them.")
+        return 2
+    print("  at a prompt: ok")
+
+    rows = []
+    rows.append(characterise("C:\\VGACAP\\MODE12", "mode 12h  640x480@60"))
+    rows.append(characterise("C:\\VGACAP\\MODE03", "mode 03h  720x400@70"))
+    rows.append(characterise("C:\\VGACAP\\MODE12", "mode 12h  (relock)"))
+
+    print("\n== summary ==")
+    for r in rows:
+        print("  %-24s %s" % (r["mode"], r["verdict"]))
+
+    v = [r["verdict"] for r in rows]
+    print()
+    if v[0] == "locked" and v[1] == "no-lock" and v[2] == "locked":
+        print("  Matches the ViRGE baseline: 12h locks, 03h does not, relock")
+        print("  works. The harness can see this card, and the mode-12h line in")
+        print("  AUTOEXEC is doing the job it was added for.")
+    elif v[0] == "locked" and v[1] == "locked":
+        print("  This card locks on text mode 03h TOO, which the ViRGE does not.")
+        print("  That is a better card for this rig, not a fault -- and it would")
+        print("  make the mode-12h line unnecessary here. Worth recording rather")
+        print("  than assuming the baseline generalises.")
+    elif v[0] != "locked":
+        print("  THE HARNESS CANNOT SEE THIS CARD in mode 12h. That is a RESULT,")
+        print("  not a tooling failure: every visual check in the harness is")
+        print("  blind on this card, and anything needing eyes has to be done at")
+        print("  the monitor. Sweeps can still run -- they are driven by the LED")
+        print("  channel and wall-clock, not by capture -- but a wedge would be")
+        print("  undiagnosable remotely.")
+    elif v[2] != "locked":
+        print("  Locked initially but did NOT relock after a mode change. That is")
+        print("  the worst shape: it would work at boot and go blind at the first")
+        print("  cell boundary, eight times in a four-cell sweep.")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        os._exit(0)
+    except KeyboardInterrupt:
+        sys.stderr.write("\ninterrupted -- target left as it was\n")
+        os._exit(130)

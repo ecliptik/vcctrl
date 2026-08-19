@@ -82,11 +82,35 @@ def grab(tag):
                     "%s:/tmp/vcraw*.jpg" % os.environ.get("VCCTRL_HOST", "usb4vc"),
                     sp], capture_output=True)
     try:
+        import hashlib
         from PIL import Image, ImageStat
-        fs = glob.glob(os.path.join(sp, "vcraw*.jpg"))
+        fs = sorted(glob.glob(os.path.join(sp, "vcraw*.jpg")))
         if not fs:
             return None, None
-        scored = [(ImageStat.Stat(Image.open(f).convert("L")).mean[0], f) for f in fs]
+
+        # Settle frames are BIT-IDENTICAL to each other; real picture never
+        # repeats, because analog sampling noise differs every frame. Measured
+        # on a static screen: frames 01-03 shared one md5, 04-16 were thirteen
+        # distinct hashes. So a repeated hash is a positive identification of a
+        # settle frame, where brightness is only a heuristic.
+        #
+        # This matters beyond tidiness. Brightness alone cannot tell a flat-black
+        # NO-LOCK from a genuinely dark SCREEN -- it picks the least-black frame
+        # either way and reports a number, and this rig has already drawn a wrong
+        # conclusion from exactly that ambiguity. If every frame in the burst is
+        # a duplicate, there is no picture at all, and saying so is the useful
+        # answer.
+        digests = {}
+        for f in fs:
+            digests.setdefault(hashlib.md5(open(f, "rb").read()).hexdigest(), []).append(f)
+        live = [f for d, group in digests.items() if len(group) == 1 for f in group]
+
+        if not live:
+            # Every frame repeated: the capture path is emitting a constant, which
+            # is what it does when it cannot lock. Not a dark screen -- no signal.
+            return None, None
+
+        scored = [(ImageStat.Stat(Image.open(f).convert("L")).mean[0], f) for f in live]
         scored.sort(reverse=True)
         mean, best = scored[0]
         dest = os.path.join(sp, "%s.jpg" % tag)

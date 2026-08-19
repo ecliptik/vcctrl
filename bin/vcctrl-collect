@@ -191,6 +191,79 @@ def put_tag(incoming, tag, before):
     return False, got
 
 
+def put_manifest(incoming, name, src, before, label):
+    """Upload one non-log file (a sweep manifest, BINARY.NFO) via CHK.BAT.
+
+    PUT.BAT sends the LOG pair and nothing else, which is why the first RB run
+    came back with no `config=` line anywhere: RB.BAT writes the witness to
+    LOGS\\<tag><SWEEP>.NFO, and that file simply never left the card. The boot
+    profile was then attested only by the operator's recollection of which menu
+    entry they picked -- which is the exact dependency r16 added the witness to
+    remove. A provenance record that stays on the machine is not a provenance
+    record.
+
+    There is ONE manifest per sweep run, not one per cell.
+    """
+    print("  %s %s" % (label, name))
+    vc("type", "C:\\DOSKUTSU\\CHK.BAT %s %s" % (src, name))
+    vc("key", "enter")
+    t0 = time.time()
+    while time.time() - t0 < PUT_TIMEOUT_S:
+        if arrived(incoming, name, before):
+            print("      %-16s %8d bytes  t+%.1fs"
+                  % (name, os.path.getsize(os.path.join(incoming, name)),
+                     time.time() - t0))
+            return True
+        time.sleep(2.0)
+    print("      not returned within %ds" % PUT_TIMEOUT_S)
+    return False
+
+
+def inspect_logs(incoming, tags):
+    """Read each collected log for evidence the cell actually ran.
+
+    ARRIVAL IS NOT HEALTH. The analysis session hit a run where all four cells
+    died at graphics init and the envelope was still complete -- four logs, a
+    manifest, a sweep-end banner. Every check this collector makes would have
+    passed. A cell that dies still writes a full artifact and names its own
+    cause on a `[critical] fatal:` line, so the log is the witness and its
+    existence is not.
+
+    Same family as the readiness bug: arrival proved the transfer and said
+    nothing about the sender's state; here it proves the file and says nothing
+    about the run.
+    """
+    print("\n== cell health ==")
+    bad = []
+    for tag in tags:
+        crit = []
+        for suffix in (".LOG", "SDL.LOG"):
+            p = os.path.join(incoming, tag + suffix)
+            if not os.path.exists(p):
+                continue
+            try:
+                with open(p, errors="replace") as f:
+                    for line in f:
+                        if "[critical]" in line or "fatal:" in line:
+                            crit.append(line.strip()[:140])
+            except OSError:
+                pass
+        if crit:
+            bad.append(tag)
+            print("  %-6s FAILED -- %d critical line(s)" % (tag, len(crit)))
+            for c in crit[:2]:
+                print("      %s" % c)
+        else:
+            print("  %-6s clean" % tag)
+    if bad:
+        print("\n  %d of %d cells did NOT complete. The files arrived and the"
+              % (len(bad), len(tags)))
+        print("  envelope looks whole -- it is not. Do not bank these numbers,")
+        print("  and do not retry-and-present: a round with a known hole beats")
+        print("  a round with an unknown substitution.")
+    return bad
+
+
 def main(argv):
     # Line-buffer stdout. These are long jobs that are usually run in the
     # background, and Python block-buffers to a pipe -- which meant a 23-minute
@@ -214,6 +287,7 @@ def main(argv):
     if argv[0] == "--tags":
         tags = [t.strip().upper() for t in argv[1].split(",") if t.strip()]
         label = "ad-hoc"
+        manifest = None          # no sweep name, so no manifest to name
     else:
         if len(argv) < 2:
             print(__doc__)
@@ -232,11 +306,14 @@ def main(argv):
                              "_tags_comment for how to derive them." % sweep)
         mtag = conf["machines"][machine]["tag"]
         tags = [mtag + t for t in spec["tags"]]
+        manifest = "%s%s.NFO" % (mtag, sweep)
         label = "%s on machine %s (%s)" % (sweep, mtag,
                                            conf["machines"][machine]["name"])
 
     print("== collect: %s ==" % label)
     print("  tags: %s" % " ".join(tags))
+    if manifest:
+        print("  manifest: %s (carries config= -- the boot-profile witness)" % manifest)
 
     if not os.path.isdir(incoming):
         raise SystemExit("REFUSED: incoming directory %s does not exist." % incoming)
@@ -273,6 +350,23 @@ def main(argv):
                   % (PUT_TIMEOUT_S, ", ".join(missing)))
         before = snapshot(incoming)
 
+    # The manifest carries config=%config%, which is the only artifact that
+    # proves which boot profile produced these logs. Pull it in the same NET
+    # session -- a second trip costs another reboot.
+    if manifest:
+        print("\n== provenance ==")
+        if not put_manifest(incoming, manifest,
+                            "C:\\DOSKUTSU\\LOGS\\" + manifest, before,
+                            "manifest"):
+            failed.append(manifest)
+        before = snapshot(incoming)
+        # BINARY.NFO describes what is actually installed on the card. The
+        # engine logs binary_sha12=UNKNOWN, so this is the only record of
+        # binary identity that travels with a run.
+        put_manifest(incoming, "BINARY.NFO", "C:\\DOSKUTSU\\BINARY.NFO",
+                     before, "binary  ")
+        before = snapshot(incoming)
+
     if not stay_net:
         print("\n== return to the menu default ==")
         # The last PUT confirmed its file ARRIVED, which happened while DOS was
@@ -301,8 +395,14 @@ def main(argv):
         else:
             print("  WARNING: could not arm LEDs; skipped the return reboot.")
 
+    unhealthy = inspect_logs(incoming, ok) if ok else []
+
     print("\n== result ==")
     print("  collected: %s" % (" ".join(ok) if ok else "(none)"))
+    if unhealthy:
+        print("  DID NOT COMPLETE: %s" % " ".join(unhealthy))
+    if unhealthy and not failed:
+        return 1
     if failed:
         print("  MISSING:   %s" % " ".join(failed))
         print("""
