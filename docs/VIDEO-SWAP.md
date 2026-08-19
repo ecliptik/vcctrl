@@ -224,15 +224,27 @@ By the analysis session's rule -- **the discriminator is drawn area and
 drawcall count, not display mode** -- these are the same workload. The ~3%
 gap is a real but small cost, not a different experiment.
 
-### Operating guidance
+### Operating guidance -- OPERATOR DECISION 2026-08-19
 
-- **640x480 when the run needs to be seen**: debugging a wedge, verifying a
-  visual defect, watching a sweep, anything where a still frame is evidence.
-- **512x384 for a blind run** where video output is already trusted and the 3%
-  is worth having.
+**640x480 is the default for this card. 512x384 is an opt-in the user can
+select when wanted.**
 
-Since there are no banked Mach64 figures older than today, there is no
-compatibility reason to prefer 512x384; the choice is genuinely free.
+His reasoning: 512x384 is slightly faster and worth keeping rather than
+removing, but observability is the better default and ~3% is not worth giving
+up seeing the screen on every run.
+
+    default   pin stood down    DOSKUTSU_PIN_NATIVE_MODE=0    640x480
+    opt-in    pin left engaged  (variable unset)              512x384
+
+Since there are no banked Mach64 figures older than today, nothing forces the
+older mode for compatibility.
+
+**Note the asymmetry, which is deliberate rather than unnoticed:** patch 0317
+is default-OFF, so the *faster* mode is the one needing no flag and the
+*default* mode is the one you have to ask for. Supporting the opt-in therefore
+costs nothing -- it is unmodified behaviour. If that inversion ever becomes a
+nuisance the fix is on the DOSKUTSU side, either flipping 0317's polarity or
+setting the variable in this machine's AUTOEXEC. Not proposed now.
 
 ### Not yet settled
 
