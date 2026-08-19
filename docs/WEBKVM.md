@@ -1,4 +1,4 @@
-# vckvm -- an interactive web KVM for the g2k
+# A web KVM for the g2k, and the daemon merge it implies
 
 **Branch:** `webkvm`. **Status:** plan only, nothing built. Written 2026-08-19.
 
@@ -11,8 +11,9 @@ Target browsers **Firefox and Safari**. Lowest practical latency, accepting
 that the path runs through the Pi.
 
 This is a front-end onto the harness that already exists. It adds one genuinely
-new mechanism -- a persistent owner of the capture device -- and everything
-else is UI over `vcctrld`, which already does input and power.
+new mechanism -- a persistent owner of the capture device -- and folds the
+result into a single daemon that both the browser and Claude drive as equal
+clients (section 2, revised on the operator's direction after the first draft).
 
 ---
 
@@ -26,6 +27,7 @@ Answered by the operator before writing this:
 | Video transport | **MJPEG over WebSocket now**, WebRTC later if measurement disappoints |
 | Access | **Tailscale only** -- no LAN bind, no password |
 | v1 scope | **Video + keyboard + power.** Mouse and files come after |
+| Daemon shape | **One daemon named `vcctrl`**, capability modules, browser and Claude as equal clients (sec. 2) |
 
 Added by the operator mid-planning: *having the option to select between video
 delivery would be nice, which we can add later, as well as other video tweaks
@@ -101,30 +103,133 @@ demands it.
 
 ---
 
-## 2. Architecture
+## 2. Architecture -- one daemon, capability modules
+
+**Revised on the operator's direction, mid-planning:**
+
+> if/when the kvm is running, could we directly use /dev/video0 and not have to
+> go through vcctrl, instead sending the stream to both the remote KVM and
+> vcctrl daemon? Ideally at some point having the KVM as the lead daemon (named
+> vcctrl) and having the ClaudeCode/API access to it would be better, then we
+> could make it like a plugin type architecture.
+
+Yes to all of it, and the first half is already how this works -- worth saying
+plainly because the wording suggests a hop that does not exist. **`vcctrld` has
+never touched video.** Nothing goes "through" it to reach the capture stick;
+today every capture is a fresh `ffmpeg` spawn against `/dev/video0` with no
+daemon involved at all. The streamer opens the device directly and fans frames
+out to both consumers. There is no relay in the path either way.
+
+The second half is the better idea, and it is worth adopting **now** rather
+than after the MVP, because it is nearly free at this stage and expensive to
+retrofit. The plan originally called for a second daemon, `vckvmd`. **That is
+dropped.** There is one daemon, it is `vcctrld`, and the web KVM is one of its
+capabilities.
 
 ```
-  browser (Firefox / Safari)
-     |  HTTPS + WSS over tailnet, via `tailscale serve`
-     v
-  ---------------------------- Pi (usb4vc, 100.64.0.1) ----------------
-  vckvmd  (new)                          vcctrld  (exists, needs changes)
-    owns /dev/video0 for its lifetime      owns the two uinput devices
-    ring buffer of recent JPEG frames      /run/vcctrl.sock, JSON lines
-    HTTP  : static UI, /shot.jpg           key / type / hold / combo
-    WS    : frames out, input in  --------> mouse / leds / power (Kasa)
-    /run/vckvm.sock : frame API
-                |                                    |
-                | JPEG                               | evdev events
-        USB capture stick                        USB4VC HAT -> STM32
-                |                                    |  PS/2
-                +-------------- g2k (1995 Gateway 2000, DOS 6.22) ---------+
+  browser (Firefox/Safari)        Claude Code / API        vcctrl CLI
+     |  HTTPS + WSS                  |  HTTP                  |  unix socket
+     |  (tailscale serve)            |                        |
+     +---------------+---------------+------------------------+
+                     |   one API, one state, one arbiter
+  ------------------ v --------- Pi (usb4vc) --------------------------------
+   vcctrld  -- core: device ownership, arbitration, event bus, transport
+     |
+     +-- input      uinput kbd + mouse -> USB4VC HAT -> STM32 -> PS/2
+     +-- video      owns /dev/video0, JPEG ring, fan-out to every subscriber
+     +-- power      Kasa EP10
+     +-- leds       PS/2 return channel
+     +-- web        static UI, WS video out, WS input in       [new]
+     +-- audio      ALSA card 1 off the capture stick          [later]
+     +-- reset      GPIO -> opto -> J31                        [when wired]
+     +-- files      FTP staging, CF reader                     [later]
+                     |
+                     v
+             g2k (1995 Gateway 2000, DOS 6.22)
 ```
 
-**Two processes, not one, and not three.** `vcctrld` keeps its current job:
-it owns the input devices and must stay the most boring, most reliable thing
-in the rig. `vckvmd` owns the capture device and everything web-facing. They
-talk over the existing unix socket.
+### Why one daemon is the right call, and it is not about tidiness
+
+**Arbitration is a correctness requirement, and only a single owner can
+enforce it.** PLAN sec. 5.1 is blunt that keystrokes mid-sweep corrupt a run --
+the harness drives sweeps, not cells, for exactly this reason. The moment a
+browser exists, there are two independent things that can type at the g2k: the
+operator and the automation. With two daemons and two API surfaces there is
+nowhere to put the rule that stops them colliding. With one, there is exactly
+one place, and it is the same place that already holds the device lock.
+
+Three further consequences, all of which the split architecture could not give:
+
+- **Claude and the operator see the same state.** The browser and the API read
+  the same lock state, the same frame ring, the same LED values, from the same
+  process. "See what is going on with automated testing" stops being *watch a
+  video of it* and becomes *watch the harness's actual state*.
+- **Claude stops paying the ssh tax.** The peer session measured every `vcctrl`
+  call at 1.52-2.55 s and attributes four separate bugs today to loops written
+  as though calls were free. An HTTP API on the tailnet is ~10 ms. That is a
+  bigger win for the automation than for the browser.
+- **New hardware lands as a module.** The J31 reset opto, audio, the Pi 5 port
+  (PLAN sec. 7) and file transfer each become one capability registering
+  commands and, if they want one, a UI panel. None of them touch the core.
+
+### Why it is not a plugin *loader*
+
+The MVP registers modules from a table in the source. No discovery, no dynamic
+import, no third-party plugin contract. The value the operator is asking for is
+the **shape** -- capabilities that are separable, each owning one device, each
+addable without disturbing the others -- and that shape is worth having from
+day one. A real loader is a feature to add when something outside this repo
+needs to plug in, and nothing does yet.
+
+### The one real cost, and how it is paid
+
+`vcctrld` is currently the most reliable thing in the rig, and the uinput
+devices are the reason. USB4VC only discovers input devices on its 0.75 s scan
+(PLAN sec. 2), so a daemon crash does not merely restart -- it drops the
+devices and silently loses the first keystrokes afterwards. **Folding a web
+server, a video pipeline and, later, a file upload handler into that process
+widens the blast radius around the single component that must not fail.**
+
+Three rules that pay for it, and they are load-bearing rather than stylistic:
+
+1. **The input path takes no dependency on any other capability.** Not on the
+   web module, not on video, not on the HTTP stack. It must remain possible to
+   type at the g2k with every other capability broken or unloaded.
+2. **A capability that raises is unloaded, not fatal.** The core catches at the
+   module boundary, marks the capability failed, reports it in `state`, and
+   keeps serving everything else. A dead video pipeline must never cost the
+   operator the keyboard.
+3. **Anything that can take the process down stays out of process.** ffmpeg is
+   already a subprocess and stays one. This is what keeps a native decoder
+   segfault from being a keyboard outage, and it is why the video capability is
+   a pipe reader rather than a library binding.
+
+If those three hold, the merge is a straight improvement. If they turn out not
+to hold in practice, the fallback is to split device ownership back out -- so
+keep the module boundaries real enough that splitting stays cheap.
+
+### Arbitration policy -- needs a decision, and not mine to make
+
+The rule itself is a question for the operator and the benchmarking session,
+because it is a comparability judgement about the fps matrix, not an
+engineering one. The choice:
+
+- **(a) Locked, with break-glass.** While a sweep holds the input lock, browser
+  keyboard is refused, with a visible banner naming what holds it. An explicit
+  "take control" button breaks the lock and **marks the run tainted** in its
+  log. Recommended: it makes the destructive case deliberate and self-
+  documenting, and a tainted run is recoverable where a silently corrupted one
+  is not.
+- **(b) Advisory.** Input always allowed, every injection recorded, runs
+  flagged after the fact. Simpler, but it makes the operator responsible for
+  remembering that typing during a sweep invalidates it.
+
+Either way, **the event bus is the part that serves the original request.**
+Every injected keystroke, power event, lock acquisition and lock release is
+published to subscribers, so the browser can show a live activity log beside
+the video: not just *the screen changed*, but *the harness typed `RB` at
+19:22:04 and took the input lock*. That is what turns watching a sweep from
+spectating into supervision.
 
 ### The single most important design constraint
 
@@ -135,10 +240,15 @@ The peer session, unprompted:
 > in my tooling today. For a browser KVM it is more than a nuisance: typing at
 > 1.5 s per keystroke is unusable.
 
-`vckvmd` runs **on the Pi** and talks to `/run/vcctrl.sock` **locally**. No ssh
-is anywhere in the interactive path. This is why the whole thing lives on the
-Pi rather than on the VM proxying to it, and it is consistent with the reason
-the repo already puts all timing on the Pi (README, PLAN sec. 1).
+Everything interactive runs **on the Pi**. No ssh is anywhere in the input
+path. This is why the whole thing lives on the Pi rather than on the VM
+proxying to it, and it is the same reason the repo already puts all timing
+there (README, PLAN sec. 1).
+
+**The `vcctrl` CLI contract does not change.** Same commands, same output; it
+talks to a richer daemon over the same socket. The peer session's tooling keeps
+working through the merge, and that is a hard requirement -- ~157 banked fps
+measurements sit behind it.
 
 ---
 
@@ -146,8 +256,8 @@ the repo already puts all timing on the Pi (README, PLAN sec. 1).
 
 Bind to the tailnet only. Two ways, and the second is recommended:
 
-- `vckvmd` listens on `100.64.0.1:8080` directly. Simple, http only.
-- **`tailscale serve https / http://127.0.0.1:8080`** -- `vckvmd` listens on
+- `vcctrld` listens on `100.64.0.1:8080` directly. Simple, http only.
+- **`tailscale serve https / http://127.0.0.1:8080`** -- `vcctrld` listens on
   loopback and Tailscale terminates HTTPS with a real cert for
   `usb4vc.<tailnet>.ts.net`. Recommended, for a reason that is not about
   security:
@@ -165,7 +275,7 @@ anything on the tailnet can power-cycle the g2k.
 
 ---
 
-## 4. `vckvmd` -- the capture streamer
+## 4. `vcctrld` -- the capture streamer
 
 This is the load-bearing new component. Everything else is UI.
 
@@ -256,7 +366,7 @@ DOS text mode 03h (720x400 @70) never locks; the game's 320x240 and mode 12h
 frames during normal operation -- at every reboot, at the boot menu, and
 between cells on a payload without the `MODE12` line.
 
-`vckvmd` must therefore treat "no frames" as an expected state, not a fault:
+`vcctrld` must therefore treat "no frames" as an expected state, not a fault:
 
 - No frame for **2 s** -> publish `{"state":"nosignal"}` to browsers, which
   show a "no signal / not locked" panel rather than a frozen last frame. A
@@ -271,7 +381,7 @@ the mistake PLAN sec. 4.1 records, one level up.
 
 ### 4.6 What automation calls instead
 
-`vckvmd` exposes `/run/vckvm.sock`, same JSON-lines shape as `vcctrl.sock`:
+`vcctrld` exposes `/run/vcctrl.sock`, same JSON-lines shape as `vcctrl.sock`:
 
     {"cmd":"shot"}                    -> {"ok":true,"jpeg":<base64>,"mean":58.9,
                                           "selected_from":10,"age_ms":120,
@@ -290,20 +400,26 @@ GET to the Pi -- ~100 ms, returning `(path, mean)` with the same signature, so
 callers do not change at all. **Offer them that shim rather than asking them to
 edit call sites.**
 
-`vcctrl shot` on the Pi becomes a `/run/vckvm.sock` client. Same command, same
+`vcctrl shot` on the Pi becomes a `/run/vcctrl.sock` client. Same command, same
 output, ~1.5 s instead of ~40 s, and that 1.5 s is now entirely the ssh hop.
 
-### 4.7 Fallback when `vckvmd` is not running
+### 4.7 Fallback when the video capability is down
 
-`vcctrl shot` must not become dependent on the web server being up. If
-`/run/vckvm.sock` does not answer, fall back to today's one-shot ffmpeg path.
-The automation's recovery path should never route through a UI daemon.
+`vcctrl shot` must not become dependent on the streamer. If the video
+capability is unloaded, failed, or the daemon is not running at all, fall back
+to today's one-shot `ffmpeg` path. The automation's recovery path is the last
+thing that should acquire a new dependency, and the case where you most need a
+frame is the case where something is already broken.
+
+Note this is also the honest answer to rule 2 in section 2: a failed video
+capability costs the operator the live picture and costs the automation ~40 s
+per frame, and costs neither of them anything else.
 
 ---
 
 ## 5. Input
 
-### 5.1 What `vcctrld` cannot do yet
+### 5.1 What the input path cannot do yet
 
 Reading `daemon/vcctrld.py`, three things block interactive use:
 
@@ -383,11 +499,11 @@ the measurement in 5.2 will show which:
 
 - If repeat happens downstream, the browser must send exactly one `keydown`
   and suppress `KeyboardEvent.repeat`, or every held key doubles up.
-- If it does not, the browser (or `vckvmd`) synthesises it -- 500 ms delay,
+- If it does not, the browser (or `vcctrld`) synthesises it -- 500 ms delay,
   30 Hz -- and must stop instantly on `keyup`.
 
 Get this wrong in the second direction and a stuck key types forever at a DOS
-prompt. **Whatever the answer, `vckvmd` releases every held key when a
+prompt. **Whatever the answer, `vcctrld` releases every held key when a
 WebSocket closes.** A dropped wifi connection must never leave a key down.
 
 ### 5.5 Pacing
@@ -396,7 +512,7 @@ WebSocket closes.** A dropped wifi connection must never leave a key down.
 types, so interactive typing needs no change. But note that pacing exists
 because USB4VC drains **one event per device per loop pass** with a 5 ms idle
 sleep (PLAN sec. 2). A browser can generate events faster than that during fast
-typing or a mouse drag, so `vckvmd` must **queue and pace**, never forward
+typing or a mouse drag, so `vcctrld` must **queue and pace**, never forward
 straight through. Dropping events on the floor is worse than adding latency
 here.
 
@@ -516,7 +632,7 @@ other profile there is no packet driver, and getting there costs a reboot.
 
 So a browser "send file" is not a push. It is:
 
-1. Upload to `vckvmd`, which stages it on the Pi and hands it to the VM's
+1. Upload to `vcctrld`, which stages it on the Pi and hands it to the VM's
    `serve.sh` FTP root (192.0.2.10:2121, `USER`/`PASSWORD_FROM_ENV`).
 2. Verify the gates that already exist and must not be dropped: **sha per
    binary, CRLF on every `.BAT`, ASCII-only** (PLAN sec. 5).
@@ -569,22 +685,25 @@ built at all until someone has seen a cursor move.
 | step | deliverable | gated on |
 |---|---|---|
 | 0 | Coordinate with the `vcctrl` session on a window to take `/dev/video0` | it is actively driving the machine |
-| 1 | `vckvmd` capture core: ffmpeg pipe, frame split, ring, `/run/vckvm.sock`, `shot`/`burst`/`state` | 0 |
-| 2 | `vcctrl shot` reads the socket, with fallback to today's ffmpeg path; `grab()` shim offered to the peer | 1 |
-| 3 | HTTP server + `tailscale serve` HTTPS + `/shot.jpg` | 1 |
-| 4 | **WS video to the browser.** A page that shows the g2k live. First real milestone | 3 |
-| 5 | `vcctrld`: threaded `serve()`, `keydown`/`keyup`, full key table | nothing |
-| 6 | Keyboard coverage sweep -- measure what the STM32 actually delivers (5.2) | 4, 5 |
-| 7 | **Keyboard in the browser**, macro bar, sticky modifiers, release-all-on-disconnect | 6 |
-| 8 | Power panel + live LEDs, with the edge-not-level rule | 5 |
-| 9 | **v1 done.** Measure real glass-to-glass latency and write it down | 4,7,8 |
-| 10 | Mouse: hardware test, then Pointer Lock | 9 + a cursor that moved |
-| 11 | Files: NET-prompt-gated FTP, CF fallback | 9 |
-| 12 | Selectable transport, WebRTC, audio, the rest of 6.3 | 9 |
+| 1 | **Core refactor**: capability registry, threaded `serve()`, input path isolated from everything else. No new features | nothing |
+| 2 | Video capability: ffmpeg pipe, frame split, ring, `shot`/`burst`/`state` on the existing socket | 0, 1 |
+| 3 | `vcctrl shot` reads the ring, with fallback to today's ffmpeg path; `grab()` shim offered to the peer | 2 |
+| 4 | HTTP capability + `tailscale serve` HTTPS + `/shot.jpg` + the event bus | 2 |
+| 5 | **WS video to the browser.** A page that shows the g2k live. First real milestone | 4 |
+| 6 | Input capability: `keydown`/`keyup`, full key table, the input lock | 1 |
+| 7 | Keyboard coverage sweep -- measure what the STM32 actually delivers (5.2) | 5, 6 |
+| 8 | **Keyboard in the browser**, macro bar, sticky modifiers, release-all-on-disconnect | 7 |
+| 9 | Power panel + live LEDs + activity log, with the edge-not-level rule | 4, 6 |
+| 10 | **v1 done.** Measure real glass-to-glass latency and write it down | 5, 8, 9 |
+| 11 | Mouse capability: hardware test, then Pointer Lock | 10 + a cursor that moved |
+| 12 | Files capability: NET-prompt-gated FTP, CF fallback | 10 |
+| 13 | Selectable transport, WebRTC, audio, reset GPIO, the rest of 6.3 | 10 |
 
-Steps 1-4 are the interesting half and depend on nothing but the device window.
-Step 5 is independent of all of it and could go first if the capture device is
-busy.
+Step 1 is deliberately a refactor with no user-visible change, so the merge
+lands while the surface is still small and the peer session's tooling can be
+checked against it in isolation. Steps 2-5 are the interesting half and depend
+on nothing but a window on the capture device. Step 6 is independent of all of
+it and can go first if the device is busy.
 
 ---
 
@@ -604,11 +723,19 @@ busy.
    The fps matrix is the whole point of the rig. Passthrough MJPEG should be
    nearly free, but *nearly free* is an assertion until it is measured against
    a banked anchor. **Ask the benchmarking session before running the streamer
-   during a scored sweep**, and default `vckvmd` to idle-when-no-viewers if it
+   during a scored sweep**, and default `vcctrld` to idle-when-no-viewers if it
    turns out to matter.
 5. **Does the mouse work at all?** (9)
 6. Framerate: the stick offers 60 fps at 640x480. Is 60 worth double the
    frames, given the source is a DOS box? Probably 30. Measure.
+7. **What happens when the operator types during a sweep?** Section 2 lays out
+   locked-with-break-glass versus advisory and recommends the former, but the
+   call belongs to the operator and the benchmarking session, because it is a
+   judgement about what invalidates a measurement.
+8. **Does the merged daemon hold rule 1** -- that the input path keeps working
+   with every other capability broken? Worth an explicit test rather than an
+   assumption: unload video, kill the web module, confirm `vcctrl type` still
+   lands.
 
 ---
 
@@ -623,3 +750,8 @@ busy.
 - **No LAN bind and no auth.** Tailscale is the boundary, per the operator.
 - **No attempt to defeat browser keyboard reservation.** It is not defeatable
   in Firefox or Safari; the macro bar is the answer (5.3).
+- **No plugin loader.** Capabilities register from a table in the source. The
+  separable shape is worth having now; dynamic loading is worth having when
+  something outside this repo needs to plug in, and nothing does (sec. 2).
+- **No change to the `vcctrl` CLI contract.** ~157 banked fps measurements sit
+  behind the peer session's tooling. The daemon grows; the CLI does not move.
