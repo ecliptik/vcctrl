@@ -446,6 +446,66 @@ already 1, because POST sets it to 1 again and a 2 s poll misses the
 transient. To detect a reboot, set **Caps Lock on first** -- POST clears it, so
 the edge is unambiguous.
 
+### Power control: the g2k is DC-powered via PicoRC  **[2026-08-19]**
+
+Deferred by the operator for now, but the constraints are settled and worth
+recording while they are fresh.
+
+The machine runs from a **PicoRC** (dekuNukem, same author as USB4VC) -- a
+passive adapter that lets an IBM PC-class board run from a 12 V DC brick through
+a picoPSU. It feeds **5 V, GND and Power Good** to the AT power connector, and
+carries a **fan header** and a **power switch header**.
+
+Two facts fall out, both favourable:
+
+- **It is genuinely DC-powered**, so anything that switches a 12 V barrel jack
+  can control it.
+- **It is AT-style rails, not ATX soft-off.** There is no `PS_ON#` handshake
+  with the motherboard, so restoring power produces a clean cold boot with no
+  BIOS "restore on AC loss" setting required. That was the main risk with any
+  power-cycling approach and it does not apply here.
+
+#### Option A -- JetKVM DC Power Control Extension, inline on the barrel jack
+
+Viable. 12-20 V DC in, 5.5x2.5 mm barrel (5.5x2.1 adapters included), browser
+controlled. Connector is **RJ-12 6P6C**, not RJ-45; the port carries power, I2C
+and GPIO, and the extension can feed 5 V back to the JetKVM over the same cable.
+
+Unpublished and worth asking about before buying: **current rating**, switching
+mechanism (relay vs MOSFET), and whether it monitors voltage/current. A
+picoPSU-fed 486 with a CF card is roughly 2-4 A at 12 V, which may be near the
+limit of a module aimed at low-power mini-PCs.
+
+Requires a JetKVM to drive it -- it is an accessory, not a standalone switch.
+Note the JetKVM's own KVM function is no help here: it is HDMI-in / USB-HID-out,
+and the g2k is VGA and PS/2.
+
+#### Option B -- relay across the PicoRC power switch header (recommended)
+
+**The PicoRC already exposes the intended control point.** A relay or opto
+across its power switch header does the same job as Option A using hardware
+already present: the Pi has free GPIO (BCM 5, 6, 12, 13, 17, 23), a module costs
+about $2, and it is a header rather than a solder joint, so it stays
+non-destructive and reversible in the spirit of the PicoRC itself.
+
+**One thing to verify: is that header latching or momentary?** An AT-style setup
+usually expects a latching toggle -- in which case the relay holds the contact
+closed for "on" and opens for "off", which a relay does naturally. If it expects
+a momentary pulse, the logic is a pulse instead. Check before wiring; the
+behaviours are not interchangeable.
+
+Prefer A only if a JetKVM is already in the rig and its UI is wanted. Otherwise
+B is the same capability for a fraction of the cost and complexity.
+
+#### Bonus: Power Good is a free state sensor
+
+PicoRC drives an LED from the **Power Good** signal. Fed back to a Pi GPIO
+through an opto, that gives the harness a direct "the machine is powered and its
+rails are good" input -- a real state reading rather than an inference from
+whether the capture stick sees a signal. Worth wiring at the same time as
+whichever power option is chosen, since the harness currently has no way to
+distinguish "powered off" from "powered on but producing no video".
+
 ### GPIO to the motherboard reset header -- the recommended fix
 
 **Confirmed from the board manual (operator, 2026-08-19): header `J31`, Pin 1 =
