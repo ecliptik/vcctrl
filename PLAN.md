@@ -511,6 +511,33 @@ it: the boot profile was `VIBRAUSB` (no Vibra16 in the box, PicoGUS in USB mode,
 so no DAC at all) **and** the line-out was not cabled to the stick's input.
 Fixing either alone still yields silence.
 
+### The `wiimidi` question -- my concern was real but narrower than I feared
+
+An A/B on the live machine showed `SDL_HINT_DOSKUTSU_AUDIO_MIDI_SOURCE=wiimidi`,
+set globally by the card's `AUTOEXEC.BAT`, materially changes the output:
+`mean -31.3 dB` with it set, `mean -25.4 dB / max -13.6 dB` cleared. So the
+variable does reach the engine.
+
+I worried this meant banked results had been hearing MIDI where Organya was
+expected. **It does not.** `CLRENV` clears both spellings (lines 21-22), and
+every measured cell calls `CALL CLRENV` before running -- verified across the
+sweeps and the individual audio cells (`G41`, `G51`, `G17`, `G22`, `C4` once
+each; `VB.BAT` six times, once per cell), none of which set `MIDI_SOURCE`
+themselves.
+
+So the true statement is narrower: **manual play on this card runs with
+`wiimidi` pinned; every measured cell does not.** That is a config-vs-expectation
+mismatch for the operator, not a data-integrity problem for the matrix -- and it
+cuts the way that is easy to get backwards. If something is heard in manual play
+and cannot be reproduced in a cell, this is the first thing to suspect.
+Removing the line from `AUTOEXEC` would close the gap; that is an operator
+decision.
+
+Note this is the second time `CLRENV` has been the thing protecting the matrix
+-- it also clears `AUDIO_SB_FORCE_8BIT`, which is why the T3/T4 drift (sec.
+5.5a) could not reach a cell either. That file does more load-bearing work than
+its 204 dull lines suggest, and should not be "simplified".
+
 ### Consequences
 
 - **Sec. 5.2's "the ear cells stay human, permanently" is withdrawn.** It was
@@ -853,8 +880,28 @@ Worth stating as a boundary rather than leaving it to be discovered as a gap.
 
 **WITHDRAWN 2026-08-19 -- this section's premise was false.** Audio capture
 works (sec. 4.2); the descriptor-based argument below was wrong. The text is
-kept because the doskutsu session acted on it. What survives is narrower: the
-harness cannot yet *judge* audio correctness, only detect presence.
+kept because the doskutsu session acted on it.
+
+**Re-decided by that session with the corrected facts, and the exclusion
+stands -- but narrowed, and it now splits in two:**
+
+- **A silence-detection pass over the ear cells IS automatable and worth
+  building.** It catches a dead DAC, a wrong boot profile, or a cell that
+  produced nothing at all -- exactly the faults that waste a human's evening
+  before they have judged anything. Cells in scope: `VB` plus the `G`-prefixed
+  individuals. These come off the autonomous runner's deny-list **for the
+  silence pass only**.
+- **Judgement stays human.** The open audio questions are all of the second
+  kind -- whether patch 0298/0307 drum envelopes are "too short", whether the
+  Shack arrangement is right. No dB measurement settles either, and capture
+  being proven does not change that.
+
+The surviving argument for the exclusion never depended on capture at all: the
+banner delay is the mechanism by which a human knows which cell is playing, so
+for scoring runs it is load-bearing regardless.
+
+The operative distinction, worth keeping verbatim: *"is this cell silent when it
+should not be" is now answerable; "does this cell sound correct" is not.*
 
 ~~**The audio-QA "ear cells" stay human, permanently.** The capture stick's
 audio input terminal is HDMI-embedded digital (`wTerminalType 0x0602`), measured
