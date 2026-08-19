@@ -155,6 +155,53 @@ def wait_cold_boot(timeout=240):
     return time.time() - t0
 
 
+def select_boot_profile(digit, edge_timeout=60, ready_timeout=200):
+    """Reboot and pick a CONFIG.SYS menu entry, without flooding the buffer.
+
+    The menu is invisible (text mode 03h does not capture) and times out in
+    5 s, so selection is blind and timed. The digit alone does not commit --
+    it highlights; Enter commits (FINDINGS sec. 8).
+
+    WHY THIS POLLS, WHEN THE ORIGINAL DELIBERATELY DID NOT: the first version
+    blind-fired a fixed number of attempts across a window, because a leds()
+    check cost ~1.5 s of ssh and would have pushed the cadence past the 5 s
+    window it had to hit. After ControlMaster (FINDINGS sec. 19) a poll costs
+    ~0.2 s, so checking between attempts is affordable and the whole tradeoff
+    disappears.
+
+    The operator hears the difference: every attempt beyond the one that lands
+    goes into the BIOS 15-key buffer, and once full the machine beeps per
+    rejected key -- "four rapid beeps after the PnP boot beep". The survivors
+    then flush into the prompt as "Bad command or file name". Stopping at
+    RDYPULSE removes both.
+
+    Pass digit=None to take the menu default without pressing anything.
+    """
+    if not arm_leds():
+        return None
+    vc("combo", "ctrl", "alt", "delete")
+    edge = wait_led("capslock", False, edge_timeout)
+    if edge is None:
+        return None
+
+    t0 = time.time()
+    attempts = 0
+    if digit is not None:
+        # Fire, then check. RDYPULSE means AUTOEXEC has finished, so the menu
+        # is long past and every further keystroke is buffer noise.
+        while time.time() - t0 < ready_timeout:
+            if bool(leds().get("scrolllock")):
+                break
+            vc("key", str(digit), "enter", check=False)
+            attempts += 1
+    if wait_led("scrolllock", True, ready_timeout - (time.time() - t0)) is None:
+        return None
+    ready = time.time() - t0
+    if wait_for_prompt(90) is None:
+        return None
+    return {"edge_s": edge, "ready_s": ready, "attempts": attempts}
+
+
 def ensure_powered(allow_power_on):
     """Bring the target up if permitted, else refuse. Returns True if usable.
 
