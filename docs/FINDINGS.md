@@ -430,3 +430,54 @@ Blanketing the menu window fills the BIOS 15-key buffer, and DOS beeps once per
 rejected keystroke. The operator heard a burst of beeps after the POST beep and
 asked about it. Harmless, stops when the window closes -- but on a 30-year-old
 machine an unexplained beep burst reads as a fault, so it is worth expecting.
+
+## 18. The caret does not escape anything in MS-DOS 6.22  [measured 2026-08-19]
+
+`^` is a **cmd.exe** escape character. COMMAND.COM has no escape mechanism at
+all, and the eight sweep BATs writing `-^>` to mean a literal arrow were never
+correct -- everyone reading them, this session included, assumed the idiom
+worked because it looked like the idiom that works on Windows.
+
+Settled on the machine rather than argued:
+
+    C:\>DEL C:\arrow
+    File not found                       <- clean slate
+
+    C:\>ECHO caret test -^> arrow
+
+    C:\>DIR C:\arrow
+    ARROW              15  08-19-26  11:32a
+
+**The file was created.** 15 bytes is exactly `caret test -^` plus CRLF: the
+caret went in as literal text and the `>` redirected regardless.
+
+Consequence: any DOS batch reaching for `^` to escape `<`, `>` or `|` is
+silently broken, and the failure is invisible because the redirect target is
+usually a plausible-looking word from the middle of the message. The only
+reliable fix is to **reword so no bare `<` or `>` exists outside a real
+redirect**, which is what the analysis session did across 21 BATs.
+
+### The redirect audit that found it needs to be by parse, not by pattern
+
+Grepping for arrow shapes found four bad lines in `RB.BAT`. Parsing every line
+for a redirect target found many more, including the one that mattered:
+
+    CLRENV.BAT:4   REM (env > CFG by design). CALLed by every cell BAT ...
+
+**COMMAND.COM parses redirection inside REM comments.** A REM produces no
+output, so this creates an empty file and nothing else -- which is why the
+stray `CFG` was 0 bytes while `ADLIB` was 64. The size was the clue that it
+came from a REM rather than an ECHO. And because `CLRENV` is CALLed by every
+cell of every sweep, a file named `CFG` has been created before every
+measurement ever taken on this rig.
+
+No arrow-shaped search would ever have found it. The general rule: **audit for
+the effect, not for the syntax you expect to cause it.**
+
+### A related DOS limit worth carrying
+
+`DIR` shows one `ADLIB`, not the two the arrow audit predicted: DOS filenames
+are case-insensitive 8.3, so `adlib` and `ADLIB` are the same file and the
+later ECHO simply overwrote the earlier one. And COMMAND.COM truncates a
+command line past **127 characters**, which nearly shipped a truncation bug
+inside the fix for a truncation bug.
