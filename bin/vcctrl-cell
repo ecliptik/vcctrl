@@ -30,7 +30,23 @@ WHAT WENT WRONG, AND WHAT EACH GUARD ANSWERS
    Guard: a lock file. This refuses to run rather than interleave.
 
 Usage:
-  vcctrl-cell <TAG> [--set VAR=VAL]... [--ticks N] [--cfg NAME] [--shot-at S]
+  vcctrl-cell <TAG> --card mach64|virge|cirrus [--set VAR=VAL]...
+                    [--ticks N] [--cfg NAME] [--shot-at S]
+
+PER-CARD DEFAULTS, because a decision that has to be remembered gets forgotten.
+
+  mach64  sets DOSKUTSU_PIN_NATIVE_MODE=0, which the operator chose as the
+          default for this card on 2026-08-19. Without it the game runs at
+          512x384 -- outside the capture stick's 60 Hz range -- and the
+          harness is blind for the whole cell. Costs about 3% fps against
+          the 512x384 figure, which he judged worth paying to see the screen.
+
+  virge   NO pin change. The ViRGE picks 320x240 exactly, and standing the pin
+          down would let a later mode-set take it to 640x480 -- changing the
+          geometry every banked anchor was measured at. Safe on the Mach64
+          precisely because nothing is banked there.
+
+  cirrus  no pin change; it reaches a capturable mode unaided.
 """
 
 import os
@@ -113,10 +129,12 @@ def main(argv):
         print(__doc__)
         return 2
     tag = argv[0].upper()
-    sets, ticks, cfg, shot_at = [], "30000", "OPL3.CFG", 45
+    sets, ticks, cfg, shot_at, card = [], "30000", "OPL3.CFG", 45, None
     i = 1
     while i < len(argv):
-        if argv[i] == "--set":
+        if argv[i] == "--card":
+            card = argv[i + 1].lower(); i += 2
+        elif argv[i] == "--set":
             sets.append(argv[i + 1]); i += 2
         elif argv[i] == "--ticks":
             ticks = argv[i + 1]; i += 2
@@ -141,6 +159,17 @@ def main(argv):
                   "DOSKUTSU_TAS_PRNG_SEED": "12345",
                   "DOSKUTSU_TAS_AUTO_EXIT_TICK": ticks,
                   "DOSKUTSU_LOG_TAG": tag}
+        if card == "mach64":
+            wanted["DOSKUTSU_PIN_NATIVE_MODE"] = "0"
+            print("   card=mach64 -> pin stood down, 640x480 (the default"
+                  " for this card)")
+        elif card in ("virge", "cirrus"):
+            print("   card=%s -> pin left engaged (its own mode captures)" % card)
+        elif card is None:
+            print("   NO --card GIVEN. Per-card defaults not applied; on a"
+                  " Mach64 this")
+            print("   means 512x384 and a blind cell. Pass --card to avoid"
+                  " relying on memory.")
         for s in sets:
             k, _, v = s.partition("=")
             wanted[k.upper()] = v

@@ -26,6 +26,13 @@ VCCTRL = os.path.join(HERE, "vcctrl")
 # ran 71 s. Treat this as a floor, not a bound.
 CALL_COST_S = 1.5
 
+# The CONFIG.SYS menu appears within a few seconds of the POST edge and times
+# out in 5 s. These bound blind selection so it covers that window and stops --
+# every keystroke after it lands in the BIOS 15-key buffer, and once full the
+# machine beeps per rejected key, which the operator hears from across the room.
+MENU_WINDOW_S = 14
+MENU_MAX_ATTEMPTS = 20
+
 
 def vc(*args, check=True):
     r = subprocess.run([VCCTRL] + list(args), capture_output=True, text=True)
@@ -187,11 +194,22 @@ def select_boot_profile(digit, edge_timeout=60, ready_timeout=200):
     t0 = time.time()
     attempts = 0
     if digit is not None:
-        # Fire, then check. RDYPULSE means AUTOEXEC has finished, so the menu
-        # is long past and every further keystroke is buffer noise.
-        while time.time() - t0 < ready_timeout:
+        # BOUND THE SPAM TWO WAYS, and neither is RDYPULSE.
+        #
+        # The first version fired a fixed count and never polled, because a
+        # leds() check cost ~1.5 s of ssh. The second polled and stopped at
+        # RDYPULSE -- which was worse: polling is now cheap, so it hammered
+        # until readiness, and on a 106 s boot that was 209 attempts against
+        # the 12 it replaced. Optimising the wrong end.
+        #
+        # The menu opens shortly after the POST edge and lives 5 s. It is long
+        # gone well before AUTOEXEC finishes, so RDYPULSE is the wrong stop
+        # signal -- it is minutes late. Bound by the window the menu is
+        # actually in, and by a cap so a slow link cannot extend it.
+        while (time.time() - t0 < MENU_WINDOW_S
+               and attempts < MENU_MAX_ATTEMPTS):
             if bool(leds().get("scrolllock")):
-                break
+                break            # already booted through; nothing to select
             vc("key", str(digit), "enter", check=False)
             attempts += 1
     if wait_led("scrolllock", True, ready_timeout - (time.time() - t0)) is None:
