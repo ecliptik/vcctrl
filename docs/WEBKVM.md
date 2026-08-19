@@ -10,6 +10,35 @@ interact if needed, or just use the PC as a remote KVM like a JetKVM.*
 Target browsers **Firefox and Safari**. Lowest practical latency, accepting
 that the path runs through the Pi.
 
+**And the sharper statement of why, which arrived after the first draft:**
+
+> this is why I want the kvm too btw, so I can actively see if something is
+> stuck if you get stuck in some loop or wait state
+
+That is not the same requirement as remote convenience, and it changes what
+this thing has to be good at. **The KVM's value is being a channel the
+automation does not control.** When the harness says RUNNING and the screen
+says a DOS prompt, the screen wins, and the operator does not have to take a
+Claude session's word for the state of his own machine.
+
+Three failures on 2026-08-19 make it concrete, all from the harness session,
+all within a few hours:
+
+- The Pi went unreachable for ~30 minutes. `vcctrl` calls blocked with no
+  timeout, which is **indistinguishable from a long-running cell**. Thirteen
+  minutes passed before anything was suspected.
+- A `pgrep -f netstep` wait loop matched its own wrapper shell and span
+  forever, with elapsed time reported as evidence of progress for twelve
+  minutes. The operator asking "shouldn't we have a result by now" is what
+  surfaced it.
+- Four cells reported "done in 152s" and had **never run** -- a 150 s floor
+  elapsing at an idle prompt, then a probe finding the prompt it had never
+  left.
+
+Every one is answered by a live screen in one glance. Two consequences run
+through this whole document: **observation is never gated** (sec. 2), and **a
+correct still beats smooth video** (sec. 6.0).
+
 This is a front-end onto the harness that already exists. It adds one genuinely
 new mechanism -- a persistent owner of the capture device -- and folds the
 result into a single daemon that both the browser and Claude drive as equal
@@ -29,6 +58,7 @@ Answered by the operator before writing this:
 | v1 scope | **Video + keyboard + power.** Mouse and files come after |
 | Daemon shape | **One daemon named `vcctrl`**, capability modules, browser and Claude as equal clients (sec. 2) |
 | Sequencing | Core built in the `webkvm` worktree, then **handed to the `vcctrl` session to finish and layer into testing** (sec. 13) |
+| Purpose | **Independent verification**, not remote convenience -- observation is never gated, and a correct still beats smooth video |
 
 Added by the operator mid-planning: *having the option to select between video
 delivery would be nice, which we can add later, as well as other video tweaks
@@ -166,9 +196,10 @@ Three further consequences, all of which the split architecture could not give:
   process. "See what is going on with automated testing" stops being *watch a
   video of it* and becomes *watch the harness's actual state*.
 - **Claude stops paying the ssh tax.** The peer session measured every `vcctrl`
-  call at 1.52-2.55 s and attributes four separate bugs today to loops written
-  as though calls were free. An HTTP API on the tailnet is ~10 ms. That is a
-  bigger win for the automation than for the browser.
+  call at 1.52-2.55 s, since improved to ~0.21 s with ssh ControlMaster, and
+  attributes four separate bugs to loops written as though calls were free. An
+  HTTP API on the tailnet is ~10 ms. That is a bigger win for the automation
+  than for the browser.
 - **New hardware lands as a module.** The J31 reset opto, audio, the Pi 5 port
   (PLAN sec. 7) and file transfer each become one capability registering
   commands and, if they want one, a UI panel. None of them touch the core.
@@ -239,9 +270,19 @@ keep the module boundaries real enough that splitting stays cheap.
 
 ### Arbitration policy -- needs a decision, and not mine to make
 
-The rule itself is a question for the operator and the benchmarking session,
-because it is a comparability judgement about the fps matrix, not an
-engineering one. The choice:
+**First, the part that is not a decision.** The lock gates **input only, and
+never observation.** The viewer must be able to watch at all times, including
+while a sweep holds the lock -- especially then, because that is the moment the
+operator most needs to know whether the harness is working or only thinks it
+is. A design where the browser goes dark because automation is running would
+remove exactly the capability being asked for, at exactly the moment it
+matters. This plan already reads that way, and it is written down here as an
+invariant so a later "the sweep owns the session" simplification cannot quietly
+take it out.
+
+With that fixed, the remaining rule is a question for the operator and the
+benchmarking session, because it is a comparability judgement about the fps
+matrix rather than an engineering one. The choice:
 
 - **(a) Locked, with break-glass.** While a sweep holds the input lock, browser
   keyboard is refused, with a visible banner naming what holds it. An explicit
@@ -253,12 +294,26 @@ engineering one. The choice:
   flagged after the fact. Simpler, but it makes the operator responsible for
   remembering that typing during a sweep invalidates it.
 
-Either way, **the event bus is the part that serves the original request.**
-Every injected keystroke, power event, lock acquisition and lock release is
-published to subscribers, so the browser can show a live activity log beside
-the video: not just *the screen changed*, but *the harness typed `RB` at
-19:22:04 and took the input lock*. That is what turns watching a sweep from
-spectating into supervision.
+Either way, **the event bus is the part that serves the original request, and
+it does more work than its size suggests.** Every injected keystroke, power
+event, lock acquisition and lock release is published to subscribers, so the
+browser shows a live activity log beside the video: not just *the screen
+changed*, but *the harness typed `RB` at 19:22:04 and took the input lock*.
+
+That is the difference between **the automation is working** and **the
+automation thinks it is working** -- and all three failures quoted at the top
+of this document would have been visible in an activity log *even with no video
+at all*. Two cheap additions make it answer the operator's question directly:
+
+- **Show the current operation and its age.** The daemon knows when a command
+  arrived. "harness has been in `ledwait` for 14 minutes" is the whole ask,
+  rendered in one line.
+- **Show the last event's age even when nothing is happening.** Silence and
+  wedged look identical unless the clock is on screen.
+
+**Recommended for v1** on the strength of the requirement above, though the
+operator scoped v1 as video + keyboard + power before it was stated -- so this
+is a proposal, not a silent addition.
 
 ### The single most important design constraint
 
@@ -268,6 +323,14 @@ The peer session, unprompted:
 > to the Pi, measured 1.52-2.55 s. That number has produced four separate bugs
 > in my tooling today. For a browser KVM it is more than a nuisance: typing at
 > 1.5 s per keystroke is unusable.
+
+**Updated the same day: 1.5 s is now ~0.21 s.** The harness was opening an ssh
+session per keystroke and DoSing journald; ControlMaster fixed it (FINDINGS 19).
+**The conclusion is unchanged and the margin is still overwhelming** -- 0.21 s
+per keystroke is four characters a second, and the in-process path is three
+orders of magnitude below it. Recorded rather than quietly restated, because a
+7x improvement is exactly the kind of thing that invites reopening a settled
+decision, and here it does not come close.
 
 Everything interactive runs **on the Pi**. No ssh is anywhere in the input
 path. This is why the whole thing lives on the Pi rather than on the VM
@@ -516,7 +579,7 @@ place where "the migration is transparent" could be true of the signature and
 false of the semantics.
 
 `vcctrl shot` on the Pi becomes a `/run/vcctrl.sock` client. Same command, same
-output, ~1.5 s instead of ~40 s, and that 1.5 s is now entirely the ssh hop.
+output, ~0.2 s instead of ~40 s, and that 0.2 s is now entirely the ssh hop.
 
 ### 4.7 Fallback when the video capability is down
 
@@ -634,6 +697,44 @@ here.
 ---
 
 ## 6. Video delivery
+
+### 6.0 A correct still beats smooth video
+
+**The tie-break rule for every decision in this section**, and it comes from
+the only person who has spent a day diagnosing this machine from captured
+frames:
+
+> The most valuable frames today were of a DOS prompt, not of the game. On the
+> Mach64 the game's 512x384 mode does not lock at all, so mid-cell is
+> invisible -- but every diagnosis I made was from a still frame of a console:
+> a `DIR` listing showing stray files, an FTP transcript showing `is not a
+> file`, a `[DKTCAP=1]` banner confirming a sweep launched correctly. Static
+> text screens, read once.
+
+**If latency and getting *a* correct frame ever conflict, take the frame.**
+This does not contradict the low-latency goal -- interactive typing still needs
+it -- but it settles the cases where they pull apart, and those are the cases
+that matter for the stuck-detection requirement.
+
+Two concrete consequences:
+
+- **Keep a "last good frame" with its age, always.** The brightest non-flat,
+  duplicate-rejected frame from the ring, held with a timestamp and shown
+  when live frames stop. **This is not the frozen-last-frame failure of 6.1** --
+  the difference is entirely in the labelling. A silently frozen frame makes a
+  KVM lie; a frame captioned *last locked picture, 4 m 12 s ago* is the single
+  most useful thing on the page during a no-lock, and on the Mach64 it may be
+  the only picture available for a whole cell.
+- **Dropping frames under load is correct; dropping the still is not.** The
+  backpressure rule in 6.1 discards frames when a client falls behind. The last
+  good frame is exempt: it is state, not stream.
+
+**This also rescues the video capability on the Mach64.** If that card never
+locks (4.5), the live stream is empty for the whole run -- but the prompts
+before and after each cell are mode 12h and *do* lock, and those are where the
+diagnoses actually came from. A card that makes mid-cell invisible does not
+make the KVM useless; it makes it a very good still camera pointed at the
+prompt.
 
 ### 6.1 MVP -- MJPEG over WebSocket
 
@@ -810,7 +911,7 @@ built at all until someone has seen a cursor move.
 | 6 | Input capability: `keydown`/`keyup`, full key table, the input lock | 1 |
 | 7 | Keyboard coverage sweep -- measure what the STM32 actually delivers (5.2) | 5, 6 |
 | 8 | **Keyboard in the browser**, macro bar, sticky modifiers, release-all-on-disconnect | 7 |
-| 9 | Power panel + live LEDs + activity log, with the edge-not-level rule | 4, 6 |
+| 9 | Power panel + live LEDs + **activity log and current-operation age** (sec. 2) | 4, 6 |
 | 10 | **v1 done.** Measure real glass-to-glass latency and write it down | 5, 8, 9 |
 | 11 | Mouse capability: hardware test, then Pointer Lock | 10 + a cursor that moved |
 | 12 | Files capability: NET-prompt-gated FTP, CF fallback | 10 |
