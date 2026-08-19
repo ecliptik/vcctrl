@@ -265,6 +265,14 @@ def put_tag(incoming, tag, before):
 
 
 def main(argv):
+    # Line-buffer stdout. These are long jobs that are usually run in the
+    # background, and Python block-buffers to a pipe -- which meant a 23-minute
+    # sweep reported absolutely nothing until it exited. Progress you cannot
+    # see during the run is not progress you can supervise.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
         return 0
