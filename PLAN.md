@@ -298,6 +298,54 @@ The asymmetry that makes this clean: **the LED COM is safe unconditionally
 because it runs and exits with no resident footprint; the network stack is not.
 Pulse everywhere, network only where asked for.**
 
+#### The risk is interrupt load, not conventional memory  [corrected]
+
+Earlier text here justified gating by "the conventional-memory picture". The
+doskutsu session checked the live logs rather than accepting that, and the real
+risk is different:
+
+- **Memory is largely a red herring.** The engine is DJGPP/CWSDPMI, running
+  protected-mode out of extended memory, and on the ViRGE it takes the direct
+  LFB path (`direct_fb=1 use_dosmemput=0 banked_multibank=0`). It is not moving
+  frames through low memory, so a 40-60 KB TSR is not obviously in its way.
+- **Interrupt load and cycle theft are the real exposure.** A packet driver
+  hooks a software interrupt *and* the NIC's hardware IRQ. Measured cells
+  already run audio on `irq=7`, and the SDL3-DOS backend uses a **cooperative**
+  scheduler where the audio thread only runs when something yields. Starving
+  that thread below ~25 fps is established to audibly degrade music -- pitch and
+  tempo drop. Adding an unrelated interrupt source to that mix is not neutral.
+- **The noise floor is 0.2 fps.** That is why this matters rather than being
+  shruggable: a change too small to look broken is still large enough to
+  contaminate every comparison, and it would not announce itself.
+- **Exposure differs by card.** The ViRGE takes direct LFB; the Cirrus is
+  force-banked on this machine -- A000 window plus VBE far calls -- and is
+  genuinely more exposed. "We tested it on the ViRGE and it was fine" does not
+  generalise across the matrix.
+
+#### Profile, not flag
+
+Both the doskutsu and g2k sessions independently reached the same shape, which
+is worth weighting.
+
+A **boot profile** makes the choice explicit at boot, made by whoever is
+standing there, and lands in `%config%` where it is *recorded* rather than
+assumed. Measured runs use any non-NET profile and the invariant holds by
+construction.
+
+A **flag would be worse**, and for a reason this project has already paid for:
+`DKTCAP` survives `CLRENV` by design, and a set-and-forgotten flag silently
+contaminating later runs is exactly the failure mode eliminated everywhere else
+today.
+
+If the stack ever does go in unconditionally, every measured number after that
+point is taken under a different machine configuration than the ~157 before it,
+and the two sets stop being comparable. That cost should be paid deliberately
+if at all -- not as a side effect of wanting file transfer.
+
+**Natural witness, cheap to add:** if a measured log can be shown to come from a
+boot where `MTCPCFG` was unset, the invariant becomes evidence rather than
+assumption.
+
 ### What landing it requires
 
 - The COM file, its intended DOS path and 8.3 name.
