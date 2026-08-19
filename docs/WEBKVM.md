@@ -28,7 +28,7 @@ Answered by the operator before writing this:
 | Access | **Tailscale only** -- no LAN bind, no password |
 | v1 scope | **Video + keyboard + power.** Mouse and files come after |
 | Daemon shape | **One daemon named `vcctrl`**, capability modules, browser and Claude as equal clients (sec. 2) |
-| Sequencing | The core refactor is **split out as its own handoff** to the `vcctrl` session (sec. 13) |
+| Sequencing | Core built in the `webkvm` worktree, then **handed to the `vcctrl` session to finish and layer into testing** (sec. 13) |
 
 Added by the operator mid-planning: *having the option to select between video
 delivery would be nice, which we can add later, as well as other video tweaks
@@ -715,7 +715,7 @@ built at all until someone has seen a cursor move.
 | step | deliverable | gated on |
 |---|---|---|
 | 0 | Coordinate with the `vcctrl` session on a window to take `/dev/video0` | it is actively driving the machine |
-| 1 | **Core refactor** -- handed to the `vcctrl` session, spec in sec. 13: threaded `serve()`, capability registry, existing behaviour moved into modules, no new features | nothing |
+| 1 | **Core refactor** (sec. 13): threaded `serve()`, capability registry, existing behaviour moved into modules, no new features. Built here, handed over for integration | nothing |
 | 2 | Video capability: ffmpeg pipe, frame split, ring, `shot`/`burst`/`state` on the existing socket | 0, 1 |
 | 3 | `vcctrl shot` reads the ring, with fallback to today's ffmpeg path; `grab()` shim offered to the peer | 2 |
 | 4 | HTTP capability + `tailscale serve` HTTPS + `/shot.jpg` + the event bus | 2 |
@@ -812,37 +812,22 @@ it and can go first if the device is busy.
 
 ---
 
-## 13. Handoff -- the core refactor as a discrete work item
+## 13. Handoff -- what goes to the `vcctrl` session, and when
 
-**Operator's direction:** land the daemon rename/merge as its own piece of
-work, handed to the `vcctrl` session at a good stopping place.
+**Operator's direction:** build the core in this worktree, then hand it to the
+`vcctrl` session to finish out and layer into their testing. So this is not a
+work order handed over up front -- it is the contract the work is built
+against, and the checklist it is handed over with.
 
-This section exists to be handed over on its own. It is step 1 of section 10,
-written so it can be executed without reading the rest of this document.
+The rename item raised earlier is **dropped**. There was never a file to move:
+`daemon/vcctrld.py`, `vcctrld.service`, `/run/vcctrl.sock` and both `vcctrl`
+CLI paths all keep their names. Section 2's merge is a change to what the
+daemon *owns*, not to what it is called, and no path moving is the point --
+the peer session's tooling crosses it untouched.
 
-### 13.1 There is no file to rename
+### 13.1 The work, in landable order
 
-Worth stating first, because "rename the daemon to `vcctrld`" sounds like a
-move and is not one. Every name is **already correct and stays put**:
-
-| thing | name | changes? |
-|---|---|---|
-| daemon source | `daemon/vcctrld.py` | no |
-| systemd unit | `vcctrld.service` | no |
-| socket | `/run/vcctrl.sock` | no |
-| CLI on the Pi | `/usr/local/bin/vcctrl` | no |
-| CLI on the VM | `bin/vcctrl` | no |
-
-What changes is **what `vcctrld` owns**. It stops being "the input server" and
-becomes the lead daemon: input, video, power, LEDs, and later web, audio, reset
-and files, each a capability module behind one API. The earlier draft of this
-plan proposed a second daemon called `vckvmd`; that is dropped (sec. 2). So the
-work is a scope change and a restructure, and the fact that no path moves is
-the point -- the peer session's tooling keeps working across it untouched.
-
-### 13.2 The work, in landable order
-
-Each item is independently committable and independently revertable.
+Built here, in `webkvm`. Each item independently committable and revertable.
 
 1. **Thread `serve()`.** One thread per connection. `Devices.lock` already
    serialises the actual device writes, so the emission path is safe as-is;
@@ -854,19 +839,20 @@ Each item is independently committable and independently revertable.
    raises is marked failed and reported in `status`, never fatal.
 3. **Move existing behaviour into modules** -- `input`, `power`, `leds` -- with
    **no behaviour change at all.** This is the risky-looking step that must be
-   provably boring; see the acceptance criteria.
+   provably boring; see 13.2.
 4. **Add `keydown` / `keyup` and the full US PS/2 key table** (sec. 5.1). New
    surface, no existing surface touched.
 
-Items 1-4 need **no access to the capture stick**. That is deliberate: this
-work can proceed while the machine is busy with PicoGUS consolidation, the
-Vibra fit, the video-card swap and Round P, without anyone giving up
-`/dev/video0`. The video capability (step 2 of sec. 10) is where the device
-window is needed, and it comes after.
+Items 1-4 need **no access to the capture stick**. That is deliberate and it is
+what makes this safe to start now: it proceeds while the machine is busy with
+PicoGUS consolidation, the Vibra fit, the video-card swap and Round P, without
+anyone giving up `/dev/video0`. The video capability (step 2 of sec. 10) is
+where the device window is needed, and it comes after.
 
-### 13.3 Acceptance criteria
+### 13.2 Acceptance criteria -- the handover checklist
 
-All testable, and all worth running rather than reasoning about:
+All testable, all worth running rather than reasoning about. These are what
+make the handover reviewable rather than a request to take it on trust:
 
 - `vcctrl status | type | key | hold | combo | mouse | leds | ledwait | power`
   produce **byte-identical output** before and after the refactor.
@@ -876,13 +862,18 @@ All testable, and all worth running rather than reasoning about:
   still lands at the g2k. This is the rule-1 test from sec. 2, and it is open
   question 8 -- do not assume it, run it.
 - After a daemon restart, `usb4vc_holds_us()` reports both devices held. A
-  restart is not free (13.4) and this is how you confirm it recovered.
+  restart is not free (13.3) and this is how you confirm it recovered.
 - `vcctrl-sweep` and `vcctrl-collect` run unmodified against the new daemon.
 
-### 13.4 Constraints that must not be broken
+The last one cannot be verified from this side alone -- it needs the peer
+session's actual tooling against the actual machine. **That is the natural
+handover point:** core built and self-tested here, then handed over for the
+integration that only they can run.
 
-All of these are already load-bearing in the current daemon and are recorded
-here so a restructure does not quietly drop one:
+### 13.3 Constraints that must not be broken
+
+All already load-bearing in the current daemon, recorded here so a restructure
+does not quietly drop one:
 
 - **The uinput devices stay open for the process lifetime.** USB4VC only
   discovers input devices on its 0.75 s scan (`usb4vc_usb_scan.py:946`), so a
@@ -904,10 +895,10 @@ here so a restructure does not quietly drop one:
 - **The `vcctrl` CLI contract is frozen.** ~157 banked fps measurements sit
   behind the peer session's tooling.
 
-### 13.5 What is explicitly not in this handoff
+### 13.4 What is not in this
 
 Video, web, HTTP, WebSocket, browser, mouse-over-Pointer-Lock, files. Those are
-sections 4 through 9 and steps 2 onward. **This item is the core refactor and
-nothing else** -- the whole reason to split it out is that it lands while the
+sections 4 through 9 and steps 2 onward. **This is the core refactor and
+nothing else** -- the reason to keep it separate is that it lands while the
 surface is still small enough to verify against the existing tooling in
 isolation.
