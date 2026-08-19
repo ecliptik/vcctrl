@@ -342,9 +342,35 @@ point is taken under a different machine configuration than the ~157 before it,
 and the two sets stop being comparable. That cost should be paid deliberately
 if at all -- not as a side effect of wanting file transfer.
 
-**Natural witness, cheap to add:** if a measured log can be shown to come from a
-boot where `MTCPCFG` was unset, the invariant becomes evidence rather than
-assumption.
+**Natural witness -- and `%config%` is the strong one.** `MTCPCFG`-unset is a
+*weak* witness: it is just a `SET`, so anything can set it, including a
+well-meaning future script. That is the same set-and-forgotten failure the
+gating is designed to avoid.
+
+The **profile name** is chosen at the boot menu, lands in `%config%` before
+AUTOEXEC branches, and cannot be retrofitted onto a run that did not boot that
+way. If the log header records `%config%` verbatim, **a measured log proves its
+own provenance** rather than attesting to an absence. Cost: one `ECHO` into the
+log.
+
+#### Separating the two costs -- only one is under anyone's control
+
+`ODIPKT` hooks **software** `INT 0x7E`, which costs nothing until something
+calls it. `E100BODI` owns **hardware IRQ 10**, which fires on received frames --
+including broadcast and ARP traffic addressed to nobody.
+
+So the steady-state cost is a property of **how noisy the LAN is**, not of the
+machine. Practical consequence: if a measurement ever must be taken with the
+stack resident, **take it with the cable unplugged** -- same resident code, same
+hooks, zero inbound frames.
+
+That also yields a falsifiable test, should the question ever be worth settling
+rather than avoiding: three runs of one cell -- stack absent, stack resident
+with cable out, stack resident with cable in -- on the **Cirrus**, since its
+banked A000 path is the more exposed one. Run 1 vs 2 isolates the cost of merely
+hooking; 2 vs 3 isolates traffic. Against a 0.2 fps floor that is a real
+measurement. Not proposed -- the gated profile means nobody has to care -- but
+it converts an assumption into a number if it ever blocks something.
 
 ### What landing it requires
 
@@ -352,6 +378,30 @@ assumption.
 - Confirmation it is non-resident -- runs, pulses, exits, hooks nothing. (By
   construction it would be: poll `0x64`, write `0xED` to `0x60`, write the
   bitmask, `INT 21h/4Ch`.)
+
+#### Two 8042 details to verify on hardware before trusting the COM
+
+Both fail quietly, and the first is specifically dangerous in this rig. Flagged
+by the g2k session as things to check, **not** as established facts about this
+machine.
+
+1. **The keyboard ACKs each byte with `0xFA`.** Those acks must be read and
+   discarded from `0x60`. If they are left sitting in the output buffer, the
+   BIOS `INT 09h` handler may take one for a scancode. **In this rig that means
+   a phantom keystroke landing in whatever the harness types next** -- a
+   corrupted command rather than a clean error, arriving one line after the
+   pulse. Exactly the failure shape that is hardest to attribute.
+2. **The BIOS may undo the pulse.** Shift/lock state lives in the BDA at
+   `0040:0017`, and the BIOS re-derives the LEDs from it on keyboard activity.
+   An LED set directly through the 8042 without updating the BDA can be reverted
+   at the next keypress -- and in this rig the next keypress is the harness's
+   own. For an **edge** signal that is harmless and arguably self-cleaning,
+   which is all the readiness pulse needs. If the LED is ever wanted as
+   **latched, readable state**, the BDA byte must be updated too.
+
+The failure mode for (2) is "works when idle, does not when the harness is
+active", which is the hardest kind to catch late. Worth one hardware check
+either way.
 - **A new manifest line as well as the file.** The sync manifest currently
   lists only `CONFIG.SYS`, `AUTOEXEC.BAT`, `README.TXT`, `CLAUDE.md`,
   `WINDOWS/SYSTEM.INI`. A tracked file missing from the manifest fails silently
