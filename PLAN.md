@@ -488,20 +488,37 @@ already present: the Pi has free GPIO (BCM 5, 6, 12, 13, 17, 23), a module costs
 about $2, and it is a header rather than a solder joint, so it stays
 non-destructive and reversible in the spirit of the PicoRC itself.
 
-**One thing to verify: is that header latching or momentary?** An AT-style setup
-usually expects a latching toggle -- in which case the relay holds the contact
-closed for "on" and opens for "off", which a relay does naturally. If it expects
-a momentary pulse, the logic is a pulse instead. Check before wiring; the
-behaviours are not interchangeable.
+**Confirmed latching** (operator, 2026-08-19), which is the simple case. The
+relay *is* the switch:
+
+- GPIO high -> relay closed -> machine on, held indefinitely
+- GPIO low -> relay open -> machine off
+- a power cycle is low, wait ~5 s, high
+
+No pulse timing to get right. Use a **1-channel 3.3 V opto-isolated relay
+module** -- check the 3.3 V rating, since many modules have 5 V-only coils that
+will not trigger reliably from a Pi GPIO.
+
+Terminology, since it recurs below: an **optocoupler** ("opto") is an LED and a
+light-sensitive transistor sealed facing each other in one package with no
+electrical connection between them. It lets the Pi switch or sense something in
+the g2k while the two machines stay electrically isolated -- no shared ground,
+no path for a voltage mismatch or a miswire to cross between separately-powered
+boxes. A relay module with an opto on its input additionally gives a mechanical
+**dry contact**: a pair of terminals that are either connected or not, with no
+voltage of its own, so it cannot be wired backwards and does not care what it is
+switching.
 
 Prefer A only if a JetKVM is already in the rig and its UI is wanted. Otherwise
 B is the same capability for a fraction of the cost and complexity.
 
 #### Bonus: Power Good is a free state sensor
 
-PicoRC drives an LED from the **Power Good** signal. Fed back to a Pi GPIO
-through an opto, that gives the harness a direct "the machine is powered and its
-rails are good" input -- a real state reading rather than an inference from
+PicoRC drives an LED from the **Power Good** signal. Fed to a Pi GPIO through an
+opto run in the *opposite* direction -- Power Good lights the LED side, the Pi
+reads the transistor side as an input -- that gives the harness a direct "the
+machine is powered and its rails are good" reading. A bare **PC817** plus a
+resistor; no relay, since this is sensing rather than switching -- a real state reading rather than an inference from
 whether the capture stick sees a signal. Worth wiring at the same time as
 whichever power option is chosen, since the harness currently has no way to
 distinguish "powered off" from "powered on but producing no video".
