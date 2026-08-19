@@ -77,9 +77,12 @@ def at_prompt():
     before = bool(leds().get("capslock"))
     vc("key", "capslock")
     flipped = wait_led("capslock", not before, 8) is not None
-    if flipped:
-        vc("key", "capslock")          # restore
-        wait_led("capslock", before, 8)
+    # Restore either way. On the failure path the keystroke was usually only
+    # BUFFERED, not lost -- DOS processes it a moment later and the LED flips
+    # after we have already given up. Leaving it unrestored means a failed
+    # probe silently corrupts the state the next probe reads.
+    vc("key", "capslock")
+    wait_led("capslock", before, 8)
     return flipped
 
 

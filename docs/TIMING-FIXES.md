@@ -222,3 +222,52 @@ delay would have papered over it. It is the same family as the LED level
 check -- **a signal that means something adjacent to what it is being read as**
 -- which is now two instances, and probably the more dangerous pattern of the
 two, because the reading is always plausible.
+
+
+## Bug 6a -- RDYPULSE has a tail
+
+Immediately after the bug 6 fix, rebooting the machine out of NET produced:
+
+    reboot edge t+27.7s
+    RDYPULSE t+12.3s
+    at_prompt: False
+
+but a screen capture showed the machine sitting at `C:\>` under
+`[PGSB] ready.`. The probe was a **false negative**.
+
+Same root cause one layer down. **RDYPULSE means AUTOEXEC finished, not that
+COMMAND.COM is reading input.** There is a short tail -- the remaining AUTOEXEC
+lines and the return to the shell -- and a probe fired inside it gets its
+keystroke buffered rather than processed.
+
+`reboot_into_net()` had been covering this with `time.sleep(SETTLE_S)`, which
+is the guess-an-interval mistake from bugs 2 and 4 wearing a different name: it
+happened to be long enough there and was not long enough in the ad-hoc path.
+Replaced with `wait_for_prompt()`. That was the last fixed sleep in the
+readiness path; the only `time.sleep` left in either tool is the poll interval
+on a *local* filesystem check, which costs nothing and is not racing anything.
+
+**A second defect, found while explaining the first:** `at_prompt()` did not
+restore Caps Lock on its failure path. But the failure path is usually a
+BUFFERED keystroke, not a lost one -- DOS processes it a moment later and the
+LED flips after the probe has given up. So a failed probe left the LED
+inverted, silently corrupting the state the next probe reads. It now restores
+either way. Verified: three consecutive probes return True in 7.8 s each and
+leave the LEDs exactly as found.
+
+### The tally
+
+Six bugs, three families:
+
+  * **guess an interval** -- bugs 1, 2, 4, 6a. Fixed sleeps and cadences
+    racing an ssh round-trip nobody had measured.
+  * **read a signal as something adjacent to what it means** -- bug 3 (a
+    stale level read as current), bug 6 (arrival read as readiness), 6a
+    (AUTOEXEC-done read as prompt-ready). The dangerous family: the reading
+    is always plausible and often correct.
+  * **the same code in two places** -- bug 5, which is why bug 4 existed
+    twice.
+
+All six were found by measuring the instrument rather than by a failure in
+the field. Only bug 6 cost anything real, and what it cost was a machine left
+in the wrong profile -- caught by its own warning.

@@ -88,7 +88,6 @@ MENU_SPAM_MAX_ATTEMPTS = 12
 REBOOT_EDGE_TIMEOUT_S = 45      # measured at t+9 s; this is deliberate slack
 READY_TIMEOUT_S = 150           # measured ~11 s post-POST, POST itself varies
 PUT_TIMEOUT_S = 90              # 880 KB/s measured; a log pair is under 400 KB
-SETTLE_S = 3.0
 
 
 def reboot_into_net():
@@ -132,9 +131,18 @@ def reboot_into_net():
             "  is missing -- both AUTOEXEC call sites are IF EXIST guarded, so a\n"
             "  deleted COM looks exactly like a hang from here. Check with capture\n"
             "  before power-cycling." % READY_TIMEOUT_S)
-    print("  RDYPULSE at t+%.1fs -- AUTOEXEC complete, prompt live"
-          % (time.time() - t1))
-    time.sleep(SETTLE_S)
+    print("  RDYPULSE at t+%.1fs -- AUTOEXEC complete" % (time.time() - t1))
+
+    # RDYPULSE means AUTOEXEC FINISHED, not that COMMAND.COM is reading input.
+    # There is a short tail -- the last AUTOEXEC lines, the return to the
+    # shell -- and probing inside it gets a false negative, because the
+    # keystroke buffers rather than being processed. This used to be
+    # time.sleep(SETTLE_S), which is the same guess-an-interval mistake as
+    # bugs 2 and 4; wait for the prompt instead of assuming a duration.
+    waited = wait_for_prompt(60)
+    if waited is None:
+        raise SystemExit("REFUSED: RDYPULSE fired but no prompt within 60s.")
+    print("  prompt live %.1fs later" % waited)
     return True
 
 
@@ -286,6 +294,8 @@ def main(argv):
                 print("  WARNING: no reboot edge; machine may still be in NET.")
             elif wait_led("scrolllock", True, READY_TIMEOUT_S) is None:
                 print("  WARNING: no RDYPULSE; machine may not have reached a prompt.")
+            elif wait_for_prompt(60) is None:
+                print("  WARNING: RDYPULSE fired but no prompt within 60s.")
             else:
                 print("  back at a prompt on the default profile.")
         else:
