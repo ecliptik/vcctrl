@@ -1216,3 +1216,74 @@ sections 4 through 9 and steps 2 onward. **This is the core refactor and
 nothing else** -- the reason to keep it separate is that it lands while the
 surface is still small enough to verify against the existing tooling in
 isolation.
+
+---
+
+## 14. Built and measured -- 2026-08-19
+
+v1 is running on the Pi. `http://100.64.0.1:8080/`, tailnet only.
+
+| | |
+|---|---|
+| Video | MJPEG passthrough, no decode/encode/base64 on the per-frame path |
+| Rate | 30 fps source; **17.0 Mbit/s** at 30 fps on a detailed screen, **7.1** at 12 |
+| Frame size | ~15 KB text console, ~70 KB a full `DIR` listing |
+| `shot` | **0.29 s**, down from ~40 s |
+| Transports | WebSocket preferred; `multipart/x-mixed-replace` fallback |
+| Input | keydown/keyup, full US PS/2 table, click-to-capture, Ctrl+Alt+Shift to release |
+
+### What measurement changed, which is most of it
+
+**The 5.5 KB frame figure in section 1 was wrong** -- it measured frames
+ffmpeg had *re-encoded* to JPEG files, not the stick's own output. Passthrough
+frames are ~15 KB for a text console and ~70 KB for a dense screen, so the
+bandwidth estimates here were low by 3x. The conclusion survives (still far
+inside the link) but the number was measuring the wrong thing.
+
+**Duplicate-hash rejection holds at 30 fps.** The claim was measured on 8 fps
+bursts; rechecked on the live stream, a static mode-12h console gives 90 frames
+and 90 distinct hashes. Analog noise really does differ every frame.
+
+**"Text mode 03h stops the stream" is wrong for a persistent open.** Every
+capture before this opened the device fresh. A long-lived stream keeps
+receiving 30 fps of **bit-identical flat black** frames instead -- 30 frames,
+one distinct hash. Perfect separation from live picture, but it means the
+watchdog's "no frames" condition may never fire for a mode change, and the real
+signal is *frames that never change*. Freshness is judged on content now:
+identical hashes attest that the source is repeating; frame arrival attests
+only that the USB device is producing bytes.
+
+**And what it repeats is flat black, not the last real screen** -- so a viewer
+in that state has nothing to look at unless the last live frame was kept. It is
+kept, and shown dimmed behind the notice with its age (6.0).
+
+### Four bugs worth keeping, because they share a shape
+
+1. **A reader thread died on an AttributeError** (`read1` on a raw `FileIO`)
+   while `video state` reported `owned=true, frames=0`.
+2. **`_select` returned a bare `None` for three different causes** and reported
+   all of them as "every frame was a duplicate". The real cause was a
+   `NameError` on `io.BytesIO`.
+3. **Two writers for one piece of state**: `_push` set `locked` on every frame,
+   30 times a second, against the watchdog's twice-a-second classification. It
+   flapped 138 times while *every* poll returned `locked` -- invisible to
+   sampling, visible only in the event log.
+4. **No backpressure**: `sendall` on a client that cannot drink 17 Mbit/s
+   blocks, so frames pile into the kernel buffer and the stream becomes a
+   backlog being replayed. This is very likely why an iPhone kept dropping the
+   socket while the handshake was provably fine.
+
+1, 2 and 3 are all the same failure: **a component reporting confidently about
+itself while being wrong**, which is precisely what section 11.1 family 2
+describes and precisely what this tool was built to catch in *other* software.
+An `except` that discards the reason turns a bug into a lie. 4 is a case of
+implementing the happy path of a rule the plan already stated.
+
+### Still not done
+
+- Mouse (9), file transfer (8), audio, WebRTC, selectable transport (6.3).
+- HTTPS via `tailscale serve` (3) -- plain HTTP works, but WebRTC and the
+  clipboard API both need a secure context, so this blocks 6.3.
+- p99 of `vcctrl key` under viewer load (11 q3) -- measurable now that viewers
+  exist.
+- The J31 reset opto is still unwired, so mains remains the only recovery.

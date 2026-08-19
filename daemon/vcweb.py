@@ -142,7 +142,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self.cap.snapshot())
             if path in ("/shot.jpg", "/lastgood.jpg"):
                 cmd = "shot" if path == "/shot.jpg" else "lastgood"
-                r = self.cap.call(cmd, {})
+                args = {}
+                if "?" in self.path:
+                    for part in self.path.split("?", 1)[1].split("&"):
+                        if part.startswith("n="):
+                            try:
+                                args["n"] = max(1, min(120, int(part[2:])))
+                            except ValueError:
+                                pass
+                r = self.cap.call(cmd, args)
                 if not r.get("picture"):
                     # 503 rather than a placeholder image. A KVM that answers a
                     # request for the screen with *a* picture, when it cannot
