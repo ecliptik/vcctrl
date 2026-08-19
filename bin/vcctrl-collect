@@ -47,7 +47,8 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
-    vc, vc_json, leds, wait_led, at_prompt, arm_leds, ensure_powered)
+    vc, vc_json, leds, wait_led, at_prompt, wait_for_prompt, arm_leds,
+    ensure_powered)
 
 CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
 DEFAULT_INCOMING = os.path.expanduser("~/doskutsu-netiter/incoming")
@@ -88,6 +89,53 @@ REBOOT_EDGE_TIMEOUT_S = 45      # measured at t+9 s; this is deliberate slack
 READY_TIMEOUT_S = 150           # measured ~11 s post-POST, POST itself varies
 PUT_TIMEOUT_S = 90              # 880 KB/s measured; a log pair is under 400 KB
 SETTLE_S = 3.0
+
+
+def reboot_into_net():
+    print("== reboot into NET ==")
+    if not arm_leds():
+        raise SystemExit("REFUSED: could not arm the LEDs. Without a known "
+                         "starting state\n  neither the reboot edge nor the "
+                         "readiness pulse can be trusted.")
+    print("  LEDs armed: caps=1 (reboot edge), scroll=0 (readiness pulse)")
+
+    vc("combo", "ctrl", "alt", "delete")
+    edge = wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S)
+    if edge is None:
+        raise SystemExit("REFUSED: no reboot edge within %ds. Ctrl-Alt-Del only "
+                         "works at a\n  prompt, never in-game -- SDL3's DOS "
+                         "backend owns INT 09h. If a cell is\n  still running, "
+                         "this is the expected failure and the machine is fine."
+                         % REBOOT_EDGE_TIMEOUT_S)
+    print("  reboot edge at t+%.1fs" % edge)
+
+    print("  blanketing the menu window with '%s'+Enter (max %ds / %d attempts)"
+          % (NET_MENU_ITEM, MENU_SPAM_WINDOW_S, MENU_SPAM_MAX_ATTEMPTS))
+    t0 = time.time()
+    attempts = 0
+    while (time.time() - t0 < MENU_SPAM_WINDOW_S
+           and attempts < MENU_SPAM_MAX_ATTEMPTS):
+        # One call, not two: the client taps a sequence, so this is ~1.5 s
+        # rather than ~3 s, which is what keeps the cadence inside the menu's
+        # 5 s. Nothing polls the LEDs in here -- a poll is another 1.5 s and
+        # would push the cadence back out past the window it has to hit.
+        vc("key", NET_MENU_ITEM, "enter", check=False)
+        attempts += 1
+    print("  %d attempts over %.1fs (%.1fs apart)"
+          % (attempts, time.time() - t0, (time.time() - t0) / max(attempts, 1)))
+
+    t1 = time.time()
+    if wait_led("scrolllock", True, READY_TIMEOUT_S) is None:
+        raise SystemExit(
+            "REFUSED: no RDYPULSE within %ds of the reboot edge.\n"
+            "  Either the machine did not reach a prompt, or C:\\DRIVERS\\RDYPULSE.COM\n"
+            "  is missing -- both AUTOEXEC call sites are IF EXIST guarded, so a\n"
+            "  deleted COM looks exactly like a hang from here. Check with capture\n"
+            "  before power-cycling." % READY_TIMEOUT_S)
+    print("  RDYPULSE at t+%.1fs -- AUTOEXEC complete, prompt live"
+          % (time.time() - t1))
+    time.sleep(SETTLE_S)
+    return True
 
 
 def snapshot(incoming):
@@ -219,6 +267,16 @@ def main(argv):
 
     if not stay_net:
         print("\n== return to the menu default ==")
+        # The last PUT confirmed its file ARRIVED, which happened while DOS was
+        # still inside FTP.EXE. Wait for the prompt to come back before typing
+        # at it, or the keystrokes buffer and arming times out on a machine
+        # that is perfectly healthy -- and the machine is then left in NET.
+        waited = wait_for_prompt(90)
+        if waited is None:
+            print("  WARNING: no prompt within 90s; leaving the machine in NET.")
+            print("  DO NOT start a measured run without rebooting it first.")
+        else:
+            print("  prompt back after %.1fs" % waited)
         # No digit: the 5 s menu timeout lands on PGSB, which is
         # measurement-clean. Leaving the machine in NET would mean the next
         # sweep ran with the packet driver resident.

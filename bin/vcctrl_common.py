@@ -83,6 +83,29 @@ def at_prompt():
     return flipped
 
 
+def wait_for_prompt(timeout=90):
+    """Block until DOS is back at a prompt and taking input.
+
+    Distinct from at_prompt(), which asks the question once. This is for the
+    case where the machine is KNOWN to be busy and we are waiting it out.
+
+    The case that produced it: put_tag() confirms a transfer by watching the
+    file arrive on the server -- but at the instant it arrives, the DOS side
+    is still inside FTP.EXE, which has yet to print, quit, return to the BAT,
+    and drop back to the prompt. Arrival proves the TRANSFER; it says nothing
+    about READINESS. Those are different questions and conflating them meant
+    the next keystroke went into the BIOS buffer instead of being processed,
+    so arm_leds() timed out and the return reboot was skipped -- leaving the
+    machine sitting in NET, which is the one profile a measured run must never
+    start from.
+    """
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if at_prompt():
+            return time.time() - t0
+    return None
+
+
 def arm_leds():
     """Put the two signal LEDs into states that make the next boot legible.
 

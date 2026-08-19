@@ -184,3 +184,41 @@ Landed alongside: `--power-on` on both tools, a `BrokenPipeError` guard (line
 buffering made `| head` produce a traceback), and a `KeyboardInterrupt` guard
 that says the target was left untouched, since the natural worry on Ctrl-C
 mid-sweep is what state the machine was abandoned in.
+
+
+---
+
+## Bug 6 -- arrival is not readiness  [found on the first real collection run]
+
+The first end-to-end `vcctrl-collect` run brought all four RB log pairs back
+correctly and then printed:
+
+    == return to the menu default ==
+      WARNING: could not arm LEDs; skipped the return reboot.
+
+**leaving the machine sitting in NET** -- the one profile a measured run must
+never start from. `arm_leds()` reproduced fine a minute later (1.5 s), so it
+was not broken; it was called at the wrong moment.
+
+The cause is a conflation in `put_tag()`. It confirms a transfer by watching
+the file appear on the FTP server, which is the right signal *for the
+transfer* and was a deliberate choice over reading the screen. But at the
+instant the file lands, the DOS side is still **inside `FTP.EXE`** -- which
+has yet to print its summary, quit, return to `PUT.BAT`, echo, and drop back
+to a prompt. The next keystroke therefore went into the BIOS buffer rather
+than being processed, and the arming wait timed out on a healthy machine.
+
+**Arrival proves the transfer. It says nothing about readiness.** Two
+different questions; one check was being asked to answer both.
+
+Fixed with `wait_for_prompt()` -- distinct from `at_prompt()`, which asks once,
+because here the machine is *known* to be busy and the job is to wait it out.
+The collector now waits for the prompt before the return reboot, and if it
+never comes, says explicitly that the machine is in NET and must not be used
+for a measured run.
+
+Worth noting what this bug is not: it is not the fixed-sleep family. A settle
+delay would have papered over it. It is the same family as the LED level
+check -- **a signal that means something adjacent to what it is being read as**
+-- which is now two instances, and probably the more dangerous pattern of the
+two, because the reading is always plausible.
