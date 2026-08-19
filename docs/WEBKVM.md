@@ -193,9 +193,31 @@ widens the blast radius around the single component that must not fail.**
 
 Three rules that pay for it, and they are load-bearing rather than stylistic:
 
-1. **The input path takes no dependency on any other capability.** Not on the
-   web module, not on video, not on the HTTP stack. It must remain possible to
-   type at the g2k with every other capability broken or unloaded.
+1. **The input path takes no *logical* dependency on any other capability, and
+   is scheduled ahead of all of them.** Not on the web module, not on video,
+   not on the HTTP stack. It must remain possible to type at the g2k with every
+   other capability broken or unloaded.
+
+   **Restated after review, because the first wording was wrong.** The peer
+   session's objection: "achievable as a logical statement and false as a
+   resource one, because it is one Python process." Correct. A keystroke that
+   does not *depend* on video can still queue behind it under the GIL, and
+   "input still works" is not the same claim as "input still works with the
+   timing the STM32 expects." So the rule has to name scheduling, not just
+   dependency: the input capability gets a **dedicated thread that never
+   touches the async loop**, and holds `Devices.lock` across a whole logical
+   operation (13.3).
+
+   One refinement in the other direction, because the GIL exposure is narrower
+   than the objection assumed: **the per-frame hot path does no base64 and no
+   decode.** WebSocket frames are binary, so fan-out is a socket write of the
+   JPEG bytes the stick already produced, and the syscall releases the GIL.
+   Base64 appears only in the JSON socket API, where a `shot` is a one-off
+   request rather than a 30 Hz loop. The exposure that remains is any
+   pure-Python framing or copying in the fan-out, which is exactly what must be
+   kept out of the hot path.
+
+   **This is settled by measurement, not by argument** -- see 13.2.
 2. **A capability that raises is unloaded, not fatal.** The core catches at the
    module boundary, marks the capability failed, reports it in `state`, and
    keeps serving everything else. A dead video pipeline must never cost the
@@ -204,6 +226,12 @@ Three rules that pay for it, and they are load-bearing rather than stylistic:
    already a subprocess and stays one. This is what keeps a native decoder
    segfault from being a keyboard outage, and it is why the video capability is
    a pipe reader rather than a library binding.
+
+   **Rule 3 does not catch memory**, which the review caught: an OOM from an
+   unbounded frame ring kills the process exactly as dead as a segfault, and it
+   is in-process by construction. Hence the ring is capped in **bytes** (4.3).
+   Frames is the wrong unit the moment anyone raises resolution or framerate --
+   which is item one on the 6.3 TODO list, so it will happen.
 
 If those three hold, the merge is a straight improvement. If they turn out not
 to hold in practice, the fallback is to split device ownership back out -- so
@@ -322,8 +350,12 @@ frame time. Listed in 6.3.
 ### 4.3 The ring buffer
 
 Keep the last ~90 frames (3 s at 30 fps) in memory as raw JPEG bytes. At 5.5 KB
-that is 500 KB; at a pessimistic 30 KB it is 2.7 MB. Fine in 920 MB, but cap by
-**bytes** and not by count so a high-detail mode cannot balloon it.
+that is 500 KB; at a pessimistic 30 KB it is 2.7 MB. Fine in 920 MB, but **cap
+in bytes and not in frames.** This is not tidiness: the ring is in-process, so
+an unbounded one is an OOM, and an OOM takes the uinput devices down with it --
+the one failure mode rule 3 does not cover (sec. 2). Frames is the wrong unit
+the moment resolution or framerate goes up, which is the first item on the 6.3
+TODO list.
 
 The ring is what makes `shot` instant: the frames the caller wants have already
 been captured before it asks.
@@ -347,8 +379,29 @@ the thing you have to ask for by name:
 
 | API | returns |
 |---|---|
-| `shot` | one JPEG, brightest non-flat of the last N frames. **The default.** |
+| `shot` | one JPEG by the selection below, **or an explicit "no picture"**. The default. |
 | `burst` | the last N raw frames, explicitly labelled raw in the response |
+
+**The selection algorithm changed under this plan on 2026-08-19** and the new
+one is load-bearing. It is no longer "brightest non-flat". `grab()` in
+`bin/vcctrl-sweep` now:
+
+1. hashes every frame in the burst;
+2. **drops any frame whose hash appears more than once** -- settle frames are
+   bit-identical, real picture never repeats (sec. 1);
+3. picks the brightest of what survives;
+4. **returns `(None, None)` if every frame was a duplicate.**
+
+Step 4 is the point, and it is why this is not a detail. **Brightness alone
+cannot distinguish a flat-black no-lock from a genuinely dark screen** -- it
+returns the least-black frame either way and reports a number as though it
+meant something. `bin/vcctrl-uvconfig` now refuses to start on `(None, None)`,
+because every check it makes is read off the screen.
+
+So `shot` must implement duplicate-hash rejection **and be able to answer "no
+picture"** rather than always returning a frame. A `shot` that hands back a
+plausible dark frame during a no-lock would reintroduce a bug the peer session
+removed the same morning this was written.
 
 Note the settle-frame problem is *weaker* here than it is today, because a
 long-lived stream is not constantly re-settling -- settle frames appear after a
@@ -383,11 +436,24 @@ So "no frames" must be treated as **possibly correct and indefinite**:
 - No frame for **2 s** -> publish `{"state":"nosignal"}`. Browsers show a "no
   signal / not locked" panel rather than a frozen last frame. A frozen last
   frame is exactly the failure mode that makes a KVM lie.
-- No frame for **10 s** -> respawn ffmpeg once, **then back off**: 10 s, 30 s,
-  60 s, capped. The peer session's correction, and it is a real one -- a flat
-  10 s retry sitting against text mode 03h would churn the device forever
-  against a state that is not a fault. The respawn exists for a wedged stick,
-  and a wedged stick is rare; unlocked is routine.
+- **Whether to respawn is decided by ffmpeg's liveness, not by a clock.** This
+  replaces the 10/30/60 backoff an earlier draft had, which the peer session
+  correctly called out as still churning -- one respawn a minute forever
+  against text mode 03h is slower churn, not an absence of churn.
+
+  | frames stopped, and... | meaning | action |
+  |---|---|---|
+  | process **alive** | the stick is not locking; the input is absent | publish `nosignal`, **do nothing else, indefinitely** |
+  | process **exited, or unresponsive to signal 0** | wedge | respawn |
+
+  That collapses the policy to a check the system can actually answer, with no
+  guessed interval to tune. Keep a slow ceiling -- at most one respawn a minute
+  -- purely as a backstop against a wedge that somehow keeps the process alive,
+  but it should be the rare path and not the normal one.
+
+  This is the same principle as everything else on this rig: **ask the system
+  what is true rather than inferring it from a clock.** Respawning cannot
+  manufacture a signal that is not arriving at the stick.
 - Never escalate a no-lock into an error state or a notification. It is a
   reading, not a failure.
 - Log every transition with a timestamp. "The picture went away at 19:22:04" is
@@ -426,7 +492,19 @@ Migration for the peer session's code is one function. Today `grab()` in
 `bin/vcctrl-sweep` ssh's, runs ffmpeg, scp's back -- ~40 s. It becomes an HTTP
 GET to the Pi -- ~100 ms, returning `(path, mean)` with the same signature, so
 callers do not change at all. **Offer them that shim rather than asking them to
-edit call sites.**
+edit call sites.** Signature confirmed correct by the peer session.
+
+**The shim must propagate "no picture", and this is the part to get right.**
+`grab()` returns `(None, None)` when every frame in the burst was a duplicate,
+and `bin/vcctrl-uvconfig` refuses to start on that value. So:
+
+    state != "locked"   ->   the shim returns (None, None)
+
+and **never** a frame. A shim that hands back a plausible dark frame during a
+no-lock silently reintroduces the ambiguity between no-lock and dark-screen
+that step 4 of the selection algorithm exists to remove (4.4). This is the one
+place where "the migration is transparent" could be true of the signature and
+false of the semantics.
 
 `vcctrl shot` on the Pi becomes a `/run/vcctrl.sock` client. Same command, same
 output, ~1.5 s instead of ~40 s, and that 1.5 s is now entirely the ssh hop.
@@ -855,15 +933,33 @@ All testable, all worth running rather than reasoning about. These are what
 make the handover reviewable rather than a request to take it on trust:
 
 - `vcctrl status | type | key | hold | combo | mouse | leds | ledwait | power`
-  produce **byte-identical output** before and after the refactor.
+  produce **byte-identical output** before and after the refactor, **including
+  error paths**. The peer session's tooling parses the JSON and branches on
+  `ok`; a refactor that changes an error shape breaks callers that never see a
+  success, and a success-only comparison would pass anyway.
 - A `power cycle` in flight (15 s of rails-down) does **not** block a
   concurrent `vcctrl type`. This is the one that proves item 1.
+- **Two concurrent `vcctrl type` calls produce two intact strings.** Added on
+  review, and it is the most important test on this list, because it is the
+  only place the refactor can introduce a *new* class of corruption. Threading
+  `serve()` makes two clients typing at once newly possible, and the failure
+  mode is not a crash -- it is `CD \DOSKUTSU` and `QA 1` arriving as
+  `CQDA  \1DOSKUTSU`. That corrupts a sweep launch silently and looks like a
+  DOS quirk. §13.3's rule about holding `Devices.lock` across a logical
+  operation is the fix; this is the test that proves it.
+- **p99 of `vcctrl key` with three viewers attached is not materially worse
+  than with none.** This is how rule 1 in section 2 gets settled -- by
+  measurement rather than by argument. If it moves, rule 1 is not holding, and
+  the point of measuring early is to know before it matters.
 - With the video capability deliberately faulted or unloaded, `vcctrl type`
   still lands at the g2k. This is the rule-1 test from sec. 2, and it is open
   question 8 -- do not assume it, run it.
 - After a daemon restart, `usb4vc_holds_us()` reports both devices held. A
   restart is not free (13.3) and this is how you confirm it recovered.
-- `vcctrl-sweep` and `vcctrl-collect` run unmodified against the new daemon.
+- `vcctrl-sweep`, `vcctrl-collect` and `vcctrl-uvconfig` run unmodified against
+  the new daemon. (`vcctrl-cardid` reads log files and never touches the
+  daemon, so it is out of scope. Both tools landed after this plan's first
+  draft.)
 
 The last one cannot be verified from this side alone -- it needs the peer
 session's actual tooling against the actual machine. **That is the natural
