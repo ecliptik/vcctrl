@@ -495,9 +495,41 @@ relay *is* the switch:
 - GPIO low -> relay open -> machine off
 - a power cycle is low, wait ~5 s, high
 
-No pulse timing to get right. Use a **1-channel 3.3 V opto-isolated relay
-module** -- check the 3.3 V rating, since many modules have 5 V-only coils that
-will not trigger reliably from a Pi GPIO.
+No pulse timing to get right.
+
+#### Parts ordered 2026-08-19
+
+| part | role | key specs |
+|---|---|---|
+| **Teyleten Robot `RK-S1B4-G97L`** (ASIN `B07XGZSYJV`, 5-pack) | power switch across the PicoRC header | 3.3 V coil, **high-level trigger**, normally open, EL817 opto onboard, SRD-DC03V-SL-C relay, 10 A 250 VAC / 10 A 30 VDC contacts, <20 ms response |
+| **AOICRIE PC817 1-Channel Optocoupler Board** (ASIN `B0DD3KBQV5`) | Power Good readback | PC817, 1 channel, onboard input resistor, wide DC input range (max 24 V) |
+
+Why these two specifically:
+
+- **3.3 V coil** is the spec that rules out most relay modules; plenty are 5 V
+  coil only and will not trigger reliably from a Pi.
+- **High-level trigger** matches the latching logic directly: GPIO high = closed
+  = machine on.
+- **Normally open** means the machine is off if the Pi is unplugged, rebooting,
+  or the daemon is not running. That is the safe default.
+- **The module form is load-bearing, not convenience.** The SRD-DC03V coil draws
+  roughly 120 mA and a Pi GPIO is good for about 16 mA. The onboard opto and
+  driver transistor mean the GPIO only lights an LED (~5-10 mA) while the
+  board's VCC carries the coil current. **Take VCC from the Pi's 3.3 V pin, not
+  from a GPIO.**
+- 10 A contacts are enormous overkill for a signal-level PS_ON line, which is
+  harmless. One long-term note: switching a few mA with no arc is a "dry
+  circuit", so contact resistance can creep up over years. It will almost
+  certainly outlast this project -- recorded only so a future flaky power switch
+  is not a mystery.
+
+#### Before wiring, measure
+
+Confirm what PicoRC's Power Good line actually presents. The docs describe it as
+driving an LED, so 5 V through a resistor is likely -- but likely is not
+measured, and the PC817 board's input range needs to bracket it. A meter across
+it while the machine runs settles it. Same discipline as measuring J31 before
+connecting anything to it.
 
 Terminology, since it recurs below: an **optocoupler** ("opto") is an LED and a
 light-sensitive transistor sealed facing each other in one package with no
