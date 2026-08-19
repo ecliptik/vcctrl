@@ -52,13 +52,26 @@ DEFAULT_INCOMING = os.path.expanduser("~/doskutsu-netiter/incoming")
 # highlights -- so every attempt is digit-then-Enter. See FINDINGS sec. 8.
 NET_MENU_ITEM = "5"
 
-# The CONFIG.SYS menu is invisible to the capture stick (it runs in text mode
-# 03h before AUTOEXEC sets mode 12h) and times out in 5 s. So selection is
-# blind: send the digit repeatedly across the window in which the menu might be
-# up, and stop as soon as RDYPULSE says we are past it. Landing a few extra
-# "5<Enter>" pairs at a live prompt is harmless -- DOS answers "Bad command or
-# file name" and carries on.
-MENU_SPAM_EVERY_S = 2.0
+# EVERY vcctrl CALL COSTS ABOUT 1.5 s. It is an ssh round-trip to the Pi, and
+# that dominates everything here -- measured 1.52-2.55 s per call, against a
+# PS/2 LED round-trip that is comfortably under one poll interval. Any timing
+# in this file has to be reasoned about in calls, not in sleeps. A loop that
+# "polls every 0.5 s" while calling leds() actually paces at about 2 s.
+CALL_COST_S = 1.5
+
+# The CONFIG.SYS menu is invisible to the capture stick -- it runs in text mode
+# 03h, before AUTOEXEC sets mode 12h -- and TIMES OUT IN 5 SECONDS. So the
+# selection is blind and the cadence has to beat that 5 s window.
+#
+# Which is why nothing polls the LEDs while the menu might be up. An earlier
+# version interleaved a leds() read with each attempt, which put two ssh calls
+# between attempts and paced the digit at roughly 5 s -- the exact width of the
+# window it was trying to hit. It would have worked sometimes. Instead: blanket
+# the whole window with digit+Enter as a SINGLE call, then start looking.
+#
+# Extra "5<Enter>" pairs landing at a live prompt are harmless; DOS answers
+# "Bad command or file name" and carries on.
+MENU_SPAM_WINDOW_S = 40         # from the reboot edge; POST-to-menu varies
 REBOOT_EDGE_TIMEOUT_S = 45      # measured at t+9 s; this is deliberate slack
 READY_TIMEOUT_S = 150           # measured ~11 s post-POST, POST itself varies
 PUT_TIMEOUT_S = 90              # 880 KB/s measured; a log pair is under 400 KB
@@ -82,13 +95,44 @@ def leds():
 
 
 def wait_led(name, want, timeout, poll=1.0):
-    """Block until LED `name` reads `want`. Returns elapsed seconds, or None."""
+    """Block until LED `name` reads `want`. Returns elapsed seconds, or None.
+
+    LEVEL-triggered, so it is only safe when the starting level is known --
+    which is what arm_leds() is for. Across a power cycle it is NOT safe: see
+    wait_cold_boot().
+    """
     t0 = time.time()
     while time.time() - t0 < timeout:
         if leds().get(name) == want:
             return time.time() - t0
         time.sleep(poll)
     return None
+
+
+def wait_cold_boot(timeout=240):
+    """Wait for a machine that was powered OFF to reach a live prompt.
+
+    Cannot use wait_led on a level, and the reason is worth stating because it
+    reads as working: /sys/class/leds on the Pi RETAINS THE LAST STATE the host
+    published, and a host that is off publishes nothing. So after `power on`
+    the LEDs still read whatever they read before the power was cut -- which,
+    if the last thing the machine did was fire RDYPULSE, is scrolllock=1. A
+    level check for "scrolllock is 1" therefore returns TRUE IMMEDIATELY,
+    reporting a machine ready 2.5 s after power-on that has not begun to POST.
+    Observed exactly that on 2026-08-19.
+
+    An edge pair is immune: POST clears the LEDs, so wait for scrolllock to go
+    0 (proving POST has happened and the reading is now this boot's, not the
+    last one's), and only then for RDYPULSE to set it to 1.
+    """
+    t0 = time.time()
+    if wait_led("scrolllock", False, timeout, poll=0.0) is None:
+        return None
+    print("  POST cleared the LEDs at t+%.1fs -- readings are now this boot's"
+          % (time.time() - t0))
+    if wait_led("scrolllock", True, timeout - (time.time() - t0), poll=0.0) is None:
+        return None
+    return time.time() - t0
 
 
 def at_prompt():
@@ -115,13 +159,18 @@ def arm_leds():
     Scroll Lock ARMED LOW: RDYPULSE.COM sets it as the last line of AUTOEXEC,
     so scroll 0 -> 1 means the prompt is live. Same argument in reverse.
     """
-    st = leds()
-    if not st.get("capslock"):
-        vc("key", "capslock")
-        time.sleep(0.5)
-    if leds().get("scrolllock"):
-        vc("key", "scrolllock")
-        time.sleep(0.5)
+    for name, want in (("capslock", True), ("scrolllock", False)):
+        if bool(leds().get(name)) is want:
+            continue
+        vc("key", name)
+        # Wait for the toggle to come back rather than sleeping a guessed
+        # interval. An earlier version slept 0.5 s here and then re-read; the
+        # read is an ssh round-trip of its own, so the whole thing raced and
+        # arm_leds() would report failure on a machine that had toggled fine
+        # a moment later. Nothing about this channel is fast enough to assume.
+        if wait_led(name, want, 15, poll=0.0) is None:
+            print("  could not set %s to %s" % (name, want))
+            return False
     st = leds()
     return bool(st.get("capslock")) and not st.get("scrolllock")
 
@@ -144,28 +193,30 @@ def reboot_into_net():
                          % REBOOT_EDGE_TIMEOUT_S)
     print("  reboot edge at t+%.1fs" % edge)
 
-    print("  selecting menu item %s (digit + Enter, every %.0fs until ready)"
-          % (NET_MENU_ITEM, MENU_SPAM_EVERY_S))
+    print("  blanketing the menu window with '%s'+Enter for %ds"
+          % (NET_MENU_ITEM, MENU_SPAM_WINDOW_S))
     t0 = time.time()
-    last_spam = 0.0
-    while time.time() - t0 < READY_TIMEOUT_S:
-        if leds().get("scrolllock"):
-            print("  RDYPULSE at t+%.1fs -- AUTOEXEC complete, prompt live"
-                  % (time.time() - t0))
-            time.sleep(SETTLE_S)
-            return True
-        if time.time() - last_spam >= MENU_SPAM_EVERY_S:
-            vc("key", NET_MENU_ITEM, check=False)
-            vc("key", "enter", check=False)
-            last_spam = time.time()
-        time.sleep(0.5)
+    attempts = 0
+    while time.time() - t0 < MENU_SPAM_WINDOW_S:
+        # One call, not two: the client taps a sequence, so this is ~1.5 s
+        # rather than ~3 s, which is what keeps the cadence inside 5 s.
+        vc("key", NET_MENU_ITEM, "enter", check=False)
+        attempts += 1
+    print("  %d attempts over %.1fs (%.1fs apart)"
+          % (attempts, time.time() - t0, (time.time() - t0) / max(attempts, 1)))
 
-    raise SystemExit(
-        "REFUSED: no RDYPULSE within %ds of the reboot edge.\n"
-        "  Either the machine did not reach a prompt, or C:\\DRIVERS\\RDYPULSE.COM\n"
-        "  is missing -- both AUTOEXEC call sites are IF EXIST guarded, so a\n"
-        "  deleted COM looks exactly like a hang from here. Check with capture\n"
-        "  before power-cycling." % READY_TIMEOUT_S)
+    t1 = time.time()
+    if wait_led("scrolllock", True, READY_TIMEOUT_S, poll=0.0) is None:
+        raise SystemExit(
+            "REFUSED: no RDYPULSE within %ds of the reboot edge.\n"
+            "  Either the machine did not reach a prompt, or C:\\DRIVERS\\RDYPULSE.COM\n"
+            "  is missing -- both AUTOEXEC call sites are IF EXIST guarded, so a\n"
+            "  deleted COM looks exactly like a hang from here. Check with capture\n"
+            "  before power-cycling." % READY_TIMEOUT_S)
+    print("  RDYPULSE at t+%.1fs -- AUTOEXEC complete, prompt live"
+          % (time.time() - t1))
+    time.sleep(SETTLE_S)
+    return True
 
 
 def snapshot(incoming):
@@ -308,6 +359,12 @@ def main(argv):
     if failed:
         print("  MISSING:   %s" % " ".join(failed))
         print("""
+  If EVERY tag failed, suspect the blind menu selection rather than the logs:
+  a missed selection boots the 5 s default instead of NET, which reaches a
+  perfectly healthy prompt with no packet driver, and PUT then fails on all of
+  them identically. Capture the screen and look for "[NET] ready." before
+  chasing anything else.
+
   A missing log is a real signal, not necessarily a transfer fault. The
   likeliest cause is that the cell never wrote one -- it died at sdl_init, or
   the sweep stopped early. Look for the tag under C:\\DOSKUTSU\\LOGS on the

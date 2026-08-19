@@ -363,3 +363,70 @@ because nothing else can be true if the file is there.
 `SET DOSKUTSU_LOG_TAG=%QAM%...` out of the r16 payload's BATs. Counting
 `DOSKUTSU.EXE` lines to get cell counts does **not** work -- the BATs mention
 the binary in comments, which inflates `TAB` to 4 cells and `DEEP` to 3.
+
+## 16. The card can be updated over the wire  [measured 2026-08-19]
+
+The CF was one payload behind (r15 vs r16). Rather than pull the card, the two
+payloads were diffed: **the entire r15 -> r16 delta was nine BAT files, 67 KB
+of text.** Binary, Organya caches, everything else byte-identical.
+
+Pushed over FTP from a NET prompt in about four minutes, and every file pulled
+straight back off the card with a small `CHK.BAT` and compared by sha256:
+**10/10 byte-identical, CRLF intact.** No hardware touched.
+
+The verification was not ceremony. Those files travel from a tarball, through a
+Unix filesystem, through FTP, onto a FAT volume -- and a DOS batch file with LF
+endings instead of CRLF fails in ways that read as a logic bug rather than a
+formatting one. `binary` mode in `GET.BAT` is what preserves them, and that is
+worth confirming rather than trusting.
+
+The general shape: **check whether a payload difference is actually binary
+before treating it as a hardware errand.** A 180 MB tarball whose real delta is
+67 KB of text is a network job.
+
+## 17. Three timing bugs, all the same bug  [measured 2026-08-19]
+
+Before trusting `vcctrl-collect` on hardware, the LED channel was measured. It
+was healthy -- `at_prompt()` returned true 4/4 -- but the measurement exposed
+the thing that actually mattered:
+
+**Every `vcctrl` call costs about 1.5 s.** It is an ssh round-trip to the Pi
+(measured 1.52-2.55 s), and it dominates every loop in the harness. The PS/2
+LED round-trip itself is comfortably under one poll interval; an apparent
+"3.14 s LED latency" was two ssh calls' worth of polling overhead being
+misread as device behaviour.
+
+Three bugs followed from not accounting for it, and all three are the same
+mistake -- a fixed sleep or a naive cadence where a closed loop belonged:
+
+1. **The menu selection was a coin flip.** Digit and Enter were sent as
+   separate calls with an LED poll between them: about 5 s per attempt, against
+   a menu window that is exactly 5 s wide. Now one call (`key 5 enter`) with no
+   polling during the window -- measured 1.76 s apart, ~2.8 attempts inside it.
+2. **`arm_leds()` slept 0.5 s** after a toggle and then re-read. The re-read is
+   itself an ssh round-trip, so it raced, and arming failed on a machine that
+   had toggled correctly a moment later. Now it waits for the toggle.
+3. **`wait_led` on a LEVEL is unsafe across a power cycle.** See below.
+
+### The stale-LED trap
+
+`/sys/class/leds` on the Pi retains the last state the host published, and a
+host that is powered off publishes nothing. So after `vcctrl power on` the LEDs
+still read whatever they read before the power was cut -- and if the machine's
+last act was firing RDYPULSE, that is `scrolllock=1`.
+
+A level check for "scrolllock is 1" therefore **returned ready 2.5 seconds
+after power-on**, on a machine that had not begun to POST. Observed exactly
+that. It is the worst class of bug: it returns the correct answer whenever the
+previous run ended any way other than at a ready prompt, so it would survive
+most tests anyone would think to write.
+
+An edge pair is immune. POST clears the LEDs, so wait for `scrolllock -> 0`
+(proving the reading is now this boot's) and only then for `-> 1`.
+
+### The beeps are ours
+
+Blanketing the menu window fills the BIOS 15-key buffer, and DOS beeps once per
+rejected keystroke. The operator heard a burst of beeps after the POST beep and
+asked about it. Harmless, stops when the window closes -- but on a 30-year-old
+machine an unexplained beep burst reads as a fault, so it is worth expecting.
