@@ -7,8 +7,49 @@ set -euo pipefail
 
 VCCTRL_HOST="${VCCTRL_HOST:-usb4vc}"
 
+# ---------------------------------------------------------------------------
+# CONNECTION MULTIPLEXING -- this is not a speed tweak, it is a fix for an
+# outage. 2026-08-19 the Pi became unreachable for ~30 minutes: ping fine, TCP
+# port 22 accepting, but sshd never sent a banner. Cause was
+#
+#     systemd-journald.service: Watchdog timeout (limit 3min)!
+#
+# repeating through the whole window. sshd, PAM and systemd-logind all write to
+# journald, and when journald stops draining its socket those writers BLOCK --
+# so sshd completes the TCP handshake in the kernel and then hangs before it
+# can say hello. Nothing could be diagnosed at the time either, because the
+# thing that failed was the thing that records failures.
+#
+# What saturated journald was this wrapper. Every call was a fresh ssh, every
+# ssh spawned a full systemd user session -- dbus, pulseaudio, ~20 journal
+# lines PER CALL -- and the harness makes a call per keystroke. 676 journal
+# entries in one ten-minute window, onto an SD card, on a 920 MB Pi.
+#
+# ControlMaster collapses that: one authenticated connection is reused by every
+# later call, so session setup happens once instead of thousands of times. It
+# also removes most of the ~1.5 s per-call cost, which is the number that has
+# produced four separate timing bugs in this harness.
+#
+# ControlPersist keeps the master alive between calls. If it dies, ssh silently
+# opens a new one -- no failure mode is introduced, only a slow path.
+SSH_CTL_DIR="${VCCTRL_SSH_CTL_DIR:-${TMPDIR:-/tmp}/vcctrl-ssh-$(id -u)}"
+mkdir -p "$SSH_CTL_DIR" 2>/dev/null || true
+chmod 700 "$SSH_CTL_DIR" 2>/dev/null || true
+
+SSH_OPTS=(
+  -o ControlMaster=auto
+  -o "ControlPath=$SSH_CTL_DIR/%r@%h:%p"
+  -o ControlPersist=300
+  # Fail fast rather than hang forever. The outage above presented as calls
+  # that never returned, which is indistinguishable from a long-running cell
+  # and is why a wedged Pi went unnoticed for 13 minutes.
+  -o ConnectTimeout=15
+  -o ServerAliveInterval=10
+  -o ServerAliveCountMax=3
+)
+
 if [[ $# -eq 0 ]]; then
-  exec ssh "$VCCTRL_HOST" vcctrl --help
+  exec ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" vcctrl --help
 fi
 
 # Quote each argument so shell metacharacters survive the ssh round trip.
@@ -18,4 +59,4 @@ for a in "$@"; do
   quoted+=("$(printf '%q' "$a")")
 done
 
-exec ssh "$VCCTRL_HOST" vcctrl "${quoted[@]}"
+exec ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" vcctrl "${quoted[@]}"
