@@ -22,8 +22,35 @@ Operator's current manual sequence:
 
     swap card -> boot DOS -> CD \UNIVBE -> UVCONFIG -> space -> space
 
-**UVCONFIG IS INTERACTIVE, WHICH MAKES IT THE WORST KIND OF THING TO
-AUTOMATE BLIND.** The harness's own rule (FINDINGS sec. 9) is that anything
+### Rehearsed on the ViRGE 2026-08-19, and the premise was wrong
+
+The whole procedure was run end to end on the card already fitted, before any
+swap, so that a failure would be attributable to the tooling rather than to
+new hardware. Result:
+
+    == uvconfig ==
+      back at a DOS prompt -- uvconfig completed without asking anything.
+    == reboot ==
+      reboot edge at t+28.2s ... prompt live ... capture still locked
+
+**UVCONFIG IS NOT INTERACTIVE ON AN UNCHANGED CARD.** It ran silently,
+rewrote `UNIVBE.DRV` and `UVCONFIG.DAT` in about two seconds, and returned
+straight to the prompt. The remembered "press space, press space again (I
+think)" did not reproduce at all.
+
+The likeliest reading -- and it is a reading, not a measurement -- is that
+those prompts appear only when the DETECTED card differs from the stored
+config. That is exactly the case a swap creates and exactly the case a
+same-card rehearsal cannot produce. The operator's "(I think)" was the honest
+signal that the sequence was uncertain; it turns out to be *conditional*
+rather than fixed, which is worse than uncertain for anything driven blind.
+
+So `bin/vcctrl-uvconfig` sends **no key sequence at all**. It runs uvconfig
+and then looks: back at a prompt means nothing was asked and it continues; a
+screen still showing means STOP, capture, and hand it to a human.
+
+**UVCONFIG IS CONDITIONALLY INTERACTIVE, WHICH MAKES IT THE WORST KIND OF
+THING TO AUTOMATE BLIND.** The harness's own rule (FINDINGS sec. 9) is that anything
 driven by a fixed number of keypresses is a latent bug -- menus wrap, a hold
 can advance two rows, and a greyed entry may or may not be skipped. "Press
 space, then I think space again" is exactly that shape, and the operator's own
@@ -126,11 +153,22 @@ Steps 1-2 are the operator's. Everything from 3 is the harness's.
    capture path, and every later step is judged through it. If the stick
    returns flat black, stop -- the harness is blind and should say so rather
    than proceed on wall-clock alone.
-5. **Read the detected chipset**, do not assume it. `UNIVBE.EXE` at load
-   prints what it found. Capture it. If it disagrees with what was fitted,
-   that is the finding.
-6. **Run uvconfig closed-loop.** Capture, confirm the screen, press, capture,
-   confirm, press. Never a fixed sequence.
+5. **Identify the card from behaviour**, with `bin/vcctrl-cardid` against a
+   sweep's SDL log. Do NOT ask UniVBE -- it shims the VBE identity and answers
+   "SciTech Software" on every card. `cardid` reads the capability shape
+   instead (mode list, `lfb_addr`, VRAM, the engine's detect probes) and says
+   UNKNOWN rather than guessing when the log is thin. If its verdict disagrees
+   with what was fitted, that is the finding.
+6. **Run `vcctrl-uvconfig`.** It backs up the current driver first, runs
+   uvconfig, and stops rather than guessing if a screen appears. It reboots
+   afterwards, because uvconfig generates a driver that only loads at
+   TSR-load time. Rehearsed end to end on the ViRGE.
+
+   If it stops with a screen showing, **that is the swap path working as
+   intended**, not a failure: drive it by hand from the captured frame. A
+   wrong key here does not crash -- UniVBE's config pages include mode tables,
+   so it boots fine and drives the monitor slightly wrong, which is the kind
+   of wrong that gets measured.
 7. **Reboot if required** (pending the answer above), then confirm the prompt
    via RDYPULSE.
 8. **Run RB as the anchor**, with `--collect`. Not because it should match --
