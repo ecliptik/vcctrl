@@ -193,7 +193,7 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // a few seconds, an <img> pointed at multipart/x-mixed-replace takes over --
 // no JS decoding, no canvas, the browser does all of it.
 let ws, wsAlive = false, xport = 'connecting', frames = 0, fpsWin = [];
-let firstFrameTimer = null;
+let firstFrameTimer = null, lastFrameAt = 0, wsTried = 0;
 
 function setXport(x) {
   xport = x;
@@ -206,6 +206,7 @@ function setXport(x) {
 function gotFrame() {
   frames++;
   const now = performance.now();
+  lastFrameAt = Date.now();
   fpsWin.push(now);
   while (fpsWin.length && now - fpsWin[0] > 2000) fpsWin.shift();
   if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
@@ -220,6 +221,11 @@ function useMjpeg(why) {
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
   img.src = '/stream.mjpg?fps=15&t=' + Date.now();
   img.onload = gotFrame;
+  // A dead multipart stream renders as a broken-image icon and stays that way
+  // forever. That is what a suspended iOS tab produces on return, and it is
+  // indistinguishable from "the machine is off" to anyone looking at it --
+  // exactly the lie this tool exists to not tell.
+  img.onerror = () => { addLine(new Date(),'transport','stream dropped — restarting','k-lock'); restart(); };
 }
 
 function connect() {
@@ -235,7 +241,14 @@ function connect() {
   // frames, not on the connection state -- the difference matters here.
   firstFrameTimer = setTimeout(() => useMjpeg('delivered no frame in 4s'), 4000);
 
-  ws.onopen = () => { wsAlive = true; };
+  ws.onopen = () => {
+    wsAlive = true;
+    // Ask for a rate suited to the device. A phone on cellular does not want
+    // 30 fps of a 70 KB screen, and the server drops rather than queues
+    // anyway -- asking for less simply wastes less.
+    const small = Math.min(screen.width, screen.height) < 500;
+    ws.send(JSON.stringify({t:'rate', fps: small ? 12 : 25}));
+  };
   ws.onerror = () => { useMjpeg('errored'); };
   ws.onclose = () => {
     wsAlive = false;
@@ -243,6 +256,7 @@ function connect() {
   };
   ws.onmessage = ev => {
     if (typeof ev.data === 'string') return;
+    if (!wsAlive) return;
     if (xport === 'mjpeg') return;
     if (xport !== 'ws') { setXport('ws'); img.style.display='none'; cv.style.display=''; }
     createImageBitmap(new Blob([ev.data], {type:'image/jpeg'})).then(bmp => {
@@ -256,10 +270,45 @@ function connect() {
 setXport('connecting');
 connect();
 
-$('refresh').onclick = () => {
-  if (xport === 'mjpeg') img.src = '/stream.mjpg?fps=15&t=' + Date.now();
-  else { try { ws.close(); } catch(e){} connect(); }
-};
+// Tear everything down and start again from the preferred transport. Called
+// on resume, on a broken stream, and by the button. It retries the WEBSOCKET
+// each time rather than staying on the fallback forever: falling back is a
+// judgement about one moment, and the moment passes.
+function restart() {
+  if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
+  try { wsAlive = false; ws && ws.close(); } catch (e) {}
+  img.onerror = null;
+  img.src = '';
+  img.style.display = 'none';
+  cv.style.display = '';
+  setXport('connecting');
+  lastFrameAt = Date.now();
+  connect();
+}
+$('refresh').onclick = restart;
+
+// iOS suspends a backgrounded tab: sockets close, the multipart stream dies,
+// and neither comes back on its own. Returning to the tab must restore the
+// picture without a manual reload -- a KVM you have to reload is one you
+// cannot trust to be showing now.
+addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') restart();
+});
+addEventListener('pageshow', e => { if (e.persisted) restart(); });
+addEventListener('online', restart);
+
+// Last resort: if the page is visible and no frame has arrived in 8s, whatever
+// transport is running has silently died. Judge on frames, not on the state of
+// the connection object -- a socket that reports open and delivers nothing is
+// the failure mode that started all this.
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return;
+  if (xport === 'connecting') return;
+  if (Date.now() - lastFrameAt > 8000) {
+    addLine(new Date(), 'transport', 'no frames for 8s — restarting', 'k-lock');
+    restart();
+  }
+}, 4000);
 
 // ------------------------------------------------------------------ input
 function send(o) {

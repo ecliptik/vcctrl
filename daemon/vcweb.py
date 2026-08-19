@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import os
+import select
 import socket
 import struct
 import threading
@@ -258,8 +259,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "Upgrade")
         self.send_header("Sec-WebSocket-Accept", accept)
         self.end_headers()
+        fps = 20.0
+        if "?" in self.path:
+            for part in self.path.split("?", 1)[1].split("&"):
+                if part.startswith("fps="):
+                    try:
+                        fps = max(1.0, min(30.0, float(part[4:])))
+                    except ValueError:
+                        pass
         self.cap.serve_ws(self.connection,
-                          agent=self.headers.get("User-Agent"))
+                          agent=self.headers.get("User-Agent"), fps=fps)
 
 
 class Server(ThreadingHTTPServer):
@@ -299,6 +308,7 @@ class WebCapability(object):
         self.ws_closed = 0
         self.ws_last_error = None
         self.ws_last_agent = None
+        self.ws_dropped = 0
         self.lock = threading.Lock()
 
     def start(self):
@@ -335,6 +345,7 @@ class WebCapability(object):
                 "seq": act.get("seq"),
                 "viewers": self.clients,
                 "ws": {"opened": self.ws_opened, "closed": self.ws_closed,
+                       "dropped": self.ws_dropped,
                        "last_error": self.ws_last_error,
                        "last_agent": self.ws_last_agent},
                 "caps": self.registry.report()}
@@ -345,17 +356,20 @@ class WebCapability(object):
 
     # -- the stream ---------------------------------------------------------
 
-    def serve_ws(self, sock, agent=None):
+    def serve_ws(self, sock, agent=None, fps=20.0):
         with self.lock:
             self.clients += 1
             self.ws_opened += 1
             self.ws_last_agent = agent
         stop = threading.Event()
         held = set()
+        # A list so the input thread can retune it live: the client knows how
+        # it is doing far better than this side can infer.
+        rate = [fps]
         try:
-            threading.Thread(target=self._ws_input, args=(sock, stop, held),
-                             daemon=True).start()
-            self._ws_frames(sock, stop)
+            threading.Thread(target=self._ws_input,
+                             args=(sock, stop, held, rate), daemon=True).start()
+            self._ws_frames(sock, stop, rate)
         except Exception as exc:
             with self.lock:
                 self.ws_last_error = "%s: %s" % (type(exc).__name__, exc)
@@ -377,7 +391,21 @@ class WebCapability(object):
             except Exception:
                 pass
 
-    def _ws_frames(self, sock, stop):
+    def _ws_frames(self, sock, stop, rate):
+        """Send frames, dropping rather than queueing when the client is slow.
+
+        This is the backpressure rule the plan called for and the first version
+        did not implement, which is very likely why an iPhone kept dropping the
+        socket: a detailed screen is ~70 KB, so 30 fps is ~17 Mbit/s, and
+        sendall() on a client that cannot drink that fast BLOCKS -- frames pile
+        up in the kernel buffer and the stream turns into a backlog being
+        replayed. For a KVM that is strictly worse than skipping: a late frame
+        has no value, because the only frame anyone wants is the current one.
+
+        select() with a zero timeout asks the socket whether it can take a
+        write right now. If it cannot, the frame is dropped and the next one is
+        considered fresh. Nothing is buffered on this side either.
+        """
         vid = self.video()
         last_t, last_state = 0.0, None
         while not stop.is_set():
@@ -388,11 +416,19 @@ class WebCapability(object):
                 state = vid.state
                 item = vid.ring[-1] if vid.ring else None
             if item is not None and item[0] > last_t:
-                last_t = item[0]
                 try:
-                    sock.sendall(ws_frame(item[1], opcode=0x2))
+                    writable = select.select([], [sock], [], 0)[1]
                 except Exception:
                     return
+                if writable:
+                    last_t = item[0]
+                    try:
+                        sock.sendall(ws_frame(item[1], opcode=0x2))
+                    except Exception:
+                        return
+                else:
+                    with self.lock:
+                        self.ws_dropped += 1
             if state != last_state:
                 last_state = state
                 try:
@@ -400,13 +436,9 @@ class WebCapability(object):
                         json.dumps({"state": state}).encode(), opcode=0x1))
                 except Exception:
                     return
-            # Paced just under the source rate. Sending only frames newer than
-            # the last one sent means a stalled source costs nothing, and a
-            # slow client simply misses frames rather than accumulating a
-            # backlog -- for a KVM, skipping beats catching up.
-            time.sleep(1.0 / 45.0)
+            time.sleep(1.0 / max(1.0, rate[0]))
 
-    def _ws_input(self, sock, stop, held):
+    def _ws_input(self, sock, stop, held, rate=None):
         while not stop.is_set():
             try:
                 got = ws_read(sock)
@@ -441,6 +473,11 @@ class WebCapability(object):
                     self.call("type", {"text": msg["s"]})
                 elif kind == "combo":
                     self.call("combo", {"keys": msg["k"]})
+                elif kind == "rate" and rate is not None:
+                    rate[0] = max(1.0, min(30.0, float(msg.get("fps", 20))))
+                elif kind == "release":
+                    held.clear()
+                    self.call("release_all", {})
             except Exception:
                 continue
         stop.set()
