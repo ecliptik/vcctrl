@@ -270,9 +270,11 @@ the edge is unambiguous.
 
 ### GPIO to the motherboard reset header -- the recommended fix
 
-The front-panel RESET header is a momentary short to ground. Driving it from
-the Pi gives a true hardware reset, independent of anything software is doing,
-which is precisely what the Ctrl-Alt-Del failure leaves missing.
+**Confirmed from the board manual (operator, 2026-08-19): header `J31`, Pin 1 =
+Signal, Pin 2 = Ground.** Shorting the two performs a reset -- the standard
+arrangement, and exactly what the front-panel button does. Driving it from the
+Pi gives a true hardware reset independent of anything software is doing, which
+is precisely what the Ctrl-Alt-Del failure leaves missing.
 
 **Do not wire a GPIO directly to the header.** That line is usually pulled up
 to +5 V and Pi GPIOs are 3.3 V and not 5 V tolerant. Use an isolator:
@@ -281,10 +283,26 @@ to +5 V and Pi GPIOs are 3.3 V and not 5 V tolerant. Use an isolator:
   -> LED anode, LED cathode -> Pi ground; transistor side across the two reset
   pins. Full galvanic isolation, no shared ground with the g2k, and it cannot
   damage either machine if something is miswired.
+- **Opto-isolated relay module (simplest, ~$2):** gives a genuine **dry
+  contact** across J31, which is both voltage-agnostic and polarity-agnostic.
+  Nothing to get wrong, no need to know what Pin 1 sits at. Relays are slow and
+  audible, which is irrelevant for a reset. **This is the recommendation if the
+  goal is "make it work without thinking about it".**
 - **N-channel MOSFET / NPN:** cheaper in parts count but shares ground with the
   g2k, which is worse in a rig where the two boxes are separately powered.
 
 Pulse for ~200 ms, then release -- that is a button press.
+
+**Two cautions before wiring:**
+
+1. **Measure Pin 1 to Pin 2 open-circuit with a meter first.** It is almost
+   certainly +5 V through a pull-up, but confirm rather than assume -- and never
+   connect a Pi GPIO directly, since Pi pins are 3.3 V and not 5 V tolerant.
+   Both the opto and the relay make the actual voltage irrelevant, which is why
+   they are preferred over a direct drive.
+2. **A bare opto-coupler output is polarised** -- collector to Pin 1 (Signal),
+   emitter to Pin 2 (Ground). Backwards, it simply will not conduct. A relay
+   module has no such concern, which is the main argument for it.
 
 **Free BCM pins** (USB4VC claims 2, 3, 8, 9, 10, 11, 16, 19, 20, 21, 22, 25,
 26, 27 for SPI, I2C, buttons and board control): **5, 6, 12, 13, 17, 23** are
