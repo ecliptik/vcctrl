@@ -218,9 +218,13 @@ def test_registry():
     for cmd in ("key", "type", "hold", "combo", "keydown", "keyup",
                 "mouse_move", "mouse_click", "leds", "ledwait", "power"):
         check("routes %s" % cmd, cmd in reg.routes)
-    check("all three capabilities started",
-          sorted(reg.caps) == ["input", "leds", "power"], sorted(reg.caps))
-    check("nothing failed", reg.failed == {}, reg.failed)
+    check("the core capabilities started",
+          set(["input", "leds", "power"]) <= set(reg.caps), sorted(reg.caps))
+    check("nothing failed to load", reg.failed == {}, reg.failed)
+    # video loads even with no capture device present -- it reports itself
+    # degraded rather than refusing to start, so the daemon on a machine with
+    # no stick attached still serves input.
+    check("video loads without a device", "video" in reg.caps)
 
     # Error shape is a compatibility contract: callers branch on `ok` and some
     # match the message, so this string is verbatim from before the refactor.
@@ -230,8 +234,8 @@ def test_registry():
 
     resp = vcctrld.handle(d, reg, {"cmd": "caps"})
     check("caps reports every capability",
-          resp["ok"] and sorted(resp["capabilities"]) ==
-          ["input", "leds", "power"])
+          resp["ok"] and set(["input", "leds", "power", "video"]) <=
+          set(resp["capabilities"]), sorted(resp.get("capabilities", {})))
 
 
 def test_rule_2_isolation():

@@ -29,6 +29,13 @@ USAGE = """usage: vcctrl <command> [args]
   ledwait [timeout_s]       block until LED state changes
   power [state|on|off|cycle]  smart-plug mains control for the target
   caps                      capability health (input, leds, power, ...)
+  video [state|acquire|release]
+                            capture device. The daemon owns /dev/video0 for its
+                            lifetime; `release` frees it for a tool that opens
+                            the device directly.
+  framestats [n]            duplicate-hash stats over the last n frames
+  shot [--out F] [n]        one selected frame, or an explicit "no picture"
+  lastgood [--out F]        the last frame that was positively picture, aged
   events [since]            activity log since a sequence number
   activity                  what is running, for how long, and who holds input
   lock [status|acquire|release|break] --as NAME
@@ -122,6 +129,14 @@ def main(argv):
         req = {"cmd": "events", "since": int(rest[0]) if rest else 0}
     elif cmd == "activity":
         req = {"cmd": "activity"}
+    elif cmd == "video":
+        req = {"cmd": "video", "action": rest[0] if rest else "state"}
+    elif cmd == "framestats":
+        req = {"cmd": "framestats", "n": int(rest[0]) if rest else 90}
+    elif cmd == "shot":
+        req = {"cmd": "shot", "n": int(rest[0]) if rest else 16}
+    elif cmd == "lastgood":
+        req = {"cmd": "lastgood"}
     elif cmd == "lock":
         req = {"cmd": "lock", "action": rest[0] if rest else "status"}
     elif cmd == "leds":

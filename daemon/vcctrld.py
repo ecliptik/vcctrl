@@ -21,10 +21,13 @@ Constraints read out of the USB4VC source, all load-bearing:
 import collections
 import errno
 import glob
+import hashlib
+import io
 import json
 import os
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -736,9 +739,484 @@ class PowerCapability(Capability):
         return {"ok": True, "power": power_state(host)}
 
 
+class VideoCapability(Capability):
+    """Owns /dev/video0 for the life of the daemon and fans frames out.
+
+    Why a persistent owner rather than a capture per request: the device is
+    single-open, and every capture on this rig used to be a fresh ffmpeg spawn
+    costing ~40 s end to end. That made frames stale enough to mis-diagnose
+    machine state twice in one day, and it made "watch the sweep live"
+    impossible rather than merely slow.
+
+    Rule 3 (sec. 2): ffmpeg stays a SUBPROCESS. A native decoder segfault must
+    not be a keyboard outage. Nothing in the per-frame path decodes, encodes or
+    base64s -- frames are passed through as the bytes the stick produced, and
+    the only per-frame work is a memcpy and a bounds check.
+
+    Rule 3 does not cover memory, so the ring is capped in BYTES. Frames is the
+    wrong unit: frame size varies by an order of magnitude between a text
+    console and a game screen, and an OOM takes the uinput devices with it.
+    """
+
+    name = "video"
+
+    DEVICE = "/dev/video0"
+    RING_BYTES = 8 * 1024 * 1024
+    NOSIGNAL_AFTER_S = 2.0
+    # How many recent frames must be bit-identical before the stream is called
+    # frozen. Eight is ~0.27 s at 30 fps -- long enough that a genuinely static
+    # screen still fails it (analog noise makes real frames differ every time,
+    # measured: 90 frames, 90 distinct hashes) and short enough to notice a
+    # mode change within a third of a second.
+    FROZEN_RUN = 8
+
+    def __init__(self, devs, bus=None):
+        Capability.__init__(self, devs)
+        self.bus = bus
+        self.lock = threading.Lock()
+        self.ring = collections.deque()
+        self.ring_bytes = 0
+        self.proc = None
+        self.reader = None
+        self.running = False
+        self.owned = False
+        self.last_frame_t = 0.0
+        self.frames_total = 0
+        self.state = "starting"
+        self.spawns = 0
+        self.last_error = None
+        self.spawn_t = 0.0
+        self.fast_failures = 0
+        self.last_good = None
+
+    # -- device lifecycle ---------------------------------------------------
+
+    def start(self):
+        self.running = True
+        self._acquire()
+        threading.Thread(target=self._watchdog, daemon=True).start()
+
+    def stop(self):
+        self.running = False
+        self._release()
+
+    def _acquire(self):
+        with self.lock:
+            if self.owned:
+                return True
+            try:
+                self.proc = subprocess.Popen(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                     "-f", "v4l2", "-input_format", "mjpeg",
+                     "-video_size", "640x480", "-framerate", "30",
+                     "-i", self.DEVICE,
+                     "-c:v", "copy", "-f", "mjpeg", "-"],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    bufsize=0)
+            except Exception as exc:
+                self.last_error = "%s: %s" % (type(exc).__name__, exc)
+                return False
+            self.owned = True
+            self.spawns += 1
+            self.spawn_t = time.time()
+            self.state = "starting"
+            self.reader = threading.Thread(target=self._read_frames,
+                                           args=(self.proc,), daemon=True)
+            self.reader.start()
+        self._publish("video.acquired", spawns=self.spawns)
+        return True
+
+    def _release(self):
+        with self.lock:
+            proc, self.proc, self.owned = self.proc, None, False
+        if proc is not None:
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+        self._publish("video.released")
+
+    def _publish(self, kind, **kw):
+        if self.bus is not None:
+            self.bus.publish(kind, **kw)
+
+    # -- the per-frame path -------------------------------------------------
+
+    def _read_frames(self, proc):
+        """Split JPEGs out of the mjpeg stream.
+
+        Frames are delimited by SOI (FFD8) and EOI (FFD9). This is safe rather
+        than merely usual: inside entropy-coded data every 0xFF is byte-stuffed
+        as FF 00, and restart markers are FFD0-FFD7, so FFD9 appears only as a
+        genuine EOI.
+
+        Length is still validated, because partial writes happen on this path
+        -- one of the existing shot files on the Pi is zero bytes.
+        """
+        buf = b""
+        fd = proc.stdout.fileno()
+        while self.running and proc.poll() is None:
+            try:
+                # os.read, not stdout.read1: with bufsize=0 Popen hands back a
+                # raw FileIO, which has no read1 -- and BufferedReader.read(n)
+                # would block for the FULL n bytes, holding frames hostage
+                # until the buffer filled. A single read syscall returning what
+                # is available is what a stream wants.
+                chunk = os.read(fd, 65536)
+            except Exception as exc:
+                # Recorded, not swallowed. The first version of this caught and
+                # broke silently, and the reader thread died on an
+                # AttributeError while `video state` cheerfully reported
+                # owned=true, frames=0 -- a capability reporting healthy while
+                # doing nothing is worse than one reporting failure.
+                self.last_error = "reader: %s: %s" % (type(exc).__name__, exc)
+                self._publish("video.reader_error", error=self.last_error)
+                break
+            if not chunk:
+                break
+            buf += chunk
+            while True:
+                i = buf.find(b"\xff\xd8")
+                if i < 0:
+                    # No SOI in hand: nothing here is the start of a frame.
+                    # Keep one trailing byte in case FF and D8 straddle reads.
+                    buf = buf[-1:]
+                    break
+                j = buf.find(b"\xff\xd9", i + 2)
+                if j < 0:
+                    buf = buf[i:]
+                    break
+                frame, buf = buf[i:j + 2], buf[j + 2:]
+                if len(frame) >= 128:
+                    self._push(frame)
+
+    def _push(self, frame):
+        now = time.time()
+        with self.lock:
+            self.ring.append((now, frame))
+            self.ring_bytes += len(frame)
+            while self.ring_bytes > self.RING_BYTES and len(self.ring) > 1:
+                _t, old = self.ring.popleft()
+                self.ring_bytes -= len(old)
+            self.last_frame_t = now
+            self.frames_total += 1
+        # NOTE: this does NOT set state. A frame arriving attests that the USB
+        # device produced bytes -- nothing more. Whether those bytes are a live
+        # picture is a question about content across several frames, and the
+        # watchdog is the single owner of that judgement.
+        #
+        # The first version set state="locked" here on every frame. At 30 fps
+        # that overwrote the watchdog's twice-a-second classification 30 times
+        # a second, so the daemon flapped between locked and frozen ~140 times
+        # while every `video state` sample returned "locked" -- the race was
+        # invisible to polling and only showed up in the event log. Two writers
+        # for one piece of state, which is the bug, not the frequency.
+
+    # -- the watchdog -------------------------------------------------------
+
+    def _watchdog(self):
+        """Respawn is decided by ffmpeg's liveness, NOT by a clock.
+
+        The distinction that matters, and it is not cosmetic:
+
+          frames stopped, process ALIVE  -> the stick is not locking. The input
+            is absent. Respawning cannot manufacture a signal, so publish
+            nosignal and do nothing, indefinitely.
+          frames stopped, process EXITED -> a wedge. Respawn.
+
+        A timer-driven respawn churns forever against a correct state. Text
+        mode 03h never locks, and with the Mach64 fitted a whole game run at
+        512x384 produces no frames and nothing is wrong. Both are correct
+        steady states that a retry loop would grind against for their entire
+        duration.
+
+        The alive-but-wedged case is deliberately NOT handled by a timeout. It
+        is indistinguishable from a correct no-lock without a positive signal,
+        and inventing a threshold to separate them would reintroduce exactly
+        the bug this design removes. If it is ever observed, it needs a real
+        signal, not a number.
+        """
+        while self.running:
+            time.sleep(0.5)
+            with self.lock:
+                owned, proc = self.owned, self.proc
+                age = time.time() - self.last_frame_t if self.last_frame_t else None
+                state = self.state
+                recent = [f for _t, f in list(self.ring)[-self.FROZEN_RUN:]]
+            # Hashing 8 frames once per half-second is ~240 KB/s of md5 --
+            # nothing next to a 4 Mbit/s stream, and it stays off the per-frame
+            # path where rule 1 cares.
+            frozen = None
+            if len(recent) >= self.FROZEN_RUN:
+                frozen = len(set(hashlib.md5(f).digest() for f in recent)) == 1
+            if not owned:
+                continue
+            if proc is not None and proc.poll() is not None:
+                # The process died. Respawn -- but a process that dies within
+                # seconds of every spawn is not a transient wedge, it is a
+                # device that cannot be opened at all (unplugged, or held by
+                # something else). Respawning that at full speed is the same
+                # churn this design set out to avoid, arriving from the other
+                # direction.
+                #
+                # The backoff is keyed on an OBSERVED fact -- this process
+                # could not stay up -- rather than on an inferred one. That is
+                # the distinction that makes it legitimate where a timeout
+                # against a correct no-lock was not.
+                lifetime = time.time() - self.spawn_t
+                with self.lock:
+                    if lifetime < 5.0:
+                        self.fast_failures += 1
+                    else:
+                        self.fast_failures = 0
+                    fails = self.fast_failures
+                self._publish("video.wedged", rc=proc.returncode,
+                              lifetime_s=round(lifetime, 2),
+                              fast_failures=fails)
+                self._release()
+                if fails:
+                    backoff = min(30.0, 2.0 ** min(fails, 5))
+                    with self.lock:
+                        self.state = "unavailable"
+                    time.sleep(backoff)
+                if self.running:
+                    self._acquire()
+                continue
+            # Frames arriving is NOT the same as picture arriving, and this
+            # rig proved it the hard way. Prediction said DOS text mode 03h
+            # would stop the stream; measurement on 2026-08-19 says the stick
+            # keeps delivering 30 fps of BIT-IDENTICAL frames instead -- 30
+            # frames, one distinct hash. The daemon reported "locked"
+            # throughout, which would have put a frozen text screen on the page
+            # captioned as live. That is exactly the lie this tool exists to
+            # not tell.
+            #
+            # So freshness is judged on content, not on arrival. This is the
+            # positive signal the design kept asking for: identical hashes
+            # attest "the source is repeating", where frame arrival attests
+            # only "the USB device is producing bytes".
+            # Before the first frame ever arrives there is no last_frame_t to
+            # age, so fall back to the spawn time. Without this the daemon sits
+            # in "starting" forever on a device that never delivers, which is
+            # the state it is least useful to be silent about.
+            if age is None:
+                age = time.time() - self.spawn_t if self.spawn_t else None
+
+            # One classifier, three outcomes, in order of what each is
+            # evidence of:
+            #   nosignal -- no bytes at all
+            #   frozen   -- bytes, but the same bytes: the source is repeating
+            #   locked   -- bytes that keep changing: a live picture
+            if age is not None and age > self.NOSIGNAL_AFTER_S:
+                new = "nosignal"
+            elif frozen is None:
+                new = state          # not enough frames yet to judge
+            else:
+                new = "frozen" if frozen else "locked"
+
+            if new != state:
+                with self.lock:
+                    self.state = new
+                self._publish("video.%s" % new,
+                              last_frame_age_s=round(age, 2) if age else None)
+
+    # -- queries ------------------------------------------------------------
+
+    def _recent(self, n):
+        with self.lock:
+            items = list(self.ring)[-n:] if n else list(self.ring)
+        return items
+
+    def commands(self):
+        return {"video": self._video, "burst": self._burst,
+                "framestats": self._framestats, "shot": self._shot,
+                "lastgood": self._lastgood}
+
+    # -- selection ----------------------------------------------------------
+
+    def _select(self, items):
+        """Duplicate-hash rejection, then brightest survivor.
+
+        Ported from grab() in bin/vcctrl-sweep so the two cannot drift, and the
+        reasoning is worth repeating rather than referencing:
+
+        Settle frames are BIT-IDENTICAL to each other; real picture never
+        repeats, because analog sampling noise differs every frame. A repeated
+        hash is therefore a positive identification of a settle frame, where
+        brightness is only a heuristic.
+
+        Step 4 -- returning nothing when every frame repeated -- is the point.
+        Brightness alone cannot distinguish a flat-black NO-LOCK from a
+        genuinely dark screen: it picks the least-black frame either way and
+        reports a number as though it meant something.
+
+        Measured on the live 30 fps stream 2026-08-19, because the original
+        claim was measured on 8 fps bursts and needed rechecking at the rate it
+        actually runs: 90 frames of a static mode-12h console gave 90 distinct
+        hashes, 0 repeated. The assumption holds at full rate.
+        """
+        digests = {}
+        for t, f in items:
+            digests.setdefault(hashlib.md5(f).hexdigest(), []).append((t, f))
+        live = [tf for group in digests.values() if len(group) == 1
+                for tf in group]
+        if not live:
+            return None, None, "every frame in the window was a duplicate"
+        try:
+            from PIL import Image, ImageStat
+        except ImportError:
+            return None, None, "PIL is not available on this host"
+        best, best_mean, errs = None, -1.0, []
+        for t, f in live:
+            try:
+                im = Image.open(io.BytesIO(f))
+                # DCT-domain downscale: decoding 1/8 scale is several times
+                # cheaper than a full decode and preserves the mean, which is
+                # all the selection needs. Measured against full decode below.
+                im.draft("L", (im.size[0] // 8, im.size[1] // 8))
+                m = ImageStat.Stat(im.convert("L")).mean[0]
+            except Exception as exc:
+                # Recorded rather than swallowed. The first version returned a
+                # bare None for three different causes -- no live frames, PIL
+                # missing, every decode failing -- and reported all of them as
+                # "every frame was a duplicate". A NameError on io.BytesIO
+                # (this module did not import io) therefore presented as a
+                # confident and wrong statement about the picture.
+                #
+                # Twice in one file now: an except that discards the reason
+                # turns a bug into a lie. A capability may report failure; it
+                # may not report a different failure than the one it had.
+                errs.append("%s: %s" % (type(exc).__name__, exc))
+                continue
+            if m > best_mean:
+                best, best_mean = (t, f), m
+        if best is None:
+            return None, None, "all %d candidate decodes failed: %s" % (
+                len(live), errs[0] if errs else "unknown")
+        return best, best_mean, len(live)
+
+    def _shot(self, req):
+        """One frame, selected -- or an explicit "no picture". The default API.
+
+        Never returns a frame when it cannot tell picture from no-lock. A shot
+        that hands back a plausible dark frame during a no-lock reintroduces
+        precisely the ambiguity _select exists to remove, and vcctrl-uvconfig
+        refuses to start on a null for that reason.
+        """
+        import base64
+        items = self._recent(int(req.get("n", 16)))
+        with self.lock:
+            state = self.state
+        if not items:
+            return {"ok": True, "picture": False, "state": state,
+                    "reason": "no frames in the ring"}
+        best, mean, live = self._select(items)
+        if best is None:
+            # `live` carries the actual reason in this branch.
+            return {"ok": True, "picture": False, "state": state,
+                    "reason": live, "considered": len(items)}
+        t, frame = best
+        with self.lock:
+            self.last_good = (t, frame, mean)
+        return {"ok": True, "picture": True, "state": state,
+                "mean": mean, "t": t, "age_s": round(time.time() - t, 3),
+                "considered": len(items), "live": live,
+                "bytes": len(frame),
+                "jpeg": base64.b64encode(frame).decode()}
+
+    def _lastgood(self, req):
+        """The last frame that was positively picture, with its age.
+
+        This is NOT the frozen-last-frame failure. The difference is entirely
+        the age: a silently frozen frame makes a KVM lie, while a frame
+        captioned "last locked picture, 4m12s ago" is the most useful thing on
+        the page during a no-lock -- and on the Mach64, where a whole game run
+        at 512x384 never locks, it may be the only picture available.
+        """
+        import base64
+        with self.lock:
+            lg = self.last_good
+            state = self.state
+        if lg is None:
+            return {"ok": True, "picture": False, "state": state,
+                    "reason": "nothing has been positively picture yet"}
+        t, frame, mean = lg
+        return {"ok": True, "picture": True, "state": state, "stale": True,
+                "mean": mean, "t": t, "age_s": round(time.time() - t, 3),
+                "jpeg": base64.b64encode(frame).decode()}
+
+    def _video(self, req):
+        action = req.get("action", "state")
+        if action == "state":
+            return {"ok": True, **self._state()}
+        if action == "release":
+            # Escape hatch for tools that still open /dev/video0 directly.
+            self._release()
+            return {"ok": True, **self._state()}
+        if action == "acquire":
+            ok = self._acquire()
+            return {"ok": ok, "error": self.last_error if not ok else None,
+                    **self._state()}
+        return {"ok": False, "error": "unknown video action: %r" % action}
+
+    def _state(self):
+        with self.lock:
+            age = (time.time() - self.last_frame_t) if self.last_frame_t else None
+            return {"state": self.state, "owned": self.owned,
+                    "frames": self.frames_total, "spawns": self.spawns,
+                    "ring_frames": len(self.ring),
+                    "ring_bytes": self.ring_bytes,
+                    "fast_failures": self.fast_failures,
+                    "last_error": self.last_error,
+                    "last_frame_age_s": round(age, 3) if age else None}
+
+    def _burst(self, req):
+        """RAW frames, labelled raw. Callers that want a judgement want shot.
+
+        The label is not decoration: settle frames after a device open or a
+        mode change are flat black, and a caller comparing the first and last
+        raw frames of a burst once reported 11% pixel difference on a provably
+        static screen.
+        """
+        n = int(req.get("n", 16))
+        items = self._recent(n)
+        import base64
+        return {"ok": True, "raw": True, "n": len(items),
+                "frames": [{"t": t, "jpeg": base64.b64encode(f).decode()}
+                           for t, f in items]}
+
+    def _framestats(self, req):
+        """Duplicate-hash statistics over a window. Diagnostic, not a judgement.
+
+        Exists because the selection algorithm rests on a measured claim --
+        settle frames are bit-identical, real picture never repeats -- and that
+        was measured on 8 fps bursts, not on a 30 fps persistent stream. This
+        is how the claim gets rechecked at the rate it will actually run.
+        """
+        items = self._recent(int(req.get("n", 90)))
+        digests = {}
+        for _t, f in items:
+            digests.setdefault(hashlib.md5(f).hexdigest(), 0)
+            digests[hashlib.md5(f).hexdigest()] += 1
+        counts = sorted(digests.values(), reverse=True)
+        return {"ok": True, "n": len(items), "distinct": len(digests),
+                "repeated": sum(1 for c in counts if c > 1),
+                "largest_group": counts[0] if counts else 0,
+                "sizes": [len(f) for _t, f in items[-8:]]}
+
+
 # The registry. A table in the source, in load order. Video, web, audio, reset
 # and files join this list; each is one entry and touches nothing above it.
-CAPABILITIES = [InputCapability, LedsCapability, PowerCapability]
+CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
+                VideoCapability]
+
+# Bind address for the web UI. Tailnet only, per the operator: Tailscale is the
+# authentication boundary and there is no password. Binding to the tailscale
+# address rather than 0.0.0.0 means the LAN cannot reach it at all, which is a
+# stronger statement than a firewall rule.
+WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "100.64.0.1")
+WEB_PORT = int(os.environ.get("VCCTRL_WEB_PORT", "8080"))
 
 
 def _pace(req):
@@ -753,6 +1231,7 @@ class Registry(object):
     """
 
     def __init__(self, devs):
+        self.devs = devs
         self.bus = Bus()
         self.activity = Activity()
         self.arbiter = Arbiter(self.bus)
@@ -761,7 +1240,13 @@ class Registry(object):
         self.routes = {}
         for cls in CAPABILITIES:
             try:
-                cap = cls(devs)
+                # Capabilities that publish take the bus; the original three
+                # do not, so the signature stays optional rather than forcing
+                # a churn through classes that have no use for it.
+                try:
+                    cap = cls(devs, self.bus)
+                except TypeError:
+                    cap = cls(devs)
                 cap.start()
             except Exception as exc:
                 self.failed[cls.name] = "%s: %s" % (type(exc).__name__, exc)
@@ -804,6 +1289,35 @@ class Registry(object):
                          ms=round((time.time() - t0) * 1000.0, 1),
                          detail=_summarise(cmd, req))
         return resp
+
+    def execute(self, req):
+        """Full command path, including the ones handled outside the routes.
+
+        `status`, `caps`, `events`, `activity` and `lock` live in handle()
+        rather than in a capability, so a caller that only used dispatch() saw
+        them as unknown commands. The web UI hit exactly that: state.json
+        returned nulls for lock and activity while cheerfully reporting ok.
+        """
+        return handle(self.devs, self, req)
+
+    def start_web(self):
+        """Started after the registry, because it is a view onto the others.
+
+        Failure here is reported and survivable: no browser, everything else
+        untouched. That is rule 2 with the one capability most likely to break.
+        """
+        try:
+            import vcweb
+            web = vcweb.WebCapability(self, WEB_BIND, WEB_PORT)
+            web.start()
+        except Exception as exc:
+            self.failed["web"] = "%s: %s" % (type(exc).__name__, exc)
+            sys.stderr.write("capability web failed to start: %s\n"
+                             % self.failed["web"])
+            return None
+        self.caps["web"] = web
+        sys.stderr.write("web ui on http://%s:%d/\n" % (WEB_BIND, WEB_PORT))
+        return web
 
     def report(self):
         out = {name: {"ok": True} for name in self.caps}
@@ -979,6 +1493,7 @@ def main():
         sys.stderr.write("warning: USB4VC has not opened %s\n" % (
             [k for k, v in held.items() if not v],))
     registry = Registry(devs)
+    registry.start_web()
     serve(devs, registry)
     return 0
 

@@ -1,0 +1,336 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>g2k</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg:#14161a; --panel:#1c1f26; --line:#2b303a; --fg:#dfe3ea;
+    --dim:#8a93a3; --ok:#5ac27a; --warn:#e0b341; --bad:#e05c5c;
+    --accent:#7aa2f7; --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+           padding:8px 14px; background:var(--panel);
+           border-bottom:1px solid var(--line); }
+  h1 { font-size:14px; font-weight:600; margin:0; letter-spacing:.02em; }
+  .pill { font:12px/1 var(--mono); padding:5px 9px; border-radius:999px;
+          border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
+  .pill.on  { color:var(--ok);   border-color:#2c5c3c; }
+  .pill.off { color:var(--bad);  border-color:#5c2c2c; }
+  .pill.mid { color:var(--warn); border-color:#5c4c2c; }
+  .grow { flex:1; }
+  button { font:12px/1 system-ui,sans-serif; color:var(--fg);
+           background:#232833; border:1px solid var(--line); border-radius:6px;
+           padding:6px 10px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.danger:hover { border-color:var(--bad); color:#ffb4b4; }
+  main { display:grid; grid-template-columns:minmax(0,1fr) 320px; gap:0;
+         height:calc(100vh - 45px); }
+  @media (max-width:900px){ main{ grid-template-columns:1fr; height:auto; } }
+  #stage { position:relative; display:flex; align-items:center;
+           justify-content:center; background:#000; min-height:50vh;
+           overflow:hidden; }
+  canvas { max-width:100%; max-height:100%; image-rendering:pixelated;
+           display:block; }
+  #veil { position:absolute; inset:0; display:none; flex-direction:column;
+          align-items:center; justify-content:center; gap:8px;
+          background:rgba(10,11,14,.82); text-align:center; padding:20px; }
+  #veil.show { display:flex; }
+  #veil .big { font:600 15px var(--mono); color:var(--warn); }
+  #veil .sub { color:var(--dim); max-width:46ch; font-size:13px; }
+  aside { border-left:1px solid var(--line); background:var(--panel);
+          display:flex; flex-direction:column; min-height:0; }
+  section { padding:10px 12px; border-bottom:1px solid var(--line); }
+  h2 { font:600 11px/1 system-ui; letter-spacing:.09em; text-transform:uppercase;
+       color:var(--dim); margin:0 0 8px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  .kv { display:flex; justify-content:space-between; gap:10px;
+        font:12px/1.7 var(--mono); }
+  .kv span:last-child { color:var(--dim); }
+  #log { flex:1; overflow-y:auto; padding:8px 12px; font:11px/1.6 var(--mono);
+         min-height:160px; }
+  #log div { display:flex; gap:8px; padding:1px 0; }
+  #log .t { color:#5b6373; flex:none; }
+  #log .k { flex:none; width:11ch; }
+  #log .d { color:var(--dim); word-break:break-all; }
+  .k-cmd{color:var(--accent)} .k-lock{color:var(--warn)}
+  .k-taint{color:var(--bad);font-weight:600} .k-vid{color:var(--ok)}
+  #kbd { border:1px solid var(--line); border-radius:6px; padding:7px 9px;
+         font-size:12px; color:var(--dim); cursor:pointer; }
+  #kbd.armed { border-color:var(--ok); color:var(--ok); }
+</style>
+
+<header>
+  <h1>g2k</h1>
+  <span id="p-video" class="pill">video …</span>
+  <span id="p-lock"  class="pill">lock …</span>
+  <span id="p-power" class="pill">power …</span>
+  <span id="p-fps"   class="pill">– fps</span>
+  <span class="grow"></span>
+  <div id="kbd" tabindex="0">click to capture keyboard</div>
+</header>
+
+<main>
+  <div id="stage">
+    <canvas id="screen" width="640" height="480"></canvas>
+    <div id="veil">
+      <div class="big" id="veil-title">no signal</div>
+      <div class="sub" id="veil-sub"></div>
+      <div class="sub" id="veil-age"></div>
+    </div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Send</h2>
+      <div class="row">
+        <button data-combo="ctrl,alt,delete" class="danger">Ctrl-Alt-Del</button>
+        <button data-key="esc">Esc</button>
+        <button data-key="enter">Enter</button>
+        <button data-key="f8">F8</button>
+        <button data-key="tab">Tab</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Power</h2>
+      <div class="row">
+        <button data-power="on">On</button>
+        <button data-power="off" class="danger">Off</button>
+        <button data-power="cycle" class="danger">Cycle</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>State</h2>
+      <div class="kv"><span>running</span><span id="s-inflight">–</span></div>
+      <div class="kv"><span>last event</span><span id="s-lastev">–</span></div>
+      <div class="kv"><span>frames</span><span id="s-frames">–</span></div>
+      <div class="kv"><span>viewers</span><span id="s-viewers">–</span></div>
+    </section>
+
+    <h2 style="padding:10px 12px 0">Activity</h2>
+    <div id="log"></div>
+  </aside>
+</main>
+
+<script>
+// ---------------------------------------------------------------- elements
+const $ = id => document.getElementById(id);
+const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
+const veil = $('veil');
+
+// ---------------------------------------------------------------- video
+let frames = 0, lastFrameAt = 0, fpsWin = [];
+let ws, wsAlive = false;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { wsAlive = true; };
+  ws.onclose = () => { wsAlive = false; setTimeout(connect, 1000); };
+  ws.onerror = () => { try { ws.close(); } catch(e){} };
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') return;      // state notice
+    const blob = new Blob([ev.data], {type:'image/jpeg'});
+    // createImageBitmap decodes off the main thread. Both target browsers
+    // support it; drawing a decoded bitmap keeps the paint cheap.
+    createImageBitmap(blob).then(bmp => {
+      if (cv.width !== bmp.width || cv.height !== bmp.height) {
+        cv.width = bmp.width; cv.height = bmp.height;
+      }
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close();
+      frames++; lastFrameAt = performance.now();
+      fpsWin.push(lastFrameAt);
+      while (fpsWin.length && lastFrameAt - fpsWin[0] > 2000) fpsWin.shift();
+    }).catch(()=>{});
+  };
+}
+connect();
+
+// ---------------------------------------------------------------- keyboard
+// Keyboard Lock is Chromium-only, so in Firefox and Safari the browser and OS
+// keep their reserved chords -- Cmd-anything on Safari, Ctrl-W/T/N and F11 on
+// Firefox. preventDefault covers the rest. The Send buttons exist for what it
+// cannot: that is a limitation of the platform, not of the daemon.
+const CODE = {
+  Enter:'enter', Escape:'esc', Backspace:'backspace', Tab:'tab', Space:'space',
+  ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
+  Home:'home', End:'end', PageUp:'pgup', PageDown:'pgdn',
+  Insert:'insert', Delete:'delete',
+  ShiftLeft:'lshift', ShiftRight:'rshift', ControlLeft:'lctrl',
+  ControlRight:'rctrl', AltLeft:'lalt', AltRight:'ralt',
+  CapsLock:'capslock', NumLock:'numlock', ScrollLock:'scrolllock',
+  Minus:'minus', Equal:'equal', BracketLeft:'leftbrace',
+  BracketRight:'rightbrace', Backslash:'backslash', Semicolon:'semicolon',
+  Quote:'apostrophe', Backquote:'grave', Comma:'comma', Period:'dot',
+  Slash:'slash', IntlBackslash:'102nd', ContextMenu:'menu',
+  MetaLeft:'leftmeta', MetaRight:'rightmeta', Pause:'pause',
+  PrintScreen:'sysrq',
+  NumpadAdd:'kpplus', NumpadSubtract:'kpminus', NumpadMultiply:'kpasterisk',
+  NumpadDivide:'kpslash', NumpadDecimal:'kpdot', NumpadEnter:'kpenter',
+};
+for (let i=1;i<=12;i++) CODE['F'+i] = 'f'+i;
+for (const c of 'abcdefghijklmnopqrstuvwxyz') CODE['Key'+c.toUpperCase()] = c;
+for (let i=0;i<=9;i++) { CODE['Digit'+i] = ''+i; CODE['Numpad'+i] = 'kp'+i; }
+
+let armed = false;
+const kbdBox = $('kbd');
+function setArmed(v) {
+  armed = v;
+  kbdBox.classList.toggle('armed', v);
+  kbdBox.textContent = v ? 'keyboard captured — click away to release'
+                         : 'click to capture keyboard';
+}
+kbdBox.addEventListener('click', () => { setArmed(true); kbdBox.focus(); });
+kbdBox.addEventListener('blur', () => { if (armed) { setArmed(false); send({t:'release'}); }});
+
+function send(o) { if (wsAlive) ws.send(JSON.stringify(o)); }
+
+addEventListener('keydown', e => {
+  if (!armed) return;
+  const k = CODE[e.code];
+  if (!k) return;
+  e.preventDefault();
+  if (e.repeat) return;   // the target does its own repeat; doubling here
+  send({t:'down', k});     // would type twice at a DOS prompt
+}, {capture:true});
+
+addEventListener('keyup', e => {
+  if (!armed) return;
+  const k = CODE[e.code];
+  if (!k) return;
+  e.preventDefault();
+  send({t:'up', k});
+}, {capture:true});
+
+// ---------------------------------------------------------------- buttons
+document.querySelectorAll('[data-key]').forEach(b =>
+  b.onclick = () => post('key', {keys:[b.dataset.key]}));
+document.querySelectorAll('[data-combo]').forEach(b =>
+  b.onclick = () => post('combo', {keys:b.dataset.combo.split(',')}));
+document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
+  const a = b.dataset.power;
+  // Confirm before cutting mains. This is a 1995 machine that may have a
+  // sweep on it, and a stray click is expensive.
+  if (a !== 'on' && !confirm(`Power ${a} the g2k?\n\nIf a sweep is running this will destroy it.`)) return;
+  post('power', {action:a});
+});
+
+async function post(cmd, body) {
+  try {
+    const r = await fetch('/cmd', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(Object.assign({cmd}, body))});
+    const j = await r.json();
+    if (!j.ok) note(j.error || 'refused');
+  } catch (e) { note(String(e)); }
+}
+
+// ---------------------------------------------------------------- log
+let seq = 0;
+const logEl = $('log');
+const CLS = k => k.startsWith('lock.broken') ? 'k-taint'
+              : k.startsWith('lock') || k === 'input.refused' ? 'k-lock'
+              : k.startsWith('video') ? 'k-vid' : 'k-cmd';
+
+function note(text) { addLine(new Date(), 'ui', text, 'k-lock'); }
+function addLine(d, kind, detail, cls) {
+  const row = document.createElement('div');
+  row.innerHTML = `<span class="t">${d.toTimeString().slice(0,8)}</span>`
+    + `<span class="k ${cls||CLS(kind)}">${kind}</span>`
+    + `<span class="d"></span>`;
+  row.lastChild.textContent = detail || '';
+  logEl.appendChild(row);
+  while (logEl.children.length > 400) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function pollEvents() {
+  try {
+    const r = await fetch('/events?since=' + seq);
+    const j = await r.json();
+    if (j.missed) note('— gap in log, some events were not seen —');
+    for (const e of (j.events||[])) {
+      seq = Math.max(seq, e.seq);
+      let d = e.detail || '';
+      if (e.kind === 'cmd') d = `${e.cmd} ${d}`.trim() + (e.by ? `  ←${e.by}` : '');
+      else d = Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
+                 .map(([k,v])=>`${k}=${v}`).join(' ');
+      addLine(new Date(e.t*1000), e.kind, d);
+    }
+  } catch (e) {}
+}
+
+// ---------------------------------------------------------------- status
+const fmtAge = s => s == null ? '–'
+  : s < 90 ? s.toFixed(0)+'s'
+  : s < 5400 ? (s/60).toFixed(1)+'m' : (s/3600).toFixed(1)+'h';
+
+async function pollState() {
+  let j;
+  try { j = await (await fetch('/state.json')).json(); }
+  catch (e) { pill('p-video','off','daemon unreachable'); return; }
+
+  const v = j.video || {};
+  // A frozen last frame is what makes a KVM lie, so an unlocked stream is
+  // covered and captioned rather than left looking live.
+  if (v.state === 'locked') {
+    pill('p-video','on','video locked'); veil.classList.remove('show');
+  } else {
+    pill('p-video','mid','video ' + (v.state||'?'));
+    const T = {nosignal:'no signal', frozen:'frozen — no live picture'};
+    $('veil-title').textContent = T[v.state] || v.state || '—';
+    $('veil-sub').textContent = v.state === 'frozen'
+      ? 'Frames are still arriving, but every one is byte-identical, so the '
+      + 'source is repeating rather than drawing. DOS text mode 03h does this. '
+      + 'The image behind this notice is real but not live.'
+      : v.state === 'nosignal'
+      ? 'No frames are arriving. On this rig that is often correct rather than '
+      + 'a fault: with the Mach64 fitted, a game run at 512x384 is outside the '
+      + 'capture stick entirely.'
+      : '';
+    $('veil-age').textContent = v.last_frame_age_s != null
+      ? 'last frame ' + fmtAge(v.last_frame_age_s) + ' ago' : '';
+    veil.classList.add('show');
+  }
+
+  const L = j.lock || {};
+  if (L.owner) pill('p-lock','mid',`input held by ${L.owner} · ${fmtAge(L.held_s)}`);
+  else pill('p-lock','on','input free');
+
+  const inf = j.inflight || [];
+  $('s-inflight').textContent = inf.length
+    ? `${inf[0].cmd} · ${fmtAge(inf[0].age_s)}` : 'idle';
+  $('s-lastev').textContent  = fmtAge(j.last_event_age_s);
+  $('s-frames').textContent  = v.frames ?? '–';
+  $('s-viewers').textContent = j.viewers ?? '–';
+  $('p-fps').textContent = (fpsWin.length ? (fpsWin.length/2).toFixed(0) : 0) + ' fps';
+}
+
+function pill(id, cls, text) {
+  const el = $(id);
+  el.className = 'pill ' + cls;
+  el.textContent = text;
+}
+
+async function pollPower() {
+  try {
+    const r = await fetch('/cmd', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({cmd:'power', action:'state'})});
+    const j = await r.json();
+    if (j.ok) pill('p-power', j.power.on ? 'on':'off',
+                   'power ' + (j.power.on ? 'on':'off'));
+  } catch (e) {}
+}
+
+setInterval(pollState, 1000);
+setInterval(pollEvents, 1000);
+setInterval(pollPower, 15000);
+pollState(); pollEvents(); pollPower();
+</script>
