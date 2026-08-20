@@ -117,6 +117,18 @@ went. A white arrow on a light-grey dialog need not differ by 60 greyscale
 levels from what it covers. If the destination matters, move onto a **dark
 background** or compare in colour rather than luminance.
 
+**Threshold has a floor and a ceiling, and 60 is near the ceiling.** Measured
+on this stick by the webkvm session: a still frame has ~1.0 mean absolute
+difference with peaks near 40. So
+
+    below ~45   you are reading the analog noise floor
+    around 45   the lowest honest threshold on this capture path
+    above ~60   you are requiring contrast the DESTINATION may not have
+
+The 60 used above was chosen to make departure unambiguous and it did that.
+For arrival, prefer 45 — the extra sensitivity costs little once the object is
+also required to be cursor-sized, since noise does not arrive in 12x20 blocks.
+
 ## 5. Why no DOS test can prove this, which is why Windows was used
 
 Both obvious approaches are structurally incapable, not merely awkward:
