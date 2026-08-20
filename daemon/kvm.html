@@ -447,10 +447,11 @@
     </button>
     <select id="zoom" aria-label="zoom">
       <option value="fit">Fit</option>
+      <option value="fill">Fill window</option>
       <option value="crop">Crop to picture</option>
+      <option value="1.5">1.5× fit</option>
       <option value="2">2× fit</option>
-      <option value="4">4× fit</option>
-      <option value="8">8× fit</option>
+      <option value="3">3× fit</option>
     </select>
     <button id="dbtn" aria-label="switch between light and dark">◐</button>
     <button id="gbtn" aria-label="settings">⚙</button>
@@ -1624,12 +1625,28 @@ if (matchMedia('(max-width:640px)').matches)
   setTab(localStorage.getItem('vcctrl.tab') || 'none');
 
 // ══════════════════════════════════════════════════════════ zoom
-// The game draws 320x240 or 512x384 CENTRED inside a 640x480 capture, so most
-// of the frame is dead margin and the picture ends up tiny. "Crop to picture"
-// finds the actual drawn region and scales that to fill the stage, which is
-// what you want almost every time; the fixed factors are there for looking
-// closely at one part of a screen.
+// Two different things waste space here, and they need two different answers.
+//
+//   THE CAPTURE LETTERBOXES. A game drawing 320x240 or 512x384 sits centred
+//   inside the 640x480 frame with dead margin around it. "Crop to picture"
+//   finds that region and scales it up.
+//
+//   THE STAGE IS NOT 4:3. It is whatever is left after the header and the
+//   command line -- usually much wider than tall -- so fitting a 4:3 picture
+//   leaves black down both sides, and trimming the capture's margin cannot
+//   help because the limit is height, not width. That is why "Crop to
+//   picture" looked the same as "Fit" on a full-screen text mode: it WAS the
+//   same, to the pixel. "Fill window" is the answer to this one. It covers
+//   the stage and pushes the overflow past the edges, which you drag back.
+//
+// The numbered steps are multiples of FIT, not of capture pixels. 4x and 8x
+// are gone: on a 640x480 source they show a sixteenth of the screen as very
+// large squares, which is not something anyone needed to look at.
+const ZOOMS = ['fit', 'fill', 'crop', '1.5', '2', '3'];
 let zoomMode = localStorage.getItem('vcctrl.zoom') || 'fit';
+// A stored mode that no longer exists would leave the select blank while
+// still applying the vanished factor.
+if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
 let panX = 0, panY = 0, crop = null;
 
 function mediaEl() {
@@ -1669,6 +1686,15 @@ function measureCrop() {
   const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
   if (bw < 32 || bh < 32) return null;     // implausibly small: ignore
   if (bw > w * 0.94 && bh > h * 0.94) return null;  // no letterbox to crop
+  // A letterbox is SYMMETRIC: a smaller mode centred in the capture leaves
+  // equal margins on both sides. A text screen whose lines happen to be short
+  // ALSO has a bounding box smaller than the frame, and cropping to that is
+  // wrong -- it trims live screen, and it moves every time the text does.
+  // Requiring the margins to match tells the two apart. Measured against a
+  // real DOS prompt: 551 of 640 columns drawn, all of the slack on one side,
+  // correctly rejected.
+  const lm = x0, rm = w - 1 - x1, tm = y0, bm = h - 1 - y1;
+  if (Math.abs(lm - rm) > w * 0.06 || Math.abs(tm - bm) > h * 0.06) return null;
   return {x0, y0, bw, bh, w, h};
 }
 
@@ -1682,14 +1708,17 @@ function applyZoom() {
   const s0 = Math.min(W / nw, H / nh);     // scale object-fit:contain applied
   let k = 1, tx = panX, ty = panY;
 
-  if (zoomMode === 'crop') {
+  if (zoomMode === 'crop' || zoomMode === 'fill') {
+    // Both modes act on the picture rather than on the capture: if there is a
+    // letterbox, fill fills with what is inside it, not with the black.
     if (!crop) crop = measureCrop();
-    if (crop) {
-      k = Math.min(W / crop.bw, H / crop.bh) / s0;
-      // Move the crop's centre to the stage centre, in post-scale pixels.
-      tx += -((crop.x0 + crop.bw / 2) - nw / 2) * s0 * k;
-      ty += -((crop.y0 + crop.bh / 2) - nh / 2) * s0 * k;
-    }
+    const r = crop || {x0: 0, y0: 0, bw: nw, bh: nh};
+    // min => all of that region is visible; max => it covers the stage.
+    k = (zoomMode === 'crop' ? Math.min(W / r.bw, H / r.bh)
+                             : Math.max(W / r.bw, H / r.bh)) / s0;
+    // Move the region's centre to the stage centre, in post-scale pixels.
+    tx += -((r.x0 + r.bw / 2) - nw / 2) * s0 * k;
+    ty += -((r.y0 + r.bh / 2) - nh / 2) * s0 * k;
   } else if (zoomMode !== 'fit') {
     // Multiples of FIT, not of capture pixels. The old scale meant "one
     // capture pixel per CSS pixel", so on a phone where fit is already about
@@ -1718,7 +1747,9 @@ $('zoom').onchange = () => {
 addEventListener('resize', applyZoom);
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.
-setInterval(() => { if (zoomMode === 'crop') { crop = null; applyZoom(); } }, 5000);
+setInterval(() => {
+  if (zoomMode === 'crop' || zoomMode === 'fill') { crop = null; applyZoom(); }
+}, 5000);
 
 // Drag to pan when the picture is larger than the stage.
 (function pan() {

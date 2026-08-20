@@ -739,6 +739,122 @@ def test_page_dom_references():
     check("settings loop guards against a missing element",
           "if (!el) continue;" in h)
 
+    # Parse the script the way a browser would, when there is an engine to do
+    # it with. It cannot catch an undefined name, but it catches the class of
+    # edit that leaves the page silent -- a stray brace from a block move, a
+    # half-applied replacement.
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node") or shutil.which("nodejs")
+    if node:
+        blocks = re.findall(r"<script>(.*?)</script>", h, re.S)
+        check("the page has exactly one script block", len(blocks) == 1,
+              len(blocks))
+        for i, b in enumerate(blocks):
+            with tempfile.NamedTemporaryFile("w", suffix=".js",
+                                             delete=False) as f:
+                f.write(b)
+                path = f.name
+            r = subprocess.run([node, "--check", path],
+                               capture_output=True, text=True)
+            os.unlink(path)
+            check("script block %d parses" % i, r.returncode == 0,
+                  r.stderr.strip().splitlines()[:3])
+    else:
+        print("  SKIP  no node: script not parsed")
+
+
+def test_zoom_modes():
+    """The zoom control must offer only modes the script implements, and the
+    modes must do what their labels say.
+
+    Reported from the rig: "Fit is still not actually fitting the screen, with
+    a lot of space around it and it's almost the same as Crop to picture". Both
+    halves were true and neither was a rendering bug. The stage is much wider
+    than 4:3, so a fitted picture leaves black down the sides; and on a
+    full-screen text mode there is no letterbox, so cropping to the picture
+    returned the picture -- k = 1.000, identical to fit, exactly as computed.
+    The missing mode was "cover the stage", so that is what was added.
+    """
+    print("\nzoom modes")
+    import os
+    import re
+
+    page = os.path.join(HERE, os.pardir, "daemon", "kvm.html")
+    with open(page, encoding="utf-8") as f:
+        h = f.read()
+
+    sel = re.search(r'<select id="zoom".*?</select>', h, re.S).group(0)
+    markup = re.findall(r'<option value="([^"]+)"', sel)
+    arr = re.search(r"const ZOOMS = \[([^\]]*)\]", h).group(1)
+    script = re.findall(r"'([^']+)'", arr)
+    # A value in one and not the other is silent either way: a stored mode the
+    # script rejects resets to fit, a listed mode the script never validates
+    # would sail past the guard.
+    check("every <option> is a known mode and vice versa",
+          markup == script, "%s vs %s" % (markup, script))
+    check("4x and 8x are gone", "4" not in markup and "8" not in markup,
+          markup)
+
+    # ── the arithmetic, ported from applyZoom() ────────────────────────────
+    def k_for(mode, W, H, nw, nh, crop=None):
+        s0 = min(W / nw, H / nh)
+        if mode in ("crop", "fill"):
+            x0, y0, bw, bh = crop or (0, 0, nw, nh)
+            k = (min(W / bw, H / bh) if mode == "crop"
+                 else max(W / bw, H / bh)) / s0
+        elif mode == "fit":
+            k = 1.0
+        else:
+            k = float(mode)
+        return k, s0
+
+    # A real desktop stage: everything left after the header and command line.
+    W, H, nw, nh = 1580, 600, 640, 480
+
+    k, s0 = k_for("fit", W, H, nw, nh)
+    check("fit is exactly the identity", k == 1.0, k)
+    check("control: fit leaves the sides black on a wide stage",
+          nw * s0 * k < W - 100, nw * s0 * k)
+
+    k, s0 = k_for("fill", W, H, nw, nh)
+    fw, fh = nw * s0 * k, nh * s0 * k
+    check("fill covers the stage in both axes",
+          fw >= W - 0.5 and fh >= H - 0.5, (fw, fh))
+    check("fill does not overshoot -- one axis lands exactly",
+          abs(fw - W) < 0.5 or abs(fh - H) < 0.5, (fw, fh))
+
+    k, _ = k_for("crop", W, H, nw, nh)
+    check("control: with no letterbox, crop IS fit -- the reported symptom",
+          k == 1.0, k)
+
+    # 512x384 centred in the capture: the case crop exists for.
+    k, s0 = k_for("crop", W, H, nw, nh, (64, 48, 512, 384))
+    check("crop scales a centred 512x384 mode to the full stage height",
+          abs(384 * s0 * k - H) < 0.5, 384 * s0 * k)
+
+    # ── what counts as a letterbox, ported from measureCrop() ─────────────
+    def is_letterbox(x0, y0, x1, y1, w=640, h=480):
+        pad = 4
+        x0 = max(0, x0 - pad); y0 = max(0, y0 - pad)
+        x1 = min(w - 1, x1 + pad); y1 = min(h - 1, y1 + pad)
+        bw, bh = x1 - x0 + 1, y1 - y0 + 1
+        if bw < 32 or bh < 32:
+            return False
+        if bw > w * 0.94 and bh > h * 0.94:
+            return False
+        lm, rm, tm, bm = x0, w - 1 - x1, y0, h - 1 - y1
+        return abs(lm - rm) <= w * 0.06 and abs(tm - bm) <= h * 0.06
+
+    # Measured off the live rig at a DOS prompt: the text stopped at column
+    # 550, so the bounding box was 551 wide with every bit of the slack on one
+    # side. Cropping to it would have trimmed live screen.
+    check("a short last line is not a letterbox",
+          not is_letterbox(0, 0, 550, 478))
+    check("control: a centred 512x384 mode is", is_letterbox(64, 48, 575, 431))
+    check("control: a centred 320x240 mode is", is_letterbox(160, 120, 479, 359))
+
 
 if __name__ == "__main__":
     test_key_table()
@@ -758,6 +874,7 @@ if __name__ == "__main__":
     test_uniform_frame_is_not_picture()
     test_websocket_accept_vector()
     test_page_dom_references()
+    test_zoom_modes()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)

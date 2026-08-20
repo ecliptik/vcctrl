@@ -90,6 +90,26 @@ print(",".join(sorted(w for w in who if w and w != "None")) or ("harness" if who
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# PAGE ONLY. vcweb reads kvm.html and themes.css from disk on every request, so
+# changing the browser side needs no restart at all -- and a deploy that does
+# not restart cannot interrupt a run, which is the whole reason the guard above
+# exists. Use this for anything that is purely front-end; it is safe to run
+# while the target is mid-cell, and the operator picks it up on reload.
+#
+# Copy to a temp name and mv into place: the mv is atomic within the
+# filesystem, so no request can ever be served half a file.
+if [ "${1:-}" = "--page" ]; then
+  for f in kvm.html themes.css; do
+    [ -f "$SRC/daemon/$f" ] || continue
+    scp -q "$SRC/daemon/$f" "$HOST:/tmp/$f.new"
+    ssh "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
+      && mv -f /opt/vcctrl/.$f.tmp /opt/vcctrl/$f' && rm -f /tmp/$f.new"
+    echo "installed $f (no restart)"
+  done
+  exit 0
+fi
+
 if [ "${VCCTRL_FORCE:-0}" != "1" ]; then
   guard_busy || exit 1
 else
