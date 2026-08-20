@@ -386,10 +386,37 @@ still two orders of magnitude below the 40 s it replaced.
 the unix socket over ssh, so if TLS, `serve` or the cert ever fails, input and
 power still work and the machine is not stranded.
 
+### Considered and not taken: Caddy with the Tailscale plugin
+
+Proposed by the operator, on the strength of a working Caddyfile from another
+stack, for automatic certificate renewal. **Checked rather than assumed, and
+the premise does not hold here: `tailscale serve` already renews
+automatically.** `tailscaled` is itself the ACME client --
+`/var/lib/tailscale/certs/` holds `acme-account.key.pem` alongside the
+certificate, and the live cert is a 90-day Let's Encrypt one it obtained and
+will replace on its own. Caddy's Tailscale integration would obtain certs
+through the same mechanism, so it would add a layer without adding the
+property it was proposed for.
+
+Against that, one real cost: another process on a box with **680 MB free and no
+swap**, where `tailscaled` alone is already 96 MB. Nothing here needs what
+Caddy is good at -- there is one backend, the daemon serves its own content,
+and compression is pointless on JPEG and PCM.
+
+**Caddy would be the right answer the moment this Pi serves a second thing.**
+One config with several backends beats several `serve` mappings, and its access
+log would be genuinely useful (this daemon deliberately logs no requests, since
+per-request logging into journald is what took the Pi off the network for 30
+minutes -- FINDINGS 19). Revisit then; not before.
+
 **Certificate renewal runs weekly and on boot**, as a systemd timer rather than
-a cron entry. `tailscale serve` renews on its own, so this is belt and braces
--- but a cert that silently fails to renew takes the KVM offline in exactly the
-situation where you most want to look at the machine. The reason it is a timer:
+a cron entry. `tailscale serve` renews on its own, so the timer is not the
+mechanism -- but it is not merely belt and braces either. **Tailscale renews
+lazily, when something asks it to serve TLS.** A KVM that nobody opens for
+three months is exactly the case where no handshake triggers a renewal, and it
+is also exactly the case where you next open it because something has gone
+wrong. The timer's job is to guarantee a trigger that does not depend on
+someone happening to visit. The reason it is a timer:
 cron's `@reboot` fires before tailscaled has connected, so an on-boot renewal
 would run against a down control plane and fail silently. A timer can say
 `After=tailscaled.service` and settle for three minutes first, and its result
