@@ -830,6 +830,22 @@ class VideoCapability(Capability):
     # measured: 90 frames, 90 distinct hashes) and short enough to notice a
     # mode change within a third of a second.
     FROZEN_RUN = 8
+    # A frame whose pixels are all the same value is not a picture, however
+    # unrepeated it is. Duplicate-hash rejection asks "is this frame a repeat?"
+    # and a uniform frame can pass that -- the check answers a different
+    # question from the one being asked.
+    #
+    # Measured at the 1/8 scale the selector decodes at: real captures range
+    # 77-226 even when almost entirely black (mean 0.10), while the stick's
+    # no-lock constant is exactly 0. Four is far below any real frame and far
+    # above a constant.
+    #
+    # The vcctrl session found this the expensive way: two in-game frames,
+    # byte-identical twenty seconds apart, every pixel exactly 7, reported as
+    # PICTURE mean 7.0 -- which turned "capture relocks during gameplay" into a
+    # result that was false. My selector is the algorithm theirs was ported
+    # from and had the same gap by construction.
+    MIN_RANGE = 4
 
     def __init__(self, devs, bus=None):
         Capability.__init__(self, devs)
@@ -1166,10 +1182,16 @@ class VideoCapability(Capability):
             # unless something kept the last live frame, and "black rectangle"
             # is indistinguishable from a powered-off machine.
             if new == "locked":
+                # Validate before storing. The watchdog used to keep the newest
+                # frame unconditionally while locked, so a uniform frame became
+                # "the last frame that was picture" -- which is exactly the
+                # black lastgood reported earlier, and it was never only a
+                # naming problem.
                 with self.lock:
-                    if self.ring:
-                        t, _sq, f = self.ring[-1]
-                        self.last_good = (t, f, None)
+                    newest = self.ring[-1] if self.ring else None
+                if newest is not None and self._is_picture(newest[2]):
+                    with self.lock:
+                        self.last_good = (newest[0], newest[2], None)
 
             if new != state:
                 with self.lock:
@@ -1298,7 +1320,7 @@ class VideoCapability(Capability):
             from PIL import Image, ImageStat
         except ImportError:
             return None, None, "PIL is not available on this host"
-        best, best_mean, errs = None, -1.0, []
+        best, best_mean, errs, flat = None, -1.0, [], 0
         for t, f in live:
             try:
                 im = Image.open(io.BytesIO(f))
@@ -1306,7 +1328,12 @@ class VideoCapability(Capability):
                 # cheaper than a full decode and preserves the mean, which is
                 # all the selection needs. Measured against full decode below.
                 im.draft("L", (im.size[0] // 8, im.size[1] // 8))
-                m = ImageStat.Stat(im.convert("L")).mean[0]
+                g = im.convert("L")
+                lo, hi = g.getextrema()
+                if hi - lo < self.MIN_RANGE:
+                    flat += 1          # a constant, not a dark picture
+                    continue
+                m = ImageStat.Stat(g).mean[0]
             except Exception as exc:
                 # Recorded rather than swallowed. The first version returned a
                 # bare None for three different causes -- no live frames, PIL
@@ -1323,9 +1350,27 @@ class VideoCapability(Capability):
             if m > best_mean:
                 best, best_mean = (t, f), m
         if best is None:
+            if flat and not errs:
+                # Say which of the two it is. "No picture" and "a constant" are
+                # different facts, and the second one names a specific hardware
+                # state worth recognising.
+                return None, None, ("all %d non-repeated frames were a uniform "
+                                    "constant -- the stick is emitting a blank, "
+                                    "not capturing a dark screen" % flat)
             return None, None, "all %d candidate decodes failed: %s" % (
                 len(live), errs[0] if errs else "unknown")
         return best, best_mean, len(live)
+
+    def _is_picture(self, frame):
+        """True if the frame has any spread at all. See MIN_RANGE."""
+        try:
+            from PIL import Image
+            im = Image.open(io.BytesIO(frame))
+            im.draft("L", (im.size[0] // 8, im.size[1] // 8))
+            lo, hi = im.convert("L").getextrema()
+            return (hi - lo) >= self.MIN_RANGE
+        except Exception:
+            return False
 
     def _shot(self, req):
         """One frame, selected -- or an explicit "no picture". The default API.

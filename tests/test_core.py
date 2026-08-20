@@ -603,6 +603,67 @@ def test_theme_contrast():
     check("every theme's light/dark pair exists", True)
 
 
+def test_uniform_frame_is_not_picture():
+    """A frame with no variance is not a picture, however unrepeated it is.
+
+    Duplicate-hash rejection asks "is this frame a repeat?", and a uniform
+    frame passes that -- the check answers a different question from the one
+    being asked. The vcctrl session found it the expensive way: two in-game
+    frames byte-identical twenty seconds apart, every pixel exactly 7, reported
+    as PICTURE mean 7.0, which turned "capture relocks during gameplay" into a
+    result that was false. This selector is the algorithm theirs was ported
+    from and had the same gap.
+
+    Measured at the 1/8 scale the selector decodes at: real captures span
+    77-226 even when almost entirely black, and the stick's no-lock constant is
+    exactly 0.
+    """
+    print("\nuniform frames")
+    import io
+    import threading
+    from PIL import Image
+
+    class Fake(vcctrld.VideoCapability):
+        def __init__(self):
+            self.lock = threading.Lock()
+
+    def const(v):
+        b = io.BytesIO()
+        Image.new("RGB", (640, 480), (v, v, v)).save(b, "JPEG", quality=90)
+        return b.getvalue()
+
+    def scene():
+        # A dark scene with a little content -- the case that must NOT be
+        # rejected, since "dark screen" and "no signal" are different facts.
+        im = Image.new("RGB", (640, 480), (2, 2, 2))
+        for x in range(40, 240):
+            for y in range(40, 60):
+                im.putpixel((x, y), (90, 90, 90))
+        b = io.BytesIO()
+        im.save(b, "JPEG", quality=90)
+        return b.getvalue()
+
+    v = Fake()
+    check("a uniform frame is not picture", not v._is_picture(const(7)))
+    check("a dark frame with content IS picture", v._is_picture(scene()))
+
+    # Distinct hashes, so duplicate rejection cannot catch these: only the
+    # variance floor can.
+    items = [(0.0, 1, const(7)), (1.0, 2, const(8)), (2.0, 3, const(9))]
+    best, _mean, reason = v._select(items)
+    check("selector rejects several DIFFERENT constants", best is None)
+    check("and says they were constants, not that they were duplicates",
+          "uniform constant" in (reason or ""), reason)
+
+    best, mean, _live = v._select(items + [(3.0, 4, scene())])
+    check("a real frame among constants still wins", best is not None)
+
+    # Control: the floor must be able to accept something, or it is not a floor
+    # but a rejection.
+    check("control: the check is not simply rejecting everything",
+          v._is_picture(scene()) and not v._is_picture(const(0)))
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -618,6 +679,7 @@ if __name__ == "__main__":
     test_audio_levels()
     test_watchdogs_survive_one_pass()
     test_theme_contrast()
+    test_uniform_frame_is_not_picture()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
