@@ -194,7 +194,7 @@
        captures the keyboard, so these three are duplicates on a phone. */
     /* The clip stays on a phone: it is inside the field, costs no row, and
        typing a file in is if anything more useful there. */
-    body #grabbtn, body #soundwrap, body #powerbtn { display:none; }
+    body #grabbtn, body #soundwrap, body #powerbtn, body #bufbtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -1084,6 +1084,15 @@
     <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
             aria-controls="pop-keys"
             title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys ▾</span></button>
+    <!-- ALWAYS RECORDING, so this does not start anything -- which is why it
+         is not called Record. The ring has been rolling since the daemon came
+         up; the button opens a window onto what it is already holding. It
+         lives here rather than in the screen menu because a control nobody
+         can find is a control that does not exist, and it was reported that
+         way within an hour of shipping. -->
+    <button id="bufbtn" aria-haspopup="true" aria-expanded="false"
+            aria-controls="scrub"
+            title="Look back through the last half minute the daemon kept"><span class="bi">⏱️</span><span class="bl">Buffer ▾</span></button>
     <!-- NOT display:none. A file input that is display:none is not focusable,
          and .click() on it is ignored outright by some browsers -- which is
          exactly why the button appeared to do nothing. Visually hidden but
@@ -2441,6 +2450,17 @@ for (const k of Object.keys(OPTS)) {
 // phone is a menu you cannot use.
 const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn',
              keys: 'keysbtn'};
+// The scrub overlay is a menu too, but it is not a .pop -- it is anchored to
+// the picture rather than to its button, because a timeline the width of a
+// button would be a timeline you cannot use. So it drives its own caret and
+// its own aria-expanded rather than going through openPop.
+function setBufOpen(on) {
+  const b = $('bufbtn');
+  b.setAttribute('aria-expanded', on ? 'true' : 'false');
+  const lab = b.querySelector('.bl');
+  lab.textContent = lab.textContent.replace(/[\u25b4\u25be]\s*$/, '').trim()
+                  + ' ' + (on ? '\u25be' : '\u25b4');
+}
 let openPopName = null;
 
 // THE CARET SAYS WHERE THE MENU WILL GO. Keys, Sound and Power live in the
@@ -2716,6 +2736,7 @@ async function enterReview() {
   // through it is that it stops changing while you look.
   holdBuffer(true);
   $('scrub').hidden = false;
+  setBufOpen(true);
   drawMap();
   await seekIdx(tl.frames.length - 1);
 }
@@ -2726,6 +2747,7 @@ function exitReview() {
   tl = null;
   bufFrom = bufTo = null;
   $('scrub').hidden = true;
+  setBufOpen(false);
   $('review').style.display = 'none';
   $('scrubsel').style.display = 'none';
   holdBuffer(false);
@@ -2866,6 +2888,8 @@ function setVeilHidden(v) {
 $('dimbtn').onclick = () => { setVeilHidden(true); holdBuffer(false); };
 $('reviewbtn').onclick = () => { setVeilHidden(true); enterReview(); };
 $('reviewitem').onclick = () => { closePop(); enterReview(); };
+// Press it again to put it away, the way every other menu on this page works.
+$('bufbtn').onclick = () => { closePop(); reviewing ? exitReview() : enterReview(); };
 $('veilback').onclick = () => setVeilHidden(false);
 // Save works on whatever is on screen: the last live frame while the stream is
 // frozen, the current one otherwise. Saving the dimmed version would be saving
@@ -3903,6 +3927,7 @@ function showPanel(which) {
 
 $('keysbtn').onclick = () => openPop('keys');
 for (const n of Object.keys(POP)) setCaret(n, false);
+setBufOpen(false);
 
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.

@@ -1392,6 +1392,20 @@ HARNESS = r"""
   emit(`cadcolour ${getComputedStyle(q('[data-combo]')).color
                     !== getComputedStyle(q('[data-key="esc"]')).color ? 1 : 0} `
      + `${document.getElementById('refresh').closest('#pop-zoom') ? 1 : 0}`);
+  // The buffer control is in the strip where it can be found, and it carries
+  // the same caret rule as the menus beside it -- up when closed, because it
+  // opens upward. It was in the screen menu, under a label about picture
+  // size, and was reported undiscoverable within the hour.
+  {
+    const bb = document.getElementById('bufbtn');
+    const lab = () => bb.querySelector('.bl').textContent.trim();
+    const up = t => t.charCodeAt(t.length - 1) === 0x25b4 ? 1 : 0;
+    const inStrip = bb.closest('#cmdbar') ? 1 : 0;
+    setBufOpen(true);
+    const opened = up(lab());
+    setBufOpen(false);
+    emit(`bufbtn ${inStrip} ${up(lab()) === 1 && opened === 0 ? 1 : 0}`);
+  }
   closePop();
   emit(`caretshut ${tipUp('keys')} ${tipUp('zoom')}`);
   document.getElementById('keysbtn').click();
@@ -1751,6 +1765,10 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][0] == 1.0, got["cadcolour"])
     check("Refresh video is in the screen menu, not the power menu",
           got["cadcolour"][1] == 1.0, got["cadcolour"])
+    check("the buffer control is in the strip, where it can be found",
+          got["bufbtn"][0] == 1.0, got["bufbtn"])
+    check("and its caret follows the same rule as the menus beside it",
+          got["bufbtn"][1] == 1.0, got["bufbtn"])
     check("a fitted picture does not overflow vertically",
           got["fitscroll"][0] <= 0, got["fitscroll"])
     check("and a fitted stage is not scrollable at all",
