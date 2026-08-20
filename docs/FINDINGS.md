@@ -550,3 +550,96 @@ expensive enough to be the fault. Worth checking wherever an observer shares
 resources with the observed -- and it is the strongest argument yet for the
 persistent-daemon architecture the web-KVM work is building, which removes the
 per-call connection entirely rather than making it cheaper.
+
+
+---
+
+## 20. A correct signal, overruled by a belief  [diagnosed 2026-08-19]
+
+The other failures in this document are proxies going wrong: a stale LED level
+read as current state, a returned prompt read as a successful command, file
+arrival read as readiness. Each is a reading that could not distinguish success
+from failure.
+
+This one is not that. **The reading was right, available for hours, and
+discarded.**
+
+### What was heard
+
+The operator, from the next room, after every reboot:
+
+> btw on reboots, sometimes I think there are too many keyboard buffers, there
+> are 4 rapid beeps after the PNP boot beep
+
+That is the BIOS type-ahead buffer overflowing. It holds 15 keystrokes and
+beeps once per key rejected past that. The beep is not a symptom that needs
+interpreting -- it is the buffer reporting its own overflow, in hardware,
+correctly, every time.
+
+A fix was made: blind menu selection dropped from 209 attempts to 12. The beeps
+got quieter. That was reported as fixed.
+
+Hours later, same operator:
+
+> I still keep on hearing like 8 or so beeps whenever you reboot, I thought that
+> was fixed?
+
+### What was actually wrong
+
+The budget was expressed in **attempts** while the thing that overflows counts
+**keystrokes**. Every attempt is digit-then-Enter:
+
+    vcctrl-collect     12 attempts  =  24 keys   into a 15-key buffer
+    vcctrl_common      20 attempts  =  40 keys   into a 15-key buffer
+
+A unit error, hiding inside a cap that looked conservative. The menu consumes
+two. Of the remaining twenty-two, some overflow -- one beep each, which is what
+was audible -- and the rest **sit in the buffer until COMMAND.COM next reads
+input**, which may be minutes later:
+
+    C:\>5C:\MTCP\PUT.BAT M64A
+    Bad command or file name
+
+That is a stray keystroke from the boot menu arriving inside a log transfer and
+prefixing it. Keystrokes from one operation landing inside another, minutes
+later. The transfer silently did nothing.
+
+### Why the bad fix survived
+
+The attempt count went down and the noise went down with it, so the metric that
+was being watched improved. Nobody looked at the screen afterwards -- and the
+screen showed eight `Bad command or file name` lines the entire time, one call
+away, for hours.
+
+**The beep had already answered the question and was overruled by a belief
+about a fix.** That is worse than a proxy failing, because a proxy that cannot
+distinguish success from failure at least never claimed to. Here the
+distinguishing evidence existed, was correct, was reported by a human, and lost
+an argument to a number that had improved.
+
+### The rule
+
+**A partial improvement in a metric is not evidence that the fault is gone.**
+When someone reports that a symptom persists, the symptom outranks the fix.
+
+And the narrower one, worth stating because it generalises past this rig:
+**bound a resource in the units the resource is measured in.** The buffer holds
+keys. Anything counted in attempts, rounds, or iterations is a proxy for keys
+and will drift from it the moment the number of keys per attempt changes.
+
+### What replaced it
+
+- The bound is keystrokes (6, against a 15-key buffer), in
+  `vcctrl_common.spam_menu` -- **one** implementation, because the loop existed
+  twice with different constants, which is why the fix had to be found twice.
+- `flush_input_line()` sends Esc before the first command after a reboot, so a
+  survivor cannot prefix it.
+- The reboot path **verifies the profile** by reading NET's `[NET] ready`
+  banner off the screen. Pressing 5 and booting NET are different events, and a
+  missed menu boots something else that also reaches a prompt.
+
+That last check was unaffordable at 40 s per capture and costs 0.2 s through
+the KVM daemon's frame ring. **Making a check cheap is what turns an assumption
+into a verification** -- the second time in one day that the same trade paid
+off, and the strongest practical argument for the daemon architecture in
+sec. 19.
