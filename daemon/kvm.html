@@ -116,6 +116,10 @@
        a glance, and it was the one thing the operator missed when the rail was
        decluttered. The other three are in the State panel. */
     #c-lock, #c-power, #c-kbd { display:none; }
+    /* Which computer this is beats which transport is carrying it: the
+       transport is in the State panel and nobody has ever needed it urgently.
+       "What am I typing into" is the question a second machine created. */
+    body #c-xport { display:none; }
     /* The rail scrolled sideways, so the gear sat off the right edge and could
        not be tapped. Nothing in a status bar should require scrolling to
        reach. The tab bar already has a settings tab, and the theme toggle
@@ -726,6 +730,7 @@
     <span id="state" aria-live="polite">—</span>
     <span id="c-lock" class="chip"><span class="chiplabel">input </span><b>—</b></span>
     <span id="c-power" class="chip" title="Mains power as the plug reports it"><span class="chiplabel">power </span><b>—</b></span>
+    <span id="c-board" class="chip" style="display:none"><span class="chiplabel">target </span><b>—</b></span>
     <span id="c-xport" class="chip"><span class="chiplabel">link </span><b>—</b></span>
     <span id="c-kbd" class="chip" title="Whether keys typed here are going to the target"><span class="chiplabel">kbd </span><b>idle</b></span>
     <span class="grow"></span>
@@ -904,6 +909,7 @@
   </div>
   <div class="hint" style="margin:8px 0 0">Off and Cycle cut the mains: the
     target does not shut down first.</div>
+  <div class="hint" id="plugid" style="margin:4px 0 0">—</div>
   <div class="poprow" style="margin-top:9px">
     <button id="refresh" title="Restart the capture if the picture is stuck">Refresh video</button>
   </div>
@@ -1355,10 +1361,21 @@ document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   // swap video cards, and energising a board somebody's hands are inside is a
   // worse outcome than any lost sweep. The wording says so rather than
   // reciting a generic warning.
+  // NAME THE PLUG, NOT THE MACHINE. One socket serves whichever machine is
+  // connected, and nothing on this rig can see what that is -- the plug does
+  // not report what is plugged into it, and the board tells you which
+  // PROTOCOL BOARD is fitted, not which computer is on the mains. So the
+  // wording states what the daemon actually knows: the socket it will switch,
+  // by the name written on it. Saying "the g2k" would be a guess dressed as
+  // a fact, which is the failure this whole page exists to avoid.
+  const plug = powerNow.alias
+    ? `"${powerNow.alias}"${powerNow.model ? ' (' + powerNow.model + ')' : ''}`
+    : 'the target\'s mains socket';
+  const board = boardNow.target ? `\n\nBoard fitted: ${boardNow.target}.` : '';
   const WARN = {
-    on:    'Switch the vcctrl-kvm target ON?\n\nMake sure the case is closed and nobody is working inside it.',
-    off:   'Power OFF the vcctrl-kvm target?\n\nIf a sweep is running this will destroy it.',
-    cycle: 'Power CYCLE the vcctrl-kvm target?\n\nRails drop for 15s and it takes ~90s to reach a prompt. If a sweep is running this will destroy it.',
+    on:    `Switch mains ON at ${plug}?\n\nMake sure the case is closed and nobody is working inside it.${board}`,
+    off:   `Cut mains at ${plug}?\n\nNo clean shutdown. If a sweep is running this destroys it.${board}`,
+    cycle: `Cycle mains at ${plug}?\n\nRails drop for 15s and it takes ~90s to reach a prompt. No clean shutdown. If a sweep is running this destroys it.${board}`,
   };
   if (!confirm(WARN[a] || `Power ${a}?`)) return;
   post('power', {action:a});
@@ -2054,6 +2071,8 @@ async function pollState() {
   $('s-lastev').textContent = fmtAge(j.last_event_age_s);
   $('s-frames').textContent = v.frames ?? '–';
   $('s-viewers').textContent = j.viewers ?? '–';
+  showPower(j.power);
+  showBoard(j.board);
   // What this tab is actually pulling. Two tabs open is two of these, and on
   // this rig that is the difference between a smooth picture and a stuttering
   // one -- worth being able to see rather than guess at.
@@ -2088,26 +2107,53 @@ async function pollState() {
       : 'audio ' + (A.state || 'unavailable'));
   }
 }
-let powerFails = 0;
-async function pollPower() {
-  // Back off when the plug is unreachable. The same EHOSTUNREACH every 20 s
-  // filled the log with identical lines and buried everything else: a fault
-  // worth reporting once is not worth reporting thirty times.
-  if (powerFails > 2 && powerFails % 15 !== 0) { powerFails++; return; }
-  const j = await post('power', {action:'state'});
-  if (j && j.ok) {
-    powerFails = 0;
-    pill('p-power', j.power.on ? 'on' : 'off', 'power ' + (j.power.on ? 'on' : 'off'));
-  } else {
-    powerFails++;
-    pill('p-power', 'off', 'power unreachable');
-  }
+// The daemon caches the plug and refreshes it on a heartbeat, so the page
+// READS that rather than querying the plug itself. The old code POSTed a live
+// `power state` every 20 s from every open tab: mains control of a 1995
+// machine behind one network request per tab per interval, and a backoff
+// hand-rolled here to stop a dead plug filling the log.
+let powerNow = {}, boardNow = {};
+function showPower(p) {
+  powerNow = p || {};
+  // TRI-STATE. `on: null` means the last refresh failed -- "the machine is
+  // off" and "I cannot reach the plug" are opposite facts and used to be the
+  // same word here.
+  const on = powerNow.on;
+  pill('p-power', on === true ? 'on' : on === false ? 'off' : 'mid',
+       'power ' + (on === true ? 'on' : on === false ? 'off' : 'unknown'));
+  const bits = [];
+  if (powerNow.alias) bits.push('"' + powerNow.alias + '"');
+  if (powerNow.model) bits.push(powerNow.model);
+  if (powerNow.host) bits.push(powerNow.host);
+  // Aged, never presented as instantaneous: it is a cache, and saying so is
+  // the difference between a reading and a claim.
+  const age = powerNow.stale ? 'not answering'
+            : powerNow.age_s != null ? 'read ' + fmtAge(powerNow.age_s) + ' ago'
+            : null;
+  $('plugid').textContent =
+    (bits.join(' · ') || 'plug identity unknown')
+    + (age ? ' · ' + age : '')
+    + (powerNow.reason ? ' · ' + powerNow.reason : '');
+}
+function showBoard(b) {
+  boardNow = b || {};
+  const el = $('c-board');
+  // What am I typing into. The BOARD is Apple Lisa/Mac/ADB; the TARGET is a
+  // Macintosh Plus, and the second one is the question anyone actually has.
+  const t = boardNow.target || boardNow.name;
+  el.style.display = t ? '' : 'none';
+  if (!t) return;
+  el.querySelector('b').textContent = t;
+  el.style.color = boardNow.stale ? 'var(--yellow)' : 'var(--muted)';
+  el.title = boardNow.name
+    ? boardNow.name + ' (board ' + boardNow.id + ')'
+      + (boardNow.stale ? ' — from the journal, may be a previous run' : '')
+    : 'no board reported';
 }
 applyVolume();
 setInterval(pollState, 1500);
 setInterval(pollEvents, 1500);
-setInterval(pollPower, 20000);
-pollState(); pollEvents(); pollPower();
+pollState(); pollEvents();
 
 // ══════════════════════════════════════════════════════════ tabs (phone)
 // Exactly one panel at a time, and SCREEN means none -- the picture is the

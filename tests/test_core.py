@@ -950,6 +950,35 @@ HARNESS = """
     out.push(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
   }
 
+  // Power is TRI-STATE. "the machine is off" and "I cannot reach the plug"
+  // are opposite facts, and a two-valued reading of a cached field reports
+  // the instrument's state as the target's -- the failure this rig has
+  // produced in three separate places.
+  {
+    const word = () => document.querySelector('#c-power b').textContent.trim();
+    showPower({alias: 'retro-rig-plug', model: 'EP10(US)',
+               host: '192.0.2.46', on: true, age_s: 2, stale: false});
+    const a = word();
+    showPower({alias: 'retro-rig-plug', on: false, age_s: 2, stale: false});
+    const b = word();
+    showPower({alias: 'retro-rig-plug', on: null, age_s: 212, stale: true,
+               reason: 'EHOSTUNREACH'});
+    const c = word(), plug = document.getElementById('plugid').textContent;
+    out.push(`power3 ${a === 'on' && b === 'off' && c === 'unknown' ? 1 : 0} ` +
+             `${plug.includes('retro-rig-plug') && plug.includes('not answering') ? 1 : 0}`);
+
+    // The board chip answers "what am I typing into", and says nothing when
+    // it does not know.
+    const chip = document.getElementById('c-board');
+    showBoard({id: 3, name: 'Apple Lisa/Mac/ADB', target: 'Macintosh Plus',
+               stale: false});
+    const shown = getComputedStyle(chip).display !== 'none'
+                  && chip.querySelector('b').textContent === 'Macintosh Plus';
+    showBoard({id: null, name: null, target: null, reason: 'usb4vc not running'});
+    const hidden = getComputedStyle(chip).display === 'none';
+    out.push(`board2 ${shown ? 1 : 0} ${hidden ? 1 : 0}`);
+  }
+
   // Full screen: nothing but the picture, and the controls come back as
   // overlays rather than by taking their space back -- reflowing the stage
   // every time you reach for a control is the opposite of the point.
@@ -1183,6 +1212,15 @@ def test_zoom_layout_in_a_browser():
           got["preview"])
     check("control: a preview does not change the selection",
           got["selkept"][0] == 1.0, got["selkept"])
+
+    check("power reads on / off / unknown, not on / off",
+          got["power3"][0] == 1.0, got["power3"])
+    check("control: the plug names itself and says when it stopped answering",
+          got["power3"][1] == 1.0, got["power3"])
+    check("the target chip names the machine, not the board",
+          got["board2"][0] == 1.0, got["board2"])
+    check("control: and says nothing when the board is unknown",
+          got["board2"][1] == 1.0, got["board2"])
 
     # Full screen has to actually give the picture the room, and the bars have
     # to come back without moving it.
