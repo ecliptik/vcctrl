@@ -21,8 +21,9 @@ design is worth keeping and it has one sharp edge: a test function that only
 appends to FAILURES still RETURNS NORMALLY, so pytest counts it as passed.
 `pytest tests/test_core.py` reported "17 passed" on this suite while nothing
 was asserting anything -- and that number was cited as evidence for a merge.
-The autouse fixture below closes that: under pytest, any check that fails
-during a test fails that test. Under `python3` nothing changes.
+tests/conftest.py closes that: under pytest, any check that fails during a
+test fails that test, reported as a failure and not counted as passed. Under
+`python3` nothing changes.
 """
 
 import importlib.util
@@ -53,32 +54,11 @@ def check(name, cond, detail=""):
         print("  FAIL  %s %s" % (name, detail))
         FAILURES.append(name)
 
-
-try:
-    import pytest as _pytest
-except ImportError:                      # `python3 tests/test_core.py` path
-    _pytest = None
-
-if _pytest is not None:
-    @_pytest.fixture(autouse=True)
-    def _checks_must_pass():
-        """Fail the test under pytest if any check() failed inside it.
-
-        Done as a fixture rather than by making check() raise, because the
-        whole value of check() is that it keeps going: a single test here
-        asserts a dozen related invariants and seeing all twelve verdicts is
-        the point. This keeps that, and still refuses to let the test pass.
-
-        Per-test rather than one assertion at the end of the module, so the
-        failure is attributed to the test that produced it and so pytest's
-        -k filtering and any ordering plugin cannot skip past the guard.
-        """
-        first = len(FAILURES)
-        yield
-        failed = FAILURES[first:]
-        if failed:
-            _pytest.fail("check() failures: %s" % ", ".join(failed),
-                         pytrace=False)
+# Under pytest, a test that only appends to FAILURES would otherwise return
+# normally and be counted as passed. tests/conftest.py turns that into a real
+# failure. It lives there rather than here because only a conftest hook can
+# reach the call phase, and doing it in a teardown fixture gets the test
+# labelled an "error" while still counting toward "passed".
 
 
 # ---------------------------------------------------------------- fakes
