@@ -1244,6 +1244,11 @@ function meter(pcm) {
 // ------------------------------------------------------------------ settings
 for (const k of Object.keys(OPTS)) {
   const el = $('opt-' + k);
+  // Not every key is a checkbox -- `v` is the settings version. Without this
+  // guard the loop threw on the first non-toggle key, and because that runs at
+  // top level it took every line after it with it: themes, tabs, polling,
+  // input. The whole page went unresponsive from one missing element.
+  if (!el) continue;
   el.checked = !!OPTS[k];
   el.onchange = () => {
     OPTS[k] = el.checked;

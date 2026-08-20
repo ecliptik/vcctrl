@@ -703,6 +703,43 @@ def test_websocket_accept_vector():
     check("control: the vector rejects the off-by-one GUID", bad != ACCEPT)
 
 
+def test_page_dom_references():
+    """Every element the page's script reaches for must exist in its markup.
+
+    Three outages tonight were one missing element or one undeclared name at
+    top level: a settings key with no checkbox, a const read before its
+    declaration, a watchdog touching an attribute its class lacks. In a script
+    that runs at top level, one throw takes every line after it -- so the whole
+    page dies and the symptom is "unresponsive", or one stuck status chip, or a
+    tab bar that does nothing. None of those name the cause.
+
+    Syntax checking does not catch it: the page parsed cleanly every time.
+    """
+    print("\npage DOM references")
+    import os
+    import re
+
+    page = os.path.join(HERE, os.pardir, "daemon", "kvm.html")
+    with open(page, encoding="utf-8") as f:
+        h = f.read()
+    ids = set(re.findall(r"\$\('([\w-]+)'\)", h))
+    present = set(re.findall(r'id="([\w-]+)"', h))
+    missing = sorted(i for i in ids if i not in present)
+    check("every $('id') in the script exists in the markup",
+          not missing, missing)
+
+    # The settings loop looks up $('opt-' + key) for every key in OPTS, so any
+    # key without a checkbox must be tolerated rather than assumed.
+    m = re.search(r"const OPTS = \{([^}]*)\}", h)
+    keys = re.findall(r"(\w+)\s*:", m.group(1)) if m else []
+    for k in keys:
+        if "opt-%s" % k not in present:
+            check("OPTS key %r has no checkbox -- loop must guard" % k,
+                  "if (!el) continue;" in h, "no guard found")
+    check("settings loop guards against a missing element",
+          "if (!el) continue;" in h)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -720,6 +757,7 @@ if __name__ == "__main__":
     test_theme_contrast()
     test_uniform_frame_is_not_picture()
     test_websocket_accept_vector()
+    test_page_dom_references()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
