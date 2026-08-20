@@ -76,6 +76,8 @@ def main(argv):
     except AttributeError:
         pass
 
+    if "--verify" in argv:
+        return verify()
     backup = "--no-backup" not in argv
     reboot = "--no-reboot" not in argv
 
@@ -94,38 +96,86 @@ def main(argv):
         return 2
     print("  capture locked (brightness %.1f)" % mean)
 
-    if backup:
-        print("\n== backup ==")
-        dos("COPY C:\\UNIVBE\\UNIVBE.DRV C:\\UNIVBE\\UNIVBE.BAK")
-        dos("Y")            # answer any overwrite prompt; harmless if none
-        dos("COPY C:\\UNIVBE\\UVCONFIG.DAT C:\\UNIVBE\\UVCONFIG.BAK")
-        dos("Y")
-        print("  UNIVBE.BAK / UVCONFIG.BAK written")
-        print("  rollback: COPY C:\\UNIVBE\\UNIVBE.BAK C:\\UNIVBE\\UNIVBE.DRV")
+    # ------------------------------------------------------------------
+    # REFUSE. This tool cannot do this job, and on 2026-08-19 it proved it by
+    # leaving the rig broken for six hours.
+    #
+    # UVCONFIG.EXE is an interactive full-screen configurator. It writes
+    # UNIVBE.DRV and UVCONFIG.DAT AS IT RUNS, so by the time anything can
+    # decide whether to continue, the files are already changed. The earlier
+    # version backed up, launched it, and then used at_prompt() to decide
+    # whether it had finished -- but at_prompt() is a BIOS-level Caps Lock
+    # probe that returns True while a program is running and reading nothing
+    # (FINDINGS sec. 20). So it reported "uvconfig completed without asking
+    # anything", rebooted, and left a half-written mode table advertising
+    # 320x240 on a Mach64-CT, which cannot double-scan and has no such mode.
+    # The game then picked that mode as closest-match to its own 320x240 and
+    # rendered nothing at all. Every "engine defect" diagnosed downstream was
+    # the engine faithfully using a mode table that was a lie.
+    #
+    # AND IT CANNOT BE FIXED BY BEING BRAVER. The configurator writes to the
+    # text buffer at 0xB800. In mode 12h -- the graphics mode the capture stick
+    # needs -- those writes land in memory that is not displayed, so the menu is
+    # invisible to the harness AND to anyone at the monitor. In text mode 03h it
+    # is visible on the monitor but the stick cannot lock 70Hz. There is no mode
+    # in which the harness and the configurator can both see the screen.
+    #
+    # So: prepare and verify, never perform. The rule this encodes is the one
+    # that would have saved the six hours -- REFUSE TO WRITE ANYTHING UNLESS
+    # THE WHOLE PROCEDURE CAN COMPLETE. A machine left neither configured nor
+    # untouched is worse than one left alone.
+    print("\n== REFUSED: this tool cannot run UVCONFIG, and will not start it ==")
+    print()
+    print("  UVCONFIG.EXE is interactive and writes its config as it runs, so")
+    print("  a tool that cannot finish it must not begin it. It is also")
+    print("  invisible in mode 12h, which is the mode capture requires -- so")
+    print("  neither this harness nor a person at the monitor can read its")
+    print("  menus while the machine is capturable.")
+    print()
+    print("  RUN IT AT THE MACHINE. The procedure, in full:")
+    print()
+    print("    C:\\VGACAP\\MODE03          (text mode -- capture goes blind)")
+    print("    C:\\UNIVBE\\UVCONFIG.EXE    (detect the card, save, exit)")
+    print("    C:\\VGACAP\\MODE12          (restore capture)")
+    print("    Ctrl-Alt-Del                (AUTOEXEC loads the new config)")
+    print()
+    print("  Read what it prints. It names the chip it detected and any modes")
+    print("  it is withholding -- on the Mach64-CT it reports that 320x200 and")
+    print("  320x240 are unavailable because the board cannot double-scan, and")
+    print("  that line is the difference between a working rig and six hours.")
+    print()
+    print("  Then run:  vcctrl-uvconfig --verify")
+    print("  which reads the resulting configuration back out of a cell log")
+    print("  and says whether it took.")
+    return 2
 
-    print("\n== uvconfig ==")
-    dos("CD \\UNIVBE")
-    dos("UVCONFIG", settle=10.0)
 
-    shot, mean = grab("uv-after")
-    if shot is None:
-        print("  NO SIGNAL after uvconfig. It may have set a mode the capture")
-        print("  stick cannot lock (it is 60Hz-only firmware). STOPPING --")
-        print("  the machine is probably fine but this tool is now blind.")
-        return 1
+def verify():
+    """Check what configuration actually loaded, from a cell's own log.
 
-    print("  frame: %s" % shot)
-    if at_prompt():
-        print("  back at a DOS prompt -- uvconfig completed without asking")
-        print("  anything.")
-    else:
-        print("\n  *** UVCONFIG IS SHOWING SOMETHING AND IS WAITING. ***")
-        print("  STOPPING here deliberately, without pressing a key.")
-        print("  Look at %s and drive it by hand." % shot)
-        print("  This is the swap path the rehearsal could not reproduce; the")
-        print("  screens are unknown, and UniVBE's config pages include mode")
-        print("  tables where a wrong key picks a different refresh rate.")
-        return 1
+    Reads the machine rather than the files on disk: a mode list is what the
+    running system OFFERS, which is the thing that matters and the thing that
+    was wrong. File sizes and timestamps looked correct throughout the incident.
+    """
+    print("== verify: reading the loaded configuration ==")
+    print()
+    print("  Run a cell first, then check its SDL log on the target:")
+    print()
+    print('    FIND /I "oem_string"  C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
+    print('    FIND /I "0x01F8"      C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
+    print('    FIND /I "MODESET: id=" C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
+    print('    FIND /I "LFB-decision" C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
+    print('    FIND /I "FB-INIT"     C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
+    print()
+    print("  A correctly configured Mach64-CT shows:")
+    print("    oem_string='Universal VESA VBE 6.70'")
+    print("    0x01F8            no matches   (320x240 needs double scanning)")
+    print("    LFB-decision      use_lfb=1    (taken unaided; no FORCE_LFB)")
+    print()
+    print("  total_vram identifies the CARD through the shim -- 2048 KB on the")
+    print("  Mach64, 4096 on the ViRGE -- while the mode table only reflects the")
+    print("  driver. They sit two lines apart and attest different layers.")
+    return 0
 
     if not reboot:
         print("\n  --no-reboot: the new UNIVBE.DRV is on disk but NOT in effect.")

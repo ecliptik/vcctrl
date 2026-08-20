@@ -332,6 +332,19 @@ def main(argv):
         print("== done in %.0fs ==" % (time.time() - t0))
         return 0
     finally:
+        # The game leaves the display in a mode the capture stick cannot lock,
+        # so every cell ends blind unless the console mode is put back. Observed
+        # 2026-08-19: a post-cell read of the log returned "no picture" six
+        # times in a row against a perfectly healthy machine, because the mode
+        # was never restored. Do this BEFORE releasing anything, and do it even
+        # on the failure paths -- a cell that died is exactly when someone needs
+        # to see the screen.
+        try:
+            vc("type", "C:\\VGACAP\\MODE12", check=False)
+            vc("key", "enter", check=False)
+            time.sleep(3)
+        except Exception:
+            pass
         drop_lock()
         release()
 
