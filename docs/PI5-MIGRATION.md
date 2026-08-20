@@ -366,6 +366,17 @@ the timing path for every keystroke and every LED poll, and the harness has
 already produced four separate timing bugs on the *old* hardware. Nothing short
 of a measured run proves the new machine did not move something.
 
+### 6-0. The number to carry forward
+
+**Two runs of one configuration on one machine differ by 0.10 in the arm
+delta.** That is the floor under every future comparison anyone makes with
+this instrument, and it is worth more than the phase-6 PASS. A difference
+smaller than 0.10 between two PUMP runs is not evidence of anything, whatever
+changed between them.
+
+Measured, not assumed: Pi 5 run 1 gave +1.30 and run 2 gave +1.20, thirty
+minutes apart, same hardware, same declared configuration, manifests identical.
+
 ### 6a. Acceptance criteria, fixed before the run
 
 **Written down before any Pi 5 number existed**, which is the only time a
@@ -664,6 +675,45 @@ run 2 passes with a manifest byte-identical to the baseline's. But the margin
 is thinner than one run made it look, and anyone who later wants to resolve a
 delta difference of 0.1 should know that two runs of the same configuration
 already differ by that much.
+
+### 6f. Do not drift-correct the delta — the correction makes it worse
+
+Applying the one-cell bias to each of the three runs:
+
+    run       naive    slope/s      bias    corrected
+    Pi 3      +1.30   -3.810e-4   -0.051      +1.351
+    Pi 5#1    +1.30   -7.491e-4   -0.100      +1.400
+    Pi 5#2    +1.20   -3.738e-4   -0.050      +1.250
+
+    naive delta       range 0.10   SD 0.058
+    drift-corrected   range 0.15   SD 0.077     +32%
+
+**Correcting increases run-to-run variance by about a third.** Sec. 6e's
+finding is why: a slope fitted from two points per arm, observed to vary 2x on
+identical hardware thirty minutes apart, imports its own instability into
+everything it touches. **A bias you cannot measure reliably cannot be
+subtracted reliably.**
+
+Weigh it honestly: n = 3, values quantised to 0.1, and the 133.5 s imbalance
+measured on round P is assumed to hold for both Pi 5 runs. Directionally clear,
+quantitatively weak. But the direction is what matters, because it means the
+fix is **not a better correction** — it is `C A A C`, which removes the bias by
+construction and needs no slope estimate at all.
+
+So the scorer's decision to print the corrected offset as REPORTED, NOT SCORED
+now has an empirical justification as well as a procedural one: had it been
+scored, the run-to-run spread would have been wider than the quantity it
+replaced. The scorer says so at the point of printing, so nobody promotes it
+later.
+
+**The band is roughly 2x conservative, and it stays where it is.** Observed
+SD(delta) across three runs is 0.058 against the 0.10 assumed when the window
+was set — agreement in order of magnitude, pointing at sigma nearer 0.05, the
+same direction the residual analysis pointed. The honest reading is not "the
+band is validated" but "the test has less power than intended". **Do not
+tighten it retroactively.** It was pre-registered at +/-0.2 and stays there for
+anything compared against these runs; a narrower window gets pre-registered for
+a future comparison, once sigma is measured rather than inferred.
 
 **Phase 6 is complete, and with it the migration.**
 

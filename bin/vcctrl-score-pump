@@ -362,6 +362,12 @@ def main(argv):
     print("  Reported, NOT scored -- the band above was fixed on the naive")
     print("  delta and is not being moved after the fact. The fix for the bias")
     print("  is a counterbalanced C A A C cell order in a successor sweep.")
+    print("  DO NOT promote this to the verdict. Measured over three runs, the")
+    print("  correction makes run-to-run spread WORSE: naive delta SD 0.058,")
+    print("  drift-corrected SD 0.077, +32%. A slope fitted from two points per")
+    print("  arm, observed to vary 2x on identical hardware 30 min apart,")
+    print("  imports its own instability into whatever it corrects. A bias you")
+    print("  cannot measure reliably cannot be subtracted reliably.")
 
     # The two verdicts are NOT independent, so they are not combined
     # symmetrically. The delta window came from SD(delta) = sigma at sigma =
