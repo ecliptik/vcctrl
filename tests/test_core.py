@@ -1071,10 +1071,16 @@ HARNESS = r"""
     // lived on the WRAPPER, so the field stood two pixels proud of every
     // button beside it -- small, and enough to make the strip look crooked.
     emit(`fieldh ${h('linewrap')} ${h('keysbtn')}`);
-    // Same anatomy as the menu buttons: a glyph cell with a rule, a label.
+    // Send is the ONE exception to the glyph-rule-label shape, deliberately:
+    // "Send" and the return glyph say the same thing, so a rule between them
+    // would be dividing a phrase rather than separating two facts. Asserted
+    // so the exception stays a decision rather than becoming a drift.
     const sb = document.getElementById('sendline');
-    emit(`sendparts ${sb.querySelector('.bi') && sb.querySelector('.bl') ? 1 : 0} `
-       + `${getComputedStyle(sb.querySelector('.bi')).borderRightWidth === '1px' ? 1 : 0}`);
+    const ret = sb.querySelector('.ret');
+    emit(`sendparts ${ret && sb.querySelector('.bl') && !sb.querySelector('.bi') ? 1 : 0} `
+       + `${ret && getComputedStyle(ret).borderLeftWidth === '0px'
+             && sb.querySelector('.bl').getBoundingClientRect().left
+                < ret.getBoundingClientRect().left ? 1 : 0}`);
   }
 
   // A DARK TARGET IS NOT A BROKEN TRANSPORT. Both are silence from here, and
@@ -1366,8 +1372,7 @@ HARNESS = r"""
 
   // The caret points where the menu WILL GO, so the strip menus and the
   // header menu must disagree about which glyph means closed. 1 = up.
-  const tipUp = n => { const t = caretLabel(n).textContent.trim();
-                       return t.charCodeAt(t.length - 1) === 0x25b4 ? 1 : 0; };
+  const tipUp = n => caretLabel(n).textContent.trim() === '\u25b4' ? 1 : 0;
   // THE KEYBOARD IS LAID OUT, not reflowed. Every one of these was wrong
   // when the menu was a wrapping bag of buttons, and every one of them would
   // silently come back if the row containers were ever dropped.
@@ -1398,8 +1403,8 @@ HARNESS = r"""
   // size, and was reported undiscoverable within the hour.
   {
     const bb = document.getElementById('bufbtn');
-    const lab = () => bb.querySelector('.bl').textContent.trim();
-    const up = t => t.charCodeAt(t.length - 1) === 0x25b4 ? 1 : 0;
+    const lab = () => bb.querySelector('.caret').textContent.trim();
+    const up = t => t === '\u25b4' ? 1 : 0;
     const inStrip = bb.closest('#cmdbar') ? 1 : 0;
     setBufOpen(true);
     const opened = up(lab());
@@ -1632,9 +1637,9 @@ def test_zoom_layout_in_a_browser():
           got["striph"][1] >= 30, got["striph"])
     check("the command field is the same height as the buttons beside it",
           got["fieldh"][0] == got["fieldh"][1], got["fieldh"])
-    check("Send is built like the menu buttons: glyph, rule, label",
+    check("Send carries a return glyph and no divider cell",
           got["sendparts"][0] == 1.0, got["sendparts"])
-    check("and the rule between them is drawn",
+    check("and the glyph sits after the word, undivided",
           got["sendparts"][1] == 1.0, got["sendparts"])
 
     check("a fallback schedules a retry, backs off, and resets on success",
@@ -2567,3 +2572,135 @@ def test_raw_frames_are_not_judged_as_pictures():
     check("a judged no-picture still returns 1",
           c.write_frame({"ok": True, "picture": False, "reason": "dark"}, p) == 1)
     check("and removes the stale file", not os.path.exists(p))
+
+
+def _load(relpath, name):
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    path = os.path.join(HERE, os.pardir, relpath)
+    loader = SourceFileLoader(name, path)
+    spec = importlib.util.spec_from_loader(name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def test_absent_key_is_not_a_value():
+    """A key's ABSENCE must not be read as a value. Four sites, one shape.
+
+    Two of these were live defects. Both had the property that makes this
+    class hard to see: the code is correct, the contract is correct, and the
+    bug lives in the seam where a caller meets a field that might not be
+    there. The dangerous direction is absence reading as the REASSURING value,
+    because then the check produces the same output as a real pass.
+    """
+    common = _load("bin/vcctrl_common.py", "vcc_common_t")
+    sweep = _load("bin/vcctrl-sweep", "vcc_sweep_t")
+
+    # 1. THE VACUOUS CHECK. all({}.values()) is True, so `st.get("usb4vc", {})`
+    # passed the preflight whenever the field was missing -- an absent answer
+    # read as a clean bill of health, immediately before a 23-minute
+    # unattended run.
+    check("all({}.values()) is True -- this is why the default was wrong",
+          all({}.values()) is True)
+
+    calls = {}
+
+    def fake_vc_json(*a):
+        return calls.get(a[0], {})
+
+    sweep.vc_json = fake_vc_json
+    conf = {"denied": {}, "sweeps": {"PUMP": {"cells": 4, "timeout_min": 23}},
+            "machines": {"1": {"tag": "G", "name": "POD-83"}}}
+
+    for label, status in (("missing usb4vc key", {}),
+                          ("empty usb4vc dict", {"usb4vc": {}})):
+        calls["status"] = status
+        try:
+            sweep.preflight(conf, "PUMP", "1")
+            check("preflight REFUSES on %s" % label, False,
+                  "it returned instead of refusing")
+        except SystemExit as exc:
+            check("preflight REFUSES on %s" % label,
+                  "REFUSED" in str(exc), str(exc)[:80])
+        except Exception as exc:
+            check("preflight REFUSES on %s" % label, False, repr(exc))
+
+    # 2. POWER IS TRI-STATE. bool(None) is False, so an unreachable plug read
+    # as "the machine is off" -- and with --power-on that meant sending `power
+    # on` to a machine that might be running, then waiting 240 s for a boot
+    # edge that could not arrive.
+    seen = {}
+
+    def power_returning(payload):
+        def f(*a):
+            if a[0] == "power":
+                return payload
+            return {}
+        return f
+
+    common.vc_json = power_returning({"power": {"on": None}})
+    check("unreachable plug -> None, NOT False", common.power_on() is None)
+    common.vc_json = power_returning({"power": {}})
+    check("a reply with no 'on' field -> None", common.power_on() is None)
+    common.vc_json = power_returning({})
+    check("no power object at all -> None", common.power_on() is None)
+    common.vc_json = power_returning({"power": {"on": False}})
+    check("a plug that says off -> False", common.power_on() is False)
+    common.vc_json = power_returning({"power": {"on": True}})
+    check("a plug that says on -> True", common.power_on() is True)
+
+    # ensure_powered must NEVER act on an unknown.
+    common.vc_json = power_returning({"power": {"on": None}})
+    acted = []
+    common.vc = lambda *a, **k: acted.append(a)
+    check("ensure_powered refuses on an unknown power state",
+          common.ensure_powered(True) is False)
+    check("and sends NO power command -- could-not-look is not a finding",
+          acted == [], acted)
+
+    # 3. A MISSING COUNT IS NOT ZERO. Defaulting framestats fields to 0 made an
+    # absent field read as "no live frames", which is the signature of a
+    # frozen capture -- a renamed key would be reported as a dead stick.
+    cap = _load("bin/vcctrl-capcheck", "vcc_capcheck_t")
+
+    def fs_returning(payload):
+        def f(*a):
+            return payload if a[0] == "framestats" else {"picture": False}
+        return f
+
+    cap.vc_json = fs_returning({"ok": True, "n": 16, "distinct": 9,
+                                "repeated": 2})
+    got = cap.profile(16)
+    check("capcheck computes a live count when every field is present",
+          got is not None and got["live"] == 7, got)
+
+    for missing in ("n", "distinct", "repeated"):
+        full = {"ok": True, "n": 16, "distinct": 9, "repeated": 2}
+        del full[missing]
+        cap.vc_json = fs_returning(full)
+        check("capcheck refuses rather than derive a count with %r absent"
+              % missing, cap.profile(16) is None)
+
+
+def test_relay_state_absent_is_not_off():
+    """A plug that answers without saying is not a plug that said off.
+
+    PowerCapability keeps `on` tri-state one layer up precisely because "the
+    machine is off" and "I cannot reach the plug" are opposite facts. Parsing
+    with bool(info.get("relay_state")) collapsed that before it ever reached
+    the caller -- undoing the distinction the layer above was built to keep.
+    """
+    import types
+    orig = vcctrld.kasa_send
+    try:
+        for label, sysinfo, want in (
+                ("no relay_state field", {"alias": "x"}, None),
+                ("relay_state 0", {"relay_state": 0, "alias": "x"}, False),
+                ("relay_state 1", {"relay_state": 1, "alias": "x"}, True)):
+            vcctrld.kasa_send = (lambda si: (lambda h, p: {
+                "system": {"get_sysinfo": si}}))(sysinfo)
+            got = vcctrld.power_state("host")["on"]
+            check("%s -> %r" % (label, want), got is want, got)
+    finally:
+        vcctrld.kasa_send = orig

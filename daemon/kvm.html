@@ -423,6 +423,13 @@
   #cmdbar button > .bl, #zoombtn > .bl, .lbtn > .bl {
     flex:none; white-space:nowrap;
   }
+  /* THE CARET IS AN ICON, NOT A LETTER. It was riding on the label's 13px
+     font, which makes a triangle about seven pixels tall -- smaller than the
+     emoji beside it and too small to read as a direction at a glance. Sized
+     against the glyph cell instead, and nudged down because a triangle's
+     optical centre sits above its box. */
+  .caret { flex:none; font-size:15px; line-height:1; display:inline-block;
+           transform:translateY(.5px); margin-left:-2px; }
   /* Lit while its panel is the one showing. NOT the global .on rule, which
      paints a green border -- green on this page means a thing is working, and
      which panel you are looking at is not a health reading. A filled ground
@@ -543,10 +550,15 @@
     padding:0 11px; min-height:0;
   }
   #line:focus { outline:none; }
+  /* A GROUND, so they read as controls rather than as decoration inside the
+     input. Transparent on the field's own --bg they looked like part of the
+     text area -- which is what made the paper clip look unclickable even
+     after it was. The same translucent black every other button uses, so it
+     needs no new colour and works on all twenty-two palettes. */
   #cmdbar #filebtn, #cmdbar #filestop {
     flex:none; display:flex; align-items:center; cursor:pointer;
     border:0; border-right:1px solid var(--rule); border-radius:0;
-    background:transparent; color:var(--muted); padding:0 10px;
+    background:rgba(0,0,0,.22); color:var(--muted); padding:0 10px;
     min-height:0;
   }
   #cmdbar #filebtn { font-size:15px; }
@@ -559,8 +571,10 @@
      overrides nothing but the chrome. */
   #cmdbar #sendline {
     flex:none; border:0; border-left:1px solid var(--rule); border-radius:0;
-    background:transparent; color:var(--green); padding:0 11px; min-height:0;
+    background:rgba(0,0,0,.22); color:var(--green); padding:0 11px;
+    min-height:0;
   }
+  #cmdbar #sendline .ret { font-size:15px; line-height:1; opacity:.8; }
   #cmdbar #sendline:hover { background:var(--rule); }
   #cmdbar #sendline:disabled { color:var(--dim); }
   /* Proportional to the row it divides, like the rail's. */
@@ -977,7 +991,7 @@
     </button>
     <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
-            title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen ▾</span></button>
+            title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen</span><span class="caret">▾</span></button>
     <!-- Fit to Screen acts on the PICTURE; the three to its right open panels
          about the rig. The rule is where that changes. -->
     <span class="sep" aria-hidden="true">|</span>
@@ -1077,13 +1091,18 @@
       <button id="filestop" hidden title="Stop where it has got to">■</button>
       <input id="line" placeholder="type a command"
              autocapitalize="off" autocorrect="off" spellcheck="false">
-      <button id="sendline" title="Type this line at the target and press Enter"><span class="bi">↵</span><span class="bl">Send</span></button>
+      <!-- The glyph is not a separate control here, it is part of the verb --
+           "Send ↵" is one thing to read. Every other button in the strip puts
+           a rule between its icon and its label because the icon says WHAT
+           and the label says which; this one says the same thing twice, so a
+           rule between them would be dividing a phrase. -->
+      <button id="sendline" title="Type this line at the target and press Enter"><span class="bl">Send</span><span class="ret">↵</span></button>
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
     <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
     <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
             aria-controls="pop-keys"
-            title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys ▾</span></button>
+            title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys</span><span class="caret">▾</span></button>
     <!-- ALWAYS RECORDING, so this does not start anything -- which is why it
          is not called Record. The ring has been rolling since the daemon came
          up; the button opens a window onto what it is already holding. It
@@ -1092,7 +1111,7 @@
          way within an hour of shipping. -->
     <button id="bufbtn" aria-haspopup="true" aria-expanded="false"
             aria-controls="scrub"
-            title="Look back through the last half minute the daemon kept"><span class="bi">⏱️</span><span class="bl">Buffer ▾</span></button>
+            title="Look back through the last half minute the daemon kept"><span class="bi">⏱️</span><span class="bl">Buffer</span><span class="caret">▾</span></button>
     <!-- NOT display:none. A file input that is display:none is not focusable,
          and .click() on it is ignored outright by some browsers -- which is
          exactly why the button appeared to do nothing. Visually hidden but
@@ -1107,10 +1126,10 @@
     <span class="split" id="soundwrap">
       <button id="mutebtn" class="bi" title="Turn the sound on">🔇</button>
       <button id="soundbtn" class="bl" aria-haspopup="true" aria-expanded="false"
-              title="Sound and volume">Sound ▾</button>
+              title="Sound and volume">Sound <span class="caret">▾</span></button>
     </span>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
-            title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power ▾</span></button>
+            title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret">▾</span></button>
   </div>
 
   <!-- A POPOVER, like Sound and Power. As a row in the flow it took ~40px of
@@ -2457,9 +2476,8 @@ const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn',
 function setBufOpen(on) {
   const b = $('bufbtn');
   b.setAttribute('aria-expanded', on ? 'true' : 'false');
-  const lab = b.querySelector('.bl');
-  lab.textContent = lab.textContent.replace(/[\u25b4\u25be]\s*$/, '').trim()
-                  + ' ' + (on ? '\u25be' : '\u25b4');
+  const lab = b.querySelector('.caret');
+  lab.textContent = on ? '\u25be' : '\u25b4';
 }
 let openPopName = null;
 
@@ -2468,11 +2486,14 @@ let openPopName = null;
 // down -- the arrow is what the click does, not which way is down. The zoom
 // menu is in the header and opens downward, so it does the same thing with
 // the opposite glyphs. One rule, and it reads correctly in both places.
+// Its own element, not characters on the end of the label. As text it rode
+// on the label's 13px and came out a seven-pixel triangle beside a
+// fourteen-pixel emoji -- too small to read as a direction. It also meant
+// every writer had to strip the old glyph off the label before appending a
+// new one, which is a string operation standing in for a piece of structure.
 function caretLabel(name) {
-  if (name === 'zoom') return $('zoomlabel');
   const b = $(POP[name]);
-  // Sound's button IS the label -- querySelector only searches descendants.
-  return b ? (b.querySelector('.bl') || b) : null;
+  return b ? b.querySelector('.caret') : null;
 }
 function setCaret(name, open) {
   const b = $(POP[name]), lab = caretLabel(name);
@@ -2483,8 +2504,7 @@ function setCaret(name, open) {
   const up = open
     ? $('pop-' + name).getBoundingClientRect().top < b.getBoundingClientRect().top
     : !!b.closest('#cmdbar');
-  lab.textContent = lab.textContent.replace(/[\u25b4\u25be]\s*$/, '').trim()
-                  + ' ' + ((open ? !up : up) ? '\u25b4' : '\u25be');
+  lab.textContent = (open ? !up : up) ? '\u25b4' : '\u25be';
 }
 
 function closePop() {
@@ -3799,7 +3819,6 @@ function setZoom(m) {
   zoomMode = m;
   localStorage.setItem('vcctrl.zoom2', m);
   $('zoomlabel').textContent = ZOOMLABEL[m] || m;
-  setCaret('zoom', openPopName === 'zoom');
   for (const b of document.querySelectorAll('#pop-zoom button'))
     b.classList.toggle('sel', b.dataset.zoom === m);
   crop = null;                             // re-measure on the next frame
