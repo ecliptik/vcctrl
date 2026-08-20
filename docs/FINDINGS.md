@@ -1171,3 +1171,64 @@ about nothing else, until something ties it to what actually ran.
 
 Nothing deploys to the CF card until the trees are reconciled. Deployment is
 the step where one copy silently wins.
+
+---
+
+## 27. Two rules that came out of one bad line
+
+`MTCP/CHK.BAT` line 16 read `ECHO CHK done: %1 -^> incoming\%2`. Fixed in
+`g2k@9d001c5`. Both rules below are general and neither is about DOS.
+
+### Documenting a bug can reproduce it
+
+There is no escape character in MS-DOS 6.22 -- the caret is a caret and the
+`>` redirects. That was established by hardware test in the morning and
+reasserted by me the same evening as settled background, in a sentence that
+was not the topic of the message.
+
+The consequence: the line printed truncated and tried to CREATE
+`incoming\<name>` under the cwd. From `C:\DOSKUTSU` there is no `incoming\`,
+which is a file creation error -- the one the operator had reported and I had
+written off as unanswerable while the capture path was dark. It was answerable
+from a file already on this disk.
+
+Then the fix reproduced the defect. `REM` is an internal command and
+COMMAND.COM parses redirection **before** dispatch, so a `>` inside a comment
+is live. The first patch quoted the broken line in a `REM` to explain it, which
+would have created the files the patch existed to stop creating.
+
+**The safest-feeling action carried the defect.** Writing a comment to warn the
+next person is what a careful author does. Nothing in "redirection is parsed
+inside REM" makes that consequence visible until you have walked into it, and
+it was caught on re-read rather than by reasoning -- which means the defence is
+the re-read, not the understanding.
+
+### A check that can fabricate an answer is worse than no check
+
+`CHK done`, `PUT done` and `GET done` were all echoed after `FTP.EXE` returned
+and conditioned on nothing, so they announced success on transfers that moved
+nothing. The obvious repair is `IF ERRORLEVEL 1`.
+
+It was declined. It is unverified whether mTCP's `FTP.EXE` sets an errorlevel,
+and **if it does not, `IF ERRORLEVEL 1` reads the previous command's value**.
+That is not a check that fails; it is a check that reports confidently on a
+different operation while wearing the right label. Strictly worse than the
+unconditional message it replaces, because it looks like rigour.
+
+All three now state the attempt and name the witness -- the file arriving on
+the server. A sentence that cannot be false beats a status whose provenance is
+unverified.
+
+### The scoreboard on this one
+
+The four files carrying the caret were reported *only* because their divergence
+had the wrong shape. The content assessment attached to that report -- "cosmetic,
+nothing to fix" -- was wrong. Had reporting been conditional on my judgement of
+importance, four sweeps would have deployed broken, because the judgement was
+the part that failed.
+
+And the divergence itself recurred within twenty minutes of my diagnosing it: I
+patched `~/doskutsu-netiter/stage` without checking that `ecliptik/g2k` tracks
+those files. Naming a failure shape does not confer immunity to it. What caught
+it was checking rather than assuming, which is a habit -- and habits work when
+understanding does not.
