@@ -934,6 +934,26 @@ HARNESS = """
     out.push(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
   }
 
+  // Rate control. The failure that matters is a loop that only ever goes one
+  // way: down to the floor on a hiccup, or up past what the tunnel carries.
+  {
+    const sent = [];
+    const realWs = ws;
+    ws = {readyState: 1, send: m => sent.push(JSON.parse(m).fps)};
+    fpsWant = 0; fpsGoodRuns = 0;
+    requestRate(14);
+    rateStep(6);                      // frames going missing
+    const backedOff = fpsWant;
+    for (let i = 0; i < 4; i++) rateStep(fpsWant);   // now keeping up
+    const creptUp = fpsWant;
+    fpsGoodRuns = 0;
+    for (let i = 0; i < 40; i++) rateStep(fpsWant);  // and keeps keeping up
+    const ceiling = fpsWant;
+    ws = realWs;
+    out.push(`rate ${backedOff} ${creptUp}`);
+    out.push(`ratecap ${ceiling} ${sent.length}`);
+  }
+
   // The rail popovers must land under the thing that opened them, and must
   // survive their anchor being hidden -- which is what happens on a phone,
   // where the tab bar opens the same menu the header chip does.
@@ -941,10 +961,13 @@ HARNESS = """
     openPop(nm);
     const pr = document.getElementById('pop-' + nm).getBoundingClientRect();
     const ar = document.getElementById(anchor).getBoundingClientRect();
-    const onscreen = pr.width > 60 && pr.left >= 0
-                     && pr.right <= window.innerWidth + 1;
-    const under = pr.top >= ar.bottom - 1;
-    out.push(`pop-${nm} ${onscreen ? 1 : 0} ${under ? 1 : 0}`);
+    const onscreen = pr.width > 60 && pr.left >= 0 && pr.top >= 0
+                     && pr.right <= window.innerWidth + 1
+                     && pr.bottom <= window.innerHeight + 1;
+    // Below the anchor, or above it when the anchor is near the bottom --
+    // these live in a strip at the foot of the window now.
+    const placed = pr.top >= ar.bottom - 1 || pr.bottom <= ar.top + 1;
+    out.push(`pop-${nm} ${onscreen ? 1 : 0} ${placed ? 1 : 0}`);
     closePop();
   }
   out.push(`popclosed ${document.getElementById('pop-sound').hidden
@@ -1112,10 +1135,20 @@ def test_zoom_layout_in_a_browser():
     check("control: a preview does not change the selection",
           got["selkept"][0] == 1.0, got["selkept"])
 
+    # Asking for 14 and getting 6 must come down near 6, not to the floor.
+    check("a starved stream backs off toward what arrives",
+          4 <= got["rate"][0] <= 7, got["rate"])
+    check("and creeps back up once frames keep arriving",
+          got["rate"][1] > got["rate"][0], got["rate"])
+    check("but never past the ceiling", got["ratecap"][0] <= 20,
+          got["ratecap"])
+    check("control: it actually told the server", got["ratecap"][1] >= 3,
+          got["ratecap"])
+
     for nm in ("sound", "power"):
         check("the %s menu opens on screen" % nm,
               got["pop-" + nm][0] == 1.0, got["pop-" + nm])
-        check("control: and below the control that opened it",
+        check("control: and clear of the control that opened it",
               got["pop-" + nm][1] == 1.0, got["pop-" + nm])
     check("control: the menus close again", got["popclosed"][0] == 1.0,
           got["popclosed"])

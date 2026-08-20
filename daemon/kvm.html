@@ -150,6 +150,9 @@
     body #keysbtn { display:none; }
     /* The tab bar is the panel here; there is no column to collapse. */
     body #sidebtn { display:none; }
+    /* The tab bar carries sound and power here, and a tap on the picture
+       captures the keyboard, so these three are duplicates on a phone. */
+    body #capturebtn, body #soundbtn, body #powerbtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -327,6 +330,10 @@
     flex:none; display:flex; gap:7px; padding:7px 9px; background:var(--panel);
     border-bottom:1px solid var(--rule); align-items:center;
   }
+  /* The line takes what is left after the controls, and the controls never
+     wrap onto a second row: a strip that changes height moves the picture. */
+  #cmdbar button { flex:none; white-space:nowrap; }
+  #capturebtn, #soundbtn, #powerbtn { font-size:13px; padding:0 9px; }
   #line {
     flex:1 1 auto; min-width:0; font:var(--t-data) var(--mono);
     background:var(--bg); color:var(--text);
@@ -561,9 +568,14 @@
     header { grid-column:1/-1; }
     #app { grid-template-rows:auto 1fr auto auto auto; }
     #stage  { grid-column:1; grid-row:2; }
-    #cmdbar { grid-column:1; grid-row:3; }
-    #capbar { grid-column:1; grid-row:4; }
-    #keys   { grid-column:1; grid-row:5; border-bottom:0; }
+    /* THE BOTTOM BAR IS A CONTROL STRIP and runs edge to edge, the way the
+       status rail does at the top. Everything you DO to the target lives
+       here; everything the target IS lives up there. The two used to be
+       mixed, which is why a power chip that looked like a readout was also a
+       menu, and a keyboard chip nobody could see a reason to press. */
+    #cmdbar { grid-column:1/-1; grid-row:3; }
+    #capbar { grid-column:1/-1; grid-row:4; }
+    #keys   { grid-column:1/-1; grid-row:5; border-bottom:0; }
     /* The rail costs about 40px of picture and is not always wanted. Hiding
        it collapses its grid row, so the stage takes the height back -- on a
        900px window that is 652 -> 692, which Fit turns straight into
@@ -577,7 +589,7 @@
     body.nopanel #app { grid-template-columns:minmax(0,1fr) 0; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
-    #body   { grid-column:2; grid-row:2/6; height:auto; border-top:0;
+    #body   { grid-column:2; grid-row:2; height:auto; border-top:0;
               border-left:1px solid var(--rule); }
     #panels { max-height:none; flex:0 1 auto; }
   }
@@ -595,10 +607,9 @@
     <h1>vcctrl-kvm</h1>
     <span id="state" aria-live="polite">—</span>
     <span id="c-lock" class="chip"><span class="chiplabel">input </span><b>—</b></span>
-    <button id="c-power" class="chip chipb" aria-haspopup="true" aria-expanded="false"
-            title="Mains power — on, off, cycle"><span class="chiplabel">power </span><b>—</b></button>
+    <span id="c-power" class="chip" title="Mains power as the plug reports it"><span class="chiplabel">power </span><b>—</b></span>
     <span id="c-xport" class="chip"><span class="chiplabel">link </span><b>—</b></span>
-    <button id="c-kbd" class="chip chipb" title="Capture the keyboard so keys go to the target"><span class="chiplabel">kbd </span><b>idle</b></button>
+    <span id="c-kbd" class="chip" title="Whether keys typed here are going to the target"><span class="chiplabel">kbd </span><b>idle</b></span>
     <span class="grow"></span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
             title="Caps, Num and Scroll read back over PS/2 — proof a keystroke landed">
@@ -612,8 +623,6 @@
       <option value="2">2× original</option>
       <option value="4">4× original</option>
     </select>
-    <button id="soundbtn" class="ibtn" aria-haspopup="true" aria-expanded="false"
-            title="Sound and volume">🔇</button>
     <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
             title="Switch between the light and dark half of this theme">☀️</button>
     <button id="gbtn" class="ibtn" aria-label="settings"
@@ -659,7 +668,12 @@
            autocapitalize="off" autocorrect="off" spellcheck="false">
     <button id="sendline" class="on" title="Type this line at the target and press Enter">Send ↵</button>
     <button id="keysbtn" aria-expanded="true"
-            aria-controls="keys" title="show or hide the key rail">Keys ▾</button>
+            aria-controls="keys" title="Show or hide the key rail">Keys ▾</button>
+    <button id="capturebtn" title="Send what you type straight to the target">⌨ Capture</button>
+    <button id="soundbtn" aria-haspopup="true" aria-expanded="false"
+            title="Sound and volume"><span id="soundglyph">🔇</span> Sound ▾</button>
+    <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
+            title="Mains power — on, off, cycle">Power ▾</button>
   </div>
 
   <div id="stalebar">A newer version of this page is available — reload
@@ -792,6 +806,7 @@
       <div class="kv"><span>buffer</span><span id="s-span">–</span></div>
       <div class="kv"><span>viewers</span><span id="s-viewers">–</span></div>
       <div class="kv"><span>transport</span><span id="s-xport">–</span></div>
+      <div class="kv"><span>stream</span><span id="s-rate">–</span></div>
     </section>
 
    </div>
@@ -870,6 +885,7 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // a few seconds, an <img> pointed at multipart/x-mixed-replace takes over --
 // no JS decoding, no canvas, the browser does all of it.
 let ws, wsAlive = false, xport = 'connecting', frames = 0, fpsWin = [];
+let byteWin = [];
 // lastFrameAt starts at NOW, not 0. At 0 the staleness watchdog computes
 // Date.now() - 0, which is always greater than eight seconds, so the first
 // tick after load tore down a socket that was merely still connecting. A
@@ -898,6 +914,7 @@ function gotFrame() {
   lastFrameAt = Date.now();
   fpsWin.push(now);
   while (fpsWin.length && now - fpsWin[0] > 2000) fpsWin.shift();
+  while (byteWin.length && now - byteWin[0][0] > 2000) byteWin.shift();
   if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
 }
 
@@ -910,6 +927,56 @@ setInterval(() => {
   $('state').classList.toggle('live', live);
 }, 700);
 
+// ── RATE CONTROL: ASK FOR WHAT IS GETTING THROUGH ────────────────────────
+// The tunnel is the constraint, not the browser. Measured on the rig while
+// the picture was stuttering: load average 4.9 on a four-core Pi with 3% idle,
+// and tailscaled alone burning 114% of a core -- userspace WireGuard
+// encrypting this stream. A desktop asking for 25 fps of 61 KB frames is
+// asking for 12 Mbit/s, and two tabs open is 24, which a Pi 3B cannot
+// encrypt. Past that ceiling frames are dropped rather than queued, the
+// picture stutters, and the socket eventually dies at 1006.
+//
+// The old code asked for a fixed 25 and never looked at what arrived. This
+// converges on the rate the path can actually carry: back off hard when
+// frames are going missing, creep up while they are not.
+const smallScreen = () => Math.min(screen.width, screen.height) < 500;
+const FPS_MIN = 4;
+const fpsCeiling = () => smallScreen() ? 12 : 20;
+let fpsWant = 0, fpsGoodRuns = 0;
+function achievedFps() {
+  if (fpsWin.length < 2) return 0;
+  const span = fpsWin[fpsWin.length - 1] - fpsWin[0];
+  return span > 0 ? (fpsWin.length - 1) * 1000 / span : 0;
+}
+function streamMbit() {
+  if (byteWin.length < 2) return 0;
+  const span = byteWin[byteWin.length - 1][0] - byteWin[0][0];
+  if (span <= 0) return 0;
+  const bytes = byteWin.reduce((a, b) => a + b[1], 0);
+  return bytes * 8 / span / 1000;
+}
+function requestRate(f) {
+  f = Math.max(FPS_MIN, Math.min(fpsCeiling(), Math.round(f)));
+  if (f === fpsWant || !ws || ws.readyState !== 1) return;
+  fpsWant = f;
+  try { ws.send(JSON.stringify({t: 'rate', fps: f})); } catch (e) {}
+}
+function rateStep(got) {
+  if (got < fpsWant * 0.75) {
+    // Going missing. Drop to just under what is arriving, not to a fixed
+    // floor: the point is to stop asking for what cannot be delivered.
+    fpsGoodRuns = 0;
+    requestRate(got * 0.9);
+  } else if (got > fpsWant * 0.92 && ++fpsGoodRuns >= 3) {
+    fpsGoodRuns = 0;
+    requestRate(fpsWant + 2);
+  }
+}
+setInterval(() => {
+  if (xport !== 'ws' || !wsAlive || fpsWin.length < 4) return;
+  rateStep(achievedFps());
+}, 3000);
+
 function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
@@ -918,7 +985,7 @@ function useMjpeg(why) {
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
-  img.src = '/stream.mjpg?fps=15&t=' + Date.now();
+  img.src = '/stream.mjpg?fps=12&t=' + Date.now();
   img.onload = gotFrame;
   // A dead multipart stream renders as a broken-image icon and stays that way
   // forever. That is what a suspended iOS tab produces on return, and it is
@@ -1013,8 +1080,8 @@ function connect() {
     // Ask for a rate suited to the device. A phone on cellular does not want
     // 30 fps of a 70 KB screen, and the server drops rather than queues
     // anyway -- asking for less simply wastes less.
-    const small = Math.min(screen.width, screen.height) < 500;
-    ws.send(JSON.stringify({t:'rate', fps: small ? 12 : 25}));
+    fpsWant = 0; fpsGoodRuns = 0;
+    requestRate(smallScreen() ? 8 : 14);
   };
   ws.onerror = () => { useMjpeg('errored'); };
   ws.onclose = e => {
@@ -1034,6 +1101,7 @@ function connect() {
     if (!wsAlive) return;
     if (xport === 'mjpeg') return;
     if (xport !== 'ws') { setXport('ws'); img.style.display='none'; cv.style.display=''; }
+    byteWin.push([performance.now(), ev.data.byteLength || 0]);
     createImageBitmap(new Blob([ev.data], {type:'image/jpeg'})).then(bmp => {
       if (cv.width !== bmp.width) { cv.width = bmp.width; cv.height = bmp.height; }
       ctx.drawImage(bmp, 0, 0);
@@ -1226,6 +1294,12 @@ function setArmed(v, opts) {
   if (armed === v) return;
   armed = v;
   $('stage').classList.toggle('armed', v);
+  // The button says what pressing it does next, and lights while it is on --
+  // the state also lives in the rail above, but the control is here.
+  $('capturebtn').textContent = v ? '⌨ Release' : '⌨ Capture';
+  $('capturebtn').classList.toggle('on', v);
+  $('capturebtn').title = v ? 'Stop sending keys to the target (Ctrl+Alt+Shift)'
+                            : 'Send what you type straight to the target';
   pill('p-kbd', v ? 'on' : '', v ? 'captured' : 'idle');
   if (v) {
     // Must happen synchronously inside the tap handler: iOS ignores focus()
@@ -1270,7 +1344,7 @@ $('verifybtn').onclick = async () => {
                             : 'NO ANSWER — keystrokes are not arriving',
                  j.verified ? 'k-vid' : 'k-taint');
 };
-$('c-kbd').onclick = () => setArmed(!armed);
+$('capturebtn').onclick = () => setArmed(!armed);
 
 function armFromStage() {
   if (armed) {
@@ -1430,7 +1504,7 @@ function setSound(on) {
   soundOn = on;
   $('sbtn').textContent = on ? '🔊' : '🔇';
   $('sbtn').title = on ? 'Mute the sound' : 'Turn the sound on';
-  $('soundbtn').textContent = on ? '🔊' : '🔇';
+  $('soundglyph').textContent = on ? '🔊' : '🔇';
   $('sbtn').classList.toggle('on', on);
   applyVolume();
   // Off stops the STREAM, not just the output: silence still costs 1.5 Mbit/s,
@@ -1550,7 +1624,7 @@ for (const k of Object.keys(OPTS)) {
 // Popovers in the rail. One at a time, anchored under whatever opened them,
 // and clamped to the window -- a menu that opens off the right edge of a
 // phone is a menu you cannot use.
-const POP = {sound: 'soundbtn', power: 'c-power'};
+const POP = {sound: 'soundbtn', power: 'powerbtn'};
 let openPopName = null;
 function closePop() {
   if (!openPopName) return;
@@ -1583,7 +1657,11 @@ function openPop(name) {
   const left = Math.max(8, Math.min(window.innerWidth - w - 8,
                                     a.left + a.width / 2 - w / 2));
   el.style.left = left + 'px';
-  el.style.top = (a.bottom + 6) + 'px';
+  // Below the anchor, unless there is no room below it -- these controls sit
+  // in a strip at the BOTTOM of the window, where "below" is off the screen.
+  const h = el.offsetHeight;
+  el.style.top = (a.bottom + 6 + h > window.innerHeight - 8
+                  ? Math.max(8, a.top - h - 6) : a.bottom + 6) + 'px';
 }
 
 function showSettings(on) {
@@ -1594,7 +1672,7 @@ function showSettings(on) {
 }
 $('gbtn').onclick = () => showSettings($('settings').hidden);
 $('soundbtn').onclick = () => openPop('sound');
-$('c-power').onclick = () => openPop('power');
+$('powerbtn').onclick = () => openPop('power');
 $('setclose').onclick = () => showSettings(false);
 $('setback').onclick = () => { closePop(); showSettings(false); };
 addEventListener('keydown', e => {
@@ -1827,6 +1905,14 @@ async function pollState() {
   $('s-lastev').textContent = fmtAge(j.last_event_age_s);
   $('s-frames').textContent = v.frames ?? '–';
   $('s-viewers').textContent = j.viewers ?? '–';
+  // What this tab is actually pulling. Two tabs open is two of these, and on
+  // this rig that is the difference between a smooth picture and a stuttering
+  // one -- worth being able to see rather than guess at.
+  const got = achievedFps();
+  $('s-rate').textContent = got
+    ? got.toFixed(0) + ' fps · ' + streamMbit().toFixed(1) + ' Mbit/s'
+      + (fpsWant ? ' (asking ' + fpsWant + ')' : '')
+    : '–';
   if (j.tls_port !== undefined && j.tls_port !== tlsPort) {
     tlsPort = j.tls_port;
     // Check reachability before retrying, so an unreachable port is reported
