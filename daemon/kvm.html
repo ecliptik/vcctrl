@@ -109,6 +109,20 @@
        belongs with the themes -- both are duplicates here. */
     body header { overflow-x:hidden; }
     body #dbtn, body #gbtn { display:none; }
+
+    /* THE TAP MUST LAND ON THE INPUT ITSELF. iOS raises the keyboard for a
+       real tap on a real field; it routinely refuses a programmatic focus(),
+       and refuses outright for an element that is off-screen or 1px -- which
+       is why "keyboard captured" appeared while no keyboard did. So on a phone
+       this input covers the picture, fully transparent: tapping the screen IS
+       tapping the field. It sits under the no-signal notice so those buttons
+       still work. */
+    body #ghost {
+      position:absolute; inset:0; left:0; top:0; width:100%; height:100%;
+      opacity:0; z-index:2; font-size:16px; background:transparent;
+      color:transparent; caret-color:transparent; border:0; padding:0;
+      -webkit-user-select:text;
+    }
     header { gap:7px; padding:0 8px;
              height:calc(38px + env(safe-area-inset-top,0px)); }
     .chip { font-size:10px; letter-spacing:.03em; }
@@ -229,6 +243,7 @@
     background:rgba(0,0,0,.84); text-align:center;
   }
   #veil.show { display:flex; }
+  #veil { z-index:4; }        /* above the transparent input on a phone */
   /* Sized against the VIEWPORT, not a fixed scale. At 20px/15px on a 390px
      phone the notice was larger than the picture it was explaining and pushed
      its own buttons over the screen. It should be readable and then get out of
@@ -386,15 +401,10 @@
   .tgroup { font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
             text-transform:uppercase; color:var(--dim); margin:10px 0 5px; }
 
-  /* iOS will not raise the keyboard for an input that is off-screen or has no
-     size, so this cannot be parked at left:-9999px -- which is why tapping the
-     screen did nothing on a phone. It now sits inside the viewport,
-     transparent and 1px. font-size must stay >= 16px or Safari zooms the page
-     on focus. */
-  #ghost { position:fixed; left:50%; top:50%; width:1px; height:1px;
-           opacity:0.01; padding:0; border:0; margin:0; z-index:1;
-           font-size:16px; background:transparent; color:transparent;
-           caret-color:transparent; }
+  /* Desktop keeps this out of the way: keys are captured from the window and
+     this only exists so key events have somewhere to land. */
+  #ghost { position:absolute; left:-9999px; top:0; width:1px; height:1px;
+           opacity:0; padding:0; border:0; margin:0; font-size:16px; }
 
   /* ── desktop ─────────────────────────────────────────────────────────── */
   @media (min-width:900px) {
@@ -452,6 +462,8 @@
     <img id="mjpeg" style="display:none" alt="">
     <img id="stale" style="display:none" alt="">
    </div>
+    <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
+           autocomplete="off" enterkeyhint="enter" aria-label="type at the target">
     <div id="veil">
       <div class="big" id="veil-title">connecting…</div>
       <div class="sub" id="veil-sub"></div>
@@ -587,8 +599,7 @@
   </div>
 </div>
 
-<input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
-       autocomplete="off" enterkeyhint="enter" aria-hidden="true" tabindex="-1">
+
 
 <script>
 // FIRST, before anything that can throw. Three outages tonight were a single
@@ -1064,6 +1075,10 @@ function armFromStage() {
   }
   setArmed(true);
 }
+// On a phone the tap lands on the transparent input, so its focus event is
+// the arming signal; the click handler still covers desktop.
+ghost.addEventListener('focus', () => { if (!armed) setArmed(true); });
+ghost.addEventListener('blur', () => { if (armed) setArmed(false); });
 $('stage').addEventListener('click', armFromStage, true);
 $('stage').addEventListener('pointerup', armFromStage, true);
 
