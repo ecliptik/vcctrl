@@ -916,6 +916,21 @@ HARNESS = """
   let untitled = 0;
   for (const b of btns) if (!b.title.trim()) untitled++;
   out.push(`tips ${btns.length} ${untitled}`);
+
+  // Settings must work with the side panel collapsed. It used to live INSIDE
+  // that panel, so collapsing the column took the settings with it and the
+  // gear did nothing at all -- silently, since the click handler ran fine.
+  const sidebtn = document.getElementById('sidebtn');
+  if (!document.body.classList.contains('nopanel')) sidebtn.click();
+  document.getElementById('gbtn').click();
+  const set = document.getElementById('settings');
+  const r = set.getBoundingClientRect();
+  const vis = !set.hidden && r.width > 100 && r.height > 100
+              && getComputedStyle(set).display !== 'none';
+  out.push(`drawer ${vis ? 1 : 0} ${Math.round(r.width)}`);
+  document.getElementById('setclose').click();
+  out.push(`drawerclosed ${document.getElementById('settings').hidden ? 1 : 0} 0`);
+  sidebtn.click();
   out.push(`named ${document.getElementById('themename').textContent.trim()
                      .replace(/\s+/g, '_')} 0`);
 
@@ -1056,6 +1071,11 @@ def test_zoom_layout_in_a_browser():
           % (got["tips"][1], got["tips"][0]))
     check("control: there are buttons to check", got["tips"][0] > 25,
           got["tips"])
+
+    check("settings opens with the side panel collapsed",
+          got["drawer"][0] == 1.0 and got["drawer"][1] > 100, got["drawer"])
+    check("control: and closes again", got["drawerclosed"][0] == 1.0,
+          got["drawerclosed"])
 
     check("control: the name line shows a label, not a raw id",
           "_" in str(got.get("named_label", "")) or

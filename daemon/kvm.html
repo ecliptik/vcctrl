@@ -200,7 +200,7 @@
     /* Only the sections the open tab wants. */
     #panels.only-sound > section:not(#sec-sound),
     #panels.only-power > section:not(#sec-power),
-    #panels.only-set   > section:not(#settings) { display:none; }
+
   }
   /* The kbd chip is the affordance now that the instruction bar is gone. */
   /* font:inherit here took the BODY font -- 15px sans -- while every other
@@ -384,7 +384,18 @@
   button.on { border-color:var(--green); color:var(--green); }
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
-  #sidebtn { font-size:15px; min-width:34px; padding:0; }
+  #sidebtn { min-width:38px; padding:0; color:var(--muted); }
+  #sidebtn svg { width:19px; height:19px; display:block; margin:0 auto; }
+  #sidebtn .frame { fill:none; stroke:currentColor; stroke-width:1.4; }
+  #sidebtn .pane  { fill:currentColor; opacity:0; transition:opacity .12s linear; }
+  /* Filled while the panel is there, empty while it is not: the icon shows
+     the state, which is how the sidebar toggles people already use behave.
+     Driven off aria-expanded rather than a class, so the accessible state and
+     the drawn state cannot disagree -- and so it does not pick up the global
+     .on rule, which paints a green border and is far too loud for a layout
+     preference sitting between a gear and a sun. */
+  #sidebtn[aria-expanded="true"] { color:var(--text); }
+  #sidebtn[aria-expanded="true"] .pane { opacity:.85; }
   /* Icon buttons: the glyph IS the label, so it gets the room a label would
      have had. Emoji presentation is explicit -- ☀ and ⚙ have text-default
      codepoints and rendered as flat outlines beside colour emoji elsewhere on
@@ -474,8 +485,30 @@
   .k-taint{color:var(--red);font-weight:600} .k-vid{color:var(--green)}
 
   #sheethdr { display:none; }
-  #settings { display:none; }
-  #settings.show { display:block; }
+  /* SETTINGS IS ITS OWN SURFACE. It used to be a section inside the side
+     panel, which meant it overlaid the log it was sharing a column with, and
+     collapsing that column took the settings with it -- the gear did nothing
+     at all. A drawer belongs to the window, not to the panel beside it. */
+  #settings {
+    position:fixed; top:0; right:0; bottom:0; width:min(390px, 100vw);
+    z-index:70; background:var(--panel); border-left:1px solid var(--rule);
+    display:flex; flex-direction:column; box-shadow:-14px 0 34px rgba(0,0,0,.34);
+  }
+  #settings[hidden] { display:none; }
+  #setbody { overflow-y:auto; -webkit-overflow-scrolling:touch;
+             padding:10px 14px 24px; }
+  #sethdr {
+    flex:none; display:flex; align-items:center; justify-content:space-between;
+    gap:10px; padding:10px 12px 10px 14px; border-bottom:1px solid var(--rule);
+    padding-top:calc(10px + env(safe-area-inset-top,0px));
+    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:var(--dim);
+  }
+  #setclose { min-width:38px; padding:0; font-size:15px; }
+  /* Click-off. Not a dark scrim over the picture: this page exists to show
+     you the picture, and dimming it to change a theme is the wrong trade. */
+  #setback { position:fixed; inset:0; z-index:69; background:transparent; }
+  #setback[hidden] { display:none; }
   #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
                     font:var(--t-read)/1.3 var(--sans); cursor:pointer; }
   #settings input[type=checkbox] { accent-color:var(--green); width:17px;
@@ -572,12 +605,22 @@
       <option value="2">2× original</option>
       <option value="4">4× original</option>
     </select>
-    <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
-            title="Switch between the light and dark half of this theme">☀️</button>
+    <!-- A drawn icon, not a glyph: every character that means "panel" either
+         carries an emoji presentation or renders differently in each font,
+         and the last two attempts here were a chevron pointing nowhere in
+         particular and a large orange play button. This is the editor
+         convention -- a pane on the right, filled while it is there. -->
     <button id="sidebtn" aria-expanded="true" aria-controls="body"
-            title="Hide the side panel and give the space to the picture">❯</button>
+            title="Hide the side panel and give the space to the picture">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect class="frame" x="2" y="3.6" width="16" height="12.8" rx="2.4"/>
+        <rect class="pane" x="12.1" y="4.9" width="4.6" height="10.2" rx="1.2"/>
+      </svg>
+    </button>
     <button id="gbtn" class="ibtn" aria-label="settings"
             title="Open the settings panel">⚙️</button>
+    <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
+            title="Switch between the light and dark half of this theme">☀️</button>
   </header>
 
   <div id="stage">
@@ -636,24 +679,13 @@
             title="Send Ctrl+Alt+Delete — reboots the target">C-A-Del</button>
   </div>
 
-  <div id="tabs">
-    <button data-tab="none" class="on" title="Just the picture">SCREEN</button>
-    <button data-tab="keys" title="The key rail and the command line">KEYS</button>
-    <button data-tab="sound" title="Sound and volume">SOUND</button>
-    <button data-tab="power" title="Mains power and the input link">POWER</button>
-    <button data-tab="log" title="What the daemon has been doing">LOG</button>
-    <button data-tab="set" title="Settings">⚙</button>
+<div id="setback" hidden></div>
+<aside id="settings" role="dialog" aria-modal="false" aria-label="Settings" hidden>
+  <div id="sethdr">
+    <span>Settings</span>
+    <button id="setclose" title="Close settings">✕</button>
   </div>
-
-  <div id="body">
-   <div id="sheethdr">
-     <span id="sheettitle">Activity</span>
-     <button id="sheetclose" title="Close this panel">✕ Close</button>
-   </div>
-   <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
-   <div id="log"></div>
-   <div id="panels">
-    <section id="settings">
+  <div id="setbody">
       <h2>Theme</h2>
       <div id="themes"></div>
       <div class="row" style="margin-bottom:8px">
@@ -684,8 +716,26 @@
       <label><input type="checkbox" id="opt-mine">
         This browser&rsquo;s own commands</label>
       <div class="hint">Off by default: you know what you just did.</div>
-    </section>
+  </div>
+</aside>
 
+  <div id="tabs">
+    <button data-tab="none" class="on" title="Just the picture">SCREEN</button>
+    <button data-tab="keys" title="The key rail and the command line">KEYS</button>
+    <button data-tab="sound" title="Sound and volume">SOUND</button>
+    <button data-tab="power" title="Mains power and the input link">POWER</button>
+    <button data-tab="log" title="What the daemon has been doing">LOG</button>
+    <button data-tab="set" title="Settings">⚙</button>
+  </div>
+
+  <div id="body">
+   <div id="sheethdr">
+     <span id="sheettitle">Activity</span>
+     <button id="sheetclose" title="Close this panel">✕ Close</button>
+   </div>
+   <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
+   <div id="log"></div>
+   <div id="panels">
     <section id="sec-sound">
       <h2>Sound</h2>
       <div id="meter">
@@ -1479,7 +1529,19 @@ for (const k of Object.keys(OPTS)) {
     else renderLog();     // re-render rather than filter-on-arrival, so a
   };                      // toggle shows history you had hidden
 }
-$('gbtn').onclick = () => $('settings').classList.toggle('show');
+function showSettings(on) {
+  $('settings').hidden = !on;
+  $('setback').hidden = !on;
+  $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
+}
+$('gbtn').onclick = () => showSettings($('settings').hidden);
+$('setclose').onclick = () => showSettings(false);
+$('setback').onclick = () => showSettings(false);
+addEventListener('keydown', e => {
+  // Only while the target is NOT taking keys: an Escape meant for a DOS menu
+  // must not be eaten by a panel that happens to be open behind it.
+  if (e.key === 'Escape' && !armed && !$('settings').hidden) showSettings(false);
+});
 
 // Traffic the harness generates to ASK QUESTIONS rather than to do anything.
 // at_prompt() toggles Caps Lock and reads the LED back, so a readiness check
@@ -1750,7 +1812,8 @@ function setTab(name) {
   const body = $('body'), panels = $('panels');
   // The long panels open as a full-screen sheet; the short ones stay a strip
   // at the bottom. Reading a log through a 150px window is not reading.
-  const asSheet = (name === 'log' || name === 'set');
+  // Settings is a drawer of its own now, not one of these panels.
+  const asSheet = (name === 'log');
   for (const b of document.querySelectorAll('#tabs button'))
     b.classList.toggle('on', b.dataset.tab === name);
   $('cmdbar').classList.toggle('open', name === 'keys');
@@ -1760,13 +1823,12 @@ function setTab(name) {
   if (asSheet) body.classList.add('sheet');
   if (asSheet) {
     body.classList.add('sheet');
-    $('sheettitle').textContent = name === 'log' ? 'Activity' : 'Settings';
+    $('sheettitle').textContent = 'Activity';
   }
   if (name === 'log') body.classList.add('show-log');
   else if (name === 'sound') { body.classList.add('show-panels'); panels.classList.add('only-sound'); }
   else if (name === 'power') { body.classList.add('show-panels'); panels.classList.add('only-power'); }
-  else if (name === 'set')   { body.classList.add('show-panels'); panels.classList.add('only-set');
-                               $('settings').classList.add('show'); }
+  else if (name === 'set')   { showSettings(true); body.classList.add('closed'); }
   else body.classList.add('closed');
   localStorage.setItem('vcctrl.tab', name);
   setTimeout(() => applyZoom(true), 80);   // the stage just changed size
@@ -1937,9 +1999,6 @@ addEventListener('resize', () => applyZoom());
   const b = $('sidebtn');
   const set = hide => {
     document.body.classList.toggle('nopanel', hide);
-    // Not ▶/◀: those carry an emoji presentation and came out as a large
-    // orange play button beside two actual emoji.
-    b.textContent = hide ? '❮' : '❯';
     b.title = hide ? 'Show the side panel'
                    : 'Hide the side panel and give the space to the picture';
     b.setAttribute('aria-expanded', hide ? 'false' : 'true');
