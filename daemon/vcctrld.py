@@ -1659,6 +1659,19 @@ class VideoCapability(Capability):
                     "ring_bytes": self.ring_bytes,
                     "fast_failures": self.fast_failures,
                     "last_error": self.last_error,
+                    # THREE situations currently render identically as "no
+                    # signal": the stick is unplugged (someone's hand is on the
+                    # cable), the stick is present but will not open (a fault),
+                    # and the stick is open on a dark target (the machine is
+                    # off). Only the third is "no signal". This separates the
+                    # first, and last_error separates the second.
+                    #
+                    # It matters most during a board swap, when the capture
+                    # stick is swapped with the board and the device genuinely
+                    # is absent for a minute -- reporting that as a fault would
+                    # be the instrument's own state reported as the target's.
+                    "device_present": os.path.exists(self.DEVICE),
+                    "device": self.DEVICE,
                     "pinned": self.pinned_at is not None,
                     "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
                     if len(self.ring) > 1 else 0.0,
@@ -1984,8 +1997,39 @@ class AudioCapability(Capability):
                     "bytes": self.bytes_total, "spawns": self.spawns,
                     "ring_chunks": len(self.ring), "ring_bytes": self.ring_bytes,
                     "last_chunk_age_s": round(age, 3) if age else None,
+                    # Same three-way distinction as video. ALSA has no path to
+                    # stat, so presence is "does the card list still name it".
+                    # hw:N,D is an index and indices are not stable across
+                    # hardware, so an absent card is exactly what a swap looks
+                    # like from here.
+                    "device_present": self._device_present(),
+                    "device": self.DEVICE,
                     "fast_failures": self.fast_failures,
                     "last_error": self.last_error}
+
+    def _device_present(self):
+        """Is the configured ALSA device still in the card list?
+
+        Deliberately tolerant: any parse failure returns None rather than
+        False, because "I could not tell" and "it is gone" are different
+        answers and this rig has paid for collapsing them before.
+        """
+        dev = self.DEVICE or ""
+        try:
+            with open("/proc/asound/cards") as f:
+                cards = f.read()
+        except OSError:
+            return None
+        if dev.startswith("hw:CARD="):
+            name = dev[len("hw:CARD="):].split(",")[0]
+            return ("[" + name) in cards.replace(" ", "") or name in cards
+        if dev.startswith("hw:"):
+            idx = dev[3:].split(",")[0]
+            if not idx.isdigit():
+                return None
+            return any(line.strip().startswith(idx + " ")
+                       for line in cards.splitlines())
+        return None
 
     def _audio(self, req):
         action = req.get("action", "state")
