@@ -527,10 +527,10 @@ class Activity(object):
         self.inflight = {}
         self.next_id = 0
 
-    def begin(self, cmd):
+    def begin(self, cmd, who=None):
         with self.lock:
             self.next_id += 1
-            self.inflight[self.next_id] = (cmd, time.time())
+            self.inflight[self.next_id] = (cmd, time.time(), who)
             return self.next_id
 
     def end(self, ident):
@@ -540,9 +540,13 @@ class Activity(object):
     def report(self):
         now = time.time()
         with self.lock:
+            # `by` is here so a caller can tell a viewer's poll from a
+            # harness command. Without it the deploy guard refused on a
+            # browser's own 1.5s status poll, which is not a run and not
+            # something worth protecting.
             return sorted(
-                ({"cmd": c, "age_s": round(now - t0, 3)}
-                 for c, t0 in self.inflight.values()),
+                ({"cmd": c, "age_s": round(now - t0, 3), "by": who}
+                 for c, t0, who in self.inflight.values()),
                 key=lambda d: -d["age_s"])
 
 
@@ -1880,7 +1884,7 @@ class Registry(object):
                                  by=req.get("as"))
                 return refusal
 
-        ident = self.activity.begin(cmd)
+        ident = self.activity.begin(cmd, req.get("as"))
         t0 = time.time()
         try:
             resp = fn(req)

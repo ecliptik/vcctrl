@@ -161,8 +161,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _json(self, obj, code=200):
-        self._send(code, json.dumps(obj), "application/json")
+    def _json(self, obj, code=200, extra=None):
+        self._send(code, json.dumps(obj), "application/json", extra)
 
     # -- routes -------------------------------------------------------------
 
@@ -175,7 +175,13 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(HERE, "themes.css"), "rb") as f:
                     return self._send(200, f.read(), "text/css; charset=utf-8")
             if path == "/state.json":
-                return self._json(self.cap.snapshot())
+                # CORS on this endpoint only. The page is served from :443 and
+                # must be able to ask whether :8443 is reachable from THIS
+                # device before trying to open a socket there -- otherwise an
+                # unreachable port and a broken WebSocket are the same 1006.
+                # Read-only, tailnet-only, no secrets.
+                return self._json(self.cap.snapshot(),
+                                  extra={"Access-Control-Allow-Origin": "*"})
             if path in ("/shot.jpg", "/lastgood.jpg"):
                 cmd = "shot" if path == "/shot.jpg" else "lastgood"
                 args = {}

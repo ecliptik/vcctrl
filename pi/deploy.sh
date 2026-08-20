@@ -42,8 +42,14 @@ guard_busy() {
   [ -n "$state" ] || return 0        # daemon down: nothing to interrupt
   owner="$(printf '%s' "$state" | python3 -c \
       'import json,sys; print((json.load(sys.stdin).get("lock") or {}).get("owner") or "")' 2>/dev/null || true)"
+  # Count only in-flight work that is NOT a browser's own poll. Every open
+  # viewer polls status every 1.5 s, so counting those refused deploys while
+  # nothing was running -- the guard cannot protect a run it cannot tell apart
+  # from a page being open.
   inflight="$(printf '%s' "$state" | python3 -c \
-      'import json,sys; print(len(json.load(sys.stdin).get("inflight") or []))' 2>/dev/null || echo 0)"
+      'import json,sys
+d = json.load(sys.stdin).get("inflight") or []
+print(sum(1 for i in d if i.get("by") not in ("browser", None)))' 2>/dev/null || echo 0)"
   if [ -n "$owner" ]; then
     echo "REFUSING TO DEPLOY: the input lock is held by '$owner'." >&2
     echo "A restart would kill whatever they are running. Ask them, or set" >&2

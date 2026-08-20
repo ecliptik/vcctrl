@@ -87,6 +87,17 @@
     text-transform:uppercase; color:var(--dim); white-space:nowrap; flex:none;
   }
   .chip b { color:var(--muted); font-weight:500; }
+  /* On a phone the rail scrolled sideways and cut "LINK MJP..." in half, which
+     is a status bar you have to operate rather than read. The words are for
+     desktop; the values carry the meaning on their own. */
+  @media (max-width:640px) {
+    h1 { display:none; }
+    .chip { font-size:10.5px; letter-spacing:.04em; }
+    .chiplabel { display:none; }
+    header { gap:8px; padding:0 8px; height:calc(40px + env(safe-area-inset-top,0px)); }
+    .lamp span { display:none; }
+    #zoom { max-width:104px; }
+  }
   /* The kbd chip is the affordance now that the instruction bar is gone. */
   .chipb { background:transparent; border:0; padding:0; min-height:0;
            cursor:pointer; font:inherit; letter-spacing:.06em; }
@@ -149,15 +160,23 @@
     background:rgba(0,0,0,.84); text-align:center;
   }
   #veil.show { display:flex; }
-  #veil .big { font:600 var(--t-state)/1.25 var(--mono); color:var(--yellow);
-               letter-spacing:.02em; }
+  /* Sized against the VIEWPORT, not a fixed scale. At 20px/15px on a 390px
+     phone the notice was larger than the picture it was explaining and pushed
+     its own buttons over the screen. It should be readable and then get out of
+     the way. */
+  #veil { gap:4px; padding:10px; }
+  #veil .big { font:600 clamp(12px, 3.6vw, 18px)/1.25 var(--mono);
+               color:var(--yellow); letter-spacing:.02em; }
   /* Wider and larger. At 46ch the explanation set as a narrow column in the
      middle of a black screen, which reads as a blob rather than as a sentence.
      72ch is a comfortable measure and the picture behind it is 4:3 anyway. */
-  #veil .sub { color:#c8c8c2; font:var(--t-read)/1.55 var(--sans);
-               max-width:72ch; }
-  #veil .age { color:#9a9a94; font:var(--t-data)/1.4 var(--mono); }
-  #veil .row { display:flex; gap:8px; margin-top:4px; }
+  #veil .sub { color:#c8c8c2; max-width:62ch;
+               font:clamp(10px, 2.9vw, 14px)/1.45 var(--sans); }
+  #veil .age { color:#9a9a94; font:clamp(9px, 2.6vw, 12px)/1.4 var(--mono); }
+  #veil .row { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;
+               justify-content:center; }
+  #veil .row button { font:clamp(10px, 2.8vw, 13px) var(--sans);
+                      min-height:32px; padding:0 9px; }
 
   /* ── rails ───────────────────────────────────────────────────────────── */
   /* Full width under the picture: a command line in a 340px sidebar could not
@@ -326,10 +345,10 @@
   <header>
     <h1>vcctrl-kvm</h1>
     <span id="state" aria-live="polite">—</span>
-    <span id="c-lock" class="chip">input <b>—</b></span>
-    <span id="c-power" class="chip">power <b>—</b></span>
-    <span id="c-xport" class="chip">link <b>—</b></span>
-    <button id="c-kbd" class="chip chipb">kbd <b>idle</b></button>
+    <span id="c-lock" class="chip"><span class="chiplabel">input </span><b>—</b></span>
+    <span id="c-power" class="chip"><span class="chiplabel">power </span><b>—</b></span>
+    <span id="c-xport" class="chip"><span class="chiplabel">link </span><b>—</b></span>
+    <button id="c-kbd" class="chip chipb"><span class="chiplabel">kbd </span><b>idle</b></button>
     <span class="grow"></span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove">
       <span class="lamp" id="lamp-caps"><i></i><span>CAP</span></span>
@@ -584,8 +603,31 @@ function wsURL() {
 
 let lastWsURL = '(none)';
 
+// Can this DEVICE reach the socket's port at all? A page loaded from :443 can
+// be perfectly healthy while :8443 is unreachable from the phone it is running
+// on -- and both produce close code 1006 with zero frames, which is what made
+// this ambiguous for four rounds. Ask before assuming the socket is at fault.
+let portOK = null;
+async function checkPort() {
+  const u = wsURL();
+  if (!u.includes(':' + tlsPort + '/')) { portOK = true; return true; }
+  try {
+    const r = await fetch(`https://${location.hostname}:${tlsPort}/state.json`,
+                          {cache:'no-store'});
+    portOK = r.ok;
+  } catch (e) {
+    portOK = false;
+  }
+  if (!portOK)
+    addLine(new Date(), 'transport',
+            `port ${tlsPort} is not reachable from this device — `
+            + 'staying on the mjpeg stream', 'k-lock');
+  return portOK;
+}
+
 function connect() {
   if (!OPTS.ws) { useMjpeg('disabled in settings'); return; }
+  if (portOK === false) { useMjpeg('port ' + tlsPort + ' unreachable'); return; }
   let sock;
   try {
     lastWsURL = wsURL();
@@ -696,10 +738,20 @@ async function post(cmd, body) {
     const r = await fetch('/cmd', {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(Object.assign({cmd}, body))});
-    const j = await r.json();
-    if (!j.ok) note(j.error || 'refused');
+    const text = await r.text();
+    let j;
+    try { j = JSON.parse(text); }
+    catch (e) {
+      // A daemon restart makes the proxy answer with an HTML error page, and
+      // JSON.parse on that produced "SyntaxError: The string did not match the
+      // expected pattern" in the log -- a message about parsing, with no hint
+      // that a request had failed or which one. Say what actually happened.
+      note(`${cmd}: HTTP ${r.status} — ${text.slice(0, 60) || 'empty reply'}`);
+      return;
+    }
+    if (!j.ok) note(`${cmd}: ${j.error || 'refused'}`);
     return j;
-  } catch (e) { note(String(e)); }
+  } catch (e) { note(`${cmd}: ${e}`); }
 }
 
 // Sticky modifiers. Tap Ctrl, then a key: the pair goes as one chord. This is
@@ -1290,8 +1342,10 @@ async function pollState() {
   $('s-viewers').textContent = j.viewers ?? '–';
   if (j.tls_port !== undefined && j.tls_port !== tlsPort) {
     tlsPort = j.tls_port;
-    // If the socket was disabled only because it could not work, it can now.
-    if (OPTS.ws && tlsPort && xport === 'mjpeg') restart();
+    // Check reachability before retrying, so an unreachable port is reported
+    // as an unreachable port rather than as a websocket that keeps failing.
+    if (OPTS.ws && tlsPort && xport === 'mjpeg')
+      checkPort().then(ok => { if (ok) restart(); });
   }
   if (j.build && BUILD !== '__' + 'BUILD__' && j.build !== BUILD)
     $('stalebar').classList.add('show');
