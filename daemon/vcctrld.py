@@ -1118,6 +1118,103 @@ def _keep_stderr(cap, proc):
         except Exception:
             pass
 
+# ── MJPEG IN AVI ──────────────────────────────────────────────────────────
+# The ring already holds JPEGs. Muxing them into a container costs no encode
+# and loses no byte: what plays back is exactly what the daemon judged, which
+# matters when the file is evidence about why a picture stopped. Re-encoding
+# to H.264 would put the Pi's compressor between the fault and the person
+# looking at it, and an artefact would then be unattributable.
+#
+# AVI rather than Matroska because AVI's MJPEG support is universal -- VLC,
+# mpv, QuickTime and ffmpeg all open it without a codec pack -- and because
+# writing it is 100 lines with no dependency.
+
+def jpeg_dims(buf):
+    """Width and height from a JPEG's SOF marker, or None.
+
+    Read rather than assumed. The Gateway's stick emits 640x480 today and a
+    Macintosh capture will not, and a container header that disagrees with its
+    frames plays as a smear rather than as an error.
+    """
+    i, n = 2, len(buf)
+    while i + 9 < n:
+        if buf[i] != 0xFF:
+            i += 1
+            continue
+        m = buf[i + 1]
+        if m == 0xFF:
+            i += 1
+            continue
+        if m in (0xD8, 0x01) or 0xD0 <= m <= 0xD7:
+            i += 2
+            continue
+        seg = (buf[i + 2] << 8) | buf[i + 3]
+        # SOF0..SOF15, except DHT (C4), JPG (C8) and DAC (CC), which are not
+        # frame headers and would give a plausible wrong answer if read as one.
+        if 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+            return ((buf[i + 7] << 8) | buf[i + 8],
+                    (buf[i + 5] << 8) | buf[i + 6])
+        if seg < 2:
+            return None
+        i += 2 + seg
+    return None
+
+
+def avi_mjpeg(frames, fps, width, height):
+    """Mux JPEG frames into an AVI. `frames` is a list of bytes, in order.
+
+    Fixed rate: AVI has one frame interval for the whole file. The ring is
+    NOT evenly spaced -- it is thinned when bytes run out -- so the caller
+    repeats a frame to cover the time it was on screen. That is what keeps a
+    stall looking like a stall instead of being smoothed into motion.
+    """
+    import struct
+
+    def chunk(fourcc, payload):
+        pad = b"\x00" * (len(payload) & 1)
+        return fourcc + struct.pack("<I", len(payload)) + payload + pad
+
+    biggest = max((len(f) for f in frames), default=0)
+    rate = int(round(fps * 1000))
+    avih = struct.pack(
+        "<14I",
+        int(round(1000000.0 / fps)),      # dwMicroSecPerFrame
+        int(biggest * fps),               # dwMaxBytesPerSec
+        0,                                # dwPaddingGranularity
+        0x10,                             # dwFlags: AVIF_HASINDEX
+        len(frames),                      # dwTotalFrames
+        0,                                # dwInitialFrames
+        1,                                # dwStreams
+        biggest,                          # dwSuggestedBufferSize
+        width, height, 0, 0, 0, 0)
+    strh = (b"vids" + b"MJPG" + struct.pack("<I", 0) + struct.pack("<HH", 0, 0)
+            + struct.pack("<7I", 0, 1000, rate, 0, len(frames), biggest,
+                          0xFFFFFFFF)
+            + struct.pack("<I", 0)
+            + struct.pack("<4H", 0, 0, width, height))
+    # BITMAPINFOHEADER is eleven fields, not ten, and the two pixels-per-metre
+    # ones are SIGNED: biSize, biWidth, biHeight, biPlanes, biBitCount,
+    # biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed,
+    # biClrImportant -- 40 bytes.
+    strf = struct.pack("<I2i2H2I2i2I", 40, width, height, 1, 24,
+                       0x47504A4D,          # 'MJPG' little-endian
+                       biggest, 0, 0, 0, 0)
+    hdrl = chunk(b"LIST", b"hdrl" + chunk(b"avih", avih)
+                 + chunk(b"LIST", b"strl" + chunk(b"strh", strh)
+                         + chunk(b"strf", strf)))
+
+    movi, idx, off = [b"movi"], [], 4
+    for f in frames:
+        pad = len(f) & 1
+        movi.append(b"00dc" + struct.pack("<I", len(f)) + f + b"\x00" * pad)
+        # 0x10 is AVIIF_KEYFRAME. Every MJPEG frame is a keyframe, which is
+        # also why seeking in this file is exact rather than approximate.
+        idx.append(b"00dc" + struct.pack("<3I", 0x10, off, len(f)))
+        off += 8 + len(f) + pad
+    body = (hdrl + chunk(b"LIST", b"".join(movi))
+            + chunk(b"idx1", b"".join(idx)))
+    return b"RIFF" + struct.pack("<I", len(body) + 4) + b"AVI " + body
+
 
 class VideoCapability(Capability):
     """Owns /dev/video0 for the life of the daemon and fans frames out.
@@ -1666,6 +1763,68 @@ class VideoCapability(Capability):
                 "ring_bytes": used, "cap_bytes": cap,
                 "thin_passes": thins, "mem_limited": memlim,
                 "target_span_s": self.TARGET_SPAN_S}
+
+    def buffer_avi(self, first=None, last=None):
+        """Snapshot the ring and mux it into a playable AVI.
+
+        Returns (bytes, meta). Called directly rather than through the command
+        table because the result is forty megabytes of binary and the command
+        path is JSON -- base64 would inflate it by a third for no reason.
+
+        THE SNAPSHOT IS THE WHOLE TRICK. One `list()` under the lock takes a
+        reference to every frame, so the ring may roll, thin and evict for the
+        rest of this call and nothing under us can be freed. The web page's
+        old version walked the ring one HTTP request per frame and lost the
+        race the moment the signal came back: eviction ran ahead of the copy
+        and each remaining fetch 404'd, so the download quietly produced
+        almost nothing. A pin would also have worked; not needing one is
+        better, because it cannot be forgotten.
+        """
+        with self.lock:
+            items = list(self.ring)
+        if first is not None:
+            items = [i for i in items if i[1] >= first]
+        if last is not None:
+            items = [i for i in items if i[1] <= last]
+        if not items:
+            return None, {"error": "the buffer is empty"}
+
+        dims = None
+        for _t, _s, f in items:
+            dims = jpeg_dims(f)
+            if dims:
+                break
+        if not dims:
+            return None, {"error": "no frame carried a readable JPEG header"}
+
+        # THE NOMINAL RATE COMES FROM THE DATA. Picking 30 would repeat every
+        # frame of a ring thinned to 17 fps and double the file for nothing;
+        # picking the average would quantise away the very stalls this file
+        # exists to show. The median gap is the rate at which the buffer is
+        # actually spaced, so an evenly-thinned buffer produces no repeats at
+        # all and a stall produces exactly as many as it lasted.
+        gaps = sorted(items[i + 1][0] - items[i][0]
+                      for i in range(len(items) - 1))
+        med = gaps[len(gaps) // 2] if gaps else 1 / 15.0
+        fps = min(30.0, max(1.0, round(1.0 / med) if med > 0 else 15.0))
+
+        out, repeats = [], 0
+        for i, (t, _sq, f) in enumerate(items):
+            dur = (items[i + 1][0] - t) if i + 1 < len(items) else med
+            n = max(1, int(round(dur * fps)))
+            n = min(n, int(fps * 5))      # a gap longer than 5s is a gap, not
+                                          # 400 copies of one frame
+            out.extend([f] * n)
+            repeats += n - 1
+        blob = avi_mjpeg(out, fps, dims[0], dims[1])
+        span = items[-1][0] - items[0][0]
+        return blob, {
+            "frames": len(items), "written": len(out), "repeated": repeats,
+            "fps": round(fps, 2), "width": dims[0], "height": dims[1],
+            "span_s": round(span, 2), "bytes": len(blob),
+            "first_seq": items[0][1], "last_seq": items[-1][1],
+            "first_t": round(items[0][0], 3), "last_t": round(items[-1][0], 3),
+        }
 
     def _frame(self, req):
         """One frame by sequence number. Raw, and labelled raw.

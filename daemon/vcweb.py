@@ -231,6 +231,31 @@ class Handler(BaseHTTPRequestHandler):
                                    "X-Frame-Mean": str(r.get("mean"))})
             if path == "/timeline.json":
                 return self._json(self.cap.call("timeline", {}))
+            if path == "/buffer.avi":
+                # ONE REQUEST FOR THE WHOLE BUFFER. The page used to fetch
+                # every frame separately -- five hundred round trips, each
+                # base64'd through the JSON command path -- which was slow
+                # enough to lose a race with the ring's own eviction. This
+                # goes straight to the capability and returns raw bytes.
+                a = {}
+                if "?" in self.path:
+                    for part in self.path.split("?", 1)[1].split("&"):
+                        k, _, v = part.partition("=")
+                        if k in ("from", "to") and v.isdigit():
+                            a[k] = int(v)
+                vid = self.cap.registry.caps.get("video")
+                if vid is None or not hasattr(vid, "buffer_avi"):
+                    return self._json({"ok": False,
+                                       "error": "no video capability"}, 503)
+                blob, meta = vid.buffer_avi(a.get("from"), a.get("to"))
+                if blob is None:
+                    return self._json({"ok": False, "error": meta.get("error")},
+                                      503)
+                name = "vcctrl-buffer-%s.avi" % time.strftime("%Y%m%dT%H%M%S")
+                return self._send(200, blob, "video/x-msvideo", {
+                    "Content-Disposition": 'attachment; filename="%s"' % name,
+                    "X-Buffer-Meta": json.dumps(meta),
+                })
             if path == "/frame.jpg":
                 seq = 0
                 if "?" in self.path:
@@ -471,6 +496,9 @@ class WebCapability(object):
         "mouse_move", "mouse_click", "power", "leds", "status", "caps",
         "events", "activity", "lock", "shot", "lastgood", "video",
         "framestats", "verify_input", "buffer",
+        # The page holds the ring while there is no picture, so the seconds
+        # that explain an outage are not overwritten by the signal returning.
+        "pin", "timeline",
         # Read-only. `level` is needed by both the page meter and by
         # bin/vcctrl-audio, which reaches the daemon over HTTPS now that plain
         # http is off -- it was missing here and the tool got a 403.

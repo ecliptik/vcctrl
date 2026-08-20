@@ -373,7 +373,29 @@
     width:640px; height:480px; max-width:none; max-height:none;
     image-rendering:pixelated; display:block;
   }
-  #stage #stale { position:absolute; inset:0; }
+  #stage #stale, #stage #review { position:absolute; inset:0; }
+  #scrub {
+    position:absolute; left:10px; right:10px; bottom:10px; z-index:60;
+    background:var(--panel); border:1px solid var(--rule); border-radius:9px;
+    box-shadow:0 12px 30px rgba(0,0,0,.36); padding:8px 10px;
+    display:flex; flex-direction:column; gap:7px;
+  }
+  #scrub[hidden] { display:none; }
+  #scrubtrack {
+    position:relative; height:26px; border:1px solid var(--rule);
+    border-radius:5px; overflow:hidden; background:var(--bg); cursor:pointer;
+  }
+  #scrubmap { display:block; width:100%; height:100%; }
+  /* The selection is a tint, not a box: a border here would sit on top of the
+     density map and hide the very gaps the map exists to show. */
+  #scrubsel { position:absolute; top:0; bottom:0; background:var(--green);
+              opacity:.18; display:none; pointer-events:none; }
+  #scrubhead { position:absolute; top:0; bottom:0; width:2px;
+               background:var(--yellow); pointer-events:none; }
+  #scrubbar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  #scrubbar button { min-height:30px; padding:0 9px; }
+  #scrubpos { font:var(--t-micro)/1 var(--mono); color:var(--dim);
+              white-space:nowrap; }
   /* A label and a caret, not a form field. The one boxed control in a rail
      of borderless icons is the thing your eye keeps going back to, which is
      the wrong place for it: the picture is what deserves that. */
@@ -995,8 +1017,31 @@
      <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
      <img id="mjpeg" style="display:none" alt="">
      <img id="stale" style="display:none" alt="">
+     <img id="review" style="display:none" alt="a frame from the buffer">
     </div>
    </div>
+    <!-- THE SCRUB BAR. An overlay rather than a row, for the same reason the
+         key rail became a menu: a row would re-fit the picture the moment you
+         reached for the timeline. -->
+    <div id="scrub" hidden>
+      <div id="scrubtrack" title="Click or drag to move through the buffer">
+        <canvas id="scrubmap"></canvas>
+        <div id="scrubsel"></div>
+        <div id="scrubhead"></div>
+      </div>
+      <div id="scrubbar">
+        <button id="scrubprev" title="Back one frame (←)">◀</button>
+        <button id="scrubplay" title="Play the buffer through">▶ Play</button>
+        <button id="scrubnext" title="Forward one frame (→)">▶</button>
+        <span class="sep" aria-hidden="true">|</span>
+        <button id="scrubin" title="Start the selection here">Mark in</button>
+        <button id="scrubout" title="End the selection here">Mark out</button>
+        <button id="scrubsave" title="Save the selected range as a video">Save range</button>
+        <span class="grow"></span>
+        <span id="scrubpos">—</span>
+        <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
+      </div>
+    </div>
     <div id="zhint" aria-hidden="true"></div>
     <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
            autocomplete="off" enterkeyhint="enter" aria-label="type at the target">
@@ -1007,7 +1052,8 @@
       <div class="row">
         <button id="dimbtn" title="Hide this notice and show the last frame it captured">Show last frame</button>
         <button id="savebtn" title="Download this frame as a JPEG">Save this frame</button>
-        <button id="savebuf" title="Download the whole scrub buffer, so what led up to this can be replayed">Save buffer</button>
+        <button id="reviewbtn" title="Step back through the seconds before it stopped">Review buffer</button>
+        <button id="savebuf" title="Download the buffer as a video, so what led up to this can be replayed">Save buffer</button>
       </div>
     </div>
     <!-- Bring the notice back. Dismissing it is useful -- the last frame is
@@ -1201,6 +1247,8 @@
   <button data-zoom="2" title="Twice the captured size">200% Original</button>
   <button data-zoom="4" title="Four times the captured size">400% Original</button>
   <hr>
+  <button id="reviewitem"
+          title="Step back through the last seconds the daemon kept">Review buffer</button>
   <button id="refresh"
           title="Restart the capture if the picture is stuck">Refresh video</button>
   <hr>
@@ -2624,6 +2672,188 @@ function applyStale() {
 // last frame at full brightness with nothing in front of it, and the corner
 // button puts the notice back, because a warning you cannot restore is a
 // warning you have deleted.
+// ── HOLD THE EVIDENCE ────────────────────────────────────────────────────
+// The ring is a rolling window. When the picture goes, the seconds that
+// explain it are already the oldest thing in it -- so if the signal comes
+// back before anyone reaches for Save, the frames that mattered are the first
+// to be overwritten. The daemon has had a pin for exactly this since the
+// scrub buffer was written, with a docstring saying so, and nothing has ever
+// called it. Now losing the picture takes it, and dismissing the notice or
+// saving gives it back.
+//
+// While pinned the daemon drops NEW frames rather than old ones, which is the
+// right way round here and is also why it must not be held indefinitely: a
+// KVM showing a held buffer while claiming to be live is the failure this
+// tool exists to prevent. The daemon expires it after 300s on its own.
+let pinned = false;
+function holdBuffer(on) {
+  if (on === pinned) return;
+  pinned = on;
+  post('pin', {action: on ? 'on' : 'off'});
+  addLine(new Date(), 'buffer',
+          on ? 'holding the buffer — no signal, so nothing is evicted'
+             : 'buffer released', 'k-note');
+}
+
+// ── REVIEWING THE BUFFER ─────────────────────────────────────────────────
+// The daemon has carried timeline/frame/pin since the ring was written and
+// nothing but a download has ever used them. This is the rest of it: step
+// through what the screen did, see where the buffer was thinned, and save a
+// range rather than all thirty seconds.
+let tl = null, tlAt = 0, bufFrom = null, bufTo = null;
+let reviewing = false, playTimer = null;
+
+async function enterReview() {
+  let j;
+  try {
+    j = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
+  } catch (e) { note('buffer: ' + e); return; }
+  if (!j || !j.frames || !j.frames.length) { note('the buffer is empty'); return; }
+  tl = j;
+  reviewing = true;
+  bufFrom = bufTo = null;
+  // Held for the whole session, not just the save: the point of stepping back
+  // through it is that it stops changing while you look.
+  holdBuffer(true);
+  $('scrub').hidden = false;
+  drawMap();
+  await seekIdx(tl.frames.length - 1);
+}
+
+function exitReview() {
+  stopPlay();
+  reviewing = false;
+  tl = null;
+  bufFrom = bufTo = null;
+  $('scrub').hidden = true;
+  $('review').style.display = 'none';
+  $('scrubsel').style.display = 'none';
+  holdBuffer(false);
+}
+
+// WHERE THE BUFFER WAS THINNED, drawn rather than described. The ring drops
+// every other frame when it runs out of bytes, so its spacing is not uniform
+// -- and a bar that looked uniform while stepping 1/30 s in one place and
+// 1/8 s in another would be lying about the one thing you came to see.
+function drawMap() {
+  const cv = $('scrubmap'), tr = $('scrubtrack');
+  const w = Math.max(1, Math.round(tr.clientWidth));
+  const h = Math.max(1, Math.round(tr.clientHeight));
+  cv.width = w; cv.height = h;
+  const x = cv.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const g = css.getPropertyValue('--green').trim();
+  const y = css.getPropertyValue('--yellow').trim();
+  const r = css.getPropertyValue('--red').trim();
+  x.clearRect(0, 0, w, h);
+  const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
+  // The median is the buffer's own idea of normal, so "thinned" means thinned
+  // RELATIVE TO THIS RECORDING rather than to a constant that would be wrong
+  // on a slower source.
+  const gaps = f.map(k => k.gap_ms).filter(v => v != null).sort((a, b) => a - b);
+  const med = gaps.length ? gaps[gaps.length >> 1] : 33;
+  for (const k of f) {
+    const px = Math.round(((k.t - t0) / span) * (w - 1));
+    const gm = k.gap_ms == null ? med : k.gap_ms;
+    x.fillStyle = gm > med * 4 ? r : gm > med * 1.8 ? y : g;
+    x.globalAlpha = gm > med * 1.8 ? 0.95 : 0.55;
+    x.fillRect(px, 0, 1, h);
+  }
+  x.globalAlpha = 1;
+}
+
+async function seekIdx(i) {
+  if (!tl) return;
+  tlAt = Math.max(0, Math.min(tl.frames.length - 1, i));
+  const k = tl.frames[tlAt];
+  const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
+  const tr = $('scrubtrack');
+  $('scrubhead').style.left =
+    Math.round(((k.t - t0) / span) * (tr.clientWidth - 2)) + 'px';
+  // Seconds BEFORE THE END, because that is the question being asked -- how
+  // long before it stopped did this happen -- not how far into a recording.
+  $('scrubpos').textContent =
+    '−' + (f[f.length - 1].t - k.t).toFixed(2) + 's · frame '
+    + (tlAt + 1) + '/' + f.length + ' · seq ' + k.seq
+    + (k.gap_ms != null ? ' · +' + k.gap_ms.toFixed(0) + 'ms' : '');
+  const img = $('review');
+  img.src = '/frame.jpg?seq=' + k.seq;
+  img.style.display = '';
+  // The reviewer's frame sits ON TOP of the live one, so hide the stale
+  // overlay or two pictures argue about the same rectangle.
+  $('stale').style.display = 'none';
+}
+
+function markRange() {
+  const sel = $('scrubsel');
+  if (bufFrom == null || bufTo == null) { sel.style.display = 'none'; return; }
+  const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
+  const at = sq => {
+    const k = f.find(v => v.seq === sq) || f[0];
+    return ((k.t - t0) / span) * ($('scrubtrack').clientWidth - 1);
+  };
+  const a = at(Math.min(bufFrom, bufTo)), b = at(Math.max(bufFrom, bufTo));
+  sel.style.left = Math.round(a) + 'px';
+  sel.style.width = Math.max(2, Math.round(b - a)) + 'px';
+  sel.style.display = 'block';
+}
+
+function stopPlay() {
+  clearInterval(playTimer);
+  playTimer = null;
+  $('scrubplay').textContent = '▶ Play';
+}
+
+$('scrubtrack').addEventListener('pointerdown', e => {
+  if (!tl) return;
+  const seek = ev => {
+    const r = $('scrubtrack').getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+    const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
+    const want = t0 + frac * span;
+    // Nearest by TIME, not by index: the buffer is not evenly spaced, so
+    // index-proportional seeking would land somewhere else entirely in a
+    // thinned stretch.
+    let best = 0, bd = Infinity;
+    f.forEach((k, i) => { const d = Math.abs(k.t - want);
+                          if (d < bd) { bd = d; best = i; } });
+    seekIdx(best);
+  };
+  stopPlay();
+  seek(e);
+  const move = ev => seek(ev);
+  const up = () => { removeEventListener('pointermove', move);
+                     removeEventListener('pointerup', up); };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+});
+$('scrubprev').onclick = () => { stopPlay(); seekIdx(tlAt - 1); };
+$('scrubnext').onclick = () => { stopPlay(); seekIdx(tlAt + 1); };
+$('scrubexit').onclick = exitReview;
+$('scrubin').onclick  = () => { bufFrom = tl.frames[tlAt].seq; markRange(); };
+$('scrubout').onclick = () => { bufTo   = tl.frames[tlAt].seq; markRange(); };
+$('scrubsave').onclick = () => $('savebuf').click();
+$('scrubplay').onclick = () => {
+  if (playTimer) { stopPlay(); return; }
+  $('scrubplay').textContent = '❚❚ Pause';
+  // Played at the buffer's own spacing: each step waits the gap the daemon
+  // recorded, so a stall plays back as a stall.
+  const step = () => {
+    if (!tl || tlAt >= tl.frames.length - 1) { stopPlay(); return; }
+    seekIdx(tlAt + 1);
+    const gap = tl.frames[tlAt].gap_ms;
+    clearTimeout(playTimer);
+    playTimer = setTimeout(step, Math.max(16, Math.min(2000, gap || 60)));
+  };
+  playTimer = setTimeout(step, 0);
+};
+addEventListener('keydown', e => {
+  if (!reviewing || e.target === $('line') || e.target === $('ghost')) return;
+  if (e.key === 'ArrowLeft')  { e.preventDefault(); stopPlay(); seekIdx(tlAt - 1); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); stopPlay(); seekIdx(tlAt + 1); }
+  if (e.key === 'Escape')     { e.preventDefault(); exitReview(); }
+});
+
 let veilHidden = false;
 function setVeilHidden(v) {
   veilHidden = v;
@@ -2633,89 +2863,61 @@ function setVeilHidden(v) {
   $('veil').classList.toggle('show', showing && !v);
   $('veilback').hidden = !(showing && v);
 }
-$('dimbtn').onclick = () => setVeilHidden(true);
+$('dimbtn').onclick = () => { setVeilHidden(true); holdBuffer(false); };
+$('reviewbtn').onclick = () => { setVeilHidden(true); enterReview(); };
+$('reviewitem').onclick = () => { closePop(); enterReview(); };
 $('veilback').onclick = () => setVeilHidden(false);
 // Save works on whatever is on screen: the last live frame while the stream is
 // frozen, the current one otherwise. Saving the dimmed version would be saving
 // the presentation rather than the evidence, so this always writes the
 // original bytes the capture stick produced.
 // ── SAVE THE BUFFER ───────────────────────────────────────────────────────
-// The frame on screen answers "what does it look like now". The buffer
-// answers "what happened just before it stopped", which is the question a No
-// Signal screen actually raises -- and it is the only copy: the ring is a
-// rolling window and every second it keeps is a second it is about to lose.
+// THE DAEMON WRITES IT NOW, and the page asks once.
 //
-// Written as a .tar of JPEGs rather than a video: the frames are already
-// JPEG, so re-encoding would cost the Pi time it does not have and lose the
-// exact bytes the daemon judged. The names carry the sequence number and the
-// millisecond offset, so the order and the GAPS survive -- a buffer that has
-// been thinned is not evenly spaced, and a viewer that assumes it is would
-// replay a stall as smooth motion.
-function tarball(files) {
-  const enc = new TextEncoder();
-  const pad = (str, n) => { const b = new Uint8Array(n); b.set(enc.encode(str).slice(0, n - 1)); return b; };
-  const parts = [];
-  for (const [name, bytes] of files) {
-    const h = new Uint8Array(512);
-    h.set(pad(name, 100), 0);
-    h.set(pad('000644 ', 8), 100);
-    h.set(pad('000000 ', 8), 108);
-    h.set(pad('000000 ', 8), 116);
-    h.set(pad(bytes.length.toString(8).padStart(11, '0') + ' ', 12), 124);
-    h.set(pad(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + ' ', 12), 136);
-    h.set(enc.encode('        '), 148);          // checksum field, spaces first
-    h[156] = 48;                                  // typeflag '0'
-    h.set(pad('ustar  ', 8), 257);
-    let sum = 0;
-    for (const b of h) sum += b;
-    h.set(pad(sum.toString(8).padStart(6, '0') + '\0 ', 8), 148);
-    parts.push(h, bytes, new Uint8Array((512 - bytes.length % 512) % 512));
-  }
-  parts.push(new Uint8Array(1024));               // two empty blocks: end
-  return new Blob(parts, {type: 'application/x-tar'});
-}
-
+// This used to build the file here: fetch /timeline.json, then one HTTP
+// request per frame -- five hundred and forty round trips, each one base64'd
+// through the JSON command path and inflated a third on the way -- then mux
+// a tar in JavaScript. It was slow enough to lose a race with the ring's own
+// eviction: when the signal came back, new frames evicted the old ones ahead
+// of the copy, every remaining fetch 404'd, and the loop's `continue` turned
+// that into a silently short file. Reported as "it's really slow, and if the
+// signal comes back it completely stops", which is exactly what it was.
+//
+// The daemon snapshots the ring under its lock in one list() -- after which
+// nothing can be freed underneath it -- and mux es MJPEG into an AVI with no
+// re-encode, so what plays back is the exact bytes it judged.
 $('savebuf').onclick = async () => {
   const b = $('savebuf');
   const was = b.textContent;
   try {
     b.disabled = true;
-    const tl = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
-    const frames = (tl && tl.frames) || [];
-    if (!frames.length) { note('the buffer is empty'); return; }
-    const t0 = frames[0].t;
-    const files = [];
-    for (let i = 0; i < frames.length; i++) {
-      b.textContent = 'Saving ' + (i + 1) + '/' + frames.length;
-      // A frame can age out between the timeline and the fetch -- the ring is
-      // still rolling while this runs. A gap is not a failure; a silent gap
-      // would be, so the count in the manifest is what was actually written.
-      const r = await fetch('/frame.jpg?seq=' + frames[i].seq);
-      if (!r.ok) continue;
-      const ms = Math.round((frames[i].t - t0) * 1000);
-      files.push(['frames/' + String(ms).padStart(8, '0') + '-'
-                  + frames[i].seq + '.jpg',
-                  new Uint8Array(await r.arrayBuffer())]);
+    b.textContent = 'Saving…';
+    const q = (bufFrom != null && bufTo != null)
+      ? '?from=' + bufFrom + '&to=' + bufTo : '';
+    const r = await fetch('/buffer.avi' + q, {cache: 'no-store'});
+    if (!r.ok) {
+      let why = 'HTTP ' + r.status;
+      try { why = (await r.json()).error || why; } catch (e) {}
+      note('save buffer: ' + why);
+      return;
     }
-    const manifest = {
-      saved: new Date().toISOString(),
-      target: (boardNow && boardNow.target) || null,
-      span_s: tl.span_s, asked_frames: frames.length, saved_frames: files.length,
-      note: 'Names are milliseconds since the first frame, then the daemon\'s '
-          + 'sequence number. Spacing is NOT uniform: the buffer is thinned '
-          + 'when it runs out of bytes, so replay by the timestamps.',
-      frames: frames.map(f => ({seq: f.seq, t: f.t, gap_ms: f.gap_ms})),
-    };
-    files.push(['manifest.json',
-                new TextEncoder().encode(JSON.stringify(manifest, null, 1))]);
+    const meta = JSON.parse(r.headers.get('X-Buffer-Meta') || '{}');
+    const blob = await r.blob();
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(tarball(files));
-    a.download = `vcctrl-buffer-${stamp}.tar`;
+    a.href = URL.createObjectURL(blob);
+    a.download = `vcctrl-buffer-${stamp}.avi`;
     a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    addLine(new Date(), 'saved', a.download + ' — ' + files.length
-            + ' files, ' + (tl.span_s || 0).toFixed(1) + 's', 'k-vid');
+    setTimeout(() => URL.revokeObjectURL(a.href), 20000);
+    // Say what is IN it, not just that something was written. "Repeated" is
+    // the honest half: those frames cover time the buffer had been thinned
+    // out of, and a reader who does not know that would read a stall as a
+    // slow section rather than as a gap.
+    addLine(new Date(), 'saved', a.download + ' — '
+            + (meta.span_s || 0).toFixed(1) + 's, ' + meta.frames + ' frames'
+            + (meta.repeated ? ' (' + meta.repeated + ' repeated to cover gaps)' : '')
+            + ' at ' + meta.fps + ' fps, '
+            + ((meta.bytes || 0) / 1048576).toFixed(1) + ' MB', 'k-vid');
   } catch (e) {
     note('save buffer: ' + e);
   } finally {
@@ -2742,6 +2944,11 @@ $('savebtn').onclick = async () => {
   } catch (e) { note('save failed: ' + e); }
 };
 async function showStale() {
+  // The reviewer owns the rectangle while it is up. Without this the poll
+  // paints the last-good frame back over whatever frame is being examined,
+  // every five seconds, and the picture jumps under the person stepping
+  // through it.
+  if (reviewing) return;
   const el = $('stale');
   if (Date.now() - staleAt > 5000) {
     staleAt = Date.now();
@@ -2764,6 +2971,7 @@ async function showStale() {
   }
 }
 function hideStale() {
+  if (reviewing) return;
   $('stale').style.display = 'none';
   staleAt = 0;
   staleBlob = null;      // saving now takes the live frame instead
@@ -2845,6 +3053,11 @@ async function pollState() {
   const v = j.video || {};
   if (v.state === 'locked') {
     pill('p-video','on','video locked');
+    // NOT WHILE REVIEWING. The signal returning is the moment the ring would
+    // overwrite what is being looked at, which is precisely when the hold has
+    // to survive -- and the notice must not be dismissed out from under a
+    // review either.
+    if (!reviewing) holdBuffer(false);
     veil.dataset.want = '0';
     veil.classList.remove('show');
     $('veilback').hidden = true;
@@ -2876,6 +3089,9 @@ async function pollState() {
     $('veil-sub').textContent = t ? t[1]
       : v.state === 'frozen' ? 'Receiving identical frames, showing buffer.'
       : v.state === 'nosignal' ? 'No frames are arriving at all.' : '';
+    // Not while merely STARTING: the first frame has not arrived yet, so
+    // there is no buffer worth holding and pinning would only stop it filling.
+    if (v.state === 'nosignal' || v.state === 'frozen') holdBuffer(true);
     showStale();
     veil.dataset.want = '1';
     veil.classList.toggle('show', !veilHidden);
@@ -3510,7 +3726,7 @@ function applyZoom(recentre) {
     // which means the full frame is deliberately larger and must be allowed
     // to overflow -- that overflow is the thing you scroll.
     if (zoomMode === 'fit' && !crop) { pw = Math.min(pw, W); ph = Math.min(ph, H); }
-    for (const id of ['screen', 'mjpeg', 'stale']) {
+    for (const id of ['screen', 'mjpeg', 'stale', 'review']) {
       const e = $(id);
       e.style.width = pw + 'px';
       e.style.height = ph + 'px';
