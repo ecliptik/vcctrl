@@ -75,6 +75,19 @@ USAGE = """usage: vcctrl <command> [args]
                               2  could not look      (no LED channel on this
                                                       board, or unreadable)
                               3  the tool itself failed
+  preflight [--no-input] [--as NAME]
+                            ONE gate for "is this rig fit to run". Checks caps,
+                            board, power, video, scrub ring, the input lock and
+                            the input round trip, and names the check that
+                            decided. Exit codes as verify-input:
+                              0  fit to run
+                              1  a real fault      (named in decided_by)
+                              2  could not tell    (named in decided_by)
+                              3  the tool failed
+                            A list of five verbs gets skipped exactly when a
+                            run is finally ready; a gate with an exit code
+                            does not. --no-input skips the round trip, which
+                            types.
   record --out F.avi [a] [b]
                             the scrub buffer as an AVI, optionally from seq a
                             to seq b. Takes the pin for the copy and releases
@@ -336,6 +349,150 @@ def fetch_avi(first, last):
     return data, meta
 
 
+
+# --- preflight ------------------------------------------------------------
+#
+# One command, one exit code, and it NAMES the check that decided.
+#
+# The benchmarking session asked for this and the argument is the reason it
+# exists rather than the feature: the check that would have saved their first
+# Round P existed, was correctly specified, and was written into the run sheet
+# the same day -- as a LIST. Lists get skipped at the moment a round is finally
+# ready to run after a long preparation, which is exactly when they matter. A
+# list of five verbs is a list. `vcctrl preflight` with an exit code is a gate.
+#
+# Every state here is three-valued, for the reason everything on this rig is:
+# a check that cannot distinguish "this is broken" from "I could not tell" will
+# eventually report one as the other, and the two demand opposite responses.
+
+OK, FAULT, UNKNOWN = "ok", "fault", "unknown"
+
+
+def _chk(name, state, detail):
+    return {"check": name, "state": state, "detail": detail}
+
+
+def preflight_checks(who=None, skip_input=False):
+    """Ordered, cheapest first, and the one that TYPES comes last.
+
+    Order is deliberate. Everything before verify-input is a read; if the rig
+    is in no state to be typed at, we want to have found that out without
+    having typed at it.
+    """
+    out = []
+
+    caps = call({"cmd": "caps"}) or {}
+    if not caps.get("ok") and "capabilities" not in caps:
+        out.append(_chk("caps", UNKNOWN, "the daemon did not answer `caps`"))
+    else:
+        bad = sorted(k for k, v in (caps.get("capabilities") or {}).items()
+                     if not v.get("ok"))
+        out.append(_chk("caps", FAULT if bad else OK,
+                        ("not healthy: %s" % ", ".join(bad)) if bad
+                        else "all %d healthy" % len(caps.get("capabilities") or {})))
+
+    board = (call({"cmd": "board"}) or {}).get("board") or {}
+    if board.get("id") is None:
+        out.append(_chk("board", UNKNOWN,
+                        board.get("reason") or "no board reported"))
+    else:
+        out.append(_chk("board", OK, "%s -> %s"
+                        % (board.get("name"), board.get("target"))))
+
+    pw = (call({"cmd": "power", "action": "state"}) or {}).get("power") or {}
+    on = pw.get("on") if "on" in pw else None
+    if on is None:
+        out.append(_chk("power", UNKNOWN,
+                        "the plug did not report a state -- NOT the same as off"))
+    elif on:
+        out.append(_chk("power", OK, "on (%s)" % (pw.get("alias") or "plug")))
+    else:
+        out.append(_chk("power", FAULT, "the target is powered off"))
+
+    vid = call({"cmd": "video", "action": "state"}) or {}
+    st = vid.get("state")
+    if st == "locked":
+        out.append(_chk("video", OK, "locked, %s frames" % vid.get("frames")))
+    elif st is None:
+        out.append(_chk("video", UNKNOWN, "no video state reported"))
+    elif not vid.get("device_present", True):
+        out.append(_chk("video", FAULT, "the capture device is absent"))
+    else:
+        # Not locked is not necessarily broken -- a powered-off target has
+        # nothing to lock onto -- so this is a could-not-look unless the
+        # device itself is missing.
+        out.append(_chk("video", UNKNOWN, "state is %r, not locked" % st))
+
+    buf = call({"cmd": "buffer"}) or {}
+    frames = buf.get("ring_frames")
+    if frames is None:
+        out.append(_chk("buffer", UNKNOWN, "no ring stats reported"))
+    elif frames == 0:
+        out.append(_chk("buffer", FAULT, "the scrub ring is empty"))
+    else:
+        out.append(_chk("buffer", OK, "%s frames, %ss span"
+                        % (frames, buf.get("span_s"))))
+
+    lock = call({"cmd": "lock", "action": "status"}) or {}
+    owner = lock.get("owner")
+    if owner and owner != who:
+        out.append(_chk("lock", UNKNOWN,
+                        "held by %r -- another session is driving" % owner))
+        skip_input = True
+    else:
+        out.append(_chk("lock", OK,
+                        "held by us (%s)" % who if owner else "free"))
+
+    if skip_input:
+        out.append(_chk("input", UNKNOWN,
+                        "not attempted -- the input lock is held elsewhere"))
+        return out
+
+    req = {"cmd": "verify_input"}
+    if who:
+        req["as"] = who
+    vi = call(req) or {}
+    if not vi.get("ok"):
+        out.append(_chk("input", UNKNOWN,
+                        "verify_input failed: %s" % vi.get("error")))
+    elif vi.get("verified") is True:
+        out.append(_chk("input", OK, "the target acknowledged a keystroke"))
+    elif vi.get("verified") is False:
+        out.append(_chk("input", FAULT,
+                        "no LED change -- the link is not carrying keystrokes"))
+    else:
+        out.append(_chk("input", UNKNOWN,
+                        vi.get("reason") or "the round trip does not apply here"))
+    return out
+
+
+def preflight(who=None, skip_input=False):
+    checks = preflight_checks(who, skip_input)
+    faults = [c for c in checks if c["state"] == FAULT]
+    unknowns = [c for c in checks if c["state"] == UNKNOWN]
+
+    if faults:
+        verdict, code, decided = FAULT, 1, faults[0]
+    elif unknowns:
+        verdict, code, decided = UNKNOWN, 2, unknowns[0]
+    else:
+        verdict, code, decided = OK, 0, None
+
+    sys.stdout.write(json.dumps({
+        "ok": True,
+        "verdict": verdict,
+        "exit": code,
+        # Name the check that decided, so a 1 or a 2 points at a subsystem
+        # instead of sending someone to read five statuses to find out which.
+        "decided_by": decided["check"] if decided else None,
+        "because": decided["detail"] if decided else None,
+        "faults": [c["check"] for c in faults],
+        "unknowns": [c["check"] for c in unknowns],
+        "checks": checks,
+    }, indent=2, sort_keys=True) + "\n")
+    return code
+
+
 def main(argv):
     pace = None
     who = None
@@ -379,6 +536,9 @@ def main(argv):
     if out_dir is not None and cmd != "burst":
         sys.stderr.write("--out-dir applies to burst, not %r\n" % cmd)
         return 3
+    if cmd == "preflight":
+        return preflight(who=who, skip_input=("--no-input" in rest))
+
     if cmd == "record":
         if out is None:
             sys.stderr.write("record needs --out FILE\n")

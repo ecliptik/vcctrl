@@ -2704,3 +2704,59 @@ def test_relay_state_absent_is_not_off():
             check("%s -> %r" % (label, want), got is want, got)
     finally:
         vcctrld.kasa_send = orig
+
+
+def test_preflight_is_a_gate_not_a_list():
+    """One exit code, and it names the check that decided.
+
+    The benchmarking session's argument for this is better than the feature:
+    the check that would have saved their first Round P existed, was correctly
+    specified, and was written into the run sheet the same day -- as a LIST.
+    Lists get skipped at the moment a round is finally ready to run after a
+    long preparation, which is exactly when they matter.
+
+    The properties under test are the ones a harness depends on: a fault
+    outranks an unknown, an unknown does not read as a pass, and the verdict
+    names its subsystem so a 2 does not send someone to read five statuses.
+    """
+    c = _client()
+    import contextlib
+    import io
+    import json as _json
+
+    def verdict(states):
+        checks = [c._chk(n, s, "detail for %s" % n) for n, s in states]
+        c.preflight_checks = lambda who=None, skip_input=False: checks
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = c.preflight()
+        return code, _json.loads(buf.getvalue())
+
+    code, d = verdict([("caps", c.OK), ("board", c.OK), ("input", c.OK)])
+    check("all ok -> 0", code == 0 and d["verdict"] == "ok", (code, d["verdict"]))
+    check("and names nothing as the decider", d["decided_by"] is None)
+
+    code, d = verdict([("caps", c.OK), ("power", c.UNKNOWN), ("input", c.OK)])
+    check("an unknown -> 2, NOT 0", code == 2, code)
+    check("and names the subsystem", d["decided_by"] == "power", d["decided_by"])
+
+    code, d = verdict([("caps", c.OK), ("input", c.FAULT)])
+    check("a fault -> 1", code == 1, code)
+    check("and names it", d["decided_by"] == "input", d["decided_by"])
+
+    # A fault OUTRANKS an unknown: if something is definitely broken, that is
+    # the more actionable finding and must not be masked by an earlier
+    # could-not-look.
+    code, d = verdict([("board", c.UNKNOWN), ("input", c.FAULT)])
+    check("a fault outranks an earlier unknown", code == 1, code)
+    check("and the verdict names the FAULT, not the unknown",
+          d["decided_by"] == "input", d["decided_by"])
+    check("while still listing the unknown", d["unknowns"] == ["board"],
+          d["unknowns"])
+
+    # The three verdicts must be distinguishable, which is the whole point.
+    codes = {verdict([("a", c.OK)])[0],
+             verdict([("a", c.UNKNOWN)])[0],
+             verdict([("a", c.FAULT)])[0]}
+    check("ok / unknown / fault are three distinct exit codes",
+          codes == {0, 1, 2}, codes)
