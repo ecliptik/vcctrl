@@ -88,6 +88,12 @@ USAGE = """usage: vcctrl <command> [args]
                             run is finally ready; a gate with an exit code
                             does not. --no-input skips the round trip, which
                             types.
+                            SCOPE IS THE HARNESS, NOT THE TARGET. It answers
+                            "can this rig drive the machine", never "is the
+                            machine fit to be measured" -- graphics provider,
+                            sound mode, boot profile. A fully green harness
+                            has driven a misconfigured target for a whole
+                            round. Passing this says nothing about that.
   record --out F.avi [a] [b]
                             the scrub buffer as an AVI, optionally from seq a
                             to seq b. Takes the pin for the copy and releases
@@ -482,6 +488,23 @@ def preflight(who=None, skip_input=False):
         "ok": True,
         "verdict": verdict,
         "exit": code,
+        # THE SUBJECT OF THIS VERDICT, stated in the output because a bare
+        # "ok" invites being read as "the rig is fit to run" and it is only
+        # half of that. There are two preflights with different subjects:
+        # this one asks whether the APPARATUS can drive the target, and a
+        # separate target-readiness check asks whether the machine is fit to
+        # be MEASURED. Passing one says nothing about the other.
+        #
+        # The benchmarking session has the receipt: a lost round this morning
+        # had a completely healthy harness -- keystrokes landing, capture
+        # locked, logs collected -- driving a target whose graphics provider
+        # had silently failed to load. Seven green checks, fourteen wasted
+        # minutes.
+        "scope": "harness",
+        "does_not_cover": ("whether the TARGET is fit to be measured -- its "
+                           "graphics provider, sound mode and boot profile. "
+                           "A green harness has driven a misconfigured target "
+                           "for a full round before."),
         # Name the check that decided, so a 1 or a 2 points at a subsystem
         # instead of sending someone to read five statuses to find out which.
         "decided_by": decided["check"] if decided else None,

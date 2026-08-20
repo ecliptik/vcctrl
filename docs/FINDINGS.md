@@ -1620,3 +1620,50 @@ run.
 Related: sec. 24 (the harness cannot see its own cable), sec. 29 (every
 diagnostic healthy, nothing driven). Same family — an instrument reporting its
 own state, or its own ignorance, as the target's.
+
+
+## 32. Two combination rules, and picking the wrong one  [2026-08-20]
+
+Two composite verdicts were specified the same day and they needed **opposite**
+combination rules. Getting this backwards is a real error in either direction,
+so the discriminator is worth writing down.
+
+**Dependent checks take a CONDITION.** The PUMP scorer reports a pair spread
+and an arm delta. The delta's acceptance window is derived from sigma, and the
+pair spread is precisely what estimates sigma — so a run whose spreads have
+widened has refuted the premise its own delta threshold rests on. Scoring the
+delta anyway counts one fault twice and dresses it as two independent
+findings. So: spread FAIL means the delta is **UNSCORED**, not failed. "This
+run cannot tell you" is a different claim from "the value is bad".
+
+**Independent checks take a PRECEDENCE.** `vcctrl preflight` runs seven checks
+that do not condition one another — a dead capture stick says nothing about
+whether the plug answers. So:
+
+    any FAULT        -> FAULT     the definite fault is the actionable one
+    else any UNKNOWN -> UNKNOWN   an unknown MUST NOT read as a pass
+    else             -> PASS
+
+with the unknown still reported separately, so an earlier could-not-look is
+not masked by a later fault or the reverse.
+
+**Deciding which rule applies is part of specifying the verdict**, not an
+implementation detail to be settled while writing the aggregator.
+
+### And a composite verdict must name its subject
+
+`vcctrl preflight` answers **"is the apparatus fit to drive the target"**. It
+does not answer **"is the target fit to be measured"** — graphics provider,
+sound mode, boot profile. Those are two preflights with different subjects and
+passing one says nothing about the other.
+
+The receipt, from the benchmarking session: a lost round had a completely
+healthy harness — keystrokes landing, capture locked, logs collected — driving
+a target whose graphics provider had silently failed to load. **Seven green
+checks and fourteen wasted minutes.**
+
+So the tool states its own scope in its output (`scope`, `does_not_cover`)
+rather than returning a bare `ok`. A verdict with an unstated subject gets
+read as covering whatever the reader was worried about, which is the same
+failure as sec. 30: a guarantee is sound inside the boundary it was written
+for, and nothing about the words says where that boundary is.
