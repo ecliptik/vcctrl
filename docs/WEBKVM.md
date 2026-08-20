@@ -362,6 +362,24 @@ Bind to the tailnet only. Two ways, and the second is recommended:
   `usb4vc.<tailnet>.ts.net`. Recommended, for a reason that is not about
   security:
 
+**DONE 2026-08-19. `https://vcctrl-pi.example.ts.net/` is live**, via
+`tailscale serve --bg --https=443`, proxying to the daemon on the tailnet
+address. Verified: TLS 1.3, cert verified by a default trust store, and the
+WebSocket upgrade works through the proxy at 8.5 Mbit/s. The page already
+chooses `wss` from `location.protocol`, so it needed no change. Set up in
+`pi/install.sh`, idempotently, and the config lives in tailscaled's state so it
+survives reboots.
+
+Plain `http://100.64.0.1:8080/` still answers, deliberately: `grab()` and
+`vcctrl-audio` reach the daemon that way and machine-to-machine calls gain
+nothing from TLS on a network that is already authenticated. Browsers should
+use the HTTPS name; tools need not.
+
+One consequence worth stating rather than burying: a publicly-trusted
+certificate means the machine's MagicDNS name appears in public Certificate
+Transparency logs. That is inherent to the cert, not to this design, and the
+operator approved it.
+
 **A raw-IP `http://` origin is not a secure context.** Pointer Lock still works
 there, but `RTCPeerConnection` and the async clipboard API do not, in both
 Firefox and Safari. The WebRTC option the operator wants held open (6.3) and
