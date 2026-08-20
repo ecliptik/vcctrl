@@ -33,6 +33,18 @@ because it looks wrong: Var(delta) = sigma^2/2 + sigma^2/2 = sigma^2. Averaging
 two cells halves the variance and doing it to both arms then differencing adds
 it straight back. Four cells buy no more precision than one.
 
+THE TWO VERDICTS ARE NOT INDEPENDENT and are therefore not combined
+symmetrically. The delta window rests on sigma = 0.10, and the pair spread is
+what estimates sigma. So a run with wide spreads has refuted the premise of its
+own delta threshold, and the delta there is UNSCORED rather than failed --
+"this run cannot tell you" is a different statement from "the delta is bad",
+and collapsing them counts one fault as two. Only on a spread PASS, where the
+data confirm the sigma, does the delta stand on its own.
+
+Both quantities are always printed whatever the verdict, because they test
+different hypotheses: spread asks whether the apparatus added variance, delta
+asks whether it shifted the measurement. One exit code cannot say which moved.
+
 WHAT IT REFUSES TO SCORE. A comparison is only worth making if the thing that
 changed is the thing under test, so it checks the things that would quietly
 confound it and stops rather than reporting a number:
@@ -227,26 +239,59 @@ def main(argv):
             print("   0.1 and the statistical band is 0.1, so this difference is")
             print("   not a measurement of anything)")
 
-    if DELTA_PASS[0] <= delta <= DELTA_PASS[1]:
+    print("  bands: pass %.2f-%.2f  inconclusive %.2f-%.2f  outside = investigate"
+          % (DELTA_PASS + DELTA_INCONCLUSIVE))
+
+    # The two verdicts are NOT independent, so they are not combined
+    # symmetrically. The delta window came from SD(delta) = sigma at sigma =
+    # 0.10, and the pair spread is precisely what estimates sigma. A run whose
+    # spreads have gone wide has contradicted the premise its own delta
+    # threshold rests on, and a delta that drifted in that run is EXPLAINED by
+    # the widened spread rather than being separate evidence. Scoring it anyway
+    # would count one fault twice and dress it as two independent findings.
+    if spread_state == "fail":
+        delta_state = "unscored"
+    elif DELTA_PASS[0] <= delta <= DELTA_PASS[1]:
         delta_state = "pass"
     elif DELTA_INCONCLUSIVE[0] <= delta <= DELTA_INCONCLUSIVE[1]:
         delta_state = "inconclusive"
     else:
         delta_state = "fail"
-    print("  bands: pass %.2f-%.2f  inconclusive %.2f-%.2f  outside = investigate"
-          % (DELTA_PASS + DELTA_INCONCLUSIVE))
 
     # --- verdict ----------------------------------------------------------
+    # Both quantities are always reported, whatever the combined verdict says.
+    # They test different hypotheses -- spread asks whether the apparatus added
+    # variance, delta asks whether it shifted the measurement -- and one word
+    # cannot say which moved.
     print("\n== verdict ==")
-    print("  pair spread : %s" % spread_state.upper())
-    print("  arm delta   : %s" % delta_state.upper())
-    if "fail" in (spread_state, delta_state):
-        print("\n  FAIL -- the harness has moved something. Do not carry these")
-        print("  numbers forward as a baseline.")
+    print("  pair spread : %-12s (did the apparatus add variance?)"
+          % spread_state.upper())
+    print("  arm delta   : %-12s (did it shift the measurement?)"
+          % delta_state.upper())
+
+    if spread_state == "fail":
+        print("\n  FAIL -- both pairs are wide, so the harness has added")
+        print("  variance. The delta is printed above but NOT scored: its")
+        print("  window assumes the very sigma these spreads have just")
+        print("  contradicted. This run cannot tell you anything about the")
+        print("  delta, which is different from telling you the delta is bad.")
         return 1
-    if "inconclusive" in (spread_state, delta_state):
-        print("\n  INCONCLUSIVE -- re-run PUMP. Do not diagnose from this; a")
-        print("  single wide pair is a one-in-three event on healthy hardware.")
+    if spread_state == "inconclusive":
+        print("\n  INCONCLUSIVE -- one pair of two is wide. That is a one-in-")
+        print("  three event on healthy hardware, so it is not a diagnosis.")
+        print("  The delta is scored above but rests on a sigma this run only")
+        print("  half-confirms. Re-run PUMP.")
+        return 3
+    # spread PASS: sigma ~ 0.10 is confirmed by this run's own data, so the
+    # delta window is valid and stands on its own.
+    if delta_state == "fail":
+        print("\n  FAIL -- spreads are tight, so the apparatus is quiet and the")
+        print("  delta window is sound. The measurement itself has shifted.")
+        return 1
+    if delta_state == "inconclusive":
+        print("\n  INCONCLUSIVE -- the apparatus is quiet, but the delta sits")
+        print("  outside the pass window. Re-run PUMP; do not diagnose from a")
+        print("  single pair per arm.")
         return 3
     print("\n  PASS -- both within-session quantities reproduce. The migration")
     print("  did not move the timing path.")

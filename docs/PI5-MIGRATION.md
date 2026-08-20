@@ -414,6 +414,22 @@ than one.
     1.00-1.10 or 1.50-1.60  INCONCLUSIVE -- repeat before concluding
     outside 1.00 - 1.60     real change, investigate the harness
 
+**The two verdicts are not independent, and are not combined symmetrically.**
+The delta window rests on sigma = 0.10, and the pair spread is exactly what
+estimates sigma — so a run whose spreads have widened has refuted the premise
+its own delta threshold stands on, and a delta that drifted in that run is
+*explained by* the widened spread rather than being separate evidence.
+
+    spread FAIL    -> overall FAIL; delta reported but UNSCORED
+    spread INCONC  -> overall INCONCLUSIVE; delta scored but flagged
+    spread PASS    -> sigma confirmed by the data, delta stands on its own
+
+"This run cannot tell you" is a different statement from "the delta is bad",
+and collapsing them counts one fault as two. Both quantities are printed
+whatever the verdict, because they test different hypotheses — spread asks
+whether the apparatus added variance, delta asks whether it shifted the
+measurement — and one exit code cannot say which moved.
+
 **Do not attempt to resolve a delta difference below ~0.2 at all** — reporting
 resolution is 0.1 and the statistical band is 0.1, so below that you are
 reading quantisation. If a tighter verdict is ever needed the lever is more
