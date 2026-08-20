@@ -1137,3 +1137,37 @@ Patched in `~/doskutsu-netiter/stage/RB.BAT`. **Not yet deployed to the CF
 card** -- that needs the target, which is powered down. The four logs already
 collected still carry the false declaration, and §26 above is the record that
 they do.
+
+### Two copies of the same fix, and neither of us was holding the other's
+
+The benchmarking session reported that `RB.BAT` emitted `video_declared=`
+twice -- an empty parameterised line and the hardcoded ViRGE one -- and that
+the four Mach64 logs therefore carry the field twice with contradictory
+values. Generously, that "you quoted the second" was a reasonable read.
+
+Checked against the artifact rather than accepted:
+
+    incoming/GRB.NFO          video_declared lines: 1
+    stage/RB.BAT (pre-patch)  video_declared lines: 1
+
+`GRB.NFO` is what the g2k itself wrote and FTP'd back. **One line.** The
+collected logs are not ambiguous; they are simply wrong, and the value I
+quoted was the only one present. Worth declining the absolution, because
+"the artifact was ambiguous" and "the artifact was wrong" are different facts
+about the same four logs.
+
+What it actually shows is that the commit adding the parameterised line never
+reached this staging tree or the CF card -- and, in the other direction, that
+their resync never reached `~/doskutsu-netiter/stage/RB.BAT`, which still
+holds the patch written here at 22:15. **Two divergent copies of one file,
+each of us reasoning confidently about the one we held.**
+
+Which is [[a-config-file-is-not-the-configuration]] arrived at from the
+opposite side. That note was written after verifying a configuration from a
+file's size instead of from the running system's mode list. Here the file was
+read correctly and the error was assuming it was the only file. Same root:
+the artifact on disk in front of you is evidence about that artifact, and
+about nothing else, until something ties it to what actually ran.
+
+Nothing deploys to the CF card until the trees are reconciled. Deployment is
+the step where one copy silently wins.
