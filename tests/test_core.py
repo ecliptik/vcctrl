@@ -950,6 +950,46 @@ HARNESS = """
     out.push(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
   }
 
+  // The rig table renders from the daemon's own words, including ffmpeg's
+  // and a device's name string. Neither is a place to assume there are no
+  // angle brackets -- this is the page's only innerHTML built from remote
+  // text.
+  {
+    const host = document.createElement('div');
+    host.innerHTML = rigRows({
+      board: {id: null, reason: 'usb4vc not running'},
+      video: {state: 'unavailable', device: '<img src=x onerror=alert(1)>',
+              device_present: null},
+      audio: {state: 'capturing', device: 'hw:1,0', device_present: true},
+      power: {alias: 'retro-rig-plug', on: null, reason: 'EHOSTUNREACH',
+              stale: true},
+      viewers: 1, listeners: 0, lock: {owner: null}});
+    const txt = host.textContent;
+    const groups = ['TARGET','CAPTURE','POWER','SESSIONS']
+      .filter(g => txt.toUpperCase().includes(g)).length;
+    out.push(`rig ${groups} ${host.querySelectorAll('img,script').length}`);
+    // A null must read as "could not tell", never as "no". Three bugs on this
+    // rig were exactly that collapse.
+    const nulls = (txt.match(/could not tell/g) || []).length;
+    out.push(`rignull ${nulls >= 1 ? 1 : 0} ${txt.includes('usb4vc not running') ? 1 : 0}`);
+  }
+
+  // Three absences, not one. Fed the shapes the rig actually published.
+  {
+    const say = c => { const t = deviceTrouble(c); return t ? t[0] : 'null'; };
+    const gone = say({state:'unavailable', device:'/dev/video0',
+      device_present:false, last_error:'[video4linux2,v4l2 @ 0x1] Cannot open video device /dev/video0: No such file or directory | Error opening input'});
+    const shut = say({state:'unavailable', device:'hw:1,0',
+      device_present:true, last_error:'[alsa @ 0x1] cannot open audio device hw:1,0 (No such file or directory) | Error opening input'});
+    const dunno = say({state:'unavailable', device:'hw:1,0', device_present:null});
+    const fine = say({state:'locked', device:'/dev/video0', device_present:true});
+    const detail = deviceTrouble({state:'unavailable', device:'hw:1,0',
+      device_present:true, last_error:'[alsa @ 0x1] cannot open audio device hw:1,0 (No such file or directory) | Error opening input'})[1];
+    out.push(`absent3 ${gone !== shut && shut !== dunno && gone !== dunno ? 1 : 0} ${fine === 'null' ? 1 : 0}`);
+    // The reason must survive, without ffmpeg's module and pointer.
+    out.push(`reason ${detail.includes('cannot open audio device hw:1,0') ? 1 : 0} ${detail.startsWith('[') ? 0 : 1}`);
+  }
+
   // Power is TRI-STATE. "the machine is off" and "I cannot reach the plug"
   // are opposite facts, and a two-valued reading of a cached field reports
   // the instrument's state as the target's -- the failure this rig has
@@ -1212,6 +1252,23 @@ def test_zoom_layout_in_a_browser():
           got["preview"])
     check("control: a preview does not change the selection",
           got["selkept"][0] == 1.0, got["selkept"])
+
+    check("the rig table renders every group", got["rig"][0] == 4.0,
+          got["rig"])
+    check("control: and injects nothing from a device name",
+          got["rig"][1] == 0.0, got["rig"])
+    check("a null device reads as could-not-tell, not as no",
+          got["rignull"][0] == 1.0, got["rignull"])
+    check("control: and an absent board gives the daemon's own reason",
+          got["rignull"][1] == 1.0, got["rignull"])
+
+    check("unplugged, will-not-open and cannot-tell read differently",
+          got["absent3"][0] == 1.0, got["absent3"])
+    check("control: a healthy device is not called trouble",
+          got["absent3"][1] == 1.0, got["absent3"])
+    check("ffmpeg's sentence survives", got["reason"][0] == 1.0, got["reason"])
+    check("control: without its module tag and pointer",
+          got["reason"][1] == 1.0, got["reason"])
 
     check("power reads on / off / unknown, not on / off",
           got["power3"][0] == 1.0, got["power3"])
