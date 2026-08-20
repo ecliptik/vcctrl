@@ -995,7 +995,14 @@ HARNESS = """
   // the instrument's state as the target's -- the failure this rig has
   // produced in three separate places.
   {
-    const word = () => document.querySelector('#c-power b').textContent.trim();
+    // Power is a lamp now, so the reading is its class and its tooltip: on,
+    // bad (off) and stale (could not tell) must be three different things.
+    const word = () => {
+      const el = document.getElementById('lamp-pwr');
+      return el.classList.contains('on') ? 'on'
+           : el.classList.contains('bad') ? 'off'
+           : el.classList.contains('stale') ? 'unknown' : 'none';
+    };
     showPower({alias: 'retro-rig-plug', model: 'EP10(US)',
                host: '192.0.2.46', on: true, age_s: 2, stale: false});
     const a = word();
@@ -1003,7 +1010,8 @@ HARNESS = """
     const b = word();
     showPower({alias: 'retro-rig-plug', on: null, age_s: 212, stale: true,
                reason: 'EHOSTUNREACH'});
-    const c = word(), plug = document.getElementById('plugid').textContent;
+    const c = word(), plug = document.getElementById('plugid').textContent
+                              + ' ' + document.getElementById('lamp-pwr').title;
     out.push(`power3 ${a === 'on' && b === 'off' && c === 'unknown' ? 1 : 0} ` +
              `${plug.includes('retro-rig-plug') && plug.includes('not answering') ? 1 : 0}`);
 
@@ -1067,7 +1075,7 @@ HARNESS = """
   // The rail popovers must land under the thing that opened them, and must
   // survive their anchor being hidden -- which is what happens on a phone,
   // where the tab bar opens the same menu the header chip does.
-  for (const [nm, anchor] of [['sound', 'soundbtn'], ['power', 'c-power']]) {
+  for (const [nm, anchor] of [['sound', 'soundbtn'], ['power', 'powerbtn']]) {
     openPop(nm);
     const pr = document.getElementById('pop-' + nm).getBoundingClientRect();
     const ar = document.getElementById(anchor).getBoundingClientRect();
@@ -1577,6 +1585,59 @@ def test_ffmpeg_stderr_is_kept():
           cap2.last_error is None, cap2.last_error)
 
 
+def test_buffer_span():
+    """Asking for a longer scrub buffer must actually buy one, and must say so
+    when memory will not allow it.
+
+    The 48 MB / 30 s default was chosen for a Pi 3 with 920 MB and NO SWAP,
+    where an overshoot did not slow the daemon down, it killed it and dropped
+    the uinput devices with it. The rig is a 4 GB Pi 5 now and that constraint
+    is gone -- but MEM_FLOOR_MB is not, so a request memory cannot honour has
+    to be clamped AND said to be clamped. A silently ignored setting is worse
+    than no setting.
+    """
+    print("\nscrub buffer")
+    cap = vcctrld.VideoCapability(None, vcctrld.Bus())
+
+    base = cap._buffer({})
+    check("reports the default span", base["target_span_s"] == 30.0,
+          base["target_span_s"])
+
+    got = cap._buffer({"seconds": 120})
+    check("a longer span is taken", got["target_span_s"] == 120.0,
+          got["target_span_s"])
+    check("and the byte cap grows with it, so granularity is kept",
+          got["asked_bytes"] == int(120 * cap.BYTES_PER_S),
+          (got["asked_bytes"], cap.RING_BYTES))
+    check("control: it is four times the 30 s default",
+          abs(got["asked_bytes"] / (30 * cap.BYTES_PER_S) - 4.0) < 0.01,
+          got["asked_bytes"])
+
+    check("an absurd request is clamped, not obeyed",
+          cap._buffer({"seconds": 99999})["target_span_s"]
+          == cap.SPAN_MAX_S, cap.SPAN_MAX_S)
+    check("control: and so is zero",
+          cap._buffer({"seconds": 0})["target_span_s"] == cap.SPAN_MIN_S,
+          cap.SPAN_MIN_S)
+    check("nonsense is refused rather than coerced",
+          cap._buffer({"seconds": "lots"}).get("ok") is False)
+
+    # Memory is the real limit, and the flag has to follow it rather than the
+    # request. Force the floor above what the machine has.
+    cap._buffer({"seconds": 600})
+    cap.MEM_FLOOR_MB = 10 ** 9
+    squeezed = cap._buffer({"seconds": 600})
+    check("a cap memory cannot honour is reported as limited",
+          squeezed["mem_limited"] is True, squeezed)
+    check("control: and the cap really is smaller than asked",
+          squeezed["cap_bytes"] < squeezed["asked_bytes"], squeezed)
+
+    # The page reads the live value back rather than remembering its own.
+    check("the span is published in the state the page polls",
+          cap._state().get("target_span_s") == 600.0,
+          cap._state().get("target_span_s"))
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -1595,6 +1656,7 @@ if __name__ == "__main__":
     test_uniform_frame_is_not_picture()
     test_websocket_accept_vector()
     test_page_dom_references()
+    test_buffer_span()
     test_no_unbound_names()
     test_ffmpeg_stderr_is_kept()
     test_zoom_modes()

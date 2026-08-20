@@ -292,6 +292,12 @@
     color:var(--green); font-weight:700; border-bottom-color:var(--green);
   }
   .lamp.stale span { opacity:.55; border-bottom-style:dashed; }
+  .lamp.warn span {
+    color:var(--yellow); font-weight:700; border-bottom-color:var(--yellow);
+  }
+  .lamp.bad span {
+    color:var(--red); font-weight:700; border-bottom-color:var(--red);
+  }
 
   /* ── stage ───────────────────────────────────────────────────────────────
      The well stays near-black in EVERY theme, including the light ones.
@@ -742,12 +748,17 @@
   <header>
     <h1>vcctrl-kvm</h1>
     <span id="state" aria-live="polite">—</span>
-    <span id="c-lock" class="chip"><span class="chiplabel">input </span><b>—</b></span>
-    <span id="c-power" class="chip" title="Mains power as the plug reports it"><span class="chiplabel">power </span><b>—</b></span>
-    <span id="c-board" class="chip" style="display:none"><span class="chiplabel">target </span><b>—</b></span>
+    <!-- Two more lamps, beside the state word and built like CAP/NUM/SCR: the
+         word carries it, colour repeats it, and the tooltip says what the
+         colour means. They replace two chips that spent most of their width
+         restating a label nobody needed twice. -->
+    <span class="lamp" id="lamp-pwr"><i></i><span>PWR</span></span>
+    <span class="lamp" id="lamp-link"><i></i><span>LINK</span></span>
+    <span id="c-board" class="chip" style="display:none"><b>—</b></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
-    <span id="c-xport" class="chip"><span class="chiplabel">link </span><b>—</b></span>
-    <span id="c-kbd" class="chip" title="Whether keys typed here are going to the target"><span class="chiplabel">kbd </span><b>idle</b></span>
+    <!-- Shown only while the lock is HELD. Unheld is the normal case and
+         "input free" is a chip reporting that nothing is happening. -->
+    <span id="c-lock" class="chip" style="display:none"><span class="chiplabel">input </span><b>—</b></span>
     <span class="grow"></span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
             title="Caps, Num and Scroll read back over PS/2 — proof a keystroke landed">
@@ -872,6 +883,17 @@
         stops responding and you need to know which half is at fault.</div>
 
       <h2 style="margin-top:14px">Video</h2>
+      <div class="row" style="margin-bottom:4px">
+        <span style="flex:1 1 auto">Scrub buffer</span>
+        <select id="bufsel" title="How much recent video the daemon keeps">
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="120">2 minutes</option>
+          <option value="300">5 minutes</option>
+        </select>
+      </div>
+      <div class="hint" id="bufinfo" style="margin-left:0">—</div>
+
       <label><input type="checkbox" id="opt-ws">
         Use WebSocket when it works</label>
       <div class="hint">Falls back to the mjpeg stream by itself if no frame
@@ -1045,6 +1067,17 @@ let byteWin = [];
 // start-ups and looks exactly like the fault it is watching for.
 let firstFrameTimer = null, lastFrameAt = Date.now(), wsTried = 0;
 
+// Three states, one word, and the tooltip carries the why. A lamp that is
+// green when the fast path is up and yellow when it is not says everything
+// the two-word chip said in a third of the width.
+function setLamp(id, cls, title) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('on', 'warn', 'bad', 'stale');
+  if (cls) el.classList.add(cls);
+  el.title = title;
+}
+
 function setXport(x) {
   xport = x;
   // Not "fallback" any more. On this deployment the HTTPS proxy speaks HTTP/2
@@ -1056,7 +1089,13 @@ function setXport(x) {
     : {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
   )[x] || x;
   $('s-xport').textContent = label;
-  pill('p-xport', x === 'ws' ? 'on' : x === 'mjpeg' ? 'mid' : 'off', label);
+  setLamp('lamp-link',
+    x === 'ws' ? 'on' : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
+    x === 'ws' ? 'WebSocket — the picture is coming over the fast path'
+    : x === 'mjpeg' ? 'mjpeg stream — works everywhere, and is the only path '
+                    + 'that survives the HTTP/2 proxy on 443'
+    : x === 'connecting' ? 'Opening a transport…'
+    : 'No transport — no picture is arriving');
 }
 
 function gotFrame() {
@@ -1463,7 +1502,6 @@ function setArmed(v, opts) {
   $('grabbtn').classList.toggle('on', v);
   $('grabbtn').title = v ? 'Stop sending keys to the target (Ctrl+Alt+Shift)'
                          : 'Send what you type straight to the target';
-  pill('p-kbd', v ? 'on' : '', v ? 'grabbed' : 'idle');
   if (v) {
     // Must happen synchronously inside the tap handler: iOS ignores focus()
     // called from a timer or after an await.
@@ -1471,14 +1509,12 @@ function setArmed(v, opts) {
     addLine(new Date(), 'ui', 'keyboard grabbed'
             + (document.activeElement === ghost ? '' : ' — focus refused'),
             'k-note');
-    pill('p-kbd', 'on', 'keyboard grabbed');
     $('capbar').classList.add('armed');
     $('capbar').innerHTML = 'keyboard grabbed — press <b>Ctrl + Alt + Shift</b> to release';
     if (!opts || !opts.quiet)
       addLine(new Date(), 'ui', 'keyboard grabbed — Ctrl+Alt+Shift releases',
               'k-note');
   } else {
-    pill('p-kbd', '', 'keyboard idle');
     $('capbar').classList.remove('armed');
     $('capbar').textContent = '';
     ghost.blur();
@@ -2042,8 +2078,7 @@ function pill(id, cls, text) {
                            : cls === 'off' ? 'var(--red)' : 'var(--yellow)';
     return;
   }
-  const map = {'p-lock':'c-lock', 'p-power':'c-power',
-               'p-xport':'c-xport', 'p-kbd':'c-kbd'};
+  const map = {'p-lock': 'c-lock'};
   const el = $(map[id] || id);
   if (!el) return;
   const b = el.querySelector('b');
@@ -2125,6 +2160,7 @@ async function pollState() {
   showPower(j.power);
   showBoard(j.board);
   showAudioDevice(j.audio);
+  showBuffer(j.video);
   showHeat(j);
   lastState = j;
   // Only while it is on screen: this rebuilds a dozen rows and nobody is
@@ -2149,10 +2185,14 @@ async function pollState() {
     $('stalebar').classList.add('show');
   $('s-span').textContent = v.span_s != null ? v.span_s.toFixed(1) + 's' : '–';
   lamps(j.leds, v.state, j.input_verified);
-  const iv = j.input_verified;
-  pill('p-lock', L.owner ? 'mid' : (iv && iv.ok ? 'on' : ''),
-       L.owner ? `held by ${L.owner}`
-               : (iv && iv.ok ? 'free · link ok' : 'free · link unproven'));
+  // Only while HELD. "input free · link unproven" was two facts in one chip,
+  // one of them permanent and neither urgent -- and the operator read it as
+  // "Linux Unproven", which is what a label nobody can parse looks like from
+  // the outside. Whether the input link is proven is what the CAP/NUM/SCR
+  // lamps already say by going dashed.
+  const held = j.lock && j.lock.owner;
+  $('c-lock').style.display = held ? '' : 'none';
+  if (held) pill('p-lock', 'mid', `held by ${L.owner}`);
   const A = j.audio || {};
   if (!soundOn) {
     // Even with sound off, say whether the capture path is alive. "silent" and
@@ -2176,8 +2216,14 @@ function showPower(p) {
   // off" and "I cannot reach the plug" are opposite facts and used to be the
   // same word here.
   const on = powerNow.on;
-  pill('p-power', on === true ? 'on' : on === false ? 'off' : 'mid',
-       'power ' + (on === true ? 'on' : on === false ? 'off' : 'unknown'));
+  const who = powerNow.alias ? '"' + powerNow.alias + '"' : 'the plug';
+  const when = powerNow.stale ? ' — not answering'
+             : powerNow.age_s != null ? ' — read ' + fmtAge(powerNow.age_s) + ' ago'
+             : '';
+  setLamp('lamp-pwr', on === true ? 'on' : on === false ? 'bad' : 'stale',
+    on === true ? 'Mains at ' + who + ' is ON' + when
+    : on === false ? 'Mains at ' + who + ' is OFF' + when
+    : 'Cannot tell — ' + (powerNow.reason || 'the plug is not answering'));
   const bits = [];
   if (powerNow.alias) bits.push('"' + powerNow.alias + '"');
   if (powerNow.model) bits.push(powerNow.model);
@@ -2301,6 +2347,43 @@ function showHeat(j) {
   el.title = (th ? th.text : 'running hot')
     + (h.temp_c != null ? ' · ' + h.temp_c.toFixed(1) + ' °C' : '');
 }
+
+// THE BUFFER BELONGS TO THE DAEMON, not to this tab. Every viewer shares one
+// ring, so the control reads the live value back rather than remembering its
+// own -- a per-browser memory of a shared setting is two tabs disagreeing
+// about a number only one of them can change.
+//
+// It is sized in BYTES and asked for in SECONDS, because a buffer sized in
+// seconds has no fixed cost and one sized in bytes has no fixed duration. So
+// what it is ASKED to keep and what it is ACTUALLY keeping are both shown;
+// the second is the honest one.
+function showBuffer(v) {
+  v = v || {};
+  const want = v.target_span_s;
+  if (want != null) {
+    const sel = $('bufsel');
+    const opt = [...sel.options].find(o => Number(o.value) === Math.round(want));
+    if (opt) sel.value = opt.value; else sel.value = '';
+  }
+  const mb = v.ring_bytes != null ? (v.ring_bytes / 1048576).toFixed(0) + ' MB' : '—';
+  $('bufinfo').textContent =
+    'Holding ' + (v.span_s != null ? v.span_s.toFixed(0) + 's' : '—')
+    + ' in ' + mb + (v.ring_frames != null ? ' · ' + v.ring_frames + ' frames' : '')
+    + (v.mem_limited ? ' · capped by free memory' : '')
+    + '. Shared by every viewer; resets to 30s if the daemon restarts.';
+}
+$('bufsel').onchange = async () => {
+  const secs = Number($('bufsel').value);
+  const r = await post('buffer', {seconds: secs});
+  if (r && r.ok) {
+    addLine(new Date(), 'video', 'scrub buffer set to ' + r.target_span_s
+            + 's (' + (r.cap_bytes / 1048576).toFixed(0) + ' MB'
+            + (r.mem_limited ? ', capped by free memory' : '') + ')', 'k-vid');
+    // The ring does not grow instantly -- it fills at the rate frames arrive,
+    // so the "holding" figure catches up over the next span rather than now.
+    showBuffer(Object.assign({}, r, {span_s: r.span_s}));
+  }
+};
 
 function showAudioDevice(a) {
   a = a || {};

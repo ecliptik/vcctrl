@@ -1029,6 +1029,16 @@ class VideoCapability(Capability):
     # BYTES -- the units the resource is actually measured in -- and the span
     # it currently buys is reported rather than promised.
     RING_BYTES = 48 * 1024 * 1024
+    # The ratio those two express: about 1.6 MB per second of buffer at the
+    # rate this stick produces. Used to size the byte cap when the span is
+    # changed, so a longer buffer keeps its granularity instead of just
+    # thinning harder over more seconds.
+    BYTES_PER_S = 48 * 1024 * 1024 / 30.0
+    # Bounds for a requested span. The floor is short enough to be useless and
+    # is there only to stop 0; the ceiling is a guard against a typo, not a
+    # capacity claim -- what actually limits it is memory, checked at _cap().
+    SPAN_MIN_S = 10.0
+    SPAN_MAX_S = 600.0
     # Wall-clock span the scrub buffer tries to preserve. When bytes run out,
     # the old end is thinned rather than dropped, so 30 s stays 30 s and only
     # its granularity degrades.
@@ -1431,6 +1441,7 @@ class VideoCapability(Capability):
 
     def commands(self):
         return {"video": self._video, "burst": self._burst,
+                "buffer": self._buffer,
                 "framestats": self._framestats, "shot": self._shot,
                 "lastgood": self._lastgood, "pin": self._pin,
                 "timeline": self._timeline, "frame": self._frame}
@@ -1460,6 +1471,48 @@ class VideoCapability(Capability):
         if action in ("on", "off"):
             self._publish("video.pin", state=action)
         return out
+
+    def _buffer(self, req):
+        """Read or set how much history the scrub buffer keeps.
+
+        Sized in BYTES and reported in SECONDS, for the reason the constants
+        already say: a buffer sized in seconds has no fixed cost and one sized
+        in bytes has no fixed duration. Asking for a span therefore sets a
+        byte cap that buys it at the current rate, and the span actually
+        achieved is reported rather than promised.
+
+        The 48 MB / 30 s default was chosen for a Pi 3 with 920 MB and no
+        swap. This machine has 4 GB, so the constraint that shaped it is gone
+        -- but MEM_FLOOR_MB still applies, and a request that memory cannot
+        honour is clamped and SAID to be clamped rather than silently obeyed.
+
+        Not persisted: a daemon restart returns to the default. That is a
+        deliberate choice over writing config from a web request, and the page
+        reads the live value back rather than remembering its own.
+        """
+        want = req.get("seconds")
+        with self.lock:
+            if want is not None:
+                try:
+                    want = float(want)
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "seconds must be a number"}
+                want = max(self.SPAN_MIN_S, min(self.SPAN_MAX_S, want))
+                self.TARGET_SPAN_S = want
+                self.RING_BYTES = int(want * self.BYTES_PER_S)
+            span = self.TARGET_SPAN_S
+            asked = self.RING_BYTES
+            used = self.ring_bytes
+            frames = len(self.ring)
+            actual = (self.ring[-1][0] - self.ring[0][0]) if frames > 1 else 0.0
+        cap = self._cap()
+        if want is not None:
+            self._publish("video.buffer", target_span_s=span,
+                          cap_bytes=cap, limited=cap < asked)
+        return {"ok": True, "target_span_s": span, "cap_bytes": cap,
+                "asked_bytes": asked, "ring_bytes": used,
+                "ring_frames": frames, "span_s": round(actual, 2),
+                "mem_limited": cap < asked}
 
     def _timeline(self, req):
         """Index of what is in the buffer: one entry per frame, no pixels.
@@ -1692,6 +1745,13 @@ class VideoCapability(Capability):
                     "pinned": self.pinned_at is not None,
                     "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
                     if len(self.ring) > 1 else 0.0,
+                    # What the buffer is ASKED to keep, beside what it is
+                    # actually keeping. A page that offers to change this has
+                    # to read the live value back rather than remember its own,
+                    # because the buffer belongs to the daemon and every viewer
+                    # shares one.
+                    "target_span_s": self.TARGET_SPAN_S,
+                    "mem_limited": self.mem_limited,
                     "last_frame_age_s": round(age, 3) if age else None}
 
     def _burst(self, req):
