@@ -216,11 +216,27 @@ def main(argv):
             # The specific signature of the bug that cost a cell: a copy
             # overwrite prompt sitting in the transcript means it ate whatever
             # was typed next.
-            if "YES/NO/AL" in up or "OVERWRIT" in up or "QUERURIT" in up:
-                print("   *** AN OVERWRITE PROMPT IS ON SCREEN ***")
-                print("   It consumes the next character typed. Whatever command")
-                print("   followed it was truncated. Do not trust this cell.")
+            # An overwrite prompt in the transcript is NOT by itself a fault.
+            # This tool answers that prompt on purpose, so the text it looks
+            # for is text it produces itself -- as written, the check refused
+            # its own correct behaviour and failed cell M64A with all five
+            # variables verifiably set.
+            #
+            # The discriminator is one line further down. DOS prints "1 file(s)
+            # copied" only after the question has been answered; an unanswered
+            # prompt is still sitting there with nothing under it. So the fault
+            # is the prompt WITHOUT a completion, not the prompt.
+            prompt_seen = ("YES/NO/AL" in up or "OVERWRIT" in up
+                           or "QUERURIT" in up)
+            copy_done = "FILE(S)COPIED" in up or "FILES)COPIED" in up
+            if prompt_seen and not copy_done:
+                print("   *** AN UNANSWERED OVERWRITE PROMPT IS ON SCREEN ***")
+                print("   No completion line under it. It consumes the next")
+                print("   character typed, so whatever command followed it was")
+                print("   truncated. Do not trust this cell.")
                 return 1
+            if prompt_seen:
+                print("   overwrite prompt answered, copy completed")
             if missing:
                 print("   REFUSED: %d variable(s) not found in the environment."
                       % len(missing))
