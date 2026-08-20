@@ -386,11 +386,7 @@
      which is right for the icons beside it and wrong for this: the icons are
      glyphs, this is a labelled control that opens a list, and it belongs to
      the same family as Keys, Sound and Power at the bottom. */
-  #zoombtn {
-    padding:0 9px; font:500 13px/1 var(--sans); letter-spacing:0;
-    color:var(--text); min-width:124px;
-    display:flex; align-items:center; gap:7px;
-  }
+  #zoombtn { color:var(--text); min-width:124px; }
   /* A real gap, not a space in the string: HTML collapses runs of whitespace,
      so "🖥️  Fit" and "🖥️ Fit" render identically and the emoji sits right on
      the F. Flex gap is the only version that actually moves it. */
@@ -400,7 +396,10 @@
   #cmdbar button > .bi, #zoombtn > .bi, .lbtn > .bi {
     border-right:1px solid var(--rule); padding-right:8px; margin-right:0;
   }
-  #cmdbar button, #zoombtn, .lbtn { display:flex; align-items:center; gap:8px; }
+  #cmdbar button, #zoombtn, .lbtn {
+    display:flex; align-items:center; gap:8px;
+    font:500 var(--t-data)/1 var(--sans); letter-spacing:0; padding:0 9px;
+  }
   #cmdbar button > .bl, #zoombtn > .bl, .lbtn > .bl {
     flex:none; white-space:nowrap;
   }
@@ -411,6 +410,9 @@
   .pbtn[aria-expanded="true"] {
     background:var(--rule); border-color:var(--muted); color:var(--text);
   }
+  /* The divider is --rule, and so is the lit ground: it disappeared exactly
+     on the one button you are looking at. */
+  .pbtn[aria-expanded="true"] > .bi { border-right-color:var(--muted); }
   /* The split pair looks like one button and behaves like two. */
   /* The wrapper is a button-shaped thing that is not a <button>, so none of
      the button sizing reached it and it came out shorter than everything
@@ -504,7 +506,7 @@
   /* ONE SIZE FOR THE WHOLE STRIP. Send inherited the 15px button default
      while the four beside it were set to 13, so the row stepped down after
      the first control. */
-  #cmdbar button { font:500 13px/1 var(--sans); padding:0 9px; }
+
   /* The wrapper carries the border and the ground, so the clip and the field
      read as one control rather than a button parked next to a box. */
   #linewrap {
