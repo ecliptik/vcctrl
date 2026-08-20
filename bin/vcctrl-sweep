@@ -118,6 +118,19 @@ def grab(tag, n=16):
                 mean = r.headers.get("X-Frame-Mean")
             with open(dest, "wb") as f:
                 f.write(data)
+            # A UNIFORM frame is not a picture, however live the stream looks.
+            # Duplicate-hash rejection asks "is this frame a repeat", and the
+            # stick's no-lock constant slips past it: on 2026-08-19 two grabs
+            # twenty seconds apart returned byte-identical frames whose every
+            # pixel was exactly 7, both reported as PICTURE mean 7.0, during a
+            # game cell that was showing nothing at all.
+            #
+            # Variance is the independent test. A real capture of any scene,
+            # however dark, has a spread of values -- analog sampling noise
+            # alone guarantees it. Equal extrema means the stick is emitting a
+            # constant, which is what it does when it cannot lock.
+            if not _has_variance(dest):
+                return None, None
             return dest, (float(mean) if mean else None)
         except urllib.error.HTTPError as exc:
             if exc.code == 503:
@@ -140,6 +153,23 @@ def grab(tag, n=16):
     sys.stderr.write("grab: daemon unreachable (%s), falling back to a direct "
                      "ffmpeg capture\n" % (last,))
     return _grab_ffmpeg(tag, sp, dest)
+
+
+def _has_variance(path, min_range=2):
+    """Does this frame contain a picture, as opposed to a uniform field?
+
+    Returns True if PIL is unavailable: refusing to judge is better than
+    judging without the means to, and the caller's other checks still apply.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return True
+    try:
+        lo, hi = Image.open(path).convert("L").getextrema()
+    except Exception:
+        return True
+    return (hi - lo) >= min_range
 
 
 def _grab_ffmpeg(tag, sp, dest):

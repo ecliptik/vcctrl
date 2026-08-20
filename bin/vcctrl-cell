@@ -124,6 +124,38 @@ def read_env_text():
         return shot, None
 
 
+LOCK_AS = "vcctrl-cell"
+
+
+def take_lock(tag):
+    """Hold the daemon's input lock for the duration of a cell.
+
+    A cell is 150 s of the target's time plus a reboot either side and it is
+    NOT resumable, so an interruption does not degrade one, it destroys it. A
+    vcctrld restart landed inside a cell on 2026-08-19 and did exactly that.
+    pi/deploy.sh refuses to run while this lock is held -- but only if somebody
+    takes it, which is this function's entire reason to exist.
+
+    Best-effort: a daemon too old to know the verb must not stop a cell, but it
+    must say so, because "no lock" and "lock taken" are otherwise identical
+    from the outside.
+    """
+    try:
+        vc("lock", "acquire", "--as", "%s-%s" % (LOCK_AS, tag))
+        return True
+    except Exception as exc:
+        print("   NOTE: could not take the input lock (%s)." % exc)
+        print("   The cell will run, but a deploy cannot see it and may kill it.")
+        return False
+
+
+def drop_lock():
+    try:
+        vc("lock", "release", "--as", LOCK_AS, check=False)
+    except Exception:
+        pass
+
+
 def main(argv):
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -153,6 +185,8 @@ def main(argv):
         return 2
     try:
         print("== cell %s ==" % tag)
+        if take_lock(tag):
+            print("   input lock held -- deploys refuse while this runs")
         if wait_for_prompt(60) is None:
             print("REFUSED: not at a prompt."); return 2
         if not cmd("CD \\DOSKUTSU"):
@@ -289,6 +323,7 @@ def main(argv):
         print("== done in %.0fs ==" % (time.time() - t0))
         return 0
     finally:
+        drop_lock()
         release()
 
 
