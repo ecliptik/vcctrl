@@ -208,7 +208,7 @@ Measured against the existing page:
 | 5 | Stage: fill available space, landscape handling | medium — most user-visible |
 | 6 | Desktop column: activity gets the height | medium |
 | 7 | Collapse controls on phone | medium |
-| 8 | Theme engine: base16 token shape, nine schemes, contrast test | low — additive, and the token work in step 1 is most of it |
+| 8 | Theme engine: base16 token shape, 27 schemes, grouped picker, contrast test | low — additive, and the token work in step 1 is most of it |
 
 Steps 1–3 are safe and improve the page on their own. 4–7 change how it feels
 and should land together so it does not look half-migrated.
@@ -217,8 +217,9 @@ and should land together so it does not look half-migrated.
 
 ## 7. Theme engine
 
-Requested: Tokyo Night, Tokyo Night Light, Dracula, Nord, Solarized Dark,
-Solarized Light, Green Monochrome, Amber Monochrome.
+Requested: Tokyo Night (dark and light), Dracula, Nord, Solarized (dark and
+light), green and amber monochrome — then Catppuccin, Gruvbox, Rosé Pine,
+Everforest, Kanagawa, and the terminal-authentic phosphors.
 
 ### What this does to section 2, said plainly
 
@@ -299,17 +300,66 @@ rest.
 
 ### Shipping list
 
-| theme | ground | notes |
+Twenty-seven schemes, in four groups. All but the phosphor set are published
+base16 schemes, so each is sixteen hex values — the count is a data table, not
+twenty-seven design exercises.
+
+**House**
+
+| theme | ground |
+|---|---|
+| `vga` **(default)** | warm graphite — §2 |
+
+**Editor schemes**
+
+| theme | ground | | theme | ground |
+|---|---|---|---|---|
+| `tokyo-night` | dark | | `catppuccin-mocha` | dark |
+| `tokyo-night-light` | light | | `catppuccin-macchiato` | dark |
+| `dracula` | dark | | `catppuccin-frappe` | dark |
+| `nord` | dark | | `catppuccin-latte` | light |
+| `solarized-dark` | dark | | `gruvbox-dark` | dark |
+| `solarized-light` | light | | `gruvbox-light` | light |
+| `rose-pine` | dark | | `everforest-dark` | dark |
+| `rose-pine-moon` | dark | | `everforest-light` | light |
+| `rose-pine-dawn` | light | | `kanagawa-wave` | dark |
+| `kanagawa-dragon` | dark | | `kanagawa-lotus` | light |
+
+**Phosphor** — hand-authored, one hue against near-black
+
+| theme | phosphor | where you would have seen it |
 |---|---|---|
-| `vga` **(default)** | warm graphite | §2; the house look |
-| `tokyo-night` | dark | |
-| `tokyo-night-light` | light | stage well still dark |
-| `dracula` | dark | |
-| `nord` | dark | low contrast; check the floor carefully |
-| `solarized-dark` | dark | |
-| `solarized-light` | light | stage well still dark |
-| `green-mono` | near-black | hand-authored, P1 phosphor |
-| `amber-mono` | near-black | hand-authored, P3 phosphor |
+| `apple-ii-green` | P1 | Apple II, early terminals — the pure green |
+| `ibm-5151` | P39 | IBM MDA monitor — yellower, longer persistence |
+| `dec-amber` | P3 | VT220 and the amber-terminal era |
+| `vt220-white` | P4 | DEC white/grey phosphor — legible, least period-kitsch |
+
+This replaces the generic `green-mono` and `amber-mono` from the request with
+named historical equivalents: `apple-ii-green` **is** the green monochrome and
+`dec-amber` **is** the amber one, they just say which green and which amber.
+Two more sit alongside them because they are genuinely different — P39 is
+visibly yellower than P1, and a white-phosphor scheme is the one monochrome
+that stays comfortable to read for an hour.
+
+**Honest limit on the phosphor set:** a phosphor is defined by persistence and
+bloom as much as by hue, and this design does not simulate either — §1 rules
+out screen effects because the picture is evidence. So these differ by **hue
+only**. They are a palette named after a monitor, not an emulation of one, and
+the naming should not overpromise.
+
+### The picker at this size
+
+Nine names could be a flat list. Twenty-seven cannot: the settings panel gets
+four labelled groups in the order above, house first, with the current theme
+marked. Still names rather than swatches — these are things people already
+recognise by name, and a grid of twenty-seven colour chips is a worse way to
+find "Gruvbox Dark" than the words are.
+
+**The contrast test earns its place here.** Checking four schemes by eye is
+plausible; checking twenty-seven is not, and several of these are known to be
+low-contrast in their published form — Nord's comment greys and Everforest's
+soft variants especially. The script over the token table is what makes adding
+the twenty-eighth safe.
 
 ---
 
