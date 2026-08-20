@@ -152,7 +152,7 @@
     body #sidebtn { display:none; }
     /* The tab bar carries sound and power here, and a tap on the picture
        captures the keyboard, so these three are duplicates on a phone. */
-    body #capturebtn, body #soundbtn, body #powerbtn { display:none; }
+    body #grabbtn, body #soundbtn, body #powerbtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -333,7 +333,7 @@
   /* The line takes what is left after the controls, and the controls never
      wrap onto a second row: a strip that changes height moves the picture. */
   #cmdbar button { flex:none; white-space:nowrap; }
-  #capturebtn, #soundbtn, #powerbtn { font-size:13px; padding:0 9px; }
+  #grabbtn, #soundbtn, #powerbtn { font-size:13px; padding:0 9px; }
   #line {
     flex:1 1 auto; min-width:0; font:var(--t-data) var(--mono);
     background:var(--bg); color:var(--text);
@@ -669,17 +669,17 @@
     <button id="sendline" class="on" title="Type this line at the target and press Enter">Send ↵</button>
     <button id="keysbtn" aria-expanded="true"
             aria-controls="keys" title="Show or hide the key rail">Keys ▾</button>
-    <button id="capturebtn" title="Send what you type straight to the target">⌨ Capture</button>
+    <button id="grabbtn" title="Send what you type straight to the target">⌨️ Grab keyboard</button>
     <button id="soundbtn" aria-haspopup="true" aria-expanded="false"
             title="Sound and volume"><span id="soundglyph">🔇</span> Sound ▾</button>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
-            title="Mains power — on, off, cycle">Power ▾</button>
+            title="Mains power — on, off, cycle">🔌 Power ▾</button>
   </div>
 
   <div id="stalebar">A newer version of this page is available — reload
     <button id="reloadbtn" title="Reload the page">Reload now</button></div>
 
-  <div id="capbar">click the screen to capture the keyboard</div>
+  <div id="capbar">click the screen to grab the keyboard</div>
 
   <div id="keys">
     <button data-mod="lctrl">Ctrl</button>
@@ -1296,23 +1296,23 @@ function setArmed(v, opts) {
   $('stage').classList.toggle('armed', v);
   // The button says what pressing it does next, and lights while it is on --
   // the state also lives in the rail above, but the control is here.
-  $('capturebtn').textContent = v ? '⌨ Release' : '⌨ Capture';
-  $('capturebtn').classList.toggle('on', v);
-  $('capturebtn').title = v ? 'Stop sending keys to the target (Ctrl+Alt+Shift)'
-                            : 'Send what you type straight to the target';
-  pill('p-kbd', v ? 'on' : '', v ? 'captured' : 'idle');
+  $('grabbtn').textContent = v ? '⌨️ Release keyboard' : '⌨️ Grab keyboard';
+  $('grabbtn').classList.toggle('on', v);
+  $('grabbtn').title = v ? 'Stop sending keys to the target (Ctrl+Alt+Shift)'
+                         : 'Send what you type straight to the target';
+  pill('p-kbd', v ? 'on' : '', v ? 'grabbed' : 'idle');
   if (v) {
     // Must happen synchronously inside the tap handler: iOS ignores focus()
     // called from a timer or after an await.
     try { ghost.focus({preventScroll:true}); } catch (e) {}
-    addLine(new Date(), 'ui', 'keyboard captured'
+    addLine(new Date(), 'ui', 'keyboard grabbed'
             + (document.activeElement === ghost ? '' : ' — focus refused'),
             'k-note');
-    pill('p-kbd', 'on', 'keyboard captured');
+    pill('p-kbd', 'on', 'keyboard grabbed');
     $('capbar').classList.add('armed');
-    $('capbar').innerHTML = 'keyboard captured — press <b>Ctrl + Alt + Shift</b> to release';
+    $('capbar').innerHTML = 'keyboard grabbed — press <b>Ctrl + Alt + Shift</b> to release';
     if (!opts || !opts.quiet)
-      addLine(new Date(), 'ui', 'keyboard captured — Ctrl+Alt+Shift releases',
+      addLine(new Date(), 'ui', 'keyboard grabbed — Ctrl+Alt+Shift releases',
               'k-note');
   } else {
     pill('p-kbd', '', 'keyboard idle');
@@ -1344,7 +1344,7 @@ $('verifybtn').onclick = async () => {
                             : 'NO ANSWER — keystrokes are not arriving',
                  j.verified ? 'k-vid' : 'k-taint');
 };
-$('capturebtn').onclick = () => setArmed(!armed);
+$('grabbtn').onclick = () => setArmed(!armed);
 
 function armFromStage() {
   if (armed) {
