@@ -98,6 +98,8 @@
   #tabs { display:none; }
   @media (max-width:640px) {
     h1 { display:none; }
+    /* These overflow the rail; the same values live in the State panel. */
+    #c-lock, #c-power, #c-xport, #c-kbd { display:none; }
     header { gap:7px; padding:0 8px;
              height:calc(38px + env(safe-area-inset-top,0px)); }
     .chip { font-size:10px; letter-spacing:.03em; }
@@ -105,13 +107,16 @@
     .lamp i { width:9px; height:9px; }
     #zoom { max-width:88px; font-size:10px; }
 
-    /* The command line is a panel, not a permanent row. */
-    #cmdbar { display:none; }
-    #cmdbar.open { display:flex; }
-    #keys { display:none; }
-    #keys.open { display:flex; }
+    /* The command line is a panel, not a permanent row.
+       `body` in front of each selector outranks the bare id, so these win
+       regardless of where they sit in the file. Without it the base rules
+       further down took precedence and every tab showed the key rail. */
+    body #cmdbar { display:none; }
+    body #cmdbar.open { display:flex; }
+    body #keys { display:none; }
+    body #keys.open { display:flex; }
 
-    #tabs {
+    body #tabs {
       display:flex; flex:none; border-top:1px solid var(--rule);
       background:var(--panel);
       padding-bottom:env(safe-area-inset-bottom,0px);
@@ -124,12 +129,12 @@
     }
     #tabs button.on { color:var(--green); border-top-color:var(--green); }
 
-    #body { height:auto; max-height:46vh; }
-    #body > * { display:none; }
-    #body.show-log > #logh, #body.show-log > #log { display:block; }
-    #body.show-log > #log { display:flex; flex-direction:column; }
-    #body.show-panels > #panels { display:block; max-height:46vh; }
-    #body.closed { display:none; }
+    body #body { height:auto; max-height:46vh; }
+    body #body > * { display:none; }
+    body #body.show-log > #logh { display:block; }
+    body #body.show-log > #log { display:flex; flex-direction:column; }
+    body #body.show-panels > #panels { display:block; max-height:46vh; }
+    body #body.closed { display:none; }
     /* Only the sections the open tab wants. */
     #panels.only-sound > section:not(#sec-sound),
     #panels.only-power > section:not(#sec-power),
@@ -1419,9 +1424,20 @@ async function pollState() {
       : 'audio ' + (A.state || 'unavailable');
   }
 }
+let powerFails = 0;
 async function pollPower() {
+  // Back off when the plug is unreachable. The same EHOSTUNREACH every 20 s
+  // filled the log with identical lines and buried everything else: a fault
+  // worth reporting once is not worth reporting thirty times.
+  if (powerFails > 2 && powerFails % 15 !== 0) { powerFails++; return; }
   const j = await post('power', {action:'state'});
-  if (j && j.ok) pill('p-power', j.power.on?'on':'off', 'power ' + (j.power.on?'on':'off'));
+  if (j && j.ok) {
+    powerFails = 0;
+    pill('p-power', j.power.on ? 'on' : 'off', 'power ' + (j.power.on ? 'on' : 'off'));
+  } else {
+    powerFails++;
+    pill('p-power', 'off', 'power unreachable');
+  }
 }
 applyVolume();
 setInterval(pollState, 1500);
