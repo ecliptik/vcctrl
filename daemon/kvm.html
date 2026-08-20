@@ -411,11 +411,11 @@
       <div class="hint" style="margin-left:0">These events still happen and the
         daemon still records them — this only filters the view.</div>
       <label><input type="checkbox" id="opt-ws">
-        Try WebSocket for video before falling back</label>
-      <div class="hint">Off by default. The HTTPS proxy in front of this daemon
-        speaks HTTP/2, and WebSocket over HTTP/2 does not survive it — the
-        socket opens and no frames arrive. Useful only when reaching the daemon
-        directly with no proxy.</div>
+        Use WebSocket for video when it works</label>
+      <div class="hint">On by default; falls back to the mjpeg stream by itself
+        if the socket does not deliver a frame. WebSocket does not survive the
+        HTTP/2 proxy on port 443, so the page opens it against port 8443, which
+        the daemon serves directly over HTTP/1.1.</div>
 
       <label><input type="checkbox" id="opt-probe">
         Show LED and probe traffic</label>
@@ -486,7 +486,13 @@ const BUILD = '__BUILD__';
 // that runs at top level, every line after it -- themes, polling, input --
 // never executed either. The visible symptom was one status chip stuck on
 // "connecting", which is a very small window onto a script that had stopped.
-const OPTS = {probe:false, poll:false, mine:false, ws:false};
+// ws defaults ON now that a transport exists which actually carries it. It was
+// off while the only path was the HTTP/2 proxy, where it could not work -- but
+// a setting the operator has to find and tick, on an origin whose localStorage
+// is separate from the one where they ticked it last time, is a trap. The page
+// falls back to mjpeg by itself if the socket does not deliver, so defaulting
+// on costs nothing when it cannot work and saves a support round when it can.
+const OPTS = {probe:false, poll:false, mine:false, ws:true};
 try { Object.assign(OPTS, JSON.parse(localStorage.getItem('vcctrl.opts') || '{}')); }
 catch (e) {}
 const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
@@ -526,7 +532,9 @@ function gotFrame() {
 function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
-  if (OPTS.ws) addLine(new Date(), 'transport', 'websocket ' + why + ' — using mjpeg', 'k-lock');
+  if (OPTS.ws)
+    addLine(new Date(), 'transport',
+            'websocket ' + why + ' (' + lastWsURL + ') — using mjpeg', 'k-lock');
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
@@ -569,11 +577,14 @@ function wsURL() {
   return `${proto}://${location.host}/ws`;
 }
 
+let lastWsURL = '(none)';
+
 function connect() {
-  if (!OPTS.ws) { useMjpeg('websocket disabled — see settings'); return; }
+  if (!OPTS.ws) { useMjpeg('disabled in settings'); return; }
   let sock;
   try {
-    sock = new WebSocket(wsURL());
+    lastWsURL = wsURL();
+    sock = new WebSocket(lastWsURL);
   } catch (e) { useMjpeg('threw: ' + e); return; }
   ws = sock;
   ws.binaryType = 'arraybuffer';
