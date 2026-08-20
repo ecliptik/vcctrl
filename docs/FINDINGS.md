@@ -898,7 +898,7 @@ that asks the Pi about the Pi will answer yes.
 
 ---
 
-## 25. The chirp was always there  [resolved 2026-08-19]
+## 25. The POST chirp  [NOT RESOLVED -- see the correction at the end]
 
 A PC-speaker chirp during POST appeared "new" tonight and looked like evidence
 of damage, arriving alongside a NIC that had dropped off the PCI bus. Chased
@@ -931,3 +931,38 @@ So the rule is not "trust the operator's report" or "distrust it" -- it is that
 a report from the room is a genuine independent channel, and the way to use it
 is to design the experiment that separates the cases. Both times, the
 experiment was cheap and the speculation was expensive.
+
+
+### CORRECTION, same evening: the conclusion above is not established
+
+The operator then pressed the **hardware reset button** -- bypassing
+Ctrl-Alt-Del entirely -- and heard the chirp again. And he is confident it is
+new as of today.
+
+    cold boot                                        no chirp
+    warm reboot, Ctrl-Alt-Del, harness talking       CHIRP
+    warm reboot, Ctrl-Alt-Del, harness silent        CHIRP
+    warm reboot, Ctrl-Alt-Del, USB4VC unplugged      CHIRP
+    warm start,  HARDWARE RESET BUTTON               CHIRP
+
+So it is **any warm start**, not the key combination -- which is a better
+characterisation than before. But "the machine always did this and automation
+made it audible" was **my inference from the change in rate**, not a measured
+fact, and it is contradicted by the person who has listened to this machine for
+far longer than the rig has existed.
+
+Retracting it, and noting why it was attractive: it explained the observation,
+required nothing to be wrong, and arrived the moment I had a story that fit.
+That is the same failure as the three NIC mechanisms (sec. 23) -- **a plausible
+cause proposed before anything constrained the search.** I wrote the rule about
+the operator's report being an independent channel in this very section, and
+then used my own reasoning to overrule it two paragraphs later.
+
+**What actually distinguishes cold from warm here:** a cold boot resets PnP ISA
+cards and re-runs full initialisation; a warm start retains configured state and
+skips it. The Vibra16S is a PnP ISA card, it was fitted today, and the operator
+notes the only previous beep was "the PnP initialisation before the boot menu" --
+so the new tone is adjacent to a subsystem that changed today.
+
+**The test is one variable and the card is coming out anyway** (see
+SOUND-PROFILES): remove the Vibra16S, warm-start, listen. Not yet run.
