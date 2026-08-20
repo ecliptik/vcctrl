@@ -158,12 +158,20 @@ def reboot_into_net():
     # is the same class of non-check as "the prompt came back" (FINDINGS bug 6)
     # -- pressing 5 and booting NET are different events, and a missed menu
     # silently boots something else that also reaches a prompt.
-    if not verify_profile("NET"):
+    verdict = verify_profile("NET")
+    if verdict is False:
         raise SystemExit(
             "REFUSED: booted, but the NET banner is not on screen.\n"
             "  The menu selection did not land, so this is some other profile\n"
             "  with no packet driver. Transferring now would time out 90s per\n"
             "  tag and report missing logs that are actually present.")
+    if verdict is None:
+        print("  PROFILE UNVERIFIED -- could not look at the screen at all.")
+        print("  Proceeding: the profile is not being ASSUMED correct, it is")
+        print("  being left for the transfer to attest. A file landing in")
+        print("  incoming/ proves NET booted; nothing else can produce one.")
+        print("  Cost if the menu missed: %ds per tag instead of a fast refusal."
+              % PUT_TIMEOUT_S)
     return True
 
 
@@ -174,22 +182,49 @@ def verify_profile(name, tries=3):
     are up, so the banner is evidence of the whole chain rather than of the
     menu alone. Retries because the buffer may still be flushing "Bad command
     or file name" lines, which scroll but do not overwrite.
+
+    THREE OUTCOMES, NOT TWO.
+
+      True   -- looked, and the banner is there.
+      False  -- looked, and it is NOT there. Real evidence of a wrong profile.
+      None   -- could not look. No OCR, or no picture on the capture path.
+
+    The two-valued version collapsed the last two, and that is the mistake
+    FINDINGS sec. 24 is about: the harness cannot see its own cable. When the
+    operator moves the VGA lead to the external monitor to watch a boot -- a
+    normal, sensible thing to do -- the stick stops locking, grab() correctly
+    returns no picture, and a boolean turns that into "the NET banner is not on
+    screen." Which is a statement about the machine, made from a fact about the
+    cable. It refuses a run that would have worked, and it names the wrong
+    cause while doing it.
+
+    A missing banner is a claim; it needs a screen to have been read. No
+    screen means no claim, which is None, and the caller decides -- here, by
+    handing the question to the transfer, whose evidence does not go through
+    the capture path at all.
     """
     try:
         from PIL import Image
         import pytesseract
     except ImportError:
-        print("  NO OCR -- cannot verify the profile. Proceeding unverified.")
-        return True
+        print("  NO OCR installed -- cannot read the banner.")
+        return None
+    looked = False
     for i in range(tries):
         shot, _ = grab("profile-check")
         if shot is not None:
+            looked = True
             text = pytesseract.image_to_string(Image.open(shot)).upper()
             if "[%s]" % name in text or "%s] READY" % name in text:
                 print("  profile verified: [%s] banner on screen" % name)
                 return True
         if i + 1 < tries:
             time.sleep(3)
+    if not looked:
+        print("  no picture on the capture path in %d tries -- VGA may be on"
+              % tries)
+        print("  the external monitor, or the stick is not locking.")
+        return None
     return False
 
 
@@ -208,11 +243,36 @@ def snapshot(incoming):
 
 
 def arrived(incoming, name, before):
+    """Has this file arrived AND finished arriving?
+
+    The size check is not decoration. FTP creates the file and then fills it,
+    so there is a window -- short, but this poll runs every 2 s against
+    transfers that take 0.1-0.5 s, which is exactly the wrong ratio -- where
+    the file exists with nothing in it. On 2026-08-19 the collector caught
+    GR4SDL.LOG in that window and reported "0 bytes", and the number was real:
+    the file was genuinely empty when it was measured. It was 42223 bytes by
+    the time anyone looked, and the server log said completed=1.
+
+    A zero-length file is never a completed transfer here -- every artifact
+    this moves has content -- so treat zero as "still arriving" rather than as
+    a size. Then confirm the size has stopped changing before calling it done,
+    so what gets printed is the final size rather than a sample of a file
+    mid-write. Reporting a transient as a result is how a healthy cell gets
+    written up as a dead one.
+    """
     p = os.path.join(incoming, name)
     if not os.path.exists(p):
         return False
     st = os.stat(p)
-    return before.get(name) != (st.st_mtime, st.st_size)
+    if st.st_size == 0:
+        return False
+    if before.get(name) == (st.st_mtime, st.st_size):
+        return False
+    time.sleep(0.4)
+    try:
+        return os.stat(p).st_size == st.st_size
+    except OSError:
+        return False
 
 
 def put_tag(incoming, tag, before):
@@ -284,9 +344,29 @@ def inspect_logs(incoming, tags):
     bad = []
     for tag in tags:
         crit = []
+        empty = []
         for suffix in (".LOG", "SDL.LOG"):
             p = os.path.join(incoming, tag + suffix)
             if not os.path.exists(p):
+                continue
+            # A ZERO-BYTE LOG IS A FAILURE THAT LOOKS LIKE A PASS.
+            #
+            # This scan reports a cell clean when it finds no `[critical]` or
+            # `fatal:` line -- and an empty file has no lines at all, so it
+            # sails through the very check written to stop arrival being
+            # mistaken for health. Which is the same mistake one level down:
+            # the docstring above says "a cell that dies still writes a full
+            # artifact and names its own cause", and that is exactly the
+            # assumption an empty file breaks.
+            #
+            # It matters most for the SDL half. That is where LFB-decision,
+            # src_pitch, vram_pitch and pitches_match live -- the fields that
+            # decide whether a number is a 640x480 measurement or a 512x384
+            # workload presented at 640x480. Losing it does not degrade the
+            # cell, it removes the ability to say what the cell measured,
+            # while the fps figure in the main log still reads perfectly.
+            if os.path.getsize(p) == 0:
+                empty.append(tag + suffix)
                 continue
             try:
                 with open(p, errors="replace") as f:
@@ -295,7 +375,15 @@ def inspect_logs(incoming, tags):
                             crit.append(line.strip()[:140])
             except OSError:
                 pass
-        if crit:
+        if empty:
+            bad.append(tag)
+            print("  %-6s EMPTY -- %s is 0 bytes" % (tag, ", ".join(empty)))
+            print("      Not a clean cell with a missing file. Nothing was")
+            print("      written, so nothing can be concluded from it -- and")
+            print("      the SDL half is where pitches_match lives.")
+            if crit:
+                print("      also %d critical line(s) in the other half" % len(crit))
+        elif crit:
             bad.append(tag)
             print("  %-6s FAILED -- %d critical line(s)" % (tag, len(crit)))
             for c in crit[:2]:

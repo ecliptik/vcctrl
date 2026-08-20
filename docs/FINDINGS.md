@@ -1005,3 +1005,89 @@ Nothing. It is expected behaviour whenever the NIC is fitted, which under the
 new standing configuration is during transfers. **Do not investigate it again**,
 and do not read it as a symptom during a collect — that is exactly the window
 where it will be heard and exactly the window where it means nothing.
+
+---
+
+## 26. The first Mach64 sweep, and what it is not a measurement of
+
+Collected 2026-08-19 22:07 as files (`vcctrl-collect RB 1`), not read off the
+screen. Ten artifacts, every `STOR` `completed=1` in the FTP server log.
+
+### What card produced them
+
+`GRB.NFO` says `video_declared=S3 ViRGE`. That is wrong, and it is wrong the
+way `vcctrl-cardid`'s docstring predicted: RB.BAT hardcodes the string, so it
+keeps asserting ViRGE after a Mach64 goes in. `vcctrl-cardid` scores all four
+SDL logs **ATI Mach64, 4/4 signature points**, on `total_vram=2048 KB` -- the
+field that reads hardware through UniVBE's shim.
+
+Note for the next person, because it nearly caught me again: these logs carry
+`lfb=0x78000000`, which appears in cardid's *ViRGE* signature table. It is
+worth one point and it is shared. The VRAM size is the discriminator. Reading
+one field by eye is what produced the ViRGE card-swap scare earlier the same
+day; running the tool is what avoided repeating it.
+
+### The numbers are not 640x480 numbers
+
+All four cells:
+
+    src_pitch=512  vram_pitch=640  pitches_match=0
+
+Defect 2, confirmed on real hardware at the mode the operator requires. The
+mode-set to 640x480 lands, `vram_w=640 vram_h=480`, and the source pitch is
+never re-derived -- so what is measured is a 512-wide workload presented into
+a 640-wide framebuffer. The *comparisons below survive this*, because all four
+cells carry the identical defect. The *absolute figures do not*. Nothing here
+may be banked as "doskutsu at 640x480".
+
+### `per_loop_fps` is not the frame rate
+
+`GR3` reports `per_loop_fps=114.9`, with `overhead_s=484` of `dur=590s`. Its
+own per-stage table reads 21.6-32.3. The aggregate is an artifact of what the
+loop counter excludes; the per-stage table is the measurement. A cell whose
+overhead dominates its duration will report a spectacular aggregate and it
+means nothing.
+
+Two stages report exactly `50.0` in every cell. That is the TAS 50 Hz ceiling,
+not a result. Both are dropped below.
+
+### The repeat pair is the useful part
+
+`R4` and `R4B` are configurationally IDENTICAL -- a diff over every hint and
+every ENGAGED/DISABLED line is empty. So `R4B` is not a lever, it is a repeat,
+and it gives the noise floor that makes every other comparison readable:
+
+    comparison              mean d      range        stages faster
+    opl3 vs opl3 (REPEAT)    +0.13   -0.20..+0.70        5/10
+    opl3 vs organya          -0.03   -2.30..+1.50        6/10
+    opl3 vs adlib            +3.19   +2.00..+7.00       10/10
+
+Organya sits inside the repeat pair's own scatter with mixed signs: no
+difference, and any single-stage comparison that claimed one would have been
+reading noise.
+
+AdLib is faster on **every stage**, and its smallest win (+2.00) is about
+three times the repeat pair's worst-case scatter. That is a real effect. It is
+also cheap to test now that the Vibra16S is out of the standing configuration.
+
+The general point: a paired stage-by-stage comparison against a measured
+repeat pair answers a question that comparing two aggregate numbers cannot.
+Without `R4B` in this sweep, `organya -0.03` and `adlib +3.19` would both have
+been single numbers with no scale to judge them on.
+
+### A transient reported as a result
+
+The collector printed `GR4SDL.LOG  0 bytes` and I flagged the cell as dead.
+The file is 42223 bytes and the server logged `completed=1 bytes=42223
+seconds=0.095`. The arrival poll runs every 2 s against transfers lasting
+0.1-0.5 s, so it caught the file between creation and fill. The size was real;
+it was a sample of a file mid-write.
+
+`arrived()` now rejects zero-length as "still arriving" and confirms the size
+has stopped changing before reporting it. The failure mode is worth naming
+separately from the fix: a measurement taken at the wrong instant is not a
+wrong measurement, which is what makes it so easy to publish.
+
+The zero-byte guard added to `inspect_logs()` at the same time is still
+correct and stays -- `GC0B` and `GP1` really are 0 bytes, and an empty file
+passes a `[critical]`-line scan precisely because it has no lines.
