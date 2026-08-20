@@ -2407,6 +2407,15 @@ function showBuffer(v) {
 $('bufsel').onchange = async () => {
   const secs = Number($('bufsel').value);
   const r = await post('buffer', {seconds: secs});
+  if (!r || !r.ok) {
+    // Say so rather than silently reverting: the daemon may predate this
+    // command, and a control that does nothing while looking as though it
+    // worked is the failure this page keeps being rebuilt to avoid.
+    addLine(new Date(), 'video', 'scrub buffer unchanged — ' +
+            ((r && r.error) || 'the daemon did not accept it'), 'k-warn');
+    showBuffer(lastState && lastState.video);
+    return;
+  }
   if (r && r.ok) {
     addLine(new Date(), 'video', 'scrub buffer set to ' + r.target_span_s
             + 's (' + (r.cap_bytes / 1048576).toFixed(0) + ' MB'
