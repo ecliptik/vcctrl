@@ -233,7 +233,7 @@
       height:auto; max-height:none;
     }
     body #body.sheet > #sheethdr > #sheetclose { display:none; }
-    body #settings { border-left:0; border-top:1px solid var(--rule); }
+    body #settings { right:8px; left:8px; width:auto; }
     body #body.sheet > #sheethdr { display:flex; }
     body #body.sheet > #panelh { display:none; } /* the sheet bar names it */
     body #body.sheet > #log { max-height:none; }
@@ -521,15 +521,19 @@
     flex:none; display:flex; align-items:center; cursor:pointer;
     border:0; border-right:1px solid var(--rule); border-radius:0;
     background:transparent; color:var(--muted); padding:0 10px;
-    font:500 13px/1 var(--sans); min-height:0;
+    min-height:0;
   }
   #cmdbar #filebtn { font-size:15px; }
   /* Send mirrors the clip: same height, same ground, on the other end of the
      same box. Both are things you do TO this field, so both live in it. */
+  /* NO FONT OF ITS OWN. It restated "500 13px/1 var(--sans)" as a literal --
+     the same duplication that had Activity and Status come out two pixels
+     large -- so it only matched the buttons by coincidence and would not have
+     followed a change to --t-data. It inherits the family declaration now and
+     overrides nothing but the chrome. */
   #cmdbar #sendline {
     flex:none; border:0; border-left:1px solid var(--rule); border-radius:0;
-    background:transparent; color:var(--green); padding:0 11px;
-    font:500 13px/1 var(--sans); min-height:0;
+    background:transparent; color:var(--green); padding:0 11px; min-height:0;
   }
   #cmdbar #sendline:hover { background:var(--rule); }
   #cmdbar #sendline:disabled { color:var(--dim); }
@@ -773,11 +777,18 @@
      previewing one. Measured rather than hardcoded: these bars change height
      with the theme's font, the safe-area inset, and whether the key rail is
      up. */
+  /* THE SAME OBJECT AS THE OTHER MENUS. It behaved like them already -- the
+     button opens it, the button closes it, it floats over the picture -- but
+     it was drawn as a slab welded to the window edge, so it read as a
+     different kind of thing. Same radius, same border on all four sides, same
+     shadow as .pop, held off the edge so the corners are visible. */
   #settings {
-    position:fixed; right:0; width:min(390px, 100vw);
-    top:var(--bar-top, 0px); bottom:var(--bar-bottom, 0px);
-    z-index:70; background:var(--panel); border-left:1px solid var(--rule);
-    display:flex; flex-direction:column; box-shadow:-14px 0 34px rgba(0,0,0,.34);
+    position:fixed; right:8px; width:min(390px, calc(100vw - 16px));
+    top:calc(var(--bar-top, 0px) + 8px);
+    bottom:calc(var(--bar-bottom, 0px) + 8px);
+    z-index:70; background:var(--panel);
+    border:1px solid var(--rule); border-radius:9px; overflow:hidden;
+    display:flex; flex-direction:column; box-shadow:0 12px 30px rgba(0,0,0,.36);
   }
   #settings[hidden] { display:none; }
   #setbody { overflow-y:auto; -webkit-overflow-scrolling:touch;
@@ -941,6 +952,9 @@
     <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
             title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit Screen ▾</span></button>
+    <!-- Fit Screen acts on the PICTURE; the three to its right open panels
+         about the rig. The rule is where that changes. -->
+    <span class="sep" aria-hidden="true">|</span>
     <!-- The two column panels, and they behave like the tabs on a phone:
          each opens its own thing, and pressing the lit one puts the column
          away. The drawn pane icon that used to collapse the column is gone --
@@ -950,10 +964,6 @@
             title="What the daemon has been doing"><span class="bi">📋</span><span class="bl">Activity</span></button>
     <button id="statbtn" class="lbtn pbtn" aria-expanded="false" aria-controls="body"
             title="Measured state of the rig"><span class="bi">📊</span><span class="bl">Status</span></button>
-    <!-- The two above RESERVE SPACE: opening them narrows the picture.
-         Settings and light/dark do not. Three identical-looking buttons doing
-         two different things to your picture is worth a rule between them. -->
-    <span class="sep" aria-hidden="true">|</span>
     <button id="gbtn" class="lbtn" aria-label="settings"
             title="Themes, video, input and the rest"><span class="bi">⚙️</span><span class="bl">Settings</span></button>
     <!-- The one bare glyph left, and the only separator. It is not a panel --
@@ -3467,6 +3477,16 @@ function applyZoom(recentre) {
   // Coming down from 4x the scrollbars are still there when we measure, so
   // the fit lands ~10px short and then the scrollbars go away, leaving a gap
   // that nothing on screen explains.
+  // DECIDED BEFORE MEASURING, and not by arithmetic. Flooring the size to
+  // whole pixels was not enough: clientHeight is ROUNDED to an integer while
+  // the box itself can be fractional, so on a display where the stage lands
+  // on 651.5 the clamp let through half a pixel and the browser drew a
+  // scrollbar for it. A fit with no crop cannot overflow by construction --
+  // so the container is not scrollable at all, and there is nothing left for
+  // a rounding error to reach. Set first, because a scrollbar present during
+  // the measurement is what made the two-pass loop necessary.
+  const canScroll = !(zoomMode === 'fit' && !crop);
+  sc.style.overflow = canScroll ? 'auto' : 'hidden';
   let scale = 0, pw = 0, ph = 0;
   for (let pass = 0; pass < 2; pass++) {
     const W = sc.clientWidth, H = sc.clientHeight;
@@ -3493,7 +3513,7 @@ function applyZoom(recentre) {
     }
   }
 
-  const over = pw > sc.clientWidth + 1 || ph > sc.clientHeight + 1;
+  const over = canScroll && (pw > sc.clientWidth + 1 || ph > sc.clientHeight + 1);
   fr.classList.toggle('zoomed', over);
   // Only on a deliberate change. Re-centring on every re-measure would drag
   // the view back under the operator every five seconds.

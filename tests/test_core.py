@@ -1399,8 +1399,14 @@ HARNESS = r"""
   arm();
   zoomMode = 'fit'; crop = null; applyZoom(true);
   const sr = document.getElementById('scroll');
+  // Both halves matter: the content must not overflow, AND the container
+  // must not be scrollable -- the second is what a rounding error cannot get
+  // past, and the first is what makes the second safe.
   emit(`fitscroll ${sr.scrollHeight - sr.clientHeight} `
-     + `${sr.scrollWidth - sr.clientWidth}`);
+     + `${getComputedStyle(sr).overflowY === 'hidden' ? 1 : 0}`);
+  zoomMode = '4'; applyZoom(true);
+  emit(`zoomscroll ${getComputedStyle(sr).overflowY === 'hidden' ? 0 : 1} 0`);
+  zoomMode = 'fit'; applyZoom(true);
   emit('end 1 1');
  } catch (e) {
   document.getElementById('harness-out').textContent = 'THREW ' + e.message;
@@ -1733,7 +1739,13 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][1] == 1.0, got["cadcolour"])
     check("a fitted picture does not overflow vertically",
           got["fitscroll"][0] <= 0, got["fitscroll"])
-    check("nor horizontally", got["fitscroll"][1] <= 0, got["fitscroll"])
+    check("and a fitted stage is not scrollable at all",
+          got["fitscroll"][1] == 1.0, got["fitscroll"])
+    # The control that stops the fix from being "turn scrolling off": at 400%
+    # the picture genuinely exceeds the box and scrolling is the only way to
+    # reach the rest of it.
+    check("control: a zoomed stage still scrolls",
+          got["zoomscroll"][0] == 1.0, got["zoomscroll"])
 
 
 def test_favicon_single_source():
