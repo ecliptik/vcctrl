@@ -69,9 +69,18 @@
   /* The state word. Colour never carries the meaning on its own -- the word
      is the meaning, and the lamp beside it repeats it. Required by the
      monochrome themes, and what colour-blind users need anyway. */
+  /* Chip size, not a headline. It was the largest thing on the page, which is
+     the wrong emphasis: the picture is the point, and when the video IS locked
+     there is nothing to announce. The states worth noticing already take the
+     whole screen with an overlay, so the rail can stay quiet. */
   #state {
-    font:600 var(--t-state)/1 var(--mono); letter-spacing:.02em;
-    color:var(--text); flex:none; white-space:nowrap;
+    font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
+    color:var(--muted); flex:none; white-space:nowrap;
+    display:flex; align-items:center; gap:5px;
+  }
+  #state::before {
+    content:""; width:7px; height:7px; border-radius:50%; flex:none;
+    background:currentColor;
   }
   .chip {
     font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
@@ -455,8 +464,11 @@ let firstFrameTimer = null, lastFrameAt = 0, wsTried = 0;
 
 function setXport(x) {
   xport = x;
-  const label = {ws:'websocket', mjpeg:'mjpeg fallback',
-                 connecting:'connecting…', down:'no video'}[x] || x;
+  // Not "fallback" any more. On this deployment the HTTPS proxy speaks HTTP/2
+  // and WebSocket does not survive it, so the mjpeg stream IS the transport --
+  // calling it a fallback reads as a degraded state when nothing is wrong.
+  const label = {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…',
+                 down:'no video'}[x] || x;
   $('s-xport').textContent = label;
   pill('p-xport', x === 'ws' ? 'on' : x === 'mjpeg' ? 'mid' : 'off', label);
 }
@@ -1134,10 +1146,12 @@ const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
 // small labelled chips: colour never carries meaning alone, which the
 // monochrome themes force and colour-blind users need anyway.
 function pill(id, cls, text) {
-  if (id === 'p-video') {           // the one prominent readout
+  if (id === 'p-video') {
     const w = String(text).replace(/^video\s*/, '').toUpperCase();
-    $('state').textContent = w === 'LOCKED' ? 'LOCKED' : w;
-    $('state').style.color = cls === 'on' ? 'var(--text)'
+    $('state').textContent = w;
+    // The dot repeats what the word says rather than replacing it -- required
+    // by the monochrome themes, needed by colour-blind users.
+    $('state').style.color = cls === 'on' ? 'var(--green)'
                            : cls === 'off' ? 'var(--red)' : 'var(--yellow)';
     return;
   }
