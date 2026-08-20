@@ -78,8 +78,7 @@ try: d=json.load(sys.stdin)
 except Exception: raise SystemExit
 b=d.get("board") or {}
 if b.get("id") is None: print("\033[1;33munknown\033[0m  \033[0;90m%s\033[0m" % (b.get("reason") or ""))
-else: print("%s \033[0;90m(PBID %s)\033[0m  \033[1;33m-> %s\033[0m" % (
-    b.get("name") or "?", b["id"], b.get("target") or "unmapped machine"))
+else: print("%s \033[0;90m(PBID %s)\033[0m" % (b.get("name") or "?", b["id"]))
 ' 2>/dev/null)
 _f "Board" "${_bt:-${_bn:-unknown}}"
 _f "Power"    "${_pl:-${_y}daemon not answering${_0}}"
