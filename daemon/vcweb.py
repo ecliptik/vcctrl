@@ -23,6 +23,7 @@ import json
 import os
 import select
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -347,6 +348,68 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+class TLSServer(Server):
+    """HTTPS served by the daemon itself, so browsers speak HTTP/1.1 to it.
+
+    WHY THIS EXISTS. `tailscale serve` terminates TLS on 443 and negotiates
+    HTTP/2 with browsers. WebSocket over HTTP/2 needs RFC 8441 Extended
+    CONNECT, and through this proxy it does not survive: measured, the daemon
+    wrote 5 frames / 174 KB into Firefox's socket and the connection then
+    errored, while an HTTP/1.1 client through the SAME proxy received 60
+    frames / 2.04 MB intact. Same server, same code, same TLS -- the only
+    difference is the protocol the client negotiated.
+
+    Python's http.server speaks HTTP/1.1 and nothing else, so terminating TLS
+    here removes the h2 hop entirely. `tailscale serve --tcp` forwards the port
+    as raw TCP, so this certificate is presented directly to the browser and
+    the connection stays tailnet-only.
+
+    The certificate is the one the weekly timer already renews. The context is
+    rebuilt when the file changes, so a renewal does not need a restart -- an
+    hour of downtime three months from now is exactly the kind of thing nobody
+    would connect back to this line.
+    """
+
+    CERT = "/var/lib/vcctrl/tls.crt"
+    KEY = "/var/lib/vcctrl/tls.key"
+
+    def __init__(self, *a, **kw):
+        self._ctx = None
+        self._cert_mtime = 0
+        Server.__init__(self, *a, **kw)
+
+    def _context(self):
+        try:
+            mtime = os.path.getmtime(self.CERT)
+        except OSError:
+            return None
+        if self._ctx is None or mtime != self._cert_mtime:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(self.CERT, self.KEY)
+            # Do NOT advertise h2. Advertising a protocol this server cannot
+            # speak is how the 443 path breaks WebSocket in the first place.
+            ctx.set_alpn_protocols(["http/1.1"])
+            self._ctx, self._cert_mtime = ctx, mtime
+        return self._ctx
+
+    def get_request(self):
+        sock, addr = self.socket.accept()
+        ctx = self._context()
+        if ctx is None:
+            sock.close()
+            raise OSError("no certificate available")
+        try:
+            return ctx.wrap_socket(sock, server_side=True), addr
+        except Exception:
+            # A TLS handshake failure is one client's problem, not the
+            # server's; without this the accept loop dies on the first probe.
+            try:
+                sock.close()
+            except Exception:
+                pass
+            raise
+
+
 # --------------------------------------------------------------- capability
 
 class WebCapability(object):
@@ -375,11 +438,14 @@ class WebCapability(object):
         "pin", "timeline", "frame",
     ])
 
-    def __init__(self, registry, bind, port):
+    def __init__(self, registry, bind, port, tls_port=0):
         self.registry = registry
         self.bind = bind
         self.port = port
+        self.tls_port = tls_port
+        self.tls_up = False
         self.httpd = None
+        self.tlsd = None
         self.clients = 0
         self.ws_opened = 0
         self.ws_closed = 0
@@ -402,6 +468,21 @@ class WebCapability(object):
         self.httpd = Server((self.bind, self.port), Handler)
         self.httpd.web = self
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        if self.tls_port:
+            try:
+                self.tlsd = TLSServer((self.bind, self.tls_port), Handler)
+                self.tlsd.web = self
+                if self.tlsd._context() is None:
+                    raise OSError("certificate not present at %s"
+                                  % TLSServer.CERT)
+                threading.Thread(target=self.tlsd.serve_forever,
+                                 daemon=True).start()
+                self.tls_up = True
+            except Exception as exc:
+                # Non-fatal: the 443 path still serves the page, only the
+                # WebSocket transport is unavailable without this.
+                sys.stderr.write("direct TLS listener unavailable: %s\n" % exc)
+                self.tlsd = None
 
     def stop(self):
         if self.httpd:
@@ -441,6 +522,10 @@ class WebCapability(object):
                 "lock": act.get("lock"),
                 "last_event_age_s": act.get("last_event_age_s"),
                 "seq": act.get("seq"),
+                "build": self.build_id(),
+                # The page uses this to open its WebSocket against the port
+                # that speaks HTTP/1.1, rather than the h2 proxy on 443.
+                "tls_port": self.tls_port if self.tls_up else 0,
                 "viewers": self.clients,
                 "listeners": self.listeners,
                 "audio": (self.audio()._state() if self.audio()
@@ -454,9 +539,27 @@ class WebCapability(object):
                        "last_agent": self.ws_last_agent},
                 "caps": self.registry.report()}
 
+    def build_id(self):
+        """Short hash of the page as it is on disk right now.
+
+        Exists because "reload" has been the answer to three reports in a row.
+        A tab that has not been reloaded runs the old JavaScript indefinitely,
+        and from the operator's side that is indistinguishable from a change
+        that did not deploy -- so the page should notice for itself rather than
+        being told.
+        """
+        try:
+            with open(os.path.join(HERE, "kvm.html"), "rb") as f:
+                return hashlib.md5(f.read()).hexdigest()[:8]
+        except Exception:
+            return "unknown"
+
     def page(self):
         with open(os.path.join(HERE, "kvm.html"), "rb") as f:
-            return f.read()
+            body = f.read()
+        # The served copy carries the hash of the copy on disk, so a running
+        # page can compare itself against what the daemon is serving now.
+        return body.replace(b"__BUILD__", self.build_id().encode())
 
     # -- the stream ---------------------------------------------------------
 

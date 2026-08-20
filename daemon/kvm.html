@@ -177,6 +177,15 @@
      is a permanent instruction for a one-time action, and it cost a row of the
      picture to say it. The kbd chip in the header carries the affordance; this
      bar appears only when it has something worth the space -- how to get out. */
+  #stalebar {
+    flex:none; display:none; align-items:center; justify-content:center;
+    gap:10px; padding:7px 10px; background:var(--yellow); color:#141210;
+    font:600 var(--t-data)/1.3 var(--sans); text-align:center;
+  }
+  #stalebar.show { display:flex; }
+  #stalebar button { min-height:30px; padding:0 10px; background:#141210;
+                     color:var(--yellow); border-color:#141210;
+                     font:600 var(--t-data) var(--sans); }
   #capbar {
     flex:none; padding:0; height:0; overflow:hidden; text-align:center;
     background:var(--panel); border-bottom:0; color:var(--green);
@@ -361,6 +370,9 @@
     <button id="sendline" class="on">Send ↵</button>
   </div>
 
+  <div id="stalebar">A newer version of this page is available — reload
+    <button id="reloadbtn">Reload now</button></div>
+
   <div id="capbar">click the screen to capture the keyboard</div>
 
   <div id="keys">
@@ -462,6 +474,11 @@
 
 <script>
 const $ = id => document.getElementById(id);
+// Substituted by the daemon when it serves this file. A tab that has not been
+// reloaded keeps running old code forever, which looks exactly like a change
+// that failed to deploy -- so the page checks whether it is stale rather than
+// leaving that to be guessed.
+const BUILD = '__BUILD__';
 
 // Declared FIRST because the transport code reads it during start-up. It used
 // to sit with the settings UI further down, which put it in the temporal dead
@@ -538,12 +555,25 @@ function useMjpeg(why) {
 //
 // The socket is kept behind a setting for a direct-to-daemon deployment where
 // no proxy is in the way, and it must still prove itself by delivering a frame.
+let tlsPort = 0;      // filled from /state.json; 0 means none available
+
+function wsURL() {
+  // Prefer the daemon's own TLS port. The 443 path goes through a proxy that
+  // negotiates HTTP/2, and WebSocket does not survive it -- measured, five
+  // frames written and the connection errored. This port advertises http/1.1
+  // only, which is the configuration that carried 2 MB intact.
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  if (tlsPort && location.protocol === 'https:'
+      && String(location.port || 443) !== String(tlsPort))
+    return `wss://${location.hostname}:${tlsPort}/ws`;
+  return `${proto}://${location.host}/ws`;
+}
+
 function connect() {
   if (!OPTS.ws) { useMjpeg('websocket disabled — see settings'); return; }
   let sock;
   try {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    sock = new WebSocket(`${proto}://${location.host}/ws`);
+    sock = new WebSocket(wsURL());
   } catch (e) { useMjpeg('threw: ' + e); return; }
   ws = sock;
   ws.binaryType = 'arraybuffer';
@@ -771,6 +801,7 @@ function setArmed(v, opts) {
 // Capture-phase, so nothing layered over the video can swallow the click, and
 // pointerup as well as click because a touch that moves slightly may not
 // produce a click at all.
+$('reloadbtn').onclick = () => location.reload(true);
 $('c-kbd').onclick = () => setArmed(!armed);
 
 function armFromStage() {
@@ -1230,6 +1261,13 @@ async function pollState() {
   $('s-lastev').textContent = fmtAge(j.last_event_age_s);
   $('s-frames').textContent = v.frames ?? '–';
   $('s-viewers').textContent = j.viewers ?? '–';
+  if (j.tls_port !== undefined && j.tls_port !== tlsPort) {
+    tlsPort = j.tls_port;
+    // If the socket was disabled only because it could not work, it can now.
+    if (OPTS.ws && tlsPort && xport === 'mjpeg') restart();
+  }
+  if (j.build && BUILD !== '__' + 'BUILD__' && j.build !== BUILD)
+    $('stalebar').classList.add('show');
   $('s-span').textContent = v.span_s != null ? v.span_s.toFixed(1) + 's' : '–';
   lamps(j.leds, v.state);
   const A = j.audio || {};

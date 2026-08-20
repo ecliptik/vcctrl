@@ -1820,6 +1820,9 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
 # recovery path does not route through the web server.
 WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "127.0.0.1")
 WEB_PORT = int(os.environ.get("VCCTRL_WEB_PORT", "8080"))
+# HTTPS served by the daemon itself, so browsers get HTTP/1.1 and WebSocket
+# works. `tailscale serve --tcp` forwards this port as raw TCP. See TLSServer.
+WEB_TLS_PORT = int(os.environ.get("VCCTRL_WEB_TLS_PORT", "8443"))
 
 
 def _pace(req):
@@ -1911,7 +1914,8 @@ class Registry(object):
         """
         try:
             import vcweb
-            web = vcweb.WebCapability(self, WEB_BIND, WEB_PORT)
+            web = vcweb.WebCapability(self, WEB_BIND, WEB_PORT,
+                                      tls_port=WEB_TLS_PORT)
             web.start()
         except Exception as exc:
             self.failed["web"] = "%s: %s" % (type(exc).__name__, exc)
@@ -1919,7 +1923,9 @@ class Registry(object):
                              % self.failed["web"])
             return None
         self.caps["web"] = web
-        sys.stderr.write("web ui on http://%s:%d/\n" % (WEB_BIND, WEB_PORT))
+        sys.stderr.write("web ui on http://%s:%d/  tls=%s\n"
+                         % (WEB_BIND, WEB_PORT,
+                            WEB_TLS_PORT if web.tls_up else "unavailable"))
         return web
 
     def report(self):

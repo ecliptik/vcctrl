@@ -77,6 +77,14 @@ if command -v tailscale >/dev/null 2>&1; then
   if [ -n "${TS_NAME:-}" ]; then
     if sudo tailscale serve --bg --https=443 "http://127.0.0.1:8080" >/dev/null 2>&1; then
       echo "https://${TS_NAME}/  -> proxying to the daemon"
+      # And a RAW TCP forward for the daemon's own TLS listener. Raw, not
+      # --tls-terminated-tcp: if Tailscale terminated TLS here it would
+      # negotiate ALPN again and could hand back HTTP/2, which is the exact
+      # thing this port exists to avoid. Passthrough means the browser does its
+      # handshake with the daemon, which advertises http/1.1 only.
+      sudo tailscale serve --bg --tcp=8443 tcp://127.0.0.1:8443 >/dev/null 2>&1 \
+        && echo "https://${TS_NAME}:8443/  -> direct to the daemon (WebSocket works here)" \
+        || echo "note: could not configure the 8443 TCP forward"
     else
       # Not fatal. Plain http on the tailnet still works; only the
       # secure-context features are unavailable.
