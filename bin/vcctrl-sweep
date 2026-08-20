@@ -295,7 +295,17 @@ def main(argv):
     # empty on purpose -- "nobody said" is a real state and must not be
     # defaulted into a claim.
     def _opt(flag):
-        return argv[argv.index(flag) + 1] if flag in argv else ""
+        # Two ways this goes wrong, both resolving to "" because an empty
+        # declared field is honest and a forged one is not. IndexError when the
+        # flag is the final argument; and `--video --sound PICOGUS` silently
+        # taking "--sound" as the video name, which would declare a lie.
+        if flag not in argv:
+            return ""
+        i = argv.index(flag) + 1
+        if i >= len(argv):
+            return ""
+        v = argv[i]
+        return "" if v.startswith("--") else v
     declare = " ".join(x for x in (_opt("--video"), _opt("--sound"),
                                    _opt("--irq")) if x)
 
