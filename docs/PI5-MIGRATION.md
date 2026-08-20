@@ -565,7 +565,32 @@ contaminating the delta directly and at full magnitude instead of at one-cell
 imbalance. The banner's "order is load-bearing" is telling the truth.
 Counterbalancing improves it; reordering for variance would wreck it.
 
-**Sigma may be unmeasurable at current precision.** That same fit leaves a
+**Drift is fitted against real time, not cell position.** Position is only a
+proxy for time if every cell costs the same, and these run 126-132 s. No new
+plumbing was needed: the engine's `[runmanifest-emit]` line is timestamped and
+carries `dur=`, so each cell's midpoint is `emit_time - dur/2` and is
+recoverable from **every log already collected**. Fitted that way:
+
+    session   slope (fps/s)      arm-pair slope    imbalance   bias   offset
+    Pi 3      -3.810e-4          -3.724e-4  (2.2%)   133.5 s   -0.05   +1.35
+    Pi 5      -7.491e-4          -7.435e-4  (0.7%)   134.5 s   -0.10   +1.40
+
+The two arms agree on the slope to within a few percent in both sessions,
+which is the check that a single common drift describes the run. The
+position-based figures were right here only because the durations happened to
+be near-equal — luck rather than design — and the time fit no longer depends
+on it. It also means every historical run can be re-fitted to ask whether
+drift has been present all along.
+
+**Sigma is unmeasurable at current precision, and that is the operative
+claim.** An earlier draft said sigma < 0.05 was established by the two zero
+residuals. It is not. The residual is `a2 - a1 - c2 + c1`, four independent
+cell values, so `SD(residual) = 2*sigma`, and the chance of it rounding to
+zero twice is 0.47 at sigma 0.025, 0.15 at 0.05, and 0.04 at 0.10. Two zero
+residuals therefore **disfavour sigma = 0.10 at about p = 0.04 and are
+comfortable with sigma <= 0.05** — real but modest evidence, not a bound. The
+practical consequence is the same either way, and another decimal place on
+`per_loop_fps` settles it directly rather than by argument. That same fit leaves a
 residual of exactly zero in both sessions — the data are fully described by
 "constant offset plus linear drift" with nothing left over. That is consistent
 with per-cell scatter below the 0.1 reporting granularity, i.e. sigma < 0.05,

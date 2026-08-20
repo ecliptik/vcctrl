@@ -109,6 +109,16 @@ def read_cell(d, tag):
     m = STAMP.match(line)
     if m:
         out["clock"] = "%s:%s:%s" % m.groups()
+        # Cell MIDPOINT in seconds, from the engine's own emit timestamp less
+        # half the duration it reports. Recoverable from every log already
+        # collected, so drift can be fitted against real time rather than
+        # against cell position -- position is only a proxy for time if every
+        # cell costs the same, and these run 126-132 s.
+        h, mi, sec = (int(x) for x in m.groups())
+        try:
+            out["mid_s"] = h * 3600 + mi * 60 + sec - float(out["dur"].rstrip("s")) / 2.0
+        except (KeyError, ValueError, AttributeError):
+            pass
     try:
         out["fps"] = float(out["per_loop_fps"])
     except (KeyError, ValueError):
@@ -320,16 +330,35 @@ def main(argv):
     # arms balanced. The residual on the fourth cell is the check: the model
     # has one degree of freedom left, so a non-zero residual means "constant
     # offset plus linear drift" does not describe this run.
-    slope = (now[CONTROL[1]]["fps"] - now[CONTROL[0]]["fps"]) / 2.0
-    offset = now[ARM[0]]["fps"] - (now[CONTROL[0]]["fps"] + slope)
-    resid = now[ARM[1]]["fps"] - (now[CONTROL[0]]["fps"] + offset + 3 * slope)
-    print("\n  drift %+.3f fps/cell  ->  delta carries a bias of %+.2f"
-          % (slope, slope))
-    print("  drift-corrected offset %+.2f   (residual %+.3f)" % (offset, resid))
-    if abs(resid) > 0.05:
-        print("  RESIDUAL IS NOT ZERO: 'constant offset plus linear drift' does")
-        print("  not describe this run, so the correction above is not")
-        print("  trustworthy either. Do not use it.")
+    c0, c1_, a0, a1_ = (now[CONTROL[0]], now[CONTROL[1]],
+                        now[ARM[0]], now[ARM[1]])
+    have_times = all("mid_s" in x for x in (c0, c1_, a0, a1_))
+    if not have_times:
+        # Report-only section, so a missing timestamp skips it rather than
+        # stopping the scoring. The verdict does not depend on any of this.
+        print("\n  cannot fit drift: a cell is missing its timestamp or dur")
+    if have_times:
+        t = {k: x["mid_s"] - c0["mid_s"] for k, x in
+             (("c0", c0), ("c1", c1_), ("a0", a0), ("a1", a1_))}
+        slope = (c1_["fps"] - c0["fps"]) / (t["c1"] - t["c0"])
+        slope_a = (a1_["fps"] - a0["fps"]) / (t["a1"] - t["a0"])
+        offset = a0["fps"] - (c0["fps"] + slope * t["a0"])
+        resid = a1_["fps"] - (c0["fps"] + offset + slope * t["a1"])
+        imbalance = (t["a0"] + t["a1"]) / 2.0 - (t["c0"] + t["c1"]) / 2.0
+        bias = slope * imbalance
+        print("\n  drift %+.3e fps/s from the control pair, %+.3e from the arm pair"
+              % (slope, slope_a))
+        print("  arm cells sit %.1f s later on average -> delta carries %+.2f"
+              % (imbalance, bias))
+        print("  drift-corrected offset %+.2f   (residual %+.3f)" % (offset, resid))
+        if slope and abs(slope_a - slope) / abs(slope) > 0.25:
+            print("  NOTE: the two arms disagree on the slope by more than 25%.")
+            print("  A single common drift does not describe this run, so the")
+            print("  correction rests on a model the data do not support.")
+        if abs(resid) > 0.05:
+            print("  RESIDUAL IS NOT ZERO: 'constant offset plus linear drift' does")
+            print("  not describe this run, so the correction above is not")
+            print("  trustworthy either. Do not use it.")
     print("  Reported, NOT scored -- the band above was fixed on the naive")
     print("  delta and is not being moved after the fact. The fix for the bias")
     print("  is a counterbalanced C A A C cell order in a successor sweep.")
