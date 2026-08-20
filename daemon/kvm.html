@@ -284,6 +284,11 @@
      "stale" is dashed, which is what the monochrome themes and a colour-blind
      reader both need. */
   .lamp { display:flex; align-items:center; }
+  /* NOT APPLICABLE is its own look: struck through and dimmed, so it reads as
+     "there is nothing here to read" rather than as a reading of nothing. A
+     dark lamp is a measurement; this is the absence of one. */
+  .lamp.na > span { opacity:.38; text-decoration:line-through;
+                    text-decoration-thickness:1px; }
   .lamp i { display:none; }
   .lamp span {
     font:var(--t-micro)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
@@ -3343,7 +3348,13 @@ const esc = t => String(t).replace(/[&<>"]/g,
 // and nothing here maps a board id to anything, because the daemon resolves
 // that so there is exactly one table.
 function heat(h) {
-  const t = Number(h && h.throttled) || 0;
+  // ABSENT IS NOT ZERO. `Number(undefined) || 0` made a missing field read as
+  // "not throttling", which is a fabricated observation about the world -- and
+  // in the direction that produces silence rather than a false alarm, so
+  // nobody would ever have gone looking. If the daemon stops reporting it,
+  // say so.
+  if (!h || h.throttled == null) return {unknown: true, text: 'not reported'};
+  const t = Number(h.throttled) || 0;
   if (!t) return null;
   const now = t & 0xf, ever = (t >> 16) & 0xf;
   const words = m => [
@@ -3355,7 +3366,12 @@ function heat(h) {
 
 function showHeat(j) {
   const el = $('c-heat'), h = j.host || {};
-  const th = heat(h);
+  // "Not reported" is a fact for the READOUT, not for the alarm. This chip is
+  // a warning light in the top rail; lighting it permanently on a daemon that
+  // never sends the field would be a false alarm that never clears, and a
+  // warning that is always on is one nobody reads. Status carries the unknown.
+  const raw = heat(h);
+  const th = raw && raw.unknown ? null : raw;
   const hot = h.temp_c != null && h.temp_c >= 80;
   const show = !!th || hot;
   el.style.display = show ? '' : 'none';
@@ -3603,7 +3619,8 @@ function statsRows(j) {
     kv('kernel', (h.kernel || '') + (h.arch ? ' · ' + h.arch : ''));
     if (h.governor) kv('governor', h.governor);
     const th = heat(h);
-    if (th) kv('throttling', th.text, th.now ? 'bad' : 'warn');
+    if (th) kv('throttling', th.text,
+               th.unknown ? 'unk' : th.now ? 'bad' : 'warn');
     if (h.mem_total_mb)
       kv('memory', h.mem_used_mb + ' / ' + h.mem_total_mb + ' MB · '
                    + pct(h.mem_used_mb / h.mem_total_mb),
@@ -4266,52 +4283,60 @@ if (autoTheme) autoPick();
 // not showing anything, because a lamp that looks live on a dead machine is
 // the same lie in miniature that cost a wrong readiness report.
 function lamps(leds, videoState, verified) {
+  // THREE STATES, because the daemon reports three. A board with no LED
+  // return channel sends {available:false, why:"unsupported"} and NO value
+  // keys at all -- and the old read, `leds && leds[key]`, saw a truthy
+  // object, got undefined for capslock, drew a dark lamp and captioned it
+  // "dark". "This machine has no LED channel" and "all three LEDs are off"
+  // rendered identically, which is exactly the confusion the three-state was
+  // added to prevent. The page would have defeated it silently.
+  const na    = !!(leds && leds.available === false);
+  const blind = !leds || (leds.available !== false && leds.capslock == null);
   // Unverified is the default, and it is drawn as such. With the PS/2 lead
   // physically unplugged the daemon still reports both devices held, input ok,
   // and plausible LED values -- all true, and all about the Pi's end of the
   // wire. Lit lamps on an unverified link are a reassuring lie.
-  // The dashes are not decoration and not a style slip: a solid lamp claims
-  // the LED reading reflects the TARGET, and it only does if the input link
-  // has been proven. With the PS/2 lead unplugged the daemon still reports
-  // both devices held and plausible LED values -- all true, and all about the
-  // Pi's end of the wire. So an unproven link gets a dashed underline, and
-  // "Verify input link" in Settings is what makes it solid.
-  const unproven = !verified || verified.ok !== true || verified.age_s > 900;
-  const stale = videoState === 'nosignal' || videoState === 'unavailable'
-                || unproven;
+  const noVerify = !!(verified && verified.available === false);
+  const unproven = !na && !noVerify
+                   && (!verified || verified.ok !== true || verified.age_s > 900);
+  const stale = !na && (videoState === 'nosignal'
+                        || videoState === 'unavailable' || unproven || blind);
   for (const [key, id] of [['capslock','lamp-caps'], ['numlock','lamp-num'],
                            ['scrolllock','lamp-scroll']]) {
     const el = $(id);
     if (!el) continue;
-    const v = leds && leds[key];
+    const v = na || blind ? null : leds[key];
     el.classList.toggle('on', v === 1);
     el.classList.toggle('stale', stale);
-    // On the CONTAINER as well: the button has padding and gaps between the
-    // three lamps, and a pointer resting in one of those found no tooltip at
-    // all -- which reads as "this has no tooltip" rather than "you missed".
-    $('lamps').title = unproven
-      ? 'Caps / Num / Scroll from the PS/2 return channel. Dashed: the input '
-        + 'link is unproven, so these describe the Pi rather than the target.'
-      : 'Caps / Num / Scroll, read back from the target over PS/2 — proof a '
-        + 'keystroke landed.';
-    el.title = unproven
-      ? 'Dashed: the input link has not been proven, so these lamps describe '
-        + 'the Pi\'s end of the wire. Settings → Verify input link.'
-      : videoState === 'nosignal' || videoState === 'unavailable'
-        ? 'Dashed: no picture, so the target may not be running.'
-        : 'Read from the PS/2 return channel — proof a keystroke landed.';
-    el.title = (leds ? (v === 1 ? 'lit' : 'dark') : 'unknown')
-             + (stale ? ' — retained, the target is not showing a picture' : '');
+    el.classList.toggle('na', na || blind);
+    // ONE title, assigned once. There were three assignments here and the
+    // last won, so the two carefully worded ones above it were dead the day
+    // they were written and nobody ever saw them.
+    el.title =
+      na    ? 'No LED return channel on this board'
+              + (leds.reason ? ' — ' + leds.reason : '')
+      : blind ? 'The daemon is not reporting LED values'
+      : (v === 1 ? 'lit' : 'dark')
+        + (unproven ? ' — the input link is unproven, so this describes the '
+                    + 'Pi rather than the target'
+           : stale ? ' — retained, the target is not showing a picture' : '');
   }
-  $('lamps').title = LAMP_ATTESTS
-    + (verified
-       ? `\n\nLink last proven by round trip ${fmtAge(verified.age_s)} ago: `
-         + (verified.ok ? 'the target answered.' : 'NO ANSWER — keystrokes are not arriving.')
-       : '\n\nThe link has not been proven this session. Tap VERIFY to send a '
-         + 'key and watch for the LED to come back.')
-    + (stale
-    ? '\n\nDashed: the target is not showing a picture, so these values are '
-      + 'retained from whenever it last published them.' : '');
+  $('lamps').title =
+    na ? 'Caps / Num / Scroll are a PS/2 return channel. This board does not '
+         + 'have one' + (leds.reason ? ': ' + leds.reason : '')
+         + ', so there is nothing to read and nothing is being claimed.'
+    : LAMP_ATTESTS
+      + (noVerify
+         ? '\n\nThis board has no round-trip verification, so the link cannot '
+           + 'be proven the way a PS/2 one can.'
+         : verified
+         ? `\n\nLink last proven by round trip ${fmtAge(verified.age_s)} ago: `
+           + (verified.ok ? 'the target answered.' : 'NO ANSWER — keystrokes are not arriving.')
+         : '\n\nThe link has not been proven this session. Tap VERIFY to send a '
+           + 'key and watch for the LED to come back.')
+      + (stale
+      ? '\n\nDashed: the target is not showing a picture, so these values are '
+        + 'retained from whenever it last published them.' : '');
 }
 
 // Name what the signal ATTESTS, not what it resembles. These lamps prove a

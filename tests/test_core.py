@@ -1411,6 +1411,33 @@ HARNESS = r"""
     setBufOpen(false);
     emit(`bufbtn ${inStrip} ${up(lab()) === 1 && opened === 0 ? 1 : 0}`);
   }
+  // ABSENCE IS NOT A READING. A board with no LED channel sends
+  // {available:false} and no value keys; the old code saw a truthy object,
+  // got undefined, and drew three dark lamps captioned "dark" -- identical to
+  // a real machine with all three LEDs off. Three states, three renderings.
+  {
+    const capsEl = document.getElementById('lamp-caps');
+    const cls = () => [capsEl.classList.contains('on') ? 'on' : '',
+                       capsEl.classList.contains('na') ? 'na' : ''].join('');
+    lamps({available: true, capslock: 1, numlock: 0, scrolllock: 0},
+          'locked', {available: true, ok: true, age_s: 3});
+    const real = cls() === 'on' && !/no LED|not reporting/.test(capsEl.title);
+    lamps({available: false, why: 'unsupported',
+           reason: 'no LED return channel on board 3 (ADB)'},
+          'locked', {available: false, why: 'unsupported'});
+    const unsupported = cls() === 'na' && /no LED return channel/i.test(capsEl.title);
+    lamps(null, 'locked', null);
+    const unknown = cls() === 'na' && /not reporting/i.test(capsEl.title);
+    emit(`ledstates ${real && unsupported && unknown ? 1 : 0} `
+       + `${unsupported && !capsEl.classList.contains('on') ? 1 : 0}`);
+    // Absent throttling must not read as "fine". The direction is the point:
+    // defaulting to the reassuring value produces silence, and silence is
+    // never investigated.
+    const t1 = heat({});
+    const t2 = heat({throttled: '0x0'});
+    emit(`heatabsent ${t1 && t1.unknown ? 1 : 0} ${t2 === null ? 1 : 0}`);
+    lamps(null, 'locked', null);
+  }
   closePop();
   emit(`caretshut ${tipUp('keys')} ${tipUp('zoom')}`);
   document.getElementById('keysbtn').click();
@@ -1770,6 +1797,16 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][0] == 1.0, got["cadcolour"])
     check("Refresh video is in the screen menu, not the power menu",
           got["cadcolour"][1] == 1.0, got["cadcolour"])
+    check("LED lamps render present, unsupported and unknown differently",
+          got["ledstates"][0] == 1.0, got["ledstates"])
+    # The exact failure: a board with no LED channel must not render as a
+    # board whose LEDs are all off.
+    check("control: an unsupported channel is not drawn as a dark lamp",
+          got["ledstates"][1] == 1.0, got["ledstates"])
+    check("absent throttling reports unknown, not healthy",
+          got["heatabsent"][0] == 1.0, got["heatabsent"])
+    check("control: a real zero still reports healthy",
+          got["heatabsent"][1] == 1.0, got["heatabsent"])
     check("the buffer control is in the strip, where it can be found",
           got["bufbtn"][0] == 1.0, got["bufbtn"])
     check("and its caret follows the same rule as the menus beside it",
