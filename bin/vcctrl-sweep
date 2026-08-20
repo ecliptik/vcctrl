@@ -366,10 +366,27 @@ def preflight(conf, sweep, machine, allow_power_on=False):
         raise SystemExit("REFUSED: unknown machine digit %r" % machine)
 
     st = vc_json("status")
-    held = st.get("usb4vc", {})
+    held = st.get("usb4vc")
+    # `all({}.values())` is TRUE. With `st.get("usb4vc", {})` this check passed
+    # vacuously whenever the field was missing -- an absent answer read as a
+    # clean bill of health, immediately before committing the machine to a
+    # 23-minute unattended run it could not verify. A check that cannot fail
+    # when the information is missing is worse than no check, because it
+    # produces the same output as a real pass.
+    if held is None:
+        raise SystemExit(
+            "REFUSED: `status` did not report a usb4vc hold state at all.\n"
+            "  That is NOT the same as the devices being held. Something is\n"
+            "  wrong with the daemon or the field has been renamed, and\n"
+            "  either way this cannot confirm the input path.")
+    if not held:
+        raise SystemExit(
+            "REFUSED: usb4vc reported an EMPTY hold state: %r\n"
+            "  No devices listed means none confirmed held." % (held,))
     if not all(held.values()):
         raise SystemExit("REFUSED: USB4VC is not holding our input devices: %s" % held)
-    print("  input devices held by USB4VC: ok")
+    print("  input devices held by USB4VC: ok (%s)"
+          % ", ".join(sorted(held)))
 
     if not ensure_powered(allow_power_on):
         raise SystemExit(2)

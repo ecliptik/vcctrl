@@ -1545,3 +1545,78 @@ slightly: a guarantee holds inside the boundary it was written for, and a
 transport that crosses that boundary carries the words without the guarantee.
 Nothing here is broken. `shot --out` does what it says on the machine it says
 it on.
+
+## 31. A key's absence read as a value  [audited 2026-08-20]
+
+Two sessions hit this within an hour, from opposite directions, and neither
+bug was in the function that failed. Both were in the **seam**: a caller met a
+contract carrying a premise nobody had written down.
+
+- The webkvm session's ring **pin** was correct code wired to nothing. The
+  save path walked the ring frame by frame without ever taking it, so when the
+  signal returned, eviction destroyed frames mid-copy and the download
+  silently produced almost nothing.
+- `write_frame` judged raw responses by `resp["picture"]`, which is **absent**
+  on that path rather than false. Every frame fetched by sequence number would
+  have reported "no picture" — and because the two-valued contract removes the
+  destination on a no-picture, it would then have **deleted the caller's
+  file**.
+
+The second is the worse kind: it fails by destroying the thing it was asked to
+produce rather than by doing nothing.
+
+### What the audit found
+
+Scanning every `.get()` in `bin/` and `daemon/` for absence becoming a claim.
+Most hits are parameter defaults where absence honestly means "the caller did
+not specify" — an env var, a request argument. **Those are fine.** The
+dangerous class is a *reading* where absence becomes a statement about the
+world, and there were four.
+
+**1. A preflight that could not fail.** `vcctrl-sweep`:
+
+    held = st.get("usb4vc", {})
+    if not all(held.values()):     # all({}.values()) is TRUE
+
+With the field missing, this printed `input devices held by USB4VC: ok` and
+committed the machine to a 23-minute unattended run it had verified nothing
+about. **An absent answer read as a clean bill of health**, and it produced
+character-for-character the same output as a real pass.
+
+**2. Power collapsed from three states to two.** `power_on()` was
+`bool(...get("power", {}).get("on"))`. The daemon goes to some trouble to keep
+`on` tri-state — null when the plug cannot be reached — because "the machine
+is off" and "I cannot reach the plug" are opposite facts. `bool(None)` is
+False, so the harness threw that away one line after the daemon preserved it.
+With `--power-on`, `ensure_powered()` would then send `power on` to a machine
+that might be running and wait 240 s for a boot edge that could not arrive.
+Nothing was cut — the command is idempotent — but the result was a confident
+false statement about the world, then four minutes, then a wrong refusal.
+
+**3. A missing count read as zero.** `vcctrl-capcheck` defaulted `n`,
+`distinct` and `repeated` to 0, so `live` came out 0 — which is the signature
+of a frozen capture. A daemon that renamed a key would be reported as a
+capture stick that had stopped locking.
+
+**4. `relay_state` absent read as off**, in the daemon's own Kasa parse,
+undoing the tri-state one layer below where it was carefully built.
+
+### The rule
+
+**Absence is a third state or it is a bug.** Before defaulting a `.get()`, ask
+which of two questions the key answers:
+
+- *"What did the caller ask for?"* — a default is correct. Absence means
+  unspecified.
+- *"What is true of the world?"* — a default is a **fabricated observation**.
+  Absence means could-not-look, and it needs its own state.
+
+And the direction matters more than the presence of a default. Absence
+defaulting to the alarming value produces a false alarm, which gets
+investigated. **Absence defaulting to the reassuring value produces silence,
+which does not** — item 1 sat in the preflight of every sweep this project has
+run.
+
+Related: sec. 24 (the harness cannot see its own cable), sec. 29 (every
+diagnostic healthy, nothing driven). Same family — an instrument reporting its
+own state, or its own ignorance, as the target's.

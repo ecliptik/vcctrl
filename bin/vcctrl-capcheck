@@ -74,11 +74,22 @@ def profile(n=16):
         return None
     if not fs.get("ok"):
         return None
-    frames = fs.get("n", 0)
-    distinct = fs.get("distinct", 0)
+    # A MISSING count is not a count of zero. Defaulting these to 0 turned an
+    # absent field into "no live frames", which is the signature of a frozen
+    # capture -- so a daemon that renamed a key would be reported as a stick
+    # that had stopped locking. Refuse to compute rather than compute from
+    # values nobody sent.
+    missing = [k for k in ("n", "distinct", "repeated") if k not in fs]
+    if missing:
+        sys.stderr.write("framestats did not report %s; not deriving a live "
+                         "count from fields that were never sent\n"
+                         % ", ".join(missing))
+        return None
+    frames = fs["n"]
+    distinct = fs["distinct"]
     # live == frames whose hash appears exactly once. framestats reports how
     # many hash GROUPS repeated, so the singleton count is the difference.
-    live = distinct - fs.get("repeated", 0)
+    live = distinct - fs["repeated"]
     mean = sh.get("mean") if sh.get("picture") else None
     return {"frames": frames, "unique": distinct, "live": live,
             "mean": mean, "source": "daemon"}

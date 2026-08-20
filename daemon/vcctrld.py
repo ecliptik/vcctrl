@@ -233,7 +233,13 @@ def errstr(exc, prefix=""):
 def power_state(host):
     info = kasa_send(host, {"system": {"get_sysinfo": {}}})
     info = info["system"]["get_sysinfo"]
-    return {"on": bool(info.get("relay_state")),
+    # None, not False, when the plug answers WITHOUT saying. bool(None) is
+    # False, which would report "the machine is off" on the word of a reply
+    # that never mentioned it -- and PowerCapability goes to some trouble one
+    # layer up to keep `on` tri-state for exactly this reason. Collapsing it
+    # here would undo that before it ever reached the caller.
+    relay = info.get("relay_state")
+    return {"on": None if relay is None else bool(relay),
             "alias": info.get("alias"),
             "model": info.get("model"),
             "on_time_s": info.get("on_time"),

@@ -118,7 +118,27 @@ def leds_available():
 
 
 def power_on():
-    return bool(vc_json("power", "state").get("power", {}).get("on"))
+    """True, False, or None. THREE states, because the plug has three.
+
+    This used to be `bool(...get("power", {}).get("on"))`, and both defaults
+    were claims. A plug that cannot be reached returns `on: null` -- the
+    daemon makes it tri-state deliberately, because "the machine is off" and
+    "I cannot reach the plug" are opposite facts that must not share a value
+    (BOARD-IDENTITY, and PowerCapability's own docstring). bool(None) is
+    False, so the harness threw that distinction away one line after the
+    daemon had carefully preserved it.
+
+    What it cost: ensure_powered() would read an unreachable plug as "powered
+    off" and, with --power-on, send `power on` to a machine that was already
+    running and then wait 240 s for a cold boot that could not happen. The
+    power command is idempotent so nothing was cut, but the answer was a
+    confident false statement about the world followed by a four-minute wait
+    and a wrong refusal.
+    """
+    st = vc_json("power", "state").get("power")
+    if not isinstance(st, dict) or "on" not in st:
+        return None
+    return st["on"]          # may itself be None -- pass the unknown through
 
 
 # A poll used to cost ~1.5 s, which is why this loop had no sleep: a delay
@@ -602,8 +622,19 @@ def ensure_powered(allow_power_on):
     improvised at a prompt every time -- and that improvisation is exactly
     where the stale-LED trap bit. Making it code makes it reviewable.
     """
-    if power_on():
+    state = power_on()
+    if state is True:
         return True
+    if state is None:
+        # NOT a power cycle. Acting on an unknown here means sending `power
+        # on` to a machine that may be mid-run, and then waiting four minutes
+        # for a boot edge that will never arrive. Refusing is the only honest
+        # move: could-not-look is not a finding.
+        print("REFUSED: cannot tell whether the target is powered.\n"
+              "  The plug did not report a state -- that is NOT the same as\n"
+              "  the machine being off, and this will not act on the\n"
+              "  difference. Check `vcctrl power state`.")
+        return False
     if not allow_power_on:
         print("REFUSED: target is powered off.\n"
               "  Run `vcctrl power on`, or pass --power-on to let this do it.")
