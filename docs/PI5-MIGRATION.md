@@ -454,6 +454,53 @@ found`. A cell that fails to run now leaves a hole that `--collect` reports
 loudly, instead of handing back the previous run's log with nothing to say it
 was old. PLAN sec. 5.2 states this rule; nothing enforced it.
 
+### 6c. Result: PASS  [measured 2026-08-20, 14:41-14:47]
+
+    cell    Pi 3    Pi 5
+    GPU0    29.6    29.8     control
+    GPU0B   29.5    29.6     control, repeat
+    GPUA    30.9    31.1     no_input_poll
+    GPUAB   30.8    30.9     no_input_poll, repeat
+
+    control-pair spread   0.1 -> 0.2    pass (threshold 0.2)
+    arm-pair spread       0.1 -> 0.2    pass
+    ARM DELTA            +1.30 -> +1.30  pass (window 1.10-1.50)
+
+**The arm delta reproduces exactly.** That is the quantity the whole test was
+built around, and the one robust to a session confound in either direction.
+The migration did not move the timing path.
+
+Sweep ran 11.5 min against a 23 min budget, four cells clean, one transient
+blind poll at t+4.3 which the three-state stall detector counted as blind
+rather than scoring as movement. All nine artifacts collected.
+
+**Two honest qualifications, neither of which changes the verdict.**
+
+*The spreads doubled, 0.1 to 0.2 on both pairs.* Both pass, and both sit ON
+the threshold rather than comfortably inside it. At sigma 0.10 the expected
+range of two samples is ~0.11, so 0.2 twice is the upper end of normal rather
+than a signal — but it is not nothing, and it is the direction a harness that
+had added variance would move. **Do not read this run as evidence the Pi 5 is
+quieter than the Pi 3.** The next PUMP run is worth watching for the same
+thing; two runs at 0.2 would be worth a look, three would not be noise.
+
+*`irq_source` differed.* Round P declared `NONE`, this run `UNDECLARED`,
+because the QA line was given `--video` and `--sound` but no `--irq`. That is
+an omission on the harness side and the only difference in the entire
+manifest — every other field, including both PicoGUS mode readbacks, is
+byte-identical. It is a declaration rather than a measurement, and the
+configuration it describes is separately proven by the readbacks and by
+cardid, so the comparison stands. **Pass `--irq NONE` next time** so the two
+manifests are identical rather than merely equivalent.
+
+**Card attested rather than declared.** All four SDL logs read S3 ViRGE/DX at
+8/8 signature points (vram 4096 KB, lfb 0x78000000, 320x240 present, S3 probe
+positive), against ATI Mach64 1/6. Declared VIRGE and detected ViRGE agree,
+which is worth having on the first run from new hardware — that is exactly
+when a silently different configuration is most plausible.
+
+**Phase 6 is complete, and with it the migration.**
+
 ## 7. Rollback
 
 **Before phase 3:** free. Power down, put the Pi 3 back in service, done — its
