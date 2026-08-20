@@ -226,25 +226,42 @@ gap is a real but small cost, not a different experiment.
 
 ### Operating guidance -- OPERATOR DECISION 2026-08-19
 
-**640x480 is the default for this card. 512x384 is an opt-in the user can
-select when wanted.**
+**SUPERSEDED 2026-08-19 (later the same day): 640x480 is the ONLY permitted
+mode on this card. The 512x384 opt-in is withdrawn.**
 
-His reasoning: 512x384 is slightly faster and worth keeping rather than
-removing, but observability is the better default and ~3% is not worth giving
-up seeing the screen on every run.
+    required  pin stood down    DOSKUTSU_PIN_NATIVE_MODE=0    640x480
+    withdrawn pin left engaged  (variable unset)              512x384
 
-    default   pin stood down    DOSKUTSU_PIN_NATIVE_MODE=0    640x480
-    opt-in    pin left engaged  (variable unset)              512x384
+The original decision kept 512x384 as a selectable option for the ~3% it is
+faster. The operator withdrew it: *"stop running the mach64 in 512x384, it
+won't display in our harness, it must be 640x480."*
+
+The reasoning that changed is not about speed, it is about what a blind cell
+costs once you have been bitten by one. 512x384 is outside the capture stick's
+60 Hz range, so a cell in that mode produces no frame at all for its whole
+duration -- no mid-cell capture, no wedge diagnosis, no screenshot to hand
+over. Every failure in such a cell is indistinguishable from every other.
+
+`vcctrl-cell` now REFUSES rather than warns, and refuses a `--set` override
+too. Enforcement rather than documentation is deliberate: **leaving the
+variable unset IS 512x384**, because it is the card's own closest match to
+320x240. The blind mode is what you get by doing nothing, which is precisely
+the kind of default that reasserts itself the moment nobody is watching.
 
 Since there are no banked Mach64 figures older than today, nothing forces the
 older mode for compatibility.
 
-**Note the asymmetry, which is deliberate rather than unnoticed:** patch 0317
-is default-OFF, so the *faster* mode is the one needing no flag and the
-*default* mode is the one you have to ask for. Supporting the opt-in therefore
-costs nothing -- it is unmodified behaviour. If that inversion ever becomes a
-nuisance the fix is on the DOSKUTSU side, either flipping 0317's polarity or
-setting the variable in this machine's AUTOEXEC. Not proposed now.
+**The asymmetry now matters more than it did.** Patch 0317 is default-OFF, so
+the *blind* mode is the one needing no flag and the *required* mode is the one
+you have to ask for. While 512x384 was a supported opt-in that was merely
+untidy; now that it is forbidden, it means the forbidden state is the one the
+system falls into unaided.
+
+The harness refusal covers every path that goes through `vcctrl-cell`. It does
+NOT cover a cell launched by hand at the DOS prompt. The durable fix belongs on
+the DOSKUTSU side -- flip 0317's polarity -- or in this machine's AUTOEXEC, so
+the safe mode is the one that needs no action. Worth doing before the next
+campaign rather than after.
 
 ### Not yet settled
 

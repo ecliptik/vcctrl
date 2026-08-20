@@ -35,11 +35,15 @@ Usage:
 
 PER-CARD DEFAULTS, because a decision that has to be remembered gets forgotten.
 
-  mach64  sets DOSKUTSU_PIN_NATIVE_MODE=0, which the operator chose as the
-          default for this card on 2026-08-19. Without it the game runs at
-          512x384 -- outside the capture stick's 60 Hz range -- and the
-          harness is blind for the whole cell. Costs about 3% fps against
-          the 512x384 figure, which he judged worth paying to see the screen.
+  mach64  sets DOSKUTSU_PIN_NATIVE_MODE=0, which is REQUIRED on this card,
+          not preferred. Without it the game runs at 512x384 -- outside the
+          capture stick's 60 Hz range -- and the harness is blind for the
+          whole cell: no mid-cell frame, no wedge diagnosis, no screenshot.
+          512x384 was briefly kept as an opt-in for the ~3% it is faster;
+          the operator withdrew that on 2026-08-19. This now REFUSES rather
+          than warns, because leaving the variable unset IS 512x384 -- it is
+          the card's own closest match to 320x240, so the blind mode is what
+          you get by doing nothing.
 
   virge   NO pin change. The ViRGE picks 320x240 exactly, and standing the pin
           down would let a later mode-set take it to 640x480 -- changing the
@@ -161,18 +165,34 @@ def main(argv):
                   "DOSKUTSU_LOG_TAG": tag}
         if card == "mach64":
             wanted["DOSKUTSU_PIN_NATIVE_MODE"] = "0"
-            print("   card=mach64 -> pin stood down, 640x480 (the default"
-                  " for this card)")
+            print("   card=mach64 -> pin stood down, 640x480 (REQUIRED)")
         elif card in ("virge", "cirrus"):
             print("   card=%s -> pin left engaged (its own mode captures)" % card)
         elif card is None:
-            print("   NO --card GIVEN. Per-card defaults not applied; on a"
-                  " Mach64 this")
-            print("   means 512x384 and a blind cell. Pass --card to avoid"
-                  " relying on memory.")
+            print("REFUSED: no --card given. Per-card defaults exist because")
+            print("  the right mode is not the same on every card, and on the")
+            print("  Mach64 the wrong one is a blind cell. Pass --card.")
+            return 2
         for s in sets:
             k, _, v = s.partition("=")
             wanted[k.upper()] = v
+
+        # OPERATOR DECISION 2026-08-19: on the Mach64, 640x480 is the ONLY
+        # permitted mode. 512x384 was previously kept as an opt-in because it
+        # is ~3% faster; that is withdrawn. The stick is 60 Hz-only firmware
+        # and 512x384 is outside its range, so a cell in that mode is blind for
+        # its whole duration -- no mid-cell frame, no wedge diagnosis, no
+        # screenshot for the operator. Speed does not buy back observability.
+        #
+        # Enforced rather than documented, because "just leave the variable
+        # unset" is what 512x384 looks like: it is the card's own preference
+        # and reasserts itself the moment nobody is paying attention.
+        if card == "mach64" and wanted.get("DOSKUTSU_PIN_NATIVE_MODE") != "0":
+            print("   REFUSED: DOSKUTSU_PIN_NATIVE_MODE=%r would run this"
+                  % wanted.get("DOSKUTSU_PIN_NATIVE_MODE"))
+            print("   card at 512x384, which the capture stick cannot lock.")
+            print("   640x480 is required on the Mach64. Remove the override.")
+            return 2
 
         print("-- clearing and setting environment --")
         if not cmd("CALL CLRENV", 90):
