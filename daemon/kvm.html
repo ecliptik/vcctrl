@@ -570,13 +570,38 @@
   #stalebar button { min-height:30px; padding:0 10px; background:var(--bg);
                      color:var(--yellow); border-color:var(--yellow);
                      font:600 var(--t-data) var(--sans); }
-  /* It WRAPS now rather than scrolling sideways. A single scrolling row was
-     right when it spanned the window; in a popover half the keys would have
-     been off the right-hand edge behind a scrollbar nobody looks for. */
+  /* ROWS, not a wrapping bag. The box takes its width from the widest row
+     -- the function keys -- rather than a number somebody picked, so the
+     layout survives a theme with a wider font. */
   #pop-keys {
-    display:flex; flex-wrap:wrap; gap:5px; padding:9px 10px;
-    width:min(438px, calc(100vw - 16px));
+    display:flex; flex-direction:column; gap:5px; padding:9px 10px;
+    width:max-content; max-width:calc(100vw - 16px);
   }
+  #pop-keys .krow { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
+  /* The locks and the arrow cluster share a row, and the cluster is two rows
+     tall, so the locks centre against it rather than sitting on its top edge. */
+  #pop-keys .klocks { align-items:center; }
+  /* THE INVERTED T. Named areas rather than nth-child, so the DOM stays in
+     reading order -- up, left, down, right -- for anyone arriving by keyboard
+     or screen reader, while the grid puts them where a hand expects. */
+  #pop-keys .karrows {
+    display:grid; margin-left:auto; gap:4px;
+    grid-template-columns:repeat(3, auto);
+    grid-template-areas:". u ." "l d r";
+  }
+  #pop-keys .karrows [data-key="up"]    { grid-area:u; }
+  #pop-keys .karrows [data-key="left"]  { grid-area:l; }
+  #pop-keys .karrows [data-key="down"]  { grid-area:d; }
+  #pop-keys .karrows [data-key="right"] { grid-area:r; }
+  #pop-keys .karrows button { min-width:40px; padding:0; }
+  /* The same object as the | between the menu buttons, turned through a right
+     angle: same colour, same weight, same job. */
+  #pop-keys hr { border:0; border-top:1px solid var(--rule); margin:3px 0;
+                 width:100%; }
+  /* .pop[hidden] is (0,2,0) and loses to the id above, so it has to be said
+     again at id strength or the menu is permanently open. */
+  #pop-keys[hidden] { display:none; }
+  #pop-keys button { flex:none; }
   /* .pop[hidden] is (0,2,0) and loses to the id above, so it has to be said
      again at id strength or the menu is permanently open. */
   #pop-keys[hidden] { display:none; }
@@ -604,6 +629,11 @@
   button:hover { border-color:var(--muted); }
   button:active { background:var(--rule); }
   button.on { border-color:var(--green); color:var(--green); }
+  /* RED WHILE IT SITS THERE, not only while pressed. These are the controls
+     that reboot the machine or cut its mains, and a warning you only see
+     after committing to the press is not a warning. */
+  button.danger { color:var(--red); }
+  button.danger:hover { border-color:var(--red); }
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
   /* These three were drawn without a box, on the argument that a glyph is
@@ -1019,32 +1049,53 @@
        -- so reaching for a key resized the thing you were about to type at.
        It is the same kind of object as the other two menus and now behaves
        like one. -->
+  <!-- LAID OUT LIKE A KEYBOARD, not reflowed like text. As a wrapping bag of
+       buttons the rows fell wherever the width happened to put them, so the
+       F-keys split across two lines and the arrows landed next to Scroll.
+       Function row, editing row, locks with the arrow cluster beside them --
+       the shape a hand already knows. -->
   <div id="pop-keys" class="pop" role="dialog" aria-label="Keys" hidden>
-    <button data-mod="lctrl">Ctrl</button>
-    <button data-mod="lalt">Alt</button>
-    <button data-mod="lshift">Shift</button>
-    <button data-key="esc">Esc</button>
-    <button data-key="tab">Tab</button>
-    <button data-key="enter">↵</button>
-    <button data-key="backspace">⌫</button>
-    <button data-key="up">↑</button>
-    <button data-key="down">↓</button>
-    <button data-key="left">←</button>
-    <button data-key="right">→</button>
-    <button data-key="f1">F1</button><button data-key="f2">F2</button>
-    <button data-key="f3">F3</button><button data-key="f4">F4</button>
-    <button data-key="f5">F5</button><button data-key="f6">F6</button>
-    <button data-key="f7">F7</button><button data-key="f8">F8</button>
-    <button data-key="f9">F9</button><button data-key="f10">F10</button>
+    <div class="krow">
+      <button data-key="f1">F1</button><button data-key="f2">F2</button>
+      <button data-key="f3">F3</button><button data-key="f4">F4</button>
+      <button data-key="f5">F5</button><button data-key="f6">F6</button>
+      <button data-key="f7">F7</button><button data-key="f8">F8</button>
+      <button data-key="f9">F9</button><button data-key="f10">F10</button>
+    </div>
+    <div class="krow">
+      <button data-key="esc">Esc</button>
+      <button data-mod="lctrl">Ctrl</button>
+      <button data-mod="lalt">Alt</button>
+      <button data-mod="lshift">Shift</button>
+      <button data-key="tab">Tab</button>
+      <button data-key="backspace">Backspace</button>
+      <button data-key="enter">Enter</button>
+    </div>
     <!-- Sendable because a modern keyboard may not have them at all. Caps
          Lock is the one that matters: it is the LED round trip this rig uses
          to prove a keystroke reached the machine, and until now the only way
-         to toggle it was to own a keyboard with the key on it. -->
-    <button data-key="capslock">Caps</button>
-    <button data-key="numlock">Num</button>
-    <button data-key="scrolllock">Scroll</button>
-    <button data-combo="ctrl,alt,delete" class="danger"
-            title="Send Ctrl+Alt+Delete — reboots the target">Ctrl-Alt-Del</button>
+         to toggle it was to own a keyboard with the key on it. Full names
+         because there is room: "Scroll" alone is not a key anybody recognises.
+         The arrows are an inverted T, which is the only arrangement of four
+         arrow keys anyone can use without reading them. -->
+    <div class="krow klocks">
+      <button data-key="capslock">Caps Lock</button>
+      <button data-key="numlock">Num Lock</button>
+      <button data-key="scrolllock">Scroll Lock</button>
+      <div class="karrows">
+        <button data-key="up" aria-label="up">↑</button>
+        <button data-key="left" aria-label="left">←</button>
+        <button data-key="down" aria-label="down">↓</button>
+        <button data-key="right" aria-label="right">→</button>
+      </div>
+    </div>
+    <!-- The rule is the same object as the | between the menu buttons: it
+         separates the keys that type from the key that reboots. -->
+    <hr>
+    <div class="krow">
+      <button data-combo="ctrl,alt,delete" class="danger"
+              title="Send Ctrl+Alt+Delete — reboots the target">Ctrl-Alt-Del</button>
+    </div>
   </div>
 
 <div id="setback" hidden></div>
@@ -1136,6 +1187,9 @@
   <button data-zoom="2" title="Twice the captured size">200% Original</button>
   <button data-zoom="4" title="Four times the captured size">400% Original</button>
   <hr>
+  <button id="refresh"
+          title="Restart the capture if the picture is stuck">Refresh video</button>
+  <hr>
   <button id="fsitem" title="Hide everything but the picture">
     <svg viewBox="0 0 20 20" aria-hidden="true">
       <path class="fsout" d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>
@@ -1147,14 +1201,15 @@
   <div class="poprow">
     <button data-power="on" title="Switch the mains plug on">On</button>
     <button data-power="off" class="danger" title="Cut mains power — the target does not shut down first">Off</button>
-    <button data-power="cycle" class="danger" title="Cut mains power, wait, and switch it back on">Cycle</button>
+    <button data-power="cycle" class="danger" title="Cut mains power, wait, and switch it back on">Power Cycle</button>
   </div>
-  <div class="hint" style="margin:8px 0 0">Off and Cycle cut the mains: the
-    target does not shut down first.</div>
-  <div class="hint" id="plugid" style="margin:4px 0 0">—</div>
-  <div class="poprow" style="margin-top:9px">
-    <button id="refresh" title="Restart the capture if the picture is stuck">Refresh video</button>
-  </div>
+  <!-- The standing warning is gone. All three already stop and ask, and each
+       confirmation states what THAT action does to THIS socket by name -- so
+       a paragraph repeating it above the buttons was a second copy of the
+       same sentence, permanently on screen, for a thing that cannot happen
+       without a deliberate yes. What stays is the fact you cannot get from
+       anywhere else: which socket these buttons switch. -->
+  <div class="hint" id="plugid" style="margin:9px 0 0">—</div>
 </div>
 
   <div id="tabs">

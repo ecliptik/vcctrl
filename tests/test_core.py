@@ -1360,6 +1360,30 @@ HARNESS = r"""
   // header menu must disagree about which glyph means closed. 1 = up.
   const tipUp = n => { const t = caretLabel(n).textContent.trim();
                        return t.charCodeAt(t.length - 1) === 0x25b4 ? 1 : 0; };
+  // THE KEYBOARD IS LAID OUT, not reflowed. Every one of these was wrong
+  // when the menu was a wrapping bag of buttons, and every one of them would
+  // silently come back if the row containers were ever dropped.
+  document.getElementById('keysbtn').click();
+  const q = sel => document.querySelector('#pop-keys ' + sel);
+  const fk = Array.from(document.querySelectorAll('#pop-keys [data-key]'))
+                  .filter(b => /^f\d+$/.test(b.dataset.key));
+  const rows = new Set(fk.map(b => Math.round(b.getBoundingClientRect().top)));
+  emit(`fkeyrow ${fk.length} ${rows.size}`);
+  const up = q('[data-key="up"]').getBoundingClientRect();
+  const dn = q('[data-key="down"]').getBoundingClientRect();
+  const lf = q('[data-key="left"]').getBoundingClientRect();
+  const rt = q('[data-key="right"]').getBoundingClientRect();
+  const mid = r => (r.left + r.right) / 2;
+  const tee = up.bottom <= dn.top + 1 && Math.abs(mid(up) - mid(dn)) < 2
+           && Math.abs(lf.top - dn.top) < 2 && Math.abs(rt.top - dn.top) < 2
+           && lf.right <= dn.left + 1 && rt.left >= dn.right - 1;
+  emit(`arrowtee ${tee ? 1 : 0} `
+     + `${mid(dn) > mid(q('[data-key="scrolllock"]').getBoundingClientRect()) ? 1 : 0}`);
+  // Red while it sits there. Compared against a plain key rather than to a
+  // literal colour, because the value is a theme token and changes 22 ways.
+  emit(`cadcolour ${getComputedStyle(q('[data-combo]')).color
+                    !== getComputedStyle(q('[data-key="esc"]')).color ? 1 : 0} `
+     + `${document.getElementById('refresh').closest('#pop-zoom') ? 1 : 0}`);
   closePop();
   emit(`caretshut ${tipUp('keys')} ${tipUp('zoom')}`);
   document.getElementById('keysbtn').click();
@@ -1696,6 +1720,17 @@ def test_zoom_layout_in_a_browser():
           got["caretopen"][0] == 0.0, got["caretopen"])
     check("opening the header menu flips its caret up",
           got["caretzoom"][0] == 1.0, got["caretzoom"])
+    check("control: all ten function keys are present",
+          got["fkeyrow"][0] == 10.0, got["fkeyrow"])
+    check("and they share one row", got["fkeyrow"][1] == 1.0, got["fkeyrow"])
+    check("the arrows form an inverted T",
+          got["arrowtee"][0] == 1.0, got["arrowtee"])
+    check("to the right of the lock keys",
+          got["arrowtee"][1] == 1.0, got["arrowtee"])
+    check("Ctrl-Alt-Del is coloured apart from the keys that only type",
+          got["cadcolour"][0] == 1.0, got["cadcolour"])
+    check("Refresh video is in the screen menu, not the power menu",
+          got["cadcolour"][1] == 1.0, got["cadcolour"])
     check("a fitted picture does not overflow vertically",
           got["fitscroll"][0] <= 0, got["fitscroll"])
     check("nor horizontally", got["fitscroll"][1] <= 0, got["fitscroll"])
