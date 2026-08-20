@@ -1,6 +1,22 @@
 # Migrating usb4vc from the Pi 3B to a Pi 5
 
-Written 2026-08-20. Plan only — nothing here has been executed.
+Written 2026-08-20, revised the same day once the hardware was in hand.
+Plan only — nothing here has been executed.
+
+## 0. What the operator settled, and what it changes
+
+| Decision | Consequence |
+|---|---|
+| **Raspberry Pi OS Trixie Lite** (Debian 13, Python 3.13) | Not Bookworm. Newer than the Pi 3's 12/3.11 — see sec. 3a for the package deltas that actually matter |
+| **A second USB4VC board** | The board, GPIO, SPI, OLED and `rpi_app` are all provable in parallel with **zero risk to the running rig** |
+| **Capture stick and CF reader move at cutover** | Only one set exists. Video/audio cannot be tested in parallel; they are the *last* thing proven, not the first |
+| **The Gateway moves to the Pi 5 early** | **This is the sharpest edge.** The moment the g2k's PS/2 lead moves, the Pi 3 stops being a working fallback — it keeps its SD card and its software, but it has nothing to drive. Rollback stops being "swap the Pi" and becomes "swap the Pi *and move the target back*" |
+| **`usb4vc-new` now, renamed to `usb4vc` at cutover** | The old node must be renamed FIRST to free the name (sec. 3c). Renaming is the cutover switch: everything pointing at `usb4vc` moves in one step |
+| **Pi 3 retired once the Pi 5 is proven** | Single-rig end state, so nothing needs to learn to handle two permanently |
+
+Because rollback degrades after the target moves, the sequence below front-loads
+everything that is reversible and defers the target move until the board itself
+is proven.
 
 **Verdict: closer to drop-in than this project has been assuming, but not
 drop-in.** The blocker everyone cited is already retired. Four real items
@@ -85,6 +101,74 @@ presenting five interfaces), and it contends with Ethernet and the CF reader
 for a single 480 Mbit bus. That contention is the origin of the ~16k
 interrupts/sec measured during capture, and it is exactly what a Pi 5 removes:
 Ethernet leaves the bus entirely and the stick gets USB 3.
+
+## 3a. Trixie changes the dependency picture, and mostly for the better
+
+Verified against the live archives, not assumed.
+
+**The shim survives the jump.** `python3-rpi-lgpio 0.6-0~rpt1+trixie` exists in
+the Raspberry Pi archive for `arm64` — the same 0.6 the Pi 3 runs — alongside
+`python3-lgpio 0.2.2-1~rpt1+trixie`. `python3-rpi.gpio` is not there at all,
+which is consistent with it being unusable on RP1.
+
+**The Pi 3 is a mix of apt and pip, and that is the part to clean up.** These
+live in `/usr/local/lib/python3.11/dist-packages`, i.e. pip-installed over a
+PEP 668 `EXTERNALLY-MANAGED` marker that is already present on Bookworm:
+
+    evdev==1.7.1   luma.core==2.4.2   luma.oled==3.13.0   Pillow==9.4.0
+    pyusb==1.2.1   smbus2==0.4.2      spidev==3.5         pyserial==3.5
+
+**Every one of them is an apt package in Debian Trixie**, so the Pi 5 build
+should use apt and avoid pip entirely:
+
+| Package | Pi 3 (pip) | Trixie (apt) | Direction |
+|---|---|---|---|
+| `python3-evdev` | 1.7.1 | 1.9.1-1 | forward, API stable |
+| `python3-luma.core` | 2.4.2 | 2.4.2-1 | identical |
+| `python3-luma.oled` | 3.13.0 | 3.10.0-1 | **backward** — see below |
+| `python3-pil` | 9.4.0 | 11.1.0 | forward, big jump |
+| `python3-usb` | 1.2.1 | 1.2.1-2 | identical |
+| `python3-smbus2` | 0.4.2 | 0.4.3-1 | forward |
+
+Two of those needed checking rather than assuming:
+
+- **The `luma.oled` downgrade is safe here.** USB4VC drives an `ssd1306` —
+  `--display ssd1306 --interface spi --spi-port 0 --spi-device 1 --gpio-reset 6
+  --gpio-data-command 5 --spi-bus-speed 2000000`. ssd1306 is the oldest and
+  most stable device class luma ships; nothing about it arrived after 3.10.
+- **The Pillow 9.4 → 11.1 jump is safe here.** Pillow 10 removed
+  `Image.ANTIALIAS` and the `textsize`/`getsize` font methods, which is the
+  usual way this breaks. `grep` across `rpi_app` finds none of them in use.
+
+**Note the OLED is on SPI, not I2C** — `spidev0.1`, while the STM32 is on
+`spidev0.0`. SPI0 therefore carries both, which sharpens risk 2: a clock-rate
+problem would affect the display and the microcontroller, and only one of them
+fails visibly.
+
+`python3-pil` is currently installed as `:armhf`; on arm64 it is simply the
+native package. `gpiozero` and `pigpio` are present on the Pi 3 but nothing in
+either codebase imports them — do not carry them without a reason.
+
+## 3c. The rename is the cutover switch
+
+`usb4vc` is a tailnet node name, and it is load-bearing well beyond ssh: it is
+`pi/deploy.sh`'s default host, the TLS cert subject
+(`vcctrl-pi.example.ts.net`, valid to Nov 2026), the `tailscale serve` target,
+the web KVM URL in bookmarks, and the host in this session's monitoring.
+
+Because exactly one node can hold the name, the rename is not a tidying step —
+**it is the moment the whole toolchain changes machines.** Order matters:
+
+1. Old node `usb4vc` → `usb4vc-pi3`. Everything pointing at `usb4vc` breaks
+   *immediately*, including `deploy.sh` and the KVM URL. Do this only when
+   ready to complete the cutover.
+2. New node `usb4vc-new` → `usb4vc`.
+3. Re-issue the cert on the new node and re-point `tailscale serve`. The old
+   cert cannot move; it is issued to the node that held the name.
+
+Until step 1, the Pi 5 is reachable as `usb4vc-new` and nothing that assumes
+`usb4vc` needs to change. That is deliberate: it keeps the rename as a single
+reversible switch rather than a scattered edit.
 
 ## 4. The four real items
 
@@ -203,47 +287,77 @@ the new card, before anything else:
 
 ## 6. Sequence
 
-**Phase 0 — on the Pi 3, before touching any new hardware.** Fix 4.1 and 4.2
-in place: by-name ALSA and video references, plus the `VCCTRL_VIDEO` override.
-Verify capture still works. Commit. This means the Pi 5 build inherits code
-that is already hardware-agnostic, and any breakage is attributable to one
-change at a time.
+Ordered so that everything reversible happens before anything that degrades the
+fallback. The target move (phase 3) is the point of no easy return, so nothing
+speculative happens after it.
 
-**Phase 1 — off-rig, no downtime.** Fresh 64-bit Bookworm on a **new** SD card.
-The Pi 3's card is not written to at any point and stays the revert path.
-Install `python3-rpi-lgpio`, `python3-spidev`, `python3-luma.*`, `python3-evdev`,
-`python3-pil`, `python3-requests`, `ffmpeg`. Minimal `config.txt` per 4.3.
-Console hardening per 4.4.
+**Phase 0 — on the Pi 3, before the Pi 5 is touched.** Fix 4.1 and 4.2 in
+place: by-name ALSA reference, `by-id` video path, `VCCTRL_VIDEO` override, and
+the same treatment in `bin/vcctrl-capcheck`. Verify capture still works on
+hardware that is known good. Commit. The Pi 5 then inherits code that is
+already hardware-agnostic, and any later breakage has one candidate cause
+instead of two.
 
-**Phase 2 — USB4VC alone, nothing else connected.** Physical fit check first
-(risk 1). Then prove the board in isolation: OLED lights, `rpi_app` starts from
-`/etc/rc.local`, a keystroke reaches a target. SPI *read* before any flash.
-**If this fails, stop** — swap the Pi 3 back and the rig is as it was.
+**Phase 1 — Pi 5 base system, `usb4vc-new`, no rig impact.** Trixie Lite is
+already imaged with a `claude` user and key. Bring up: apt package set per 3a
+(no pip), minimal `config.txt` per 4.3, console hardening per 4.4 *before*
+anything else writes to a console, tailscale join as `usb4vc-new`. Nothing here
+touches the running rig.
 
-**Phase 3 — vcctrl.** `pi/install.sh`, capture stick, CF reader, the Kasa plug
-at 192.0.2.46. Confirm `caps` reports all six, a frame locks, audio floor
-looks analog rather than digital-silent.
+**Phase 2 — the second USB4VC board, bench only.** Mechanical fit first (risk
+1) — this is the one that cannot be planned around. Then prove the board in
+isolation: OLED lights (ssd1306 over SPI0 CE1), `rpi_app` starts from
+`/etc/rc.local`, SPI **reads** succeed. Check the new board's STM32 firmware
+version rather than assuming it matches the Pi 3's
+`PBFW_LISA_MAC_ADB_PBID3_V0_1_0.hex`, and **do not flash as the first SPI
+operation**. If any of this fails, stop — the running rig is untouched and
+nothing has been lost.
 
-**Phase 4 — tailnet.** Remove the old node, claim the name, re-issue the cert,
-re-point `tailscale serve`. Verify the web KVM from a phone, since that is the
-path with the most surface.
+**Phase 3 — move the Gateway. This is the commitment point.** PS/2 lead from
+the old USB4VC to the new one. Prove a keystroke reaches DOS and comes back on
+the LED channel. From here the Pi 3 has no target and is no longer a working
+fallback, only a shelf spare.
 
-**Phase 5 — a real sweep.** Not a smoke test. A full sweep with collect,
-compared against a banked result on the same hardware profile. The Pi is in the
-timing path for every keystroke, and nothing short of a measured run proves it
-did not change.
+**Phase 4 — move the peripherals and install vcctrl.** Capture stick and CF
+reader across, `pi/install.sh`, Kasa plug at 192.0.2.46 unchanged (it is a
+network device and does not care). Confirm `caps` reports all six, a frame
+locks, and the audio floor reads analog rather than digital-silent. This is the
+first time video and audio can be tested at all, which is why it is late.
+
+**Phase 5 — the rename.** Per 3c, in that order, then re-issue the cert and
+re-point `tailscale serve`. Verify the web KVM from a phone, since that path
+has the most surface.
+
+**Phase 6 — a real sweep.** Not a smoke test. A full sweep with collect,
+compared against a banked result on the same hardware profile. The Pi sits in
+the timing path for every keystroke and every LED poll, and the harness has
+already produced four separate timing bugs on the *old* hardware. Nothing short
+of a measured run proves the new machine did not move something.
 
 ## 7. Rollback
 
-Power down, swap the Pi, power up. The Pi 3's SD card is never written to, so
-the revert is the physical swap plus the tailnet name moving back. Minutes, not
-hours — provided phase 4 is the *last* irreversible step, which is why it sits
-after everything else.
+**Before phase 3:** free. Power down, put the Pi 3 back in service, done — its
+SD card was never written to and it still owns the tailnet name.
+
+**After phase 3:** physical and slower. Move the PS/2 lead back, move the
+capture stick and CF reader back, and if phase 5 has happened, rename the nodes
+back and re-issue the cert. Minutes rather than seconds, and it needs someone
+at the rack.
+
+This is the direct cost of moving the target early, and it is worth stating
+plainly rather than discovering it: the plan trades a cheap rollback for an
+earlier end-to-end test. That is a reasonable trade *because* phase 2 proves
+the board before the target moves — but it means phase 2 must not be rushed.
 
 ## 8. Open items
 
-- Mechanical clearance — physical inspection required (risk 1)
-- Whether the CF reader and capture stick want USB2 or USB3 ports on the Pi 5;
-  cheap USB3 capture dongles are occasionally happier on a USB2 port, and this
-  one is a `0001:ff02` "Fry's Electronics" no-name
-- Whether anything besides the OLED uses `/dev/i2c-2`
+- **Mechanical clearance** around the Pi 5's PCIe connector, fan header and
+  relocated ports. Physical inspection, risk 1, blocks phase 2.
+- **STM32 firmware version on the new board** — unknown until it is read. May
+  differ from the Pi 3's board.
+- **Whether the capture stick prefers a USB2 or USB3 port** on the Pi 5. It is
+  a no-name `0001:ff02` and cheap capture dongles are occasionally happier on
+  USB2. Worth trying both before concluding anything about frame rates.
+- **Whether anything besides the OLED uses `/dev/i2c-2`.**
+- **`snd_bcm2835` cmdline parameters** (`enable_headphones`, `enable_hdmi`) are
+  Pi-3-specific and should not be carried forward blindly.
