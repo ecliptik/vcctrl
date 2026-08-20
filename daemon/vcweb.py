@@ -592,6 +592,13 @@ class WebCapability(object):
                           {"id": None, "name": None, "target": None,
                            "source": None, "stale": None,
                            "reason": "board capability failed to start"}),
+                # Host facts. The login banner has had these since the Pi 5
+                # build and the page has not, so "is it thermally throttling
+                # while I watch the stream stutter" was answerable at a shell
+                # and not in the KVM. Cheap /proc and /sys reads, cached
+                # briefly so a 1.5 s poll from several tabs does not re-read
+                # them per tab.
+                "host": self.host_facts(),
                 "viewers": self.clients,
                 "listeners": self.listeners,
                 "audio": (self.audio()._state() if self.audio()
@@ -606,6 +613,66 @@ class WebCapability(object):
                        "last_error": self.ws_last_error,
                        "last_agent": self.ws_last_agent},
                 "caps": self.registry.report()}
+
+    _host_cache = (0.0, None)
+
+    def host_facts(self):
+        """Model, kernel, thermals, governor, memory, disk, uptime, load.
+
+        Thermals and the throttled word are the two that earn their place on a
+        KVM rather than in a shell: a Pi that is throttling produces a stream
+        that stutters, and the page is where someone is looking when it does.
+        `throttled` is the firmware's own bitfield, not a derived guess.
+        """
+        now = time.time()
+        ts, cached = WebCapability._host_cache
+        if cached and now - ts < 5.0:
+            return cached
+
+        def _read(path, default=None):
+            try:
+                with open(path) as f:
+                    return f.read().strip()
+            except OSError:
+                return default
+
+        facts = {"model": None, "kernel": None, "arch": None,
+                 "governor": None, "temp_c": None, "throttled": None,
+                 "mem_used_mb": None, "mem_total_mb": None,
+                 "disk_used_gb": None, "disk_total_gb": None,
+                 "uptime_s": None, "load": None}
+        try:
+            facts["model"] = (_read("/proc/device-tree/model") or "").replace("\x00", "") or None
+            uname = os.uname()
+            facts["kernel"], facts["arch"] = uname.release, uname.machine
+            facts["governor"] = _read(
+                "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+            t = _read("/sys/class/thermal/thermal_zone0/temp")
+            if t and t.isdigit():
+                facts["temp_c"] = round(int(t) / 1000.0, 1)
+            up = _read("/proc/uptime")
+            if up:
+                facts["uptime_s"] = int(float(up.split()[0]))
+            la = _read("/proc/loadavg")
+            if la:
+                facts["load"] = [float(x) for x in la.split()[:3]]
+            mem = {}
+            for line in (_read("/proc/meminfo") or "").splitlines():
+                k, _, v = line.partition(":")
+                mem[k] = v.strip().split()[0] if v.strip() else "0"
+            if "MemTotal" in mem and "MemAvailable" in mem:
+                tot = int(mem["MemTotal"]) // 1024
+                avail = int(mem["MemAvailable"]) // 1024
+                facts["mem_total_mb"], facts["mem_used_mb"] = tot, tot - avail
+            st = os.statvfs("/")
+            facts["disk_total_gb"] = round(st.f_blocks * st.f_frsize / 1e9, 1)
+            facts["disk_used_gb"] = round(
+                (st.f_blocks - st.f_bfree) * st.f_frsize / 1e9, 1)
+        except Exception:
+            pass       # partial facts are fine; every key is present regardless
+
+        WebCapability._host_cache = (now, facts)
+        return facts
 
     def build_id(self):
         """Short hash of the page as it is on disk right now.
