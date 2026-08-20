@@ -1132,7 +1132,37 @@ setInterval(() => {
 // frames are going missing, creep up while they are not.
 const smallScreen = () => Math.min(screen.width, screen.height) < 500;
 const FPS_MIN = 4;
-const fpsCeiling = () => smallScreen() ? 12 : 20;
+// THE CEILING IS MEASURED, NOT WRITTEN DOWN. It used to be 20, "because the
+// stick only produces ~24" -- true of the VGA stick on the Pi 3 and wrong
+// here: the same stick on the Pi 5 delivers 29.99 fps, measured over six
+// seconds against the daemon's own frame counter. A hardcoded ceiling means
+// asking for two thirds of what exists on a link that was carrying it at 19%
+// of one core.
+//
+// So the source rate is read from `video.frames` between polls and the
+// ceiling follows it. That also survives the Macintosh, whose HDMI capture
+// device is a different piece of hardware with no reason to match this one --
+// the assumption this replaces would have been wrong there too, in an unknown
+// direction.
+let srcFps = 0, srcFrames = null, srcAt = 0;
+function noteSourceRate(v) {
+  const now = Date.now();
+  if (v && v.frames != null) {
+    if (srcFrames != null && now > srcAt) {
+      const r = (v.frames - srcFrames) * 1000 / (now - srcAt);
+      // Smoothed, and bounded against nonsense: a daemon restart resets the
+      // counter and would otherwise read as a large negative rate.
+      if (r > 0 && r < 200) srcFps = srcFps ? srcFps * 0.7 + r * 0.3 : r;
+    }
+    srcFrames = v.frames; srcAt = now;
+  }
+}
+const fpsCeiling = () => {
+  // The device cap is a bandwidth choice and stays: a phone does not want 30
+  // fps of a 60 KB screen even when the source offers it.
+  const device = smallScreen() ? 12 : 30;
+  return Math.max(FPS_MIN, Math.min(device, Math.round(srcFps || 20)));
+};
 let fpsWant = 0, fpsGoodRuns = 0;
 function achievedFps() {
   if (fpsWin.length < 2) return 0;
@@ -2160,6 +2190,7 @@ async function pollState() {
   showPower(j.power);
   showBoard(j.board);
   showAudioDevice(j.audio);
+  noteSourceRate(j.video);
   showBuffer(j.video);
   showHeat(j);
   lastState = j;
@@ -2172,7 +2203,9 @@ async function pollState() {
   const got = achievedFps();
   $('s-rate').textContent = got
     ? got.toFixed(0) + ' fps · ' + streamMbit().toFixed(1) + ' Mbit/s'
-      + (fpsWant ? ' (asking ' + fpsWant + ')' : '')
+      + (fpsWant ? ' (asking ' + fpsWant : '')
+      + (fpsWant && srcFps ? ' of ' + srcFps.toFixed(0) + ' at source' : '')
+      + (fpsWant ? ')' : '')
     : '–';
   if (j.tls_port !== undefined && j.tls_port !== tlsPort) {
     tlsPort = j.tls_port;

@@ -1055,6 +1055,12 @@ HARNESS = """
   // Rate control. The failure that matters is a loop that only ever goes one
   // way: down to the floor on a hiccup, or up past what the tunnel carries.
   {
+    // The ceiling follows the SOURCE. Feed it a daemon counter advancing at
+    // 30 fps and it must be willing to ask for 30, not the 20 that was
+    // hardcoded from a different stick on a different machine.
+    noteSourceRate({frames: 0}); srcAt -= 1000;
+    noteSourceRate({frames: 30});
+    const ceilAt30 = fpsCeiling();
     const sent = [];
     const realWs = ws;
     ws = {readyState: 1, send: m => sent.push(JSON.parse(m).fps)};
@@ -1070,6 +1076,7 @@ HARNESS = """
     ws = realWs;
     out.push(`rate ${backedOff} ${creptUp}`);
     out.push(`ratecap ${ceiling} ${sent.length}`);
+    out.push(`srcceil ${ceilAt30} ${Math.round(srcFps)}`);
   }
 
   // The rail popovers must land under the thing that opened them, and must
@@ -1303,8 +1310,12 @@ def test_zoom_layout_in_a_browser():
           4 <= got["rate"][0] <= 7, got["rate"])
     check("and creeps back up once frames keep arriving",
           got["rate"][1] > got["rate"][0], got["rate"])
-    check("but never past the ceiling", got["ratecap"][0] <= 20,
+    check("but never past the ceiling", got["ratecap"][0] <= 30,
           got["ratecap"])
+    check("the ceiling follows a 30 fps source instead of a hardcoded 20",
+          got["srcceil"][0] == 30.0, got["srcceil"])
+    check("control: and it measured the source, not guessed it",
+          25 <= got["srcceil"][1] <= 31, got["srcceil"])
     check("control: it actually told the server", got["ratecap"][1] >= 3,
           got["ratecap"])
 
