@@ -386,8 +386,15 @@
   .tgroup { font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
             text-transform:uppercase; color:var(--dim); margin:10px 0 5px; }
 
-  #ghost { position:absolute; opacity:0; height:1px; width:1px; padding:0;
-           border:0; left:-9999px; top:0; font-size:16px; }
+  /* iOS will not raise the keyboard for an input that is off-screen or has no
+     size, so this cannot be parked at left:-9999px -- which is why tapping the
+     screen did nothing on a phone. It now sits inside the viewport,
+     transparent and 1px. font-size must stay >= 16px or Safari zooms the page
+     on focus. */
+  #ghost { position:fixed; left:50%; top:50%; width:1px; height:1px;
+           opacity:0.01; padding:0; border:0; margin:0; z-index:1;
+           font-size:16px; background:transparent; color:transparent;
+           caret-color:transparent; }
 
   /* ── desktop ─────────────────────────────────────────────────────────── */
   @media (min-width:900px) {
@@ -584,6 +591,30 @@
        autocomplete="off" enterkeyhint="enter" aria-hidden="true" tabindex="-1">
 
 <script>
+// FIRST, before anything that can throw. Three outages tonight were a single
+// uncaught error at top level -- a const read before its declaration, a
+// settings key with no checkbox, an attribute a class did not define. Each
+// stopped every later line, and each presented as something else: "one chip
+// stuck on connecting", "the whole UI is unresponsive", "Send does nothing".
+// None named the cause, and there is no console on a phone.
+addEventListener('error', e => {
+  const box = document.getElementById('bootfail') || (() => {
+    const d = document.createElement('div');
+    d.id = 'bootfail';
+    d.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;'
+      + 'background:#7a1c1c;color:#fff;font:12px/1.4 ui-monospace,monospace;'
+      + 'padding:8px 10px;white-space:pre-wrap;max-height:45vh;overflow:auto';
+    (document.body || document.documentElement).appendChild(d);
+    return d;
+  })();
+  box.textContent = 'PAGE SCRIPT ERROR - everything after this line stopped\n'
+    + (e.message || e.error) + '\n' + (e.filename || '') + ':'
+    + (e.lineno || '?') + ':' + (e.colno || '?');
+});
+addEventListener('unhandledrejection', e =>
+  dispatchEvent(new ErrorEvent('error',
+                {message: 'unhandled promise: ' + e.reason})));
+
 const $ = id => document.getElementById(id);
 // Substituted by the daemon when it serves this file. A tab that has not been
 // reloaded keeps running old code forever, which looks exactly like a change
@@ -978,10 +1009,12 @@ function setArmed(v, opts) {
   $('stage').classList.toggle('armed', v);
   pill('p-kbd', v ? 'on' : '', v ? 'captured' : 'idle');
   if (v) {
-    // Focusing the off-screen input is what summons the on-screen keyboard on
-    // a touch device. On desktop it is harmless and keeps key events flowing
-    // to one place.
-    ghost.focus({preventScroll:true});
+    // Must happen synchronously inside the tap handler: iOS ignores focus()
+    // called from a timer or after an await.
+    try { ghost.focus({preventScroll:true}); } catch (e) {}
+    addLine(new Date(), 'ui', 'keyboard captured'
+            + (document.activeElement === ghost ? '' : ' — focus refused'),
+            'k-lock');
     pill('p-kbd', 'on', 'keyboard captured');
     $('capbar').classList.add('armed');
     $('capbar').innerHTML = 'keyboard captured — press <b>Ctrl + Alt + Shift</b> to release';
