@@ -1057,6 +1057,39 @@ investigation for a while.
 > distinguish two states, say so and return "unknown" -- `grab()` returning
 > `(None, None)` rather than the least-black frame is this rule applied.
 
+**The sharper form of family 2, found across two sessions in one day: the
+problem is not that proxies are wrong, it is that they drift from the thing
+they stand for *silently, by construction*.** Four instances, four different
+proxies, none of which announced anything:
+
+| the proxy | what it was read as | what it actually attested |
+|---|---|---|
+| `/sys/class/leds` level | the machine is up | the host published a state at *some* point |
+| frames arriving | the picture is live | the USB device is producing bytes |
+| focus on a hidden input | the keyboard is captured | that element has focus |
+| Caps Lock LED toggling | DOS is at a prompt | the BIOS INT 9 handler is intact |
+
+The last is the `vcctrl` session's, and it is the most instructive because it
+had the strongest track record. `at_prompt()` toggles Caps Lock and watches the
+LED -- but **Caps Lock is serviced by the BIOS keyboard ISR, not by DOS**, so
+the LED flips whether or not `COMMAND.COM` is reading input. It appeared
+reliable for months because the one case it does catch is the game, which hooks
+INT 9. It cannot tell "at a prompt" from "`FTP.EXE` is running", which is
+exactly how 41 characters got typed into a 15-key buffer while a BAT was still
+finishing.
+
+**A proxy that is right about the case you keep testing is the most dangerous
+kind**, because the track record is real and is evidence for the wrong claim.
+
+### Consequence for this plan, section 8
+
+The file-transfer UI was specced to enable its button only "at a NET prompt",
+with `at_prompt` named as the way to know. **That gate rests on the proxy
+above and is therefore not sound as written.** It needs the DOS-level probe the
+`vcctrl` session is building -- type a sentinel, look for its echo in a
+captured frame, `Esc` it away -- which is affordable only because a grab is now
+0.2 s rather than 40 s. Section 8 should not be built until that lands.
+
 Neither rule would have been derived from the individual bugs; both were
 visible only once the bugs were lined up. **The next one will not look like
 either of these**, which is the argument for writing the families down rather
