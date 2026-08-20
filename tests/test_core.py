@@ -1047,6 +1047,20 @@ HARNESS = r"""
     emit(`grab ${still ? 1 : 0} ${lit && !lamp.classList.contains('on') ? 1 : 0}`);
   }
 
+  // The resolution comes from the FRAME, not from a constant. A canvas
+  // carries 640x480 as an attribute, so reporting before a frame arrives
+  // would report the Gateway's geometry on a Macintosh.
+  {
+    frames = 0; capW = 0; capH = 0;
+    zoomMode = 'fit'; crop = null; applyZoom(true);
+    const before = document.querySelector('#pop-zoom [data-zoom="1"]').textContent;
+    frames = 1; cv.width = 512; cv.height = 342;
+    applyZoom(true);
+    const after = document.querySelector('#pop-zoom [data-zoom="1"]').textContent;
+    cv.width = 640; cv.height = 480; applyZoom(true);
+    emit(`res ${before.includes('actual resolution') ? 1 : 0} ${after.includes('512×342') ? 1 : 0}`);
+  }
+
   // The file control has to be CLICKABLE. display:none on a file input makes
   // .click() a no-op in some browsers, which is what "the File button does
   // not work" was -- a handler that ran perfectly and opened nothing.
@@ -1418,6 +1432,11 @@ def test_zoom_layout_in_a_browser():
           got["grab"][0] == 1.0, got["grab"])
     check("control: and the KBD lamp lights and unlights",
           got["grab"][1] == 1.0, got["grab"])
+
+    check("no frame yet means no resolution claimed",
+          got["res"][0] == 1.0, got["res"])
+    check("control: and a 512x342 frame reports 512x342",
+          got["res"][1] == 1.0, got["res"])
 
     check("the file input can actually be clicked open",
           got["file2"][0] == 1.0, got["file2"])

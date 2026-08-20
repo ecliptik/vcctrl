@@ -375,7 +375,7 @@
      the same family as Keys, Sound and Power at the bottom. */
   #zoombtn {
     padding:0 9px; font:500 13px/1 var(--sans); letter-spacing:0;
-    color:var(--text); min-width:66px;
+    color:var(--text); min-width:92px;
   }
 
   .popmenu { padding:5px; min-width:150px; }
@@ -819,8 +819,8 @@
          restating a label nobody needed twice. -->
     <span class="sep" aria-hidden="true">|</span>
     <span class="lamp" id="lamp-pwr"><i></i><span>PWR</span></span>
-    <span class="lamp" id="lamp-link"><i></i><span>LINK</span></span>
-    <span class="lamp" id="lamp-audio"><i></i><span>AUDIO</span></span>
+    <span class="lamp" id="lamp-link"><i></i><span>LNK</span></span>
+    <span class="lamp" id="lamp-audio"><i></i><span>AUD</span></span>
     <span class="lamp" id="lamp-kbd"><i></i><span>KBD</span></span>
     <span class="lamp" id="lamp-mouse"><i></i><span>MOS</span></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
@@ -2646,6 +2646,9 @@ function rigRows(j) {
     kv(label, c.state || '—',
        c.state === 'locked' || c.state === 'capturing' ? '' : 'warn');
     kv(label + ' device', c.device || '—');
+    if (label === 'video')
+      kv('resolution', capSize() ? capSize() + ' from the device' : 'no frame yet',
+         capSize() ? '' : 'unk');
     if (c.device_present === false) kv(label + ' present', 'no', 'warn');
     else if (c.device_present === true) kv(label + ' present', 'yes');
     else unk(label + ' present');
@@ -3000,6 +3003,14 @@ function applyZoom(recentre) {
   const el = mediaEl();
   const nw = el.naturalWidth || el.width || 640;
   const nh = el.naturalHeight || el.height || 480;
+  // The real geometry, from the frame rather than from a constant. 640x480 on
+  // the Gateway's VGA stick, 512x342 native on a Macintosh Plus, and whatever
+  // an HDMI capture device decides to emit -- which is exactly why it is read
+  // and not assumed. Only trusted once a frame has arrived: the canvas
+  // carries 640x480 as an attribute and would otherwise report it forever.
+  if (frames > 0 && nw > 1 && nh > 1) {
+    if (nw !== capW || nh !== capH) { capW = nw; capH = nh; showCapture(); }
+  }
   if (!crop) crop = measureCrop();
   const r = crop || {x0: 0, y0: 0, bw: nw, bh: nh};
 
@@ -3047,7 +3058,18 @@ function applyZoom(recentre) {
 // factor of nearly two on the Macintosh -- 512x342 native against 976x652
 // fitted, measured -- and by much less on the Gateway, which is exactly when
 // two similar pictures get mistaken for the same one.
-const ZOOMLABEL = {fit: 'Fit', '1': 'Original', '2': '200%', '4': '400%'};
+let capW = 0, capH = 0;
+const capSize = () => capW ? capW + '×' + capH : null;
+// The menu says the ACTUAL pixel count, because "Original" only means
+// something if you know what the device is producing -- and on a Macintosh
+// Plus, Fit and Original differ by nearly two to one.
+function showCapture() {
+  const b = document.querySelector('#pop-zoom [data-zoom="1"]');
+  if (b) b.textContent = capSize() ? 'Original — ' + capSize()
+                                   : 'Original — actual resolution';
+  if (!$('settings').hidden && lastState) $('rig').innerHTML = rigRows(lastState);
+}
+const ZOOMLABEL = {fit: 'Fit Screen', '1': 'Original', '2': '200%', '4': '400%'};
 function setZoom(m) {
   zoomMode = m;
   localStorage.setItem('vcctrl.zoom2', m);
@@ -3388,6 +3410,12 @@ function lamps(leds, videoState, verified) {
   // physically unplugged the daemon still reports both devices held, input ok,
   // and plausible LED values -- all true, and all about the Pi's end of the
   // wire. Lit lamps on an unverified link are a reassuring lie.
+  // The dashes are not decoration and not a style slip: a solid lamp claims
+  // the LED reading reflects the TARGET, and it only does if the input link
+  // has been proven. With the PS/2 lead unplugged the daemon still reports
+  // both devices held and plausible LED values -- all true, and all about the
+  // Pi's end of the wire. So an unproven link gets a dashed underline, and
+  // "Verify input link" in Settings is what makes it solid.
   const unproven = !verified || verified.ok !== true || verified.age_s > 900;
   const stale = videoState === 'nosignal' || videoState === 'unavailable'
                 || unproven;
@@ -3398,6 +3426,12 @@ function lamps(leds, videoState, verified) {
     const v = leds && leds[key];
     el.classList.toggle('on', v === 1);
     el.classList.toggle('stale', stale);
+    el.title = unproven
+      ? 'Dashed: the input link has not been proven, so these lamps describe '
+        + 'the Pi\'s end of the wire. Settings → Verify input link.'
+      : videoState === 'nosignal' || videoState === 'unavailable'
+        ? 'Dashed: no picture, so the target may not be running.'
+        : 'Read from the PS/2 return channel — proof a keystroke landed.';
     el.title = (leds ? (v === 1 ? 'lit' : 'dark') : 'unknown')
              + (stale ? ' — retained, the target is not showing a picture' : '');
   }
