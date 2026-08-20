@@ -450,6 +450,16 @@
   button.on { border-color:var(--green); color:var(--green); }
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
+  /* NO BOX AROUND AN ICON. The rail's job is to be read, and three outlined
+     squares next to it read as three more things to look at. The glyph is the
+     control; hover and press say the rest. The focus ring is untouched --
+     that one is not decoration. */
+  header .ibtn, #sidebtn {
+    border-color:transparent; background:transparent;
+  }
+  header .ibtn:hover, #sidebtn:hover {
+    border-color:transparent; background:var(--rule);
+  }
   #sidebtn { min-width:38px; padding:0; color:var(--muted); }
   #sidebtn svg { width:19px; height:19px; display:block; margin:0 auto; }
   #sidebtn .frame { fill:none; stroke:currentColor; stroke-width:1.4; }
