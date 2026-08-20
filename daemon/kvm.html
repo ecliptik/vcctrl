@@ -1147,7 +1147,13 @@ const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
 // monochrome themes force and colour-blind users need anyway.
 function pill(id, cls, text) {
   if (id === 'p-video') {
-    const w = String(text).replace(/^video\s*/, '').toUpperCase();
+    // Display label only. The daemon's wire value stays `locked` -- the
+    // harness branches on it and it is in the API, the tests and the docs.
+    // Changing what a reader sees is a presentation decision; changing what a
+    // caller receives is a contract change, and these are not the same edit.
+    const LABEL = {LOCKED:'ACTIVE', NOSIGNAL:'NO SIGNAL'};
+    const raw = String(text).replace(/^video\s*/, '').toUpperCase();
+    const w = LABEL[raw] || raw;
     $('state').textContent = w;
     // The dot repeats what the word says rather than replacing it -- required
     // by the monochrome themes, needed by colour-blind users.
