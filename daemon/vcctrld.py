@@ -805,7 +805,24 @@ class VideoCapability(Capability):
     name = "video"
 
     DEVICE = "/dev/video0"
-    RING_BYTES = 8 * 1024 * 1024
+    # 48 MB. 30 s at 30 fps is 900 frames: 13.5 MB of text console but 63 MB of
+    # a dense screen, a 4.7x spread. A buffer sized in seconds has no fixed
+    # cost and one sized in bytes has no fixed duration, so this is capped in
+    # BYTES -- the units the resource is actually measured in -- and the span
+    # it currently buys is reported rather than promised.
+    RING_BYTES = 48 * 1024 * 1024
+    # Wall-clock span the scrub buffer tries to preserve. When bytes run out,
+    # the old end is thinned rather than dropped, so 30 s stays 30 s and only
+    # its granularity degrades.
+    TARGET_SPAN_S = 30.0
+    # Never let the ring push the Pi towards OOM. There is NO SWAP on this box:
+    # an overshoot does not slow the daemon down, it kills it, and that drops
+    # the uinput devices.
+    MEM_FLOOR_MB = 200
+    # A pin stops eviction so a frame cannot be freed while it is being looked
+    # at. It expires, because a pinned buffer stops accepting new frames and a
+    # silently stale KVM is the failure this tool exists to prevent.
+    PIN_TIMEOUT_S = 300.0
     NOSIGNAL_AFTER_S = 2.0
     # How many recent frames must be bit-identical before the stream is called
     # frozen. Eight is ~0.27 s at 30 fps -- long enough that a genuinely static
@@ -832,6 +849,11 @@ class VideoCapability(Capability):
         self.spawn_t = 0.0
         self.fast_failures = 0
         self.last_good = None
+        self.seq = 0
+        self.thin_passes = 0
+        self.dropped_pinned = 0
+        self.pinned_at = None
+        self.mem_limited = False
 
     # -- device lifecycle ---------------------------------------------------
 
@@ -935,14 +957,75 @@ class VideoCapability(Capability):
                 if len(frame) >= 128:
                     self._push(frame)
 
+    def _cap(self):
+        """Effective byte cap, lowered if the Pi is short of memory."""
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        avail_mb = int(line.split()[1]) / 1024.0
+                        break
+                else:
+                    return self.RING_BYTES
+        except Exception:
+            return self.RING_BYTES
+        headroom = (avail_mb - self.MEM_FLOOR_MB) * 1024 * 1024
+        if headroom < self.RING_BYTES:
+            self.mem_limited = True
+            return max(4 * 1024 * 1024, int(headroom))
+        self.mem_limited = False
+        return self.RING_BYTES
+
+    def _thin(self):
+        """Drop every other frame from the oldest third. Caller holds the lock.
+
+        Trades temporal resolution for wall-clock span, in the region where it
+        is needed least: recent frames stay at the full rate for frame-by-frame
+        work, and the old end degrades to 15 fps, then 7.5. Thirty seconds of
+        history survives in every case.
+
+        O(n) but infrequent -- a pass frees roughly a sixth of the ring, which
+        at 30 fps is several seconds of headroom before the next one.
+        """
+        items = list(self.ring)
+        third = max(1, len(items) // 3)
+        kept, freed = [], 0
+        for i, entry in enumerate(items):
+            if i < third and i % 2 == 1:
+                freed += len(entry[2])
+                continue
+            kept.append(entry)
+        if freed:
+            self.ring.clear()
+            self.ring.extend(kept)
+            self.ring_bytes -= freed
+            self.thin_passes += 1
+
     def _push(self, frame):
         now = time.time()
         with self.lock:
-            self.ring.append((now, frame))
+            pinned = self.pinned_at is not None
+            cap = self._cap()
+            if pinned and self.ring_bytes + len(frame) > cap:
+                # Pinned: the buffer is being examined, so drop the NEW frame
+                # rather than free one somebody may be looking at.
+                self.dropped_pinned += 1
+                self.last_frame_t = now
+                return
+            self.seq += 1
+            self.ring.append((now, self.seq, frame))
             self.ring_bytes += len(frame)
-            while self.ring_bytes > self.RING_BYTES and len(self.ring) > 1:
-                _t, old = self.ring.popleft()
-                self.ring_bytes -= len(old)
+            while self.ring_bytes > cap and len(self.ring) > 1:
+                span = now - self.ring[0][0]
+                if span > self.TARGET_SPAN_S * 1.05 or len(self.ring) < 8:
+                    _t, _s, old = self.ring.popleft()
+                    self.ring_bytes -= old and len(old)
+                else:
+                    before = self.ring_bytes
+                    self._thin()
+                    if self.ring_bytes >= before:
+                        _t, _s, old = self.ring.popleft()
+                        self.ring_bytes -= len(old)
             self.last_frame_t = now
             self.frames_total += 1
         # NOTE: this does NOT set state. A frame arriving attests that the USB
@@ -987,7 +1070,7 @@ class VideoCapability(Capability):
                 owned, proc = self.owned, self.proc
                 age = time.time() - self.last_frame_t if self.last_frame_t else None
                 state = self.state
-                recent = [f for _t, f in list(self.ring)[-self.FROZEN_RUN:]]
+                recent = [f for _t, _s, f in list(self.ring)[-self.FROZEN_RUN:]]
             # Hashing 8 frames once per half-second is ~240 KB/s of md5 --
             # nothing next to a 4 Mbit/s stream, and it stays off the per-frame
             # path where rule 1 cares.
@@ -1072,7 +1155,7 @@ class VideoCapability(Capability):
             if new == "locked":
                 with self.lock:
                     if self.ring:
-                        t, f = self.ring[-1]
+                        t, _sq, f = self.ring[-1]
                         self.last_good = (t, f, None)
 
             if new != state:
@@ -1091,7 +1174,82 @@ class VideoCapability(Capability):
     def commands(self):
         return {"video": self._video, "burst": self._burst,
                 "framestats": self._framestats, "shot": self._shot,
-                "lastgood": self._lastgood}
+                "lastgood": self._lastgood, "pin": self._pin,
+                "timeline": self._timeline, "frame": self._frame}
+
+    # -- scrub --------------------------------------------------------------
+
+    def _pin(self, req):
+        """Stop eviction so a frame cannot be freed while it is examined.
+
+        Without this the scrub feature is subtly broken in exactly the case it
+        exists for: the live stream keeps writing while you look at something
+        interesting, and the frame under the cursor gets evicted from under it.
+        """
+        action = req.get("action", "status")
+        with self.lock:
+            if action == "on":
+                self.pinned_at = time.time()
+            elif action == "off":
+                self.pinned_at = None
+                self.dropped_pinned = 0
+            held = (time.time() - self.pinned_at) if self.pinned_at else None
+            out = {"ok": True, "pinned": self.pinned_at is not None,
+                   "held_s": round(held, 1) if held else None,
+                   "dropped_while_pinned": self.dropped_pinned,
+                   "expires_in_s": round(self.PIN_TIMEOUT_S - held, 1)
+                   if held else None}
+        if action in ("on", "off"):
+            self._publish("video.pin", state=action)
+        return out
+
+    def _timeline(self, req):
+        """Index of what is in the buffer: one entry per frame, no pixels.
+
+        Carries the gap to the previous frame so the UI can draw where the
+        buffer has been thinned. A scrub bar that looks uniform while stepping
+        1/30 s in one place and 1/7.5 s in another is a lying interface.
+        """
+        with self.lock:
+            items = list(self.ring)
+            pinned = self.pinned_at is not None
+            span = (items[-1][0] - items[0][0]) if len(items) > 1 else 0.0
+            cap = self._cap()
+            used = self.ring_bytes
+            thins = self.thin_passes
+            memlim = self.mem_limited
+        out, prev = [], None
+        for t, sq, f in items:
+            out.append({"seq": sq, "t": round(t, 3), "bytes": len(f),
+                        "gap_ms": None if prev is None
+                        else round((t - prev) * 1000.0, 1)})
+            prev = t
+        return {"ok": True, "frames": out, "count": len(out),
+                "span_s": round(span, 2), "pinned": pinned,
+                "ring_bytes": used, "cap_bytes": cap,
+                "thin_passes": thins, "mem_limited": memlim,
+                "target_span_s": self.TARGET_SPAN_S}
+
+    def _frame(self, req):
+        """One frame by sequence number. Raw, and labelled raw.
+
+        Scrubbing wants the exact frame at a position, not a judgement about
+        it -- so unlike `shot` this does no duplicate rejection and no
+        brightness selection, and says so.
+        """
+        import base64
+        want = int(req.get("seq", 0))
+        with self.lock:
+            for t, sq, f in reversed(self.ring):
+                if sq == want:
+                    return {"ok": True, "raw": True, "seq": sq, "t": t,
+                            "age_s": round(time.time() - t, 3),
+                            "bytes": len(f),
+                            "jpeg": base64.b64encode(f).decode()}
+            oldest = self.ring[0][1] if self.ring else None
+            newest = self.ring[-1][1] if self.ring else None
+        return {"ok": False, "error": "seq %d is not in the buffer" % want,
+                "oldest": oldest, "newest": newest}
 
     # -- selection ----------------------------------------------------------
 
@@ -1117,7 +1275,7 @@ class VideoCapability(Capability):
         hashes, 0 repeated. The assumption holds at full rate.
         """
         digests = {}
-        for t, f in items:
+        for t, _sq, f in items:
             digests.setdefault(hashlib.md5(f).hexdigest(), []).append((t, f))
         live = [tf for group in digests.values() if len(group) == 1
                 for tf in group]
@@ -1237,6 +1395,9 @@ class VideoCapability(Capability):
                     "ring_bytes": self.ring_bytes,
                     "fast_failures": self.fast_failures,
                     "last_error": self.last_error,
+                    "pinned": self.pinned_at is not None,
+                    "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
+                    if len(self.ring) > 1 else 0.0,
                     "last_frame_age_s": round(age, 3) if age else None}
 
     def _burst(self, req):
@@ -1251,8 +1412,9 @@ class VideoCapability(Capability):
         items = self._recent(n)
         import base64
         return {"ok": True, "raw": True, "n": len(items),
-                "frames": [{"t": t, "jpeg": base64.b64encode(f).decode()}
-                           for t, f in items]}
+                "frames": [{"t": t, "seq": sq,
+                            "jpeg": base64.b64encode(f).decode()}
+                           for t, sq, f in items]}
 
     def _framestats(self, req):
         """Duplicate-hash statistics over a window. Diagnostic, not a judgement.
@@ -1264,14 +1426,14 @@ class VideoCapability(Capability):
         """
         items = self._recent(int(req.get("n", 90)))
         digests = {}
-        for _t, f in items:
+        for _t, _sq, f in items:
             digests.setdefault(hashlib.md5(f).hexdigest(), 0)
             digests[hashlib.md5(f).hexdigest()] += 1
         counts = sorted(digests.values(), reverse=True)
         return {"ok": True, "n": len(items), "distinct": len(digests),
                 "repeated": sum(1 for c in counts if c > 1),
                 "largest_group": counts[0] if counts else 0,
-                "sizes": [len(f) for _t, f in items[-8:]]}
+                "sizes": [len(f) for _t, _s, f in items[-8:]]}
 
 
 class AudioCapability(Capability):
@@ -1428,6 +1590,18 @@ class AudioCapability(Capability):
                 age = (time.time() - self.last_chunk_t) if self.last_chunk_t \
                     else (time.time() - self.spawn_t if self.spawn_t else None)
                 state = self.state
+            # A pin that outlives its usefulness turns the KVM stale, which is
+            # the failure this whole tool exists to prevent. Expire it.
+            with self.lock:
+                if self.pinned_at is not None and \
+                        time.time() - self.pinned_at > self.PIN_TIMEOUT_S:
+                    self.pinned_at = None
+                    expired = True
+                else:
+                    expired = False
+            if expired:
+                self._publish("video.pin", state="expired")
+
             if not owned:
                 continue
             if proc is not None and proc.poll() is not None:

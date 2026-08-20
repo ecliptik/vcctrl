@@ -67,6 +67,13 @@
   #vpct { min-width:4ch; text-align:right; }
   #vol { flex:0 1 130px; min-width:80px; height:20px; accent-color:var(--ok);
          background:transparent; cursor:pointer; }
+  #settings { display:none; }
+  #settings.show { display:block; }
+  #settings label { display:flex; align-items:center; gap:8px; padding:4px 0;
+                    font-size:12px; cursor:pointer; }
+  #settings input[type=checkbox] { accent-color:var(--ok); width:15px;
+                                   height:15px; flex:none; }
+  #settings .hint { color:var(--dim); font-size:11px; margin:2px 0 8px; }
   #mbar { flex:1; height:6px; background:#0f1116; border-radius:3px;
           overflow:hidden; position:relative; }
   #mrms { position:absolute; left:0; top:0; bottom:0; width:0%;
@@ -141,6 +148,7 @@
     <span id="p-audio" class="pill">sound off</span>
     <span class="grow"></span>
     <button id="kbtn" class="primary">⌨ Keyboard</button>
+    <button id="gbtn" title="settings">⚙</button>
   </header>
 
   <div id="stage">
@@ -188,6 +196,26 @@
   </div>
 
   <div id="body">
+    <section id="settings">
+      <h2>Settings</h2>
+      <div class="hint">What appears in the activity log. The events still
+        happen and are still recorded by the daemon — this only filters the
+        view.</div>
+      <label><input type="checkbox" id="opt-probe">
+        Show LED and probe traffic</label>
+      <div class="hint">Caps Lock toggles, <code>leds</code>, <code>ledwait</code>
+        and level reads. The harness uses these to test whether the machine is
+        responding, so they repeat constantly and drown everything else.</div>
+      <label><input type="checkbox" id="opt-poll">
+        Show read-only queries</label>
+      <div class="hint">Screenshots, status and power-state polls — every open
+        tab makes them on a timer.</div>
+      <label><input type="checkbox" id="opt-mine">
+        Show this browser's own commands</label>
+      <div class="hint">Off by default: you already know what you just did. The
+        harness's actions are the ones worth watching.</div>
+    </section>
+
     <section>
       <h2>Type</h2>
       <div class="row">
@@ -729,20 +757,87 @@ function meter(pcm) {
   $('mdb').textContent = rdb <= -90 ? 'silent' : rdb.toFixed(0) + 'dB';
 }
 
+// ------------------------------------------------------------------ settings
+const OPTS = {probe:false, poll:false, mine:false};
+try { Object.assign(OPTS, JSON.parse(localStorage.getItem('vcctrl.opts') || '{}')); }
+catch (e) {}
+for (const k of Object.keys(OPTS)) {
+  const el = $('opt-' + k);
+  el.checked = !!OPTS[k];
+  el.onchange = () => {
+    OPTS[k] = el.checked;
+    localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
+    renderLog();          // re-render rather than filter-on-arrival, so a
+  };                      // toggle shows history you had hidden
+}
+$('gbtn').onclick = () => $('settings').classList.toggle('show');
+
+// Traffic the harness generates to ASK QUESTIONS rather than to do anything.
+// at_prompt() toggles Caps Lock and reads the LED back, so a readiness check
+// shows up as a keystroke plus two LED reads, several times a minute -- which
+// buries the one line that says what the harness actually typed.
+const PROBE_CMDS = new Set(['leds', 'ledwait', 'level']);
+const POLL_CMDS  = new Set(['shot', 'lastgood', 'framestats', 'timeline',
+                            'frame', 'activity', 'events', 'status', 'caps',
+                            'powerlog']);
+function isProbe(e) {
+  if (e.kind !== 'cmd') return false;
+  if (PROBE_CMDS.has(e.cmd)) return true;
+  // A Caps Lock keystroke is a readiness probe on this rig, not typing.
+  return /^(key|keydown|keyup|combo)$/.test(e.cmd) && /caps/i.test(e.detail || '');
+}
+function isPoll(e) {
+  if (e.kind !== 'cmd') return false;
+  if (POLL_CMDS.has(e.cmd)) return true;
+  // Read-only forms of otherwise consequential commands.
+  return (e.cmd === 'power' || e.cmd === 'video' || e.cmd === 'pin')
+         && e.detail === 'state';
+}
+function visible(e) {
+  if (!OPTS.probe && isProbe(e)) return false;
+  if (!OPTS.poll && isPoll(e)) return false;
+  if (!OPTS.mine && e.kind === 'cmd' && e.by === 'browser') return false;
+  return true;
+}
+
 // ------------------------------------------------------------------ log
 let seq = 0;
 const logEl = $('log');
+const LOGBUF = [];        // kept so a settings change can re-render history
 const CLS = k => k.startsWith('lock.broken') ? 'k-taint'
   : (k.startsWith('lock') || k === 'input.refused') ? 'k-lock'
   : k.startsWith('video') ? 'k-vid' : 'k-cmd';
-function note(t) { addLine(new Date(), 'ui', t, 'k-lock'); }
+function note(t) { push({kind:'ui', t:Date.now()/1000, detail:t, _cls:'k-lock'}); }
 function addLine(d, kind, detail, cls) {
+  push({kind, t:d.getTime()/1000, detail, _cls:cls});
+}
+function push(e) {
+  LOGBUF.push(e);
+  while (LOGBUF.length > 400) LOGBUF.shift();
+  if (visible(e)) renderOne(e, true);
+}
+function renderOne(e, prepend) {
+  const d = new Date(e.t * 1000);
   const row = document.createElement('div');
   row.innerHTML = `<span class="t">${d.toTimeString().slice(0,8)}</span>`
-    + `<span class="k ${cls||CLS(kind)}">${kind}</span><span class="d"></span>`;
-  row.lastChild.textContent = detail || '';
-  logEl.insertBefore(row, logEl.firstChild);
+    + `<span class="k ${e._cls || CLS(e.kind)}">${e.kind}</span>`
+    + `<span class="d"></span>`;
+  row.lastChild.textContent = e._text !== undefined ? e._text : (e.detail || '');
+  if (prepend) logEl.insertBefore(row, logEl.firstChild);
+  else logEl.appendChild(row);
   while (logEl.children.length > 250) logEl.removeChild(logEl.lastChild);
+}
+function renderLog() {
+  logEl.textContent = '';
+  const shown = LOGBUF.filter(visible).slice(-250).reverse();
+  for (const e of shown) renderOne(e, false);
+  const hidden = LOGBUF.length - LOGBUF.filter(visible).length;
+  if (hidden > 0) {
+    const row = document.createElement('div');
+    row.innerHTML = '<span class="t"></span><span class="k" style="color:#5b6373">filtered</span>'
+      + `<span class="d">${hidden} event${hidden===1?'':'s'} hidden by settings</span>`;
+    logEl.appendChild(row);
+  }
 }
 async function pollEvents() {
   try {
@@ -750,10 +845,11 @@ async function pollEvents() {
     if (j.missed) note('— gap in log, some events were not seen —');
     for (const e of (j.events||[])) {
       seq = Math.max(seq, e.seq);
-      let d = e.kind === 'cmd' ? `${e.cmd} ${e.detail||''}`.trim() + (e.by?`  ←${e.by}`:'')
-            : Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
-                .map(([k,v])=>`${k}=${v}`).join(' ');
-      addLine(new Date(e.t*1000), e.kind, d);
+      e._text = e.kind === 'cmd'
+        ? `${e.cmd} ${e.detail||''}`.trim() + (e.by ? `  ←${e.by}` : '')
+        : Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
+            .map(([k,v])=>`${k}=${v}`).join(' ');
+      push(e);
     }
   } catch (e) {}
 }

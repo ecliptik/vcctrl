@@ -162,6 +162,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, base64.b64decode(r["jpeg"]), "image/jpeg",
                                   {"X-Frame-Age": str(r.get("age_s")),
                                    "X-Frame-Mean": str(r.get("mean"))})
+            if path == "/timeline.json":
+                return self._json(self.cap.call("timeline", {}))
+            if path == "/frame.jpg":
+                seq = 0
+                if "?" in self.path:
+                    for part in self.path.split("?", 1)[1].split("&"):
+                        if part.startswith("seq="):
+                            try:
+                                seq = int(part[4:])
+                            except ValueError:
+                                pass
+                r = self.cap.call("frame", {"seq": seq})
+                if not r.get("ok"):
+                    return self._json(r, 404)
+                return self._send(200, base64.b64decode(r["jpeg"]), "image/jpeg",
+                                  {"X-Frame-Age": str(r.get("age_s")),
+                                   "X-Frame-Seq": str(r.get("seq"))})
             if path == "/events":
                 since = 0
                 if "?" in self.path:
@@ -246,8 +263,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(
                         ("--%s\r\nContent-Type: image/jpeg\r\n"
                          "Content-Length: %d\r\n\r\n"
-                         % (boundary, len(item[1]))).encode())
-                    self.wfile.write(item[1])
+                         % (boundary, len(item[2]))).encode())
+                    self.wfile.write(item[2])
                     self.wfile.write(b"\r\n")
                 time.sleep(1.0 / fps)
         except (BrokenPipeError, ConnectionResetError, OSError):
@@ -312,6 +329,8 @@ class WebCapability(object):
         # bin/vcctrl-audio, which reaches the daemon over HTTPS now that plain
         # http is off -- it was missing here and the tool got a 403.
         "level", "powerlog",
+        # scrub
+        "pin", "timeline", "frame",
     ])
 
     def __init__(self, registry, bind, port):
@@ -446,7 +465,7 @@ class WebCapability(object):
                 if writable:
                     last_t = item[0]
                     try:
-                        sock.sendall(ws_frame(item[1], opcode=0x2))
+                        sock.sendall(ws_frame(item[2], opcode=0x2))
                     except Exception:
                         return
                 else:
