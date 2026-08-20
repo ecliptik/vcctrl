@@ -990,6 +990,22 @@ HARNESS = """
     out.push(`reason ${detail.includes('cannot open audio device hw:1,0') ? 1 : 0} ${detail.startsWith('[') ? 0 : 1}`);
   }
 
+  // Grabbing the keyboard must not change the LAYOUT. The message used to be
+  // a row that appeared, so clicking the picture pushed the picture up -- the
+  // reward for using the thing was the thing moving.
+  {
+    const before = document.getElementById('mjpeg').getBoundingClientRect();
+    setArmed(true);
+    const during = document.getElementById('mjpeg').getBoundingClientRect();
+    const lamp = document.getElementById('lamp-kbd');
+    const lit = lamp.classList.contains('on');
+    setArmed(false);
+    const after = document.getElementById('mjpeg').getBoundingClientRect();
+    const still = Math.abs(during.height - before.height) < 0.5
+               && Math.abs(after.height - before.height) < 0.5;
+    out.push(`grab ${still ? 1 : 0} ${lit && !lamp.classList.contains('on') ? 1 : 0}`);
+  }
+
   // Power is TRI-STATE. "the machine is off" and "I cannot reach the plug"
   // are opposite facts, and a two-valued reading of a cached field reports
   // the instrument's state as the target's -- the failure this rig has
@@ -1284,6 +1300,11 @@ def test_zoom_layout_in_a_browser():
     check("ffmpeg's sentence survives", got["reason"][0] == 1.0, got["reason"])
     check("control: without its module tag and pointer",
           got["reason"][1] == 1.0, got["reason"])
+
+    check("grabbing the keyboard moves nothing on the page",
+          got["grab"][0] == 1.0, got["grab"])
+    check("control: and the KBD lamp lights and unlights",
+          got["grab"][1] == 1.0, got["grab"])
 
     check("power reads on / off / unknown, not on / off",
           got["power3"][0] == 1.0, got["power3"])

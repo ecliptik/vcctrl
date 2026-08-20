@@ -439,16 +439,6 @@
   #stalebar button { min-height:30px; padding:0 10px; background:var(--bg);
                      color:var(--yellow); border-color:var(--yellow);
                      font:600 var(--t-data) var(--sans); }
-  #capbar {
-    flex:none; padding:0; height:0; overflow:hidden; text-align:center;
-    background:var(--panel); border-bottom:0; color:var(--green);
-    font:var(--t-micro)/1.5 var(--mono); letter-spacing:.04em;
-  }
-  #capbar.armed {
-    padding:5px 10px; height:auto; border-bottom:1px solid var(--rule);
-  }
-  #capbar.flash { color:var(--text); transition:none; }
-
   #keys {
     flex:none; display:flex; gap:5px; overflow-x:auto; padding:6px 8px;
     background:var(--panel); border-bottom:1px solid var(--rule);
@@ -473,19 +463,24 @@
      squares next to it read as three more things to look at. The glyph is the
      control; hover and press say the rest. The focus ring is untouched --
      that one is not decoration. */
-  header .ibtn, #sidebtn, #fsbtn, #zoombtn {
+  header .ibtn, #sidebtn, #zoombtn {
     border-color:transparent; background:transparent;
   }
-  header .ibtn:hover, #sidebtn:hover, #fsbtn:hover, #zoombtn:hover {
+  header .ibtn:hover, #sidebtn:hover, #zoombtn:hover {
     border-color:transparent; background:var(--rule);
   }
-  #sidebtn, #fsbtn { min-width:38px; padding:0; color:var(--muted); }
-  #fsbtn svg { width:18px; height:18px; display:block; margin:0 auto; }
-  #fsbtn path { fill:none; stroke:currentColor; stroke-width:1.5;
-                stroke-linecap:round; stroke-linejoin:round; }
-  #fsbtn .fsin { display:none; }
-  body.fs #fsbtn .fsout { display:none; }
-  body.fs #fsbtn .fsin { display:block; }
+  #sidebtn { min-width:38px; padding:0; color:var(--muted); }
+  /* Full screen sits at the bottom of the zoom menu: everything in there
+     answers "how big is the picture", and this is the largest answer. It was
+     a fifth icon in a rail that had just been cut down to four. */
+  .popmenu hr { border:0; border-top:1px solid var(--rule); margin:5px 4px; }
+  #fsitem { display:flex; align-items:center; gap:8px; }
+  #fsitem svg { width:15px; height:15px; flex:none; }
+  #fsitem path { fill:none; stroke:currentColor; stroke-width:1.6;
+                 stroke-linecap:round; stroke-linejoin:round; }
+  #fsitem .fsin { display:none; }
+  body.fs #fsitem .fsout { display:none; }
+  body.fs #fsitem .fsin { display:block; }
 
   /* ── full screen ─────────────────────────────────────────────────────
      Nothing but the picture, so it reads as a machine you are sitting at
@@ -493,7 +488,7 @@
      rather than by taking their space back: reflowing the stage would
      resize and re-fit the picture every time you reached for a control,
      which is the opposite of looking directly connected. */
-  body.fs header, body.fs #cmdbar, body.fs #capbar,
+  body.fs header, body.fs #cmdbar,
   body.fs #keys, body.fs #tabs, body.fs #body { display:none; }
   body.fs.peek header, body.fs.peek #cmdbar {
     display:flex; position:fixed; left:0; right:0; z-index:80;
@@ -716,7 +711,6 @@
        mixed, which is why a power chip that looked like a readout was also a
        menu, and a keyboard chip nobody could see a reason to press. */
     #cmdbar { grid-column:1/-1; grid-row:3; }
-    #capbar { grid-column:1/-1; grid-row:4; }
     #keys   { grid-column:1/-1; grid-row:5; border-bottom:0; }
     /* The rail costs about 40px of picture and is not always wanted. Hiding
        it collapses its grid row, so the stage takes the height back -- on a
@@ -754,6 +748,7 @@
          restating a label nobody needed twice. -->
     <span class="lamp" id="lamp-pwr"><i></i><span>PWR</span></span>
     <span class="lamp" id="lamp-link"><i></i><span>LINK</span></span>
+    <span class="lamp" id="lamp-kbd"><i></i><span>KBD</span></span>
     <span id="c-board" class="chip" style="display:none"><b>—</b></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
     <!-- Shown only while the lock is HELD. Unheld is the normal case and
@@ -777,13 +772,6 @@
          and the last two attempts here were a chevron pointing nowhere in
          particular and a large orange play button. This is the editor
          convention -- a pane on the right, filled while it is there. -->
-    <button id="fsbtn" aria-pressed="false"
-            title="Full screen — just the picture">
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path class="fsout" d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>
-        <path class="fsin" d="M7.5 3v4.5H3M17 7.5h-4.5V3M12.5 17v-4.5H17M3 12.5h4.5V17"/>
-      </svg>
-    </button>
     <button id="sidebtn" aria-expanded="true" aria-controls="body"
             title="Hide side panel">
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -831,7 +819,6 @@
   <div id="stalebar">A newer version of this page is available — reload
     <button id="reloadbtn" title="Reload the page">Reload now</button></div>
 
-  <div id="capbar">click the screen to grab the keyboard</div>
 
   <div id="keys">
     <button data-mod="lctrl">Ctrl</button>
@@ -940,6 +927,12 @@
   <button data-zoom="1" title="One capture pixel per screen pixel">Original</button>
   <button data-zoom="2" title="Twice the captured size">200%</button>
   <button data-zoom="4" title="Four times the captured size">400%</button>
+  <hr>
+  <button id="fsitem" title="Hide everything but the picture">
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path class="fsout" d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>
+      <path class="fsin" d="M7.5 3v4.5H3M17 7.5h-4.5V3M12.5 17v-4.5H17M3 12.5h4.5V17"/>
+    </svg>Full screen</button>
 </div>
 
 <div id="pop-power" class="pop" role="dialog" aria-label="Power" hidden>
@@ -1528,6 +1521,16 @@ function setArmed(v, opts) {
   $('stage').classList.toggle('armed', v);
   // The button says what pressing it does next, and lights while it is on --
   // the state also lives in the rail above, but the control is here.
+  // A ROW THAT APPEARS PUSHES THE PICTURE. The message used to be a bar under
+  // the key rail, so grabbing the keyboard moved everything on the page up by
+  // its height -- a layout shift as the reward for clicking the thing you are
+  // looking at. The state lives in the rail with the other lamps and on the
+  // button itself, and the one-time instruction is a toast over the picture,
+  // which costs no layout at all.
+  setLamp('lamp-kbd', v ? 'on' : null,
+    v ? 'Keys typed here go to the target — Ctrl + Alt + Shift releases'
+      : 'Keys typed here stay in the browser. Click the picture, or press '
+        + 'Grab keyboard, to send them to the target.');
   $('grabbtn').textContent = v ? '⌨️ Release keyboard' : '⌨️ Grab keyboard';
   $('grabbtn').classList.toggle('on', v);
   $('grabbtn').title = v ? 'Stop sending keys to the target (Ctrl+Alt+Shift)'
@@ -1539,14 +1542,11 @@ function setArmed(v, opts) {
     addLine(new Date(), 'ui', 'keyboard grabbed'
             + (document.activeElement === ghost ? '' : ' — focus refused'),
             'k-note');
-    $('capbar').classList.add('armed');
-    $('capbar').innerHTML = 'keyboard grabbed — press <b>Ctrl + Alt + Shift</b> to release';
+    hint('keyboard grabbed — Ctrl + Alt + Shift releases');
     if (!opts || !opts.quiet)
       addLine(new Date(), 'ui', 'keyboard grabbed — Ctrl+Alt+Shift releases',
               'k-note');
   } else {
-    $('capbar').classList.remove('armed');
-    $('capbar').textContent = '';
     ghost.blur();
     // Anything still held goes up, on this side and at the g2k. Releasing
     // capture with a key down would leave it down at a DOS prompt, typing
@@ -1577,11 +1577,10 @@ $('grabbtn').onclick = () => setArmed(!armed);
 
 function armFromStage() {
   if (armed) {
-    // Already captured. Do not silently do nothing -- the previous build's
-    // real bug was invisible state, so say what is true.
-    const b = $('capbar');
-    b.classList.add('flash');
-    setTimeout(() => b.classList.remove('flash'), 90);
+    // Already grabbed. Do not silently do nothing -- the previous build's
+    // real bug was invisible state, so say what is true, over the picture
+    // rather than by growing a row.
+    hint('already grabbed — Ctrl + Alt + Shift releases');
     return;
   }
   setArmed(true);
@@ -1900,7 +1899,7 @@ function measureBars() {
   const hdr = document.querySelector('header');
   const top = hdr ? hdr.getBoundingClientRect().bottom : 0;
   let bot = window.innerHeight;
-  for (const id of ['cmdbar', 'capbar', 'keys', 'tabs']) {
+  for (const id of ['cmdbar', 'keys', 'tabs']) {
     const el = $(id);
     if (!el || getComputedStyle(el).display === 'none') continue;
     const r = el.getBoundingClientRect();
@@ -2687,9 +2686,10 @@ function setFullscreen(v) {
   fsOn = v;
   document.body.classList.toggle('fs', v);
   if (!v) document.body.classList.remove('peek');
-  const b = $('fsbtn');
+  const b = $('fsitem');
   b.setAttribute('aria-pressed', v ? 'true' : 'false');
-  b.title = v ? 'Leave full screen' : 'Full screen — just the picture';
+  b.title = v ? 'Bring the controls back' : 'Hide everything but the picture';
+  b.lastChild.textContent = v ? 'Leave full screen' : 'Full screen';
   try {
     const el = document.documentElement;
     if (v && !document.fullscreenElement && el.requestFullscreen)
@@ -2703,7 +2703,7 @@ function setFullscreen(v) {
   // and the stage has taken the room.
   setTimeout(() => { measureBars(); applyZoom(true); }, 60);
 }
-$('fsbtn').onclick = () => setFullscreen(!fsOn);
+$('fsitem').onclick = () => { closePop(); setFullscreen(!fsOn); };
 // The browser can leave without us -- Esc, its own toolbar, a trackpad
 // gesture -- and the page would keep pretending otherwise.
 document.addEventListener('fullscreenchange', () => {
