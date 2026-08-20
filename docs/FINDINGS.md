@@ -1410,3 +1410,96 @@ number, it is printed in the kill line itself, and it eliminates entire
 families of explanation before they are written down. Both wrong mechanisms
 here were stories about journald having too much work, and the CPU figure had
 already ruled that out before either was proposed.
+
+---
+
+## 29. Every diagnostic healthy, nothing driven  [measured 2026-08-20]
+
+After the Pi 5 migration the Gateway would not accept input. Not intermittently
+— not at all, from the harness or from a USB keyboard plugged into the Pi.
+
+What made it expensive is that **every instrument reported healthy**:
+
+    SPI to the protocol board       answers, live, verified with a raw xfer
+    board detection                 PBID 1, IBM PC Compatible, fw 0.5.7
+    protocol selection              AT/PS2 set, set_protocol sent, OLED agrees
+    daemon -> uinput                KEY_A down/up read off /dev/input/event5
+    USB4VC has the device open      opened device: 0x1209 0xdea1
+    input lock                      held, 0 input.refused events
+    GPIO 20 (PCARD_BUSY)            low, so the SPI gate was not blocking
+    capture, audio, board, power    all fine
+
+And the OLED's debug view **showed the keypresses arriving**. So "the app
+receives events" and "the app sends events" were simultaneously true and false.
+
+### The cause
+
+`usb4vc_usb_scan.py` reads input events with a hardcoded 32-bit layout:
+
+    data = this_device['file'].read(16)
+    data = list(data[8:])
+    if data[0] == EV_KEY: ...
+
+`struct input_event` is `timeval + u16 type + u16 code + s32 value`, and
+`timeval` is two `long`s: 8+2+2+4 = 16 on armhf, **16+2+2+4 = 24 on arm64**. A
+16-byte read returns only the timestamp, and `data[8:]` is the tail of
+`tv_usec`. Measured on one real KEY_A:
+
+    raw:      0365876a 00000000  1a630500 00000000  0100 1e00 01000000
+              |-- tv_sec (8) --|  |-- tv_usec (8) -| type code  value
+    usb4vc:   data[0] = 26        garbage
+    correct:  data[0] = 1, code = 30      EV_KEY, KEY_A
+
+`EV_KEY` is 1. The dispatch compared against 26 and never fired.
+
+This was the operator's own caveat, raised before the migration began: "usb4vc
+was 32-bit only, the Pi 5 is 64-bit." It was in the plan as an architecture
+note and nobody turned it into a search for hardcoded struct sizes.
+
+### Why every diagnostic passed
+
+**Because they were all in different code paths.** SPI status, board detection,
+protocol selection and the OLED are unrelated to the input read loop. The one
+path that mattered was the only one with no instrument on it — and the OLED's
+debug view actively misled, because `my_oled.kick()` runs BEFORE the parse, so
+the UI reported activity the send path then discarded.
+
+### What actually found it
+
+Two operator tests, not software probing.
+
+1. **A real USB keyboard plugged into the Pi.** Same failure, which eliminated
+   vcctrl entirely — nothing of ours was in that path.
+2. **The OLED in debug mode**, which proved the app was receiving what it would
+   not forward.
+
+Before those, the investigation was narrowing the *transport* — cables, chip
+selects, the busy pin — and would have kept going. The operator was about to
+power down and reseat, which would have proven nothing and cost a power cycle.
+
+Three mechanisms were proposed and refuted before the right one, all by
+checking rather than by reasoning: `PROTOCOL_OFF` from a config file that
+turned out to be written lazily (the second time `config.json` looked
+authoritative and was not — see BOARD-IDENTITY sec. 2), the SPI chip selects
+reading as plain GPIO outputs, and the busy-pin gate.
+
+### The rule
+
+**When every diagnostic is green and the system does nothing, suspect the path
+with no diagnostic on it.** Health checks cluster where instrumentation was easy
+to add, which is not where faults cluster. A green board is not a driven target;
+they are separated by exactly the code nobody was watching.
+
+Corollary, for porting: an architecture change is not a note to carry in a plan.
+It is a search. `grep` for hardcoded struct sizes, `read(N)` on binary
+interfaces, and anything slicing a fixed offset out of a kernel structure.
+
+### Recorded alongside: the mouse, first proven the same day
+
+`vcctrl mouse move` had never moved a cursor on any target, on either machine.
+It has now — under Windows 3.11 at VGA 640x480, cursor tracked across
+(360,269) -> (461,298) -> (281,112) -> (102,1) -> (2,1), confirmed
+independently by the webkvm session from a separate process reading the frame
+ring. Full detail in docs/MOUSE.md, including why no DOS-based test could have
+produced it: everything that renders a cursor switches to a video mode this
+capture path cannot lock.
