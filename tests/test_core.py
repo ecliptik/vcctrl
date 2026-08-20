@@ -2454,3 +2454,98 @@ def test_wrapper_out_is_the_callers_disk():
     check("--out-dir pointing at a regular file is refused",
           r.returncode == 3 and "not a directory" in r.stderr,
           (r.returncode, r.stderr.strip()[:120]))
+
+
+def _client():
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    path = os.path.join(HERE, os.pardir, "bin", "vcctrl-client")
+    loader = SourceFileLoader("vcctrl_client", path)
+    spec = importlib.util.spec_from_loader("vcctrl_client", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def test_verify_input_exit_codes():
+    """The exit code carries the READING, so a script can branch without
+    parsing JSON -- and could-not-look must not read as a failure.
+
+    `vcctrl verify-input || abort` is the intended use. If an ADB board (no
+    LED return channel at all) exited 1, every harness guarded that way would
+    abort on working hardware. Three states, three codes.
+    """
+    c = _client()
+    check("verified -> 0", c.verify_input_exit({"ok": True, "verified": True}) == 0)
+    check("not verified -> 1 (a real fault)",
+          c.verify_input_exit({"ok": True, "verified": False}) == 1)
+    check("could not look -> 2, NOT 1",
+          c.verify_input_exit({"ok": True, "verified": None,
+                               "why": "unsupported"}) == 2)
+    check("tool failure -> 3",
+          c.verify_input_exit({"ok": False, "error": "daemon said no"}) == 3)
+    codes = {c.verify_input_exit({"ok": True, "verified": True}),
+             c.verify_input_exit({"ok": True, "verified": False}),
+             c.verify_input_exit({"ok": True, "verified": None}),
+             c.verify_input_exit({"ok": False})}
+    check("all four outcomes are distinguishable", codes == {0, 1, 2, 3}, codes)
+
+
+def test_burst_is_all_or_nothing():
+    """A burst with silent holes looks like a complete capture and is not.
+
+    If frame 3 of 5 fails to decode, the caller must not be left with 2 files
+    and a zero status -- nothing on disk would say which frames are missing or
+    why, and a set with holes is indistinguishable from a set where the target
+    genuinely went dark. Roll back instead.
+    """
+    import base64
+    import tempfile
+    c = _client()
+    d = tempfile.mkdtemp(prefix="burst")
+
+    jpg = base64.b64encode(b"\xff\xd8fake").decode()
+    good = {"ok": True, "raw": True, "n": 3,
+            "frames": [{"t": 1.0, "seq": i, "jpeg": jpg} for i in (5, 6, 7)]}
+    out = os.path.join(d, "ok")
+    check("a good burst writes every frame and returns 0",
+          c.write_burst(good, out) == 0 and len(os.listdir(out)) == 3)
+
+    bad = {"ok": True, "raw": True, "n": 3,
+           "frames": [{"t": 1.0, "seq": 5, "jpeg": jpg},
+                      {"t": 1.0, "seq": 6, "jpeg": "!!! not base64 !!!"},
+                      {"t": 1.0, "seq": 7, "jpeg": jpg}]}
+    out2 = os.path.join(d, "partial")
+    rc = c.write_burst(bad, out2)
+    left = os.listdir(out2) if os.path.isdir(out2) else []
+    check("a burst that fails partway returns non-zero", rc != 0, rc)
+    check("and leaves NO frames behind, not a partial set", left == [], left)
+
+    out3 = os.path.join(d, "empty")
+    check("zero frames is a failure, not an empty success",
+          c.write_burst({"ok": True, "frames": []}, out3) == 1)
+
+
+def test_raw_frames_are_not_judged_as_pictures():
+    """`frame` and `burst` are labelled raw and carry no picture judgement.
+
+    write_frame's rule is resp["picture"], which is ABSENT on a raw response
+    rather than false. Judging raw frames by it would report "no picture" for
+    every frame ever fetched by sequence number -- and, because the contract
+    removes the destination on a no-picture, would delete the caller's file
+    too.
+    """
+    import base64
+    import tempfile
+    c = _client()
+    d = tempfile.mkdtemp(prefix="rawframe")
+    p = os.path.join(d, "f.jpg")
+    raw = {"ok": True, "raw": True, "seq": 42, "t": 1.0, "bytes": 6,
+           "jpeg": base64.b64encode(b"\xff\xd8fake").decode()}
+    check("a raw frame is written and returns 0", c.write_frame(raw, p) == 0)
+    check("and the file exists", os.path.exists(p))
+
+    # A judged response with picture=False must still remove the file.
+    check("a judged no-picture still returns 1",
+          c.write_frame({"ok": True, "picture": False, "reason": "dark"}, p) == 1)
+    check("and removes the stale file", not os.path.exists(p))

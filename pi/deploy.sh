@@ -144,6 +144,32 @@ if [ "${1:-}" = "--page" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# CLIENT ONLY. /usr/local/bin/vcctrl is a fresh process per invocation, so
+# replacing the file needs no restart for exactly the reason --page does not:
+# nothing long-lived is holding the old copy. The next call picks up the new
+# one and any call already in flight finishes on the old one, which is fine --
+# they do not share state.
+#
+# This exists so CLI work can ship while somebody is mid-run. A full deploy
+# runs install.sh, which restarts vcctrld and drops both uinput devices; a
+# sweep cannot survive that and is not resumable. Making the safe path
+# available is what stops the unsafe path being used out of impatience.
+if [ "${1:-}" = "--client" ]; then
+  f="$SRC/bin/vcctrl-client"
+  [ -f "$f" ] || { echo "no $f" >&2; exit 1; }
+  # Syntax-check BEFORE installing. A client that cannot parse takes out every
+  # verb at once, including the ones a running sweep depends on -- and it would
+  # do so on the next call rather than at deploy time, so the deploy would look
+  # like it worked.
+  python3 -m py_compile "$f" || { echo "refusing: $f does not compile" >&2; exit 1; }
+  $SCP "$f" "$HOST:/tmp/vcctrl.new" || explain_hang
+  $SSH "$HOST" "python3 -m py_compile /tmp/vcctrl.new && sudo install -m 0755 -T \
+    /tmp/vcctrl.new /usr/local/bin/vcctrl && rm -f /tmp/vcctrl.new" || explain_hang
+  echo "installed vcctrl client (no restart)"
+  exit 0
+fi
+
 if [ "${VCCTRL_FORCE:-0}" != "1" ]; then
   guard_busy || exit 1
 else

@@ -142,9 +142,17 @@ done
 
 # `|| rc=$?` rather than a bare call: `set -e` is on, so a non-zero status
 # would abort the script here and the cleanup below would never run.
+# stdout is captured rather than passed through, because the client reports
+# the path it wrote in its JSON -- and that is the path on the PI. Printing it
+# unaltered hands a script an absolute path that does not exist on the machine
+# reading it, which is the same class of defect as the rest of this file: a
+# value that is real and is about something other than the question asked.
 rc=0
+remote_stdout=$(mktemp)
+trap 'cleanup; rm -f -- "$remote_stdout"' EXIT
 ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" \
-  "mkdir -p $(printf '%q' "$rdir") && vcctrl ${quoted[*]}" || rc=$?
+  "mkdir -p $(printf '%q' "$rdir") && vcctrl ${quoted[*]}" \
+  >"$remote_stdout" || rc=$?
 
 # TWO-VALUED, ACROSS THE HOST BOUNDARY TOO. On any non-zero status the local
 # destination must NOT exist afterwards -- otherwise a caller that does
@@ -177,4 +185,23 @@ else
     exit 3
   fi
 fi
+
+# Rewrite the reported path to where the file actually IS. Falls back to
+# printing the output unchanged if it is not JSON or python is unavailable --
+# a cosmetic field is not worth failing a capture that succeeded.
+python3 - "$remote_stdout" "$remote_target" "$rdir" "$local_out" <<'PYFILTER' 2>/dev/null \
+  || cat -- "$remote_stdout"
+import json, sys
+raw = open(sys.argv[1]).read()
+remote_file, remote_dir, local = sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    d = json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(0)
+for key, was in (("out", remote_file), ("out_dir", remote_dir)):
+    if isinstance(d, dict) and d.get(key) == was:
+        d[key] = local
+sys.stdout.write(json.dumps(d, indent=2, sort_keys=True) + "\n")
+PYFILTER
 exit 0

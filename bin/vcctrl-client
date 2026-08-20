@@ -52,6 +52,29 @@ USAGE = """usage: vcctrl <command> [args]
                             `vcctrl shot --out f.jpg; analyse f.jpg` cannot
                             analyse the previous run's frame believing it is
                             current.
+  timeline                  index of every frame in the scrub buffer: seq,
+                            timestamp, size. No pixels, so it is cheap enough
+                            to poll and is how you find the seq to fetch.
+  frame <seq> [--out F]     one frame by sequence number. RAW, and labelled
+                            raw -- the daemon passes no judgement on whether
+                            it is a picture. For a judged frame use `shot`.
+  burst <n> [--out-dir D]   n raw frames at once, written as <seq>.jpg.
+                            All or nothing: a burst with silent holes in it
+                            looks like a complete capture and is not.
+  pin [status|on|off]       stop the ring evicting frames while you examine
+                            them. Without it the live stream overwrites the
+                            frame you are looking at. Auto-releases after
+                            300 s, so an interrupted script cannot wedge it.
+  buffer [seconds]          read, or set, how much history the ring keeps
+  verify-input              prove the input path by LED round trip. THE only
+                            check that means the target answered -- every
+                            other input status describes the Pi's own end of
+                            the wire. Exit codes carry the reading:
+                              0  the target answered
+                              1  it did not          (a real fault)
+                              2  could not look      (no LED channel on this
+                                                      board, or unreadable)
+                              3  the tool itself failed
   events [since]            activity log since a sequence number
   activity                  what is running, for how long, and who holds input
   lock [status|acquire|release|break] --as NAME
@@ -98,7 +121,13 @@ def write_frame(resp, path):
     import base64
     import os
 
-    if not resp.get("picture"):
+    # A raw frame carries no picture judgement, deliberately -- `frame` and
+    # `burst` are labelled raw precisely so a caller cannot mistake them for
+    # something the daemon vouched for. Judging them by resp["picture"] would
+    # report "no picture" for every raw frame ever fetched, since the key is
+    # absent rather than false.
+    have = ("jpeg" in resp) if resp.get("raw") else bool(resp.get("picture"))
+    if not have:
         note = ""
         try:
             os.unlink(path)
@@ -129,10 +158,94 @@ def write_frame(resp, path):
     return 0
 
 
+
+def write_burst(resp, outdir):
+    """N raw frames into a directory, named by sequence number.
+
+    Same two-valued rule as write_frame, extended to a set: either the
+    directory holds this run's frames and the status is 0, or the directory is
+    empty and the status is 1. A HALF-WRITTEN burst is the worst outcome --
+    it looks like a complete capture with a gap in it, and nothing on disk
+    says which frames are missing or why.
+    """
+    import base64
+    import os
+
+    frames = resp.get("frames") or []
+    if not frames:
+        sys.stderr.write("no frames returned; %s left empty\n" % outdir)
+        return 1
+    try:
+        os.makedirs(outdir, exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write("could not create %s: %s\n" % (outdir, exc))
+        return 1
+
+    written = []
+    try:
+        for fr in frames:
+            name = os.path.join(outdir, "%012d.jpg" % int(fr["seq"]))
+            tmp = name + ".part"
+            with open(tmp, "wb") as fh:
+                fh.write(base64.b64decode(fr["jpeg"]))
+            os.replace(tmp, name)
+            written.append(name)
+    except (OSError, KeyError, ValueError) as exc:
+        # Roll back rather than leave a partial set. See the docstring: a
+        # burst with silent holes in it is worse than no burst.
+        for n in written:
+            try:
+                os.unlink(n)
+            except OSError:
+                pass
+        try:
+            os.unlink(tmp)
+        except (OSError, NameError):
+            pass
+        sys.stderr.write("burst failed partway (%s); removed the %d frame(s) "
+                         "already written rather than leave a set with holes "
+                         "in it\n" % (exc, len(written)))
+        return 1
+
+    meta = {k: v for k, v in resp.items() if k != "frames"}
+    meta["out_dir"] = outdir
+    meta["written"] = len(written)
+    meta["seqs"] = [int(f["seq"]) for f in frames]
+    sys.stdout.write(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+def verify_input_exit(resp):
+    """Map the round trip onto an exit code a script can branch on.
+
+        0  the target answered      -- the input path is proven
+        1  it did not answer        -- a real fault
+        2  could not look           -- no return channel on this board, or
+                                       the LEDs are unreadable
+        3  the tool itself failed
+
+    Three states rather than two, for the reason everything else on this rig
+    has three: "the Macintosh has no LED channel" and "the Gateway is not
+    answering" are opposite facts, and a harness that treats could-not-look as
+    a failure aborts on working hardware.
+    """
+    if not resp.get("ok"):
+        sys.stderr.write("error: %s\n" % resp.get("error"))
+        return 3
+    verified = resp.get("verified")
+    sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
+    if verified is True:
+        return 0
+    if verified is False:
+        return 1
+    return 2
+
+
 def main(argv):
     pace = None
     who = None
     out = None
+    out_dir = None
     args = []
     i = 0
     while i < len(argv):
@@ -148,6 +261,10 @@ def main(argv):
             out = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--out-dir":
+            out_dir = argv[i + 1]
+            i += 2
+            continue
         args.append(argv[i])
         i += 1
 
@@ -156,9 +273,17 @@ def main(argv):
         return 0
 
     cmd, rest = args[0], args[1:]
-    if out is not None and cmd not in ("shot", "lastgood"):
-        sys.stderr.write("--out applies to shot and lastgood, not %r\n" % cmd)
-        return 2
+    # Exit 3 rather than 2 here on purpose: 2 now means "could not look" for
+    # verify-input, and a flag misapplied to a command is a tool misuse, not a
+    # reading. Keeping them apart matters more than matching the old number,
+    # which nothing branches on.
+    if out is not None and cmd not in ("shot", "lastgood", "frame"):
+        sys.stderr.write("--out applies to shot, lastgood and frame, "
+                         "not %r\n" % cmd)
+        return 3
+    if out_dir is not None and cmd != "burst":
+        sys.stderr.write("--out-dir applies to burst, not %r\n" % cmd)
+        return 3
     if cmd == "status":
         req = {"cmd": "status"}
     elif cmd == "key":
@@ -222,6 +347,24 @@ def main(argv):
         req = {"cmd": "power", "action": action}
         if action == "cycle" and len(rest) > 1:
             req["off_seconds"] = float(rest[1])
+    elif cmd == "timeline":
+        req = {"cmd": "timeline"}
+    elif cmd == "frame":
+        if not rest:
+            sys.stderr.write("frame needs a sequence number "
+                             "(see `vcctrl timeline`)\n")
+            return 3
+        req = {"cmd": "frame", "seq": int(rest[0])}
+    elif cmd == "burst":
+        req = {"cmd": "burst", "n": int(rest[0]) if rest else 8}
+    elif cmd == "pin":
+        req = {"cmd": "pin", "action": rest[0] if rest else "status"}
+    elif cmd == "buffer":
+        req = {"cmd": "buffer"}
+        if rest:
+            req["seconds"] = float(rest[0])
+    elif cmd in ("verify-input", "verify_input"):
+        req = {"cmd": "verify_input"}
     elif cmd == "ledwait":
         req = {"cmd": "ledwait",
                "timeout": float(rest[0]) if rest else 5.0}
@@ -236,12 +379,16 @@ def main(argv):
 
     resp = call(req)
     if resp is None:
-        return 1
+        return 3 if cmd in ("verify-input", "verify_input") else 1
+    if cmd in ("verify-input", "verify_input"):
+        return verify_input_exit(resp)
     if not resp.get("ok"):
         sys.stderr.write("error: %s\n" % resp.get("error"))
         return 1
     if out is not None:
         return write_frame(resp, out)
+    if out_dir is not None:
+        return write_burst(resp, out_dir)
     if len(resp) > 1:
         sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
     return 0
