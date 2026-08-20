@@ -448,6 +448,78 @@ def type_command(cmd, retries=3, settle=4.0, press_enter=True):
     return False
 
 
+class StagedChange:
+    """Make a mutating procedure either complete or revert -- never neither.
+
+    THE PROPERTY THIS ENCODES. On 2026-08-19 vcctrl-uvconfig backed up, began
+    an interactive configurator, then correctly refused to drive a screen it
+    could not read -- and stopped there. Refusing to type blind was the right
+    instinct. Leaving the target half-modified was not, and the harness treated
+    "did not complete" and "reverted" as the same outcome when they are
+    opposites: one leaves a machine in a state nobody designed, and it ran that
+    way for six hours.
+
+    Not a rule about uvconfig. Any procedure that writes to the target should be
+    able to answer "and if I stop halfway?" with something other than silence.
+
+    Usage:
+
+        with StagedChange("univbe driver") as st:
+            st.revert_with("COPY C:\\UNIVBE\\UNIVBE.BAK C:\\UNIVBE\\UNIVBE.DRV")
+            ...                       # do the mutation
+            st.completed()            # ONLY on the success path
+
+    Leaving the block without calling completed() -- by exception, by return,
+    or by an explicit bail -- runs the revert commands in reverse order and says
+    so. Reverting is best-effort and always reports what it could not undo,
+    because a failed revert is exactly the state this exists to make visible.
+    """
+
+    def __init__(self, what):
+        self.what = what
+        self.reverts = []
+        self.done = False
+
+    def revert_with(self, dos_command):
+        """Register the command that undoes what you are ABOUT to do.
+
+        Register it BEFORE the mutation, not after: a procedure that dies during
+        the write has still written, and a revert registered afterwards never
+        gets recorded.
+        """
+        self.reverts.append(dos_command)
+
+    def completed(self):
+        self.done = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.done:
+            return False
+        if not self.reverts:
+            print("  *** %s DID NOT COMPLETE and has no revert registered. ***"
+                  % self.what)
+            print("  The target may be in a state nobody designed. Check it by"
+                  " hand.")
+            return False
+        print("  *** %s DID NOT COMPLETE -- reverting %d change(s) ***"
+              % (self.what, len(self.reverts)))
+        for cmd in reversed(self.reverts):
+            try:
+                vc("type", cmd, check=False)
+                vc("key", "enter", check=False)
+                time.sleep(1.5)
+                vc("key", "y", check=False)      # answer an overwrite prompt
+                vc("key", "enter", check=False)
+                ok = wait_for_prompt(60) is not None
+            except Exception:
+                ok = False
+            print("     %-58s %s" % (cmd, "ok" if ok else "FAILED -- undo by hand"))
+        return False
+
+
 def ensure_powered(allow_power_on):
     """Bring the target up if permitted, else refuse. Returns True if usable.
 
