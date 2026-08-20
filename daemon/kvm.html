@@ -99,7 +99,10 @@
   @media (max-width:640px) {
     h1 { display:none; }
     /* These overflow the rail; the same values live in the State panel. */
-    #c-lock, #c-power, #c-xport, #c-kbd { display:none; }
+    /* Transport stays: which path is carrying the picture is worth knowing at
+       a glance, and it was the one thing the operator missed when the rail was
+       decluttered. The other three are in the State panel. */
+    #c-lock, #c-power, #c-kbd { display:none; }
     /* The rail scrolled sideways, so the gear sat off the right edge and could
        not be tapped. Nothing in a status bar should require scrolling to
        reach. The tab bar already has a settings tab, and the theme toggle
@@ -142,6 +145,7 @@
       padding-bottom:env(safe-area-inset-bottom,0px);
     }
     body #body.sheet > #sheethdr { display:flex; }
+    body #body.sheet > #logh { display:none; }   /* the sheet bar names it */
     body #body.sheet > #log { max-height:none; }
     body #sheethdr {
       display:none; flex:none; align-items:center; justify-content:space-between;
@@ -637,8 +641,11 @@ function setXport(x) {
   // Not "fallback" any more. On this deployment the HTTPS proxy speaks HTTP/2
   // and WebSocket does not survive it, so the mjpeg stream IS the transport --
   // calling it a fallback reads as a degraded state when nothing is wrong.
-  const label = {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…',
-                 down:'no video'}[x] || x;
+  const narrow = matchMedia('(max-width:640px)').matches;
+  const label = (narrow
+    ? {ws:'WS', mjpeg:'MJPEG', connecting:'…', down:'NONE'}
+    : {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
+  )[x] || x;
   $('s-xport').textContent = label;
   pill('p-xport', x === 'ws' ? 'on' : x === 'mjpeg' ? 'mid' : 'off', label);
 }
