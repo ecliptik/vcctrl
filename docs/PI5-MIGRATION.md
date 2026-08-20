@@ -366,6 +366,78 @@ the timing path for every keystroke and every LED poll, and the harness has
 already produced four separate timing bugs on the *old* hardware. Nothing short
 of a measured run proves the new machine did not move something.
 
+### 6a. Acceptance criteria, fixed before the run
+
+**Written down before any Pi 5 number existed**, which is the only time a
+threshold can be chosen honestly. Supplied by the benchmarking session from
+their profile sec. 3.2b rather than invented here.
+
+The instrument is PUMP on machine 1, declared `VIRGE PICOGUS`, against round P
+banked at `~/doskutsu-netiter/banked/roundP-pi3-2026-08-20/`:
+
+| cell | arm | Pi 3 |
+|---|---|---|
+| GPU0 | control | 29.6 |
+| GPU0B | control, repeat | 29.5 |
+| GPUA | no_input_poll | 30.9 |
+| GPUAB | no_input_poll, repeat | 30.8 |
+
+Assumed per-cell sigma is **0.10** — the profile's declared 0.2 within-session
+band read as ~2 sigma. The three pair ranges actually observed (0.0, 0.1, 0.1)
+imply sigma ~0.06, but they are quantised to 0.1 and do not determine it, and a
+tight sigma makes the test fire on noise.
+
+**Control-pair and arm-pair spread.** Threshold 0.2, because the profile
+declared 0.2 before this test existed.
+
+    both pairs <= 0.2       pass
+    exactly one over 0.2    INCONCLUSIVE -- re-run, do not diagnose
+    both over 0.2           fail: the harness has added variance
+
+The middle state is not squeamishness. **A pair spread is a 2-sample range,
+which is a poor variance estimator**: at sigma 0.10 the difference of two cells
+has SD 0.14, so one pair exceeds 0.2 by chance about one time in six with
+nothing wrong, and with two pairs per run, seeing one wide pair on healthy
+hardware is roughly a one-in-three event. Treating that as failure would fail
+good hardware most of the time it was tested.
+
+**Arm delta.** Centre +1.30, and its band is **not** tighter than a single
+cell's, which is the counterintuitive part:
+
+    Var(delta) = sigma^2/2 + sigma^2/2 = sigma^2      SD(delta) = 0.10
+
+Averaging two cells halves the variance, but that is done for both arms and
+then differenced, which adds it straight back. Four cells buy no more precision
+than one.
+
+    1.10 - 1.50             pass
+    1.00-1.10 or 1.50-1.60  INCONCLUSIVE -- repeat before concluding
+    outside 1.00 - 1.60     real change, investigate the harness
+
+**Do not attempt to resolve a delta difference below ~0.2 at all** — reporting
+resolution is 0.1 and the statistical band is 0.1, so below that you are
+reading quantisation. If a tighter verdict is ever needed the lever is more
+repeats per arm, not a cleverer statistic.
+
+**Why the delta is the right instrument, checked rather than assumed.** The
+obvious objection is that it only cancels an *additive* session confound. If
+whatever moved 30.4 to 29.6 is proportional instead, it is 2.8% at ~30 fps, and
+2.8% of a 1.30 delta is **0.04** — an order of magnitude inside the window. So
+it survives the confound either way.
+
+### 6b. Two hazards closed before launching
+
+**Tag collision.** PUMP writes GPU0/GPUA/GPU0B/GPUAB on every run, so a second
+run overwrites the first — on the card and, through `--collect`, in
+`incoming/`. Round P was archived first. **Archive before re-running any sweep
+whose tags you are about to reuse**, which is every sweep.
+
+**Stale logs read as fresh.** The four tags were deleted from
+`C:\DOSKUTSU\LOGS` before launch, confirmed by a `DIR` returning `File not
+found`. A cell that fails to run now leaves a hole that `--collect` reports
+loudly, instead of handing back the previous run's log with nothing to say it
+was old. PLAN sec. 5.2 states this rule; nothing enforced it.
+
 ## 7. Rollback
 
 **Before phase 3:** free. Power down, put the Pi 3 back in service, done — its

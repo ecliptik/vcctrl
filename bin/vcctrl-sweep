@@ -42,7 +42,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
-    vc, vc_json, at_prompt, ensure_powered)
+    vc, vc_json, at_prompt, ensure_powered, set_lock_owner, get_lock_owner)
 
 CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
 
@@ -292,6 +292,62 @@ class StallTracker(object):
                 "still": still, "escalate": False}
 
 
+LOCK_AS = "sweep"
+
+
+def take_lock(sweep, machine):
+    """Hold the input lock for the whole run, and answer to it ourselves.
+
+    A sweep is the longest uninterruptible thing this harness does and the one
+    with the narrowest safe injection window: once the PAUSE is answered there
+    is no shell reading a command line, so a keystroke from anywhere else lands
+    in the BIOS buffer and leaks into the next cell's game process. That is not
+    a crash, it is a QUIET corruption of a measurement -- the run completes,
+    the logs look fine, and one cell saw an input the others did not.
+
+    Two failure modes, both already paid for elsewhere in this tree:
+
+      * Not taking the lock at all. `vcctrl-cell` takes one; this did not, so
+        for its whole life a sweep could be typed into by any other session
+        with nothing to stop it and nothing to record that it happened.
+      * Taking it and not setting LOCK_OWNER, which locks the harness out of
+        its own keyboard -- every `vc("type", ...)` below is refused by the
+        daemon. `vcctrl-cell` did exactly this the first time and died holding
+        a lock it could not name.
+
+    Refuses rather than proceeds if someone else holds it: a sweep sharing the
+    machine with another session is not a measurement worth spending 20 minutes
+    on. Refuses rather than proceeds if the lock is UNAVAILABLE too -- unlike a
+    cell, which degrades to a warning, because a cell can be re-run cheaply and
+    the corruption here is silent.
+    """
+    owner = "%s-%s%s" % (LOCK_AS, sweep, machine)
+    st = vc_json("lock", "status")
+    held = st.get("owner")
+    if held:
+        raise SystemExit(
+            "REFUSED: the input lock is held by %r (%.0fs).\n"
+            "  Another session is driving the target. Two writers on one\n"
+            "  keyboard during a sweep produces a run that completes and\n"
+            "  cannot be trusted, which is worse than one that fails."
+            % (held, st.get("held_s") or 0))
+    vc("lock", "acquire", "--as", owner)
+    set_lock_owner(owner)
+    print("  input lock held as %s" % owner)
+    return owner
+
+
+def drop_lock(why):
+    owner = get_lock_owner()
+    if not owner:
+        return
+    print("  releasing the input lock (%s)" % why)
+    try:
+        vc("lock", "release", "--as", owner, check=False)
+    finally:
+        set_lock_owner(None)
+
+
 def load_conf():
     with open(CONF) as f:
         return json.load(f)
@@ -375,6 +431,12 @@ def main(argv):
     print("  sweep %s: %d cells, budget %d min, machine %s (%s)" %
           (sweep, spec["cells"], spec["timeout_min"], mach["tag"], mach["name"]))
 
+    take_lock(sweep, machine)
+
+    # AFTER the lock, deliberately: at_prompt() taps a key, so it is input and
+    # the daemon refuses it to anyone who is not the holder. Probing first and
+    # locking second would mean the probe either ran unlocked or failed for a
+    # reason that reads as "the target is wedged".
     if not at_prompt():
         raise SystemExit("REFUSED: target did not answer the LED probe -- it is not at a\n"
                          "  prompt, or something is still running. Not typing into that.")
@@ -452,6 +514,11 @@ def main(argv):
                 # live -- so this is the one moment it can be started with no
                 # further checking.
                 print("\n-- handing off to vcctrl-collect --")
+                # The collector types: it reboots and drives PUT. It does not
+                # know our lock identity, so holding on here would refuse every
+                # keystroke it sends. Hand the keyboard over cleanly rather
+                # than leave it half-owned.
+                drop_lock("handing the keyboard to vcctrl-collect")
                 return subprocess.call(
                     [os.path.join(HERE, "vcctrl-collect"), sweep, machine])
             print("  no prompt -- still running, continuing to watch")
@@ -486,12 +553,22 @@ def on_timeout(sweep, mach, recover):
 
 
 if __name__ == "__main__":
+    # Every exit path drops the lock, including the two that call os._exit and
+    # therefore skip `finally` entirely. A lock left held by a dead process is
+    # not a safety margin -- it is a machine nobody can drive, and the only way
+    # out is `lock break`, which marks the next run TAINTED.
     try:
-        sys.exit(main(sys.argv[1:]))
+        try:
+            code = main(sys.argv[1:])
+        finally:
+            drop_lock("run finished")
+        sys.exit(code)
     except BrokenPipeError:
         # Line-buffered output means `| head` closes the pipe under us. That is
         # the reader's choice, not an error worth a traceback.
+        drop_lock("output pipe closed")
         os._exit(0)
     except KeyboardInterrupt:
         sys.stderr.write("\ninterrupted -- the target is left as it was\n")
+        drop_lock("interrupted")
         os._exit(130)
