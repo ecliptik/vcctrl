@@ -97,6 +97,17 @@
         "C4F",
         "51F"
       ]
+    },
+    "PUMP": {
+      "cells": 4,
+      "timeout_min": 23,
+      "measured": "not yet measured -- budget taken from RB, same 4-cell shape",
+      "tags": [
+        "PU0",
+        "PUA",
+        "PU0B",
+        "PUAB"
+      ]
     }
   },
   "denied": {
