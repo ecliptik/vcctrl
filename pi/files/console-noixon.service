@@ -1,0 +1,31 @@
+[Unit]
+Description=Disable XON/XOFF flow control on the console TTYs
+# NOTE: the first version of this unit ran in early boot with
+# DefaultDependencies=no and Before=sysinit.target. It reported "active" and
+# had NO EFFECT -- tty1 still came up with ixon set. It was running before the
+# tty was in a state where termios stuck. A unit that reports success while
+# changing nothing is worse than no unit, because the motd then advertises a
+# protection that does not exist.
+#
+# Running after getty.target instead. agetty here runs with --noreset, so it
+# does not undo the setting once applied. Verified by applying the same stty by
+# hand at this point in boot, where it does stick.
+After=getty.target multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ixon is what lets a stray Ctrl-S suspend console output forever. The vcctrl
+# virtual keyboard is a keyboard to THIS Pi as well as to the DOS target, so a
+# Ctrl-S aimed at the g2k lands here too. See docs/FINDINGS.md sec. 28.
+#
+# This is defence in depth, NOT the load-bearing fix. The fix that matters is
+# journald never opening a tty at all (ForwardToConsole/ForwardToWall=no),
+# because once a writer is stuck in n_tty_write it holds termios_rwsem and this
+# command can no longer run -- it queues behind the condition it would clear.
+ExecStart=/usr/bin/stty -F /dev/tty1 -ixon -ixoff
+# Do not let a missing tty1 fail the boot.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

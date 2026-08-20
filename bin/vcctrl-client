@@ -29,6 +29,10 @@ USAGE = """usage: vcctrl <command> [args]
   ledwait [timeout_s]       block until LED state changes
   power [state|on|off|cycle]  smart-plug mains control for the target
   caps                      capability health (input, leds, power, ...)
+  board                     which USB4VC protocol board is installed, and
+                            therefore which machine input reaches. Reports
+                            unknown rather than guessing; never defaults to
+                            IBM PC.
   video [state|acquire|release]
                             capture device. The daemon owns /dev/video0 for its
                             lifetime; `release` frees it for a tool that opens
@@ -189,6 +193,8 @@ def main(argv):
         req = {"cmd": "release_all"}
     elif cmd == "caps":
         req = {"cmd": "caps"}
+    elif cmd == "board":
+        req = {"cmd": "board"}
     elif cmd == "events":
         req = {"cmd": "events", "since": int(rest[0]) if rest else 0}
     elif cmd == "activity":

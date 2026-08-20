@@ -584,6 +584,14 @@ class WebCapability(object):
                           {"host": None, "alias": None, "model": None,
                            "on": None, "age_s": None, "stale": None,
                            "reason": "power capability failed to start"}),
+                # Which protocol board is installed, and therefore which
+                # computer the input path is actually wired to. Unknown is a
+                # first-class answer -- never a default to IBMPC.
+                "board": (self.registry.caps["board"].snapshot()
+                          if "board" in self.registry.caps else
+                          {"id": None, "name": None, "target": None,
+                           "source": None, "stale": None,
+                           "reason": "board capability failed to start"}),
                 "viewers": self.clients,
                 "listeners": self.listeners,
                 "audio": (self.audio()._state() if self.audio()

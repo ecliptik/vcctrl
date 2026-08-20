@@ -1,0 +1,27 @@
+[Unit]
+Description=USB4VC virtual PS/2 input board (rpi_app)
+Documentation=https://github.com/dekuNukem/USB4VC
+# The board is on SPI0 (STM32 on spidev0.0, ssd1306 OLED on spidev0.1) and
+# GPIO, so wait for devices to settle before claiming them.
+After=multi-user.target systemd-udev-settle.service
+
+[Service]
+Type=simple
+# keep_alive.py is upstream's own restart wrapper: it re-execs usb4vc_main.py
+# on any exit except 169, which means "quit deliberately". It is kept rather
+# than replaced with Restart=always so this machine runs the SAME supervision
+# the Pi 3 ran -- a migration should change the hardware or the software, not
+# both. Replacing it with native systemd supervision is a reasonable follow-up
+# once the rig is proven, not during bring-up.
+#
+# The tee replicates the Pi 3's rc.local line: usb4vc_ui.py copies
+# usb4vc_debug_log.txt to a USB stick on demand, so that file has to exist.
+WorkingDirectory=/home/pi/usb4vc/rpi_app
+ExecStart=/bin/sh -c 'exec python3 -u keep_alive.py 2>&1 | tee -a /home/pi/usb4vc/usb4vc_debug_log.txt'
+Restart=always
+RestartSec=2
+# Needs root for /dev/uinput, GPIO and SPI, same as rc.local gave it.
+User=root
+
+[Install]
+WantedBy=multi-user.target

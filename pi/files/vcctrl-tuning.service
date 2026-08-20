@@ -1,0 +1,36 @@
+[Unit]
+Description=vcctrl rig tuning (CPU governor + tailscale UDP offload)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# --- 1. CPU governor -------------------------------------------------------
+# Measured on this machine: governor was `ondemand`, sitting at 1500 MHz of a
+# 2400 MHz maximum. `ondemand` ramps AFTER load appears, and this rig's work is
+# short and bursty -- a keystroke, an LED poll, one MJPEG frame. Those are
+# exactly the shape that finishes before the governor has decided to ramp, so
+# the harness pays ramp latency as jitter on every operation.
+#
+# This rig produces MEASUREMENTS, and its own timing is in the measurement
+# path: four separate timing bugs have come out of this harness already. A
+# fixed clock is worth more here than the idle watts it costs, and there is a
+# fan on the board.
+ExecStart=/bin/sh -c 'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null || true; done'
+
+# --- 2. Tailscale UDP GRO offload ------------------------------------------
+# Tailscale's own documented tuning for Linux. tailscaled does WireGuard in
+# USERSPACE, so every packet of the video stream is encrypted by the CPU -- on
+# the Pi 3 that showed up as tailscaled burning 114% of a core while the stream
+# stuttered. rx-udp-gro-forwarding lets the kernel coalesce UDP before handing
+# it up, which is most of the per-packet cost.
+#
+# Measured here as supported and OFF: rx-udp-gro-forwarding off, rx-gro-list
+# off. The pairing is deliberate -- Tailscale wants GRO forwarding ON and
+# gro-list OFF; enabling both is a known bad combination.
+ExecStart=/bin/sh -c '/usr/sbin/ethtool -K eth0 rx-udp-gro-forwarding on rx-gro-list off 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

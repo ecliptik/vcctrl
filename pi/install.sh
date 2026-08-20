@@ -40,6 +40,92 @@ UNIT
 # Found the hard way -- see docs/FINDINGS.md.
 sudo systemctl mask ctrl-alt-del.target
 
+# ---------------------------------------------------------------------------
+# HOST CONFIGURATION -- everything below was applied by hand during the Pi 5
+# migration and is folded in here so the machine is reproducible from a
+# checkout rather than from one session's shell history. That gap is the same
+# "a synced tree is not a synced deployment" problem pointing the other way:
+# the tree was right and the machine held state nothing tracked.
+#
+# All of it is idempotent and safe to re-run.
+
+FILES="$SRC/pi/files"
+
+# journald must never write to a tty. The vcctrl virtual keyboard is a keyboard
+# to THIS Pi as well as to the target, so a Ctrl-S meant for the DOS box is
+# XOFF on the Pi's own console -- and a blocked console write stops journald
+# draining its socket, which blocks sshd, PAM and sudo behind it. Measured:
+# journald wedged in writev() on /dev/console, fd 41, every sample of a stall.
+# See docs/FINDINGS.md sec. 28.
+if [ -f "$FILES/journald.conf" ]; then
+  sudo install -m 0644 "$FILES/journald.conf" /etc/systemd/journald.conf
+  sudo systemctl restart systemd-journald || true
+fi
+
+# Belt to that braces: clear ixon on tty1 so a stray Ctrl-S cannot stop console
+# output in the first place. Ordered AFTER getty -- an earlier version ran in
+# early boot, reported "active", and changed nothing, which is worse than not
+# running at all because the banner then advertised a protection that did not
+# exist.
+if [ -f "$FILES/console-noixon.service" ]; then
+  sudo install -m 0644 "$FILES/console-noixon.service" /etc/systemd/system/console-noixon.service
+  sudo systemctl enable console-noixon.service >/dev/null 2>&1 || true
+fi
+
+# CPU governor and the tailscale UDP offload. Not cosmetic: `ondemand` ramps
+# AFTER load appears and this rig's work is short and bursty, so the harness
+# paid ramp latency as jitter on a machine whose own timing sits inside the
+# measurement. tailscaled does WireGuard in userspace, so rx-udp-gro-forwarding
+# is most of the per-packet cost of the video stream.
+if [ -f "$FILES/vcctrl-tuning.service" ]; then
+  sudo install -m 0644 "$FILES/vcctrl-tuning.service" /etc/systemd/system/vcctrl-tuning.service
+  sudo systemctl enable vcctrl-tuning.service >/dev/null 2>&1 || true
+fi
+
+# USB4VC's own app under systemd. Wraps upstream's keep_alive.py rather than
+# replacing it with Restart=always: a migration should change the hardware or
+# the supervision, not both.
+if [ -f "$FILES/usb4vc.service" ] && [ -d /home/pi/usb4vc/rpi_app ]; then
+  sudo install -m 0644 "$FILES/usb4vc.service" /etc/systemd/system/usb4vc.service
+  sudo systemctl enable usb4vc.service >/dev/null 2>&1 || true
+fi
+
+# Login banner. In profile.d and NOT /etc/update-motd.d, because nothing on
+# this Debian regenerates /run/motd.dynamic -- a status block rendered through
+# pam_motd is a snapshot of whenever that file was last written, and it showed
+# vcctrld DOWN while vcctrld was running. profile.d runs per login shell and
+# therefore cannot cache.
+if [ -f "$FILES/motd-status.sh" ]; then
+  sudo install -m 0644 "$FILES/motd-status.sh" /etc/profile.d/vcctrl-status.sh
+  printf '\n' | sudo tee /etc/motd >/dev/null
+fi
+
+# SPI carries the STM32 (spidev0.0) and the ssd1306 OLED (spidev0.1); I2C is
+# there for the OLED's alternate wiring. Asserted rather than assumed -- a Pi
+# imaged fresh has neither.
+BOOTCFG=/boot/firmware/config.txt
+if [ -f "$BOOTCFG" ]; then
+  grep -q '^dtparam=spi=on' "$BOOTCFG" || \
+    printf '\n# vcctrl/USB4VC: STM32 on spidev0.0, ssd1306 OLED on spidev0.1\ndtparam=spi=on\ndtparam=i2c_arm=on\n' \
+    | sudo tee -a "$BOOTCFG" >/dev/null
+fi
+echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf >/dev/null
+
+# USB4VC loops forever trying to disable bluetooth ERTM, because upstream calls
+# subprocess.call() on a shell redirection string with no shell=True: it raises,
+# gets swallowed by `except Exception: continue`, and retries every 2 s. On the
+# Pi 3 that burned 4h30m of CPU in 34 hours. Satisfying the check at module
+# level costs nothing and needs no patch to upstream.
+echo "options bluetooth disable_ertm=1" | sudo tee /etc/modprobe.d/usb4vc-ertm.conf >/dev/null
+
+# The board-identity patch is LOCAL and must not silently disappear under an
+# upstream update. --check only reports; it never modifies.
+if [ -f "$SRC/tools/patch-usb4vc-board.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_ui.py ]; then
+  sudo python3 "$SRC/tools/patch-usb4vc-board.py" --check || \
+    echo "NOTE: board-identity patch is not applied; vcctrl will report board unknown."
+fi
+
+
 # Config. Written only if absent, so a local edit survives re-installs.
 # NOTE the plug's Kasa alias is "retro-rig-plug" -- it is not renamed, so anyone
 # looking at the Kasa app will not obviously connect it to the g2k. That is

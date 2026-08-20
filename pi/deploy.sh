@@ -151,5 +151,8 @@ else
 fi
 
 ssh "$HOST" 'rm -rf ~/vcctrl-src && mkdir -p ~/vcctrl-src'
-tar -C "$SRC" -cf - daemon bin pi | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+# tools/ ships too: install.sh runs patch-usb4vc-board.py --check from it,
+# and a check that cannot find its own script reports a missing patch that
+# is actually applied -- a false alarm is still a wrong answer.
+tar -C "$SRC" -cf - daemon bin pi tools | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
 ssh "$HOST" 'bash ~/vcctrl-src/pi/install.sh'

@@ -797,22 +797,38 @@ class PowerCapability(Capability):
         self._seen = None      # last successful power_state() result
         self._seen_t = 0.0
         self._seen_host = None
+        self._fail = None      # why the most recent refresh did not succeed
+
+    # One request per interval for the WHOLE DAEMON, regardless of how many
+    # tabs are open. That distinction is the point: querying the plug per tab
+    # per 1.5 s poll was the thing worth avoiding, not querying it at all.
+    # Without a heartbeat `stale` latches true after the first idle hour and a
+    # permanently-set flag carries no information -- the page would show
+    # "unknown" during exactly the quiet periods when someone glances at it.
+    REFRESH_S = 60.0
 
     def start(self):
-        # One identity read at startup, off the main thread. The plug is on the
-        # LAN and a dead plug must not delay or fail daemon startup -- power is
-        # the capability most likely to be unreachable and least likely to be
-        # needed in the first seconds.
-        threading.Thread(target=self._refresh, name="power-id",
+        # Off the main thread: the plug is on the LAN and a dead plug must not
+        # delay or fail daemon startup.
+        threading.Thread(target=self._heartbeat, name="power-id",
                          daemon=True).start()
+
+    def _heartbeat(self):
+        while True:
+            self._refresh()
+            time.sleep(self.REFRESH_S)
 
     def _refresh(self):
         try:
             host = load_config().get("kasa_host")
             if host:
                 self._remember(host, power_state(host))
-        except Exception:
-            pass       # absence is reported by snapshot(), not raised here
+                self._fail = None
+        except Exception as exc:
+            # Record WHY, and let snapshot() turn `on` into null. A plug that
+            # stopped answering and a plug reporting off are opposite facts and
+            # must not share a JSON value.
+            self._fail = "%s: %s" % (type(exc).__name__, exc)
 
     def _remember(self, host, st):
         self._seen, self._seen_t, self._seen_host = st, time.time(), host
@@ -840,10 +856,18 @@ class PowerCapability(Capability):
                     "on": None, "age_s": None, "stale": None,
                     "reason": "the plug has not answered since the daemon started"}
         age = round(time.time() - t, 1)
+        # `on` is TRI-STATE. If the last refresh failed we no longer know the
+        # relay state, and reporting the last-known value as though it were
+        # current is how "the machine is off" and "I cannot reach the plug"
+        # become the same JSON. Three separate bugs on this rig today were that
+        # exact collapse, so it is null and `reason` says why.
+        unreachable = self._fail is not None
         return {"host": self._seen_host or cfg_host,
                 "alias": st.get("alias"), "model": st.get("model"),
-                "on": st.get("on"), "age_s": age,
-                "stale": age > self.STALE_S, "reason": None}
+                "on": None if unreachable else st.get("on"),
+                "age_s": age,
+                "stale": unreachable or age > self.STALE_S,
+                "reason": self._fail}
 
     def commands(self):
         return {"power": self._power, "powerlog": self._powerlog}
@@ -1984,10 +2008,139 @@ class AudioCapability(Capability):
         return dict({"ok": True, "state": self.state}, **lv)
 
 
+
+_UNSET = object()
+
+
+class BoardCapability(Capability):
+    """Which USB4VC protocol board is installed, and therefore which machine.
+
+    The rig drives a Gateway 2000 over the IBM PC board and a Macintosh Plus
+    over the Lisa/Mac/ADB board, through ONE USB4VC with the boards swapped by
+    hand. Several capabilities mean different things depending on which is in,
+    so the daemon has to be able to answer rather than assume.
+
+    NOT read: /home/pi/usb4vc/config/config.json. It is keyed by board id and
+    looks authoritative. On the Pi 3 it read {"3": ...} -- the Mac board -- for
+    the entire time that machine was driving the Gateway over PS/2, because
+    rpi_app only writes a section when settings are CHANGED. It records boards
+    once configured, not the board present.
+    """
+
+    name = "board"
+
+    FILE = "/run/usb4vc/board.json"
+
+    # Rig-specific: which computer each board implies. Lives here rather than
+    # in the page so there is one table instead of two that drift. Override
+    # with "board_targets": {"1": "..."} in the daemon config.
+    TARGETS = {1: "Gateway 2000", 2: None, 3: "Macintosh Plus"}
+
+    def __init__(self, *a, **kw):
+        super(BoardCapability, self).__init__(*a, **kw)
+        self._last_id = _UNSET
+
+    def commands(self):
+        return {"board": self._board}
+
+    def start(self):
+        self.snapshot()          # publishes board.changed on first read
+
+    def _targets(self):
+        try:
+            over = load_config().get("board_targets") or {}
+        except Exception:
+            over = {}
+        out = dict(self.TARGETS)
+        for k, v in over.items():
+            try:
+                out[int(k)] = v
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _from_file(self):
+        """The primary source: written by our local patch to rpi_app.
+
+        /run is tmpfs, which is the whole reason this is trusted -- the record
+        cannot outlive the boot that wrote it, so a stale value reading as
+        current is structurally impossible rather than merely unlikely.
+        """
+        with open(self.FILE) as f:
+            return json.load(f), "status-file"
+
+    def _from_journal(self):
+        """Fallback: rpi_app prints the SPI status frame at startup.
+
+        Bounded to THIS BOOT (-b). Without that bound the journal happily
+        returns a frame from a previous boot, which is exactly the stale-record
+        failure the status file was chosen to avoid.
+        """
+        out = subprocess.run(
+            ["journalctl", "-b", "-u", "usb4vc", "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=5).stdout
+        last = None
+        for line in out.splitlines():
+            if "PB INFO:" in line and "[" in line:
+                last = line
+        if not last:
+            raise LookupError("no PB INFO frame in this boot's journal")
+        nums = last[last.index("[") + 1:last.index("]")].split(",")
+        return {"id": int(nums[3]), "name": None,
+                "fw_ver": None, "hw_rev": None, "t": None}, "journal"
+
+    def snapshot(self):
+        """The contract. EVERY KEY ALWAYS PRESENT, null where unknown.
+
+        A consumer that branches on which keys exist ends up re-encoding the
+        daemon's internal states, and a key that is sometimes absent has broken
+        the page more than once. Unknown is a first-class answer here, never a
+        default to IBMPC -- "could not look" and "looked, and it is a Mac" must
+        not collapse into one value, because the caller acts differently on
+        each.
+        """
+        rec = src_name = None
+        reason = None
+        for reader in (self._from_file, self._from_journal):
+            try:
+                rec, src_name = reader()
+                break
+            except Exception as exc:
+                reason = "%s: %s" % (type(exc).__name__, exc)
+        if not rec:
+            out = {"id": None, "name": None, "target": None, "source": None,
+                   "stale": None,
+                   "reason": "usb4vc has not reported a board (%s)" % reason}
+        else:
+            bid = rec.get("id")
+            age = (round(time.time() - rec["t"], 1)
+                   if rec.get("t") else None)
+            out = {"id": bid,
+                   "name": rec.get("name"),
+                   "target": self._targets().get(bid),
+                   "source": src_name,
+                   # The journal path cannot prove the frame belongs to the
+                   # currently running rpi_app -- only to this boot -- so it is
+                   # marked stale. The file path is written by the running
+                   # instance into tmpfs, so it is not.
+                   "stale": src_name != "status-file",
+                   "reason": None}
+            if age is not None:
+                out["age_s"] = age
+        if out["id"] != self._last_id:
+            if self._last_id is not _UNSET and self.bus:
+                self.bus.publish("board.changed", **out)
+            self._last_id = out["id"]
+        return out
+
+    def _board(self, req):
+        return {"ok": True, "board": self.snapshot()}
+
+
 # The registry. A table in the source, in load order. Video, web, audio, reset
 # and files join this list; each is one entry and touches nothing above it.
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
-                VideoCapability, AudioCapability]
+                VideoCapability, AudioCapability, BoardCapability]
 
 # Bind address for the web UI: LOOPBACK ONLY.
 #
