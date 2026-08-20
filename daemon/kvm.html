@@ -90,13 +90,50 @@
   /* On a phone the rail scrolled sideways and cut "LINK MJP..." in half, which
      is a status bar you have to operate rather than read. The words are for
      desktop; the values carry the meaning on their own. */
+  /* ── phone ──────────────────────────────────────────────────────────────
+     Five stacked regions competing for 800 px is a desktop layout wearing a
+     phone. Here the picture keeps everything that is left, and exactly one
+     panel opens at a time from a tab bar -- so nothing is half-visible and
+     nothing is cut off the bottom. */
+  #tabs { display:none; }
   @media (max-width:640px) {
     h1 { display:none; }
-    .chip { font-size:10.5px; letter-spacing:.04em; }
-    .chiplabel { display:none; }
-    header { gap:8px; padding:0 8px; height:calc(40px + env(safe-area-inset-top,0px)); }
+    header { gap:7px; padding:0 8px;
+             height:calc(38px + env(safe-area-inset-top,0px)); }
+    .chip { font-size:10px; letter-spacing:.03em; }
     .lamp span { display:none; }
-    #zoom { max-width:104px; }
+    .lamp i { width:9px; height:9px; }
+    #zoom { max-width:88px; font-size:10px; }
+
+    /* The command line is a panel, not a permanent row. */
+    #cmdbar { display:none; }
+    #cmdbar.open { display:flex; }
+    #keys { display:none; }
+    #keys.open { display:flex; }
+
+    #tabs {
+      display:flex; flex:none; border-top:1px solid var(--rule);
+      background:var(--panel);
+      padding-bottom:env(safe-area-inset-bottom,0px);
+    }
+    #tabs button {
+      flex:1; border:0; border-radius:0; background:transparent;
+      color:var(--dim); font:var(--t-micro)/1 var(--mono);
+      letter-spacing:.06em; min-height:46px; padding:0;
+      border-top:2px solid transparent;
+    }
+    #tabs button.on { color:var(--green); border-top-color:var(--green); }
+
+    #body { height:auto; max-height:46vh; }
+    #body > * { display:none; }
+    #body.show-log > #logh, #body.show-log > #log { display:block; }
+    #body.show-log > #log { display:flex; flex-direction:column; }
+    #body.show-panels > #panels { display:block; max-height:46vh; }
+    #body.closed { display:none; }
+    /* Only the sections the open tab wants. */
+    #panels.only-sound > section:not(#sec-sound),
+    #panels.only-power > section:not(#sec-power),
+    #panels.only-set   > section:not(#settings) { display:none; }
   }
   /* The kbd chip is the affordance now that the instruction bar is gone. */
   .chipb { background:transparent; border:0; padding:0; min-height:0;
@@ -293,7 +330,10 @@
   #log div { display:flex; gap:7px; padding:1px 0; }
   #log .t { color:var(--dim); flex:none; }
   #log .k { flex:none; width:10ch; overflow:hidden; }
-  #log .d { color:var(--muted); word-break:break-all; }
+  #log .d { color:var(--muted); overflow-wrap:anywhere;
+            display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+            overflow:hidden; }
+  #log div.open .d { -webkit-line-clamp:unset; overflow:visible; }
   .k-cmd{color:var(--blue)} .k-lock{color:var(--yellow)}
   .k-taint{color:var(--red);font-weight:600} .k-vid{color:var(--green)}
 
@@ -414,6 +454,15 @@
     <button data-combo="ctrl,alt,delete" class="danger">C-A-Del</button>
   </div>
 
+  <div id="tabs">
+    <button data-tab="none" class="on">SCREEN</button>
+    <button data-tab="keys">KEYS</button>
+    <button data-tab="sound">SOUND</button>
+    <button data-tab="power">POWER</button>
+    <button data-tab="log">LOG</button>
+    <button data-tab="set">⚙</button>
+  </div>
+
   <div id="body">
    <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
    <div id="log"></div>
@@ -450,7 +499,7 @@
         harness's actions are the ones worth watching.</div>
     </section>
 
-    <section>
+    <section id="sec-sound">
       <h2>Sound</h2>
       <div id="meter">
         <button id="sbtn">🔇</button>
@@ -464,7 +513,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="sec-power">
       <h2>Power</h2>
       <div class="row">
         <button data-power="on">On</button>
@@ -474,7 +523,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="sec-state">
       <h2>State</h2>
       <div class="kv"><span>running</span><span id="s-inflight">–</span></div>
       <div class="kv"><span>last event</span><span id="s-lastev">–</span></div>
@@ -676,7 +725,16 @@ function connect() {
   };
 }
 setXport('connecting');
-connect();
+// Learn the port BEFORE the first attempt. Connecting immediately meant the
+// first socket always went to :443, which cannot carry it -- one guaranteed
+// failure and one alarming log line on every single page load, before the
+// real attempt had even been made.
+fetch('/state.json', {cache:'no-store'})
+  .then(r => r.json())
+  .then(j => { if (j && j.tls_port) tlsPort = j.tls_port; })
+  .catch(() => {})
+  .then(() => checkPort())
+  .then(() => connect());
 
 // Tear everything down and start again from the preferred transport. Called
 // on resume, on a broken stream, and by the button. It retries the WEBSOCKET
@@ -1175,6 +1233,9 @@ function renderOne(e, prepend) {
     + `<span class="k ${e._cls || CLS(e.kind)}">${e.kind}</span>`
     + `<span class="d"></span>`;
   row.lastChild.textContent = e._text !== undefined ? e._text : (e.detail || '');
+  // Two lines, tap to expand. A wrapped websocket URL was taking four lines of
+  // a narrow column and pushing everything else off the screen.
+  row.onclick = () => row.classList.toggle('open');
   if (prepend) logEl.insertBefore(row, logEl.firstChild);
   else logEl.appendChild(row);
   while (logEl.children.length > 250) logEl.removeChild(logEl.lastChild);
@@ -1322,13 +1383,11 @@ async function pollState() {
     $('veil-title').textContent = T[v.state] || v.state || '—';
     // One sentence. The detail lives in the docs; a screen you are looking at
     // because something is wrong is the wrong place to read four lines.
+    // One short line. The full explanation was four lines of prose in the
+    // middle of a black screen, which is a document, not a status.
     $('veil-sub').textContent = v.state === 'frozen'
-      ? 'Frames are still arriving, but every one is identical — the capture '
-      + 'stick is repeating a blank, not drawing. Usually DOS text mode.'
-      : v.state === 'nosignal'
-      ? 'No frames are arriving. Often correct here: a 512×384 game run is '
-      + 'outside what the capture stick can lock onto.'
-      : '';
+      ? 'Every frame is identical — the stick is repeating a blank.'
+      : v.state === 'nosignal' ? 'No frames arriving.' : '';
     showStale();
     veil.classList.add('show');
   }
@@ -1369,6 +1428,31 @@ setInterval(pollState, 1500);
 setInterval(pollEvents, 1500);
 setInterval(pollPower, 20000);
 pollState(); pollEvents(); pollPower();
+
+// ══════════════════════════════════════════════════════════ tabs (phone)
+// Exactly one panel at a time, and SCREEN means none -- the picture is the
+// point, so the default state gives it everything.
+function setTab(name) {
+  const body = $('body'), panels = $('panels');
+  for (const b of document.querySelectorAll('#tabs button'))
+    b.classList.toggle('on', b.dataset.tab === name);
+  $('cmdbar').classList.toggle('open', name === 'keys');
+  $('keys').classList.toggle('open', name === 'keys');
+  body.className = '';
+  panels.className = '';
+  if (name === 'log') body.classList.add('show-log');
+  else if (name === 'sound') { body.classList.add('show-panels'); panels.classList.add('only-sound'); }
+  else if (name === 'power') { body.classList.add('show-panels'); panels.classList.add('only-power'); }
+  else if (name === 'set')   { body.classList.add('show-panels'); panels.classList.add('only-set');
+                               $('settings').classList.add('show'); }
+  else body.classList.add('closed');
+  localStorage.setItem('vcctrl.tab', name);
+  setTimeout(applyZoom, 80);        // the stage just changed size
+}
+for (const b of document.querySelectorAll('#tabs button'))
+  b.onclick = () => setTab(b.dataset.tab);
+if (matchMedia('(max-width:640px)').matches)
+  setTab(localStorage.getItem('vcctrl.tab') || 'none');
 
 // ══════════════════════════════════════════════════════════ zoom
 // The game draws 320x240 or 512x384 CENTRED inside a 640x480 capture, so most
