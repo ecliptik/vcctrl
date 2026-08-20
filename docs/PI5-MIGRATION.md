@@ -734,13 +734,30 @@ the board before the target moves — but it means phase 2 must not be rushed.
 
 ## 8. Open items
 
-- **Mechanical clearance** around the Pi 5's PCIe connector, fan header and
-  relocated ports. Physical inspection, risk 1, blocks phase 2.
-- **STM32 firmware version on the new board** — unknown until it is read. May
-  differ from the Pi 3's board.
-- **Whether the capture stick prefers a USB2 or USB3 port** on the Pi 5. It is
-  a no-name `0001:ff02` and cheap capture dongles are occasionally happier on
-  USB2. Worth trying both before concluding anything about frame rates.
-- **Whether anything besides the OLED uses `/dev/i2c-2`.**
-- **`snd_bcm2835` cmdline parameters** (`enable_headphones`, `enable_hdmi`) are
-  Pi-3-specific and should not be carried forward blindly.
+Four of the five are closed, three of them by reading the running machine
+rather than by doing anything.
+
+- ~~**Mechanical clearance**~~ — **CLOSED.** The board is fitted, the stack is
+  assembled, and it has driven two full sweeps. A fan is fitted and running at
+  ~2990 RPM, which was also listed as unknown and is not.
+- ~~**STM32 firmware version on the new board**~~ — **CLOSED: 0.5.7, hw_rev 0**,
+  read from `/run/usb4vc/board.json`, which the local patch publishes. Note
+  this is now free to check at any time and needs no teardown.
+- ~~**Whether anything besides the OLED uses `/dev/i2c-2`**~~ — **CLOSED, the
+  question does not apply.** `/dev/i2c-2` does not exist on this machine; the
+  OLED is on `spidev0.1`. A Pi-3-shaped question that the Pi 5 answers by not
+  having the device.
+- ~~**`snd_bcm2835` cmdline parameters**~~ — **CLOSED.** Not present in
+  `/boot/firmware/cmdline.txt`. They were not carried forward, which is what
+  the item asked for, and audio works without them.
+- **Whether the capture stick prefers a USB2 or USB3 port** — **still open**,
+  and now cheap to test since the machine is stable and there is a measured
+  baseline to compare against. It is a no-name `0001:ff02` and cheap capture
+  dongles are occasionally happier on USB2.
+
+**Thermals, measured 2026-08-20 under load:** 55.4 °C, `throttled=0x0`, ARM
+clock at its full 2.40 GHz, load average 0.21 while driving a sweep. The
+throttle word is latching, not a sample, so `0x0` means it has never throttled
+since boot — through the migration and both sweeps. Roughly 25 °C of headroom
+against the 80 °C soft threshold. Both figures are in `/state.json`, so this
+needs no ssh round trip to check.
