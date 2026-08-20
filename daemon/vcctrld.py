@@ -213,6 +213,23 @@ def kasa_send(host, payload, timeout=5.0):
         sock.close()
 
 
+# Every string below travels into /state.json, which every open tab polls every
+# 1.5 s and which the page renders. An exception message is arbitrary text from
+# somewhere else -- a device path, a library's complaint, whatever a subprocess
+# wrote -- so it is bounded here rather than trusted to be short. The webkvm
+# session already caps ffmpeg's stderr at the same 240; this brings the
+# exception paths in line so there is one rule and not two.
+#
+# Bounding is a SIZE measure, not a safety one: escaping belongs where the text
+# is rendered, and the page does that.
+ERR_MAX = 240
+
+
+def errstr(exc, prefix=""):
+    s = "%s%s: %s" % (prefix, type(exc).__name__, exc)
+    return s if len(s) <= ERR_MAX else s[:ERR_MAX - 1] + "\u2026"
+
+
 def power_state(host):
     info = kasa_send(host, {"system": {"get_sysinfo": {}}})
     info = info["system"]["get_sysinfo"]
@@ -828,7 +845,7 @@ class PowerCapability(Capability):
             # Record WHY, and let snapshot() turn `on` into null. A plug that
             # stopped answering and a plug reporting off are opposite facts and
             # must not share a JSON value.
-            self._fail = "%s: %s" % (type(exc).__name__, exc)
+            self._fail = errstr(exc)
 
     def _remember(self, host, st):
         self._seen, self._seen_t, self._seen_host = st, time.time(), host
@@ -1097,7 +1114,7 @@ class VideoCapability(Capability):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     bufsize=0)
             except Exception as exc:
-                self.last_error = "%s: %s" % (type(exc).__name__, exc)
+                self.last_error = errstr(exc)
                 return False
             self.owned = True
             self.spawns += 1
@@ -1158,7 +1175,7 @@ class VideoCapability(Capability):
                 # AttributeError while `video state` cheerfully reported
                 # owned=true, frames=0 -- a capability reporting healthy while
                 # doing nothing is worse than one reporting failure.
-                self.last_error = "reader: %s: %s" % (type(exc).__name__, exc)
+                self.last_error = errstr(exc, "reader: ")
                 self._publish("video.reader_error", error=self.last_error)
                 break
             if not chunk:
@@ -1787,7 +1804,7 @@ class AudioCapability(Capability):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     bufsize=0)
             except Exception as exc:
-                self.last_error = "%s: %s" % (type(exc).__name__, exc)
+                self.last_error = errstr(exc)
                 return False
             self.owned = True
             self.spawns += 1
@@ -1834,7 +1851,7 @@ class AudioCapability(Capability):
             try:
                 data = os.read(fd, 16384)
             except Exception as exc:
-                self.last_error = "reader: %s: %s" % (type(exc).__name__, exc)
+                self.last_error = errstr(exc, "reader: ")
                 self._publish("audio.reader_error", error=self.last_error)
                 break
             if not data:
@@ -2150,11 +2167,12 @@ class BoardCapability(Capability):
                 rec, src_name = reader()
                 break
             except Exception as exc:
-                reason = "%s: %s" % (type(exc).__name__, exc)
+                reason = errstr(exc)
         if not rec:
             out = {"id": None, "name": None, "target": None, "source": None,
                    "stale": None,
-                   "reason": "usb4vc has not reported a board (%s)" % reason}
+                   "reason": ("usb4vc has not reported a board (%s)"
+                              % reason)[:ERR_MAX]}
         else:
             bid = rec.get("id")
             age = (round(time.time() - rec["t"], 1)
