@@ -1040,16 +1040,41 @@ a 640-wide framebuffer. The *comparisons below survive this*, because all four
 cells carry the identical defect. The *absolute figures do not*. Nothing here
 may be banked as "doskutsu at 640x480".
 
-### `per_loop_fps` is not the frame rate
+### `per_loop_fps` is not the frame rate -- but it is not corrupt either
 
-`GR3` reports `per_loop_fps=114.9`, with `overhead_s=484` of `dur=590s`. Its
-own per-stage table reads 21.6-32.3. The aggregate is an artifact of what the
-loop counter excludes; the per-stage table is the measurement. A cell whose
-overhead dominates its duration will report a spectacular aggregate and it
-means nothing.
+`GR3` reports `per_loop_fps=114.9`, with `overhead_s=484` of `dur=590s`, while
+its own per-stage table reads 21.6-32.3.
 
-Two stages report exactly `50.0` in every cell. That is the TAS 50 Hz ceiling,
-not a result. Both are dropped below.
+I first wrote this up as an artifact that "means nothing". **The benchmarking
+session corrected that and the correction is the useful part.** `per_loop_fps`
+is approximately `flips / (dur - overhead_s)` -- the rate *as if overhead were
+free*. It answers a hypothetical, and it answers it correctly:
+
+    cell  flips   dur  ovh  loop  fps_mean  per_loop  factor
+    GR4    2853   131   24   107      22.6      27.7    1.23
+    GR4B   2857   130   24   106      22.6      27.7    1.23
+    GR5    3134   122   16   106      26.5      30.4    1.15
+    GR3   11816   590  484   106      20.1     114.9    5.72
+
+`per_loop / fps_mean` tracks `dur / (dur - ovh)` to within 3% in every cell,
+and GR3 hit the same `auto-exit at tick 5140` as the others. The reel
+completed. Flips accrue *during* overhead while overhead is subtracted from
+the denominator, so a cell that spends 82% of its wall-clock loading reports a
+spectacular number by construction.
+
+And the table carries a signal I had missed entirely: **the loop denominator
+is ~106 s in all four cells.** GR3 is not a broken cell, it is the same 106 s
+of work with 484 s of loading in front of it.
+
+Two different errors, worth keeping apart. Mine was calling arithmetic corrupt
+because its output was implausible -- discarding a cell rather than
+understanding a field. The one that was actually available to be made is
+quoting 114.9 as a frame rate. Rules recorded downstream: cross-check the
+ratio against `dur/(dur-ovh)`; treat per-loop as inadmissible above ~25%
+overhead; never quote a per-loop figure without its overhead beside it.
+
+Two stages report exactly `50.0` in every cell -- the TAS 50 Hz ceiling, not a
+result. Both are dropped from the comparisons below.
 
 ### The repeat pair is the useful part
 
@@ -1091,3 +1116,24 @@ wrong measurement, which is what makes it so easy to publish.
 The zero-byte guard added to `inspect_logs()` at the same time is still
 correct and stays -- `GC0B` and `GP1` really are 0 bytes, and an empty file
 passes a `[critical]`-line scan precisely because it has no lines.
+
+### The last hardcoded lie in the chain
+
+`RB.BAT` printed `video_declared=S3 ViRGE` unconditionally, and kept printing
+it after a Mach64 went in. Both peer sessions flagged it independently as the
+thing to fix before anyone reads these numbers cold.
+
+The irony is in the file. Eight lines above the offending `ECHO`, a comment
+explains that `config=%config%` proves provenance *precisely because it is
+chosen at the boot menu rather than asserted* -- "a log PROVES its own
+provenance rather than attesting to the absence of something". Then the next
+line but one asserts the video card.
+
+It now reads `%QAVID%`, defaulting to `UNDECLARED`. An honest gap sends the
+reader to `vcctrl-cardid`; a confident wrong string sends them nowhere,
+because it does not look like a question.
+
+Patched in `~/doskutsu-netiter/stage/RB.BAT`. **Not yet deployed to the CF
+card** -- that needs the target, which is powered down. The four logs already
+collected still carry the false declaration, and §26 above is the record that
+they do.
