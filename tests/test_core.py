@@ -879,59 +879,72 @@ def test_zoom_modes():
     check("control: a centred 320x240 mode is", is_letterbox(160, 120, 479, 359))
 
 
-HARNESS = """
+HARNESS = r"""
 <pre id="harness-out"></pre>
 <script>
 // Measure what the ENGINE lays out, not what the model predicts it will.
 //
-// The page's own transport logic keeps running underneath this and will
-// happily re-point the img at a stream that does not exist on file:// and
-// hide it again, so every measurement re-asserts its element first.
+// THE CANVAS, NOT THE IMG, and that is the whole reason this harness is
+// reliable. Loading a picture into the <img> needs a real decode, and
+// chromium's --virtual-time-budget races ahead of real work: the page has
+// 1.5 s pollers, so a 30 s budget is exhausted in a fraction of a second and
+// the DOM is dumped before the decode lands. Worse, the page's own transport
+// re-points img.src at /stream.mjpg, and reassigning src CANCELS a pending
+// load without firing load OR error -- so awaiting those handlers waits
+// forever. That combination is what reported "no output".
 //
-// No requestAnimationFrame anywhere: getBoundingClientRect forces layout on
-// the spot, and waiting for frames under a virtual-time budget is how this
-// harness hung the first time -- measuring nothing, silently.
+// A canvas has intrinsic dimensions the moment it exists. No load, no decode,
+// no race, and mediaEl() picks it as soon as the img is hidden.
+//
+// No requestAnimationFrame either: getBoundingClientRect forces layout on the
+// spot, and waiting for frames under a virtual-time budget hung this harness
+// once already.
 (async () => {
  try {
-  const CAP = 'CAPSRC';
   const img = document.getElementById('mjpeg'), cv = document.getElementById('screen');
   const sc = document.getElementById('scroll');
-  const arm = () => { cv.style.display = 'none'; img.style.display = 'block'; };
+  // Re-asserted before every measurement: the page's transport logic keeps
+  // running underneath and will hide the canvas again.
+  const arm = () => { img.style.display = 'none'; cv.style.display = 'block'; };
   arm();
-  await new Promise(r => { img.onload = r; img.onerror = r; img.src = CAP; });
   const out = [];
-  out.push(`loaded ${img.naturalWidth} ${img.naturalHeight}`);
+  const pre = document.getElementById('harness-out');
+  // Written AS IT GOES. All-or-nothing meant a run that stopped two thirds of
+  // the way through reported "no output", which reads as a broken page rather
+  // than as a harness that stalled -- and hid which step it stalled on.
+  const emit = v => { out.push(v); pre.textContent = out.join('|'); };
+  emit(`loaded ${cv.width} ${cv.height}`);
   const say = (name, extra) => {
-    const b = img.getBoundingClientRect();
-    out.push(`${name} ${b.width.toFixed(2)} ${b.height.toFixed(2)}` +
-             (extra === undefined ? '' : ' ' + extra));
+    const b = cv.getBoundingClientRect();
+    emit(`${name} ${b.width.toFixed(2)} ${b.height.toFixed(2)}` +
+         (extra === undefined ? '' : ' ' + extra));
   };
   for (const m of ['fit', '1', '2', '4']) {
     arm();
     zoomMode = m; crop = null; applyZoom(true);
     // clientWidth excludes any scrollbar, which is the space a fit has.
-    out.push(`view-${m} ${sc.clientWidth} ${sc.clientHeight}`);
+    emit(`view-${m} ${sc.clientWidth} ${sc.clientHeight}`);
     say(m, `${sc.scrollWidth > sc.clientWidth + 1 ? 1 : 0}${sc.scrollHeight > sc.clientHeight + 1 ? 1 : 0}`);
   }
   // The picker builds itself from the stylesheet. When that read fails it
   // fails SILENTLY -- an empty grid and a raw theme id where the name goes --
   // which is exactly what a cross-origin cssRules read did on the first
   // attempt, and what a stale themes.css did on the second.
-  out.push(`themes ${THEMES.length} ${PAIRS.length}`);
+  emit(`themes ${THEMES.length} ${PAIRS.length}`);
   const chips = document.querySelectorAll('#themes button');
   let painted = 0;
   for (const c of chips) {
     const bg = getComputedStyle(c).backgroundColor;
     if (bg && bg !== 'rgba(0, 0, 0, 0)') painted++;
   }
-  out.push(`chips ${chips.length} ${painted}`);
+  emit(`chips ${chips.length} ${painted}`);
   // Every button says what it does on hover. The ones that lack a tooltip are
   // always the ones added last, which is why this is counted rather than
   // eyeballed.
   const btns = document.querySelectorAll('button');
   let untitled = 0;
   for (const b of btns) if (!b.title.trim()) untitled++;
-  out.push(`tips ${btns.length} ${untitled}`);
+  emit(`tips ${btns.length} ${untitled}`);
 
   // Hovering a swatch previews it, and leaving puts it back. The failure
   // that matters is the second half: a preview that sticks has silently
@@ -946,8 +959,8 @@ HARNESS = """
     chip.onmouseleave();
     const after = root.getAttribute('data-theme');
     const selNow = document.querySelector('#themes button.sel');
-    out.push(`preview ${during === chip.dataset.theme ? 1 : 0} ${after === before ? 1 : 0}`);
-    out.push(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
+    emit(`preview ${during === chip.dataset.theme ? 1 : 0} ${after === before ? 1 : 0}`);
+    emit(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
   }
 
   // The rig table renders from the daemon's own words, including ffmpeg's
@@ -967,11 +980,11 @@ HARNESS = """
     const txt = host.textContent;
     const groups = ['TARGET','CAPTURE','POWER','SESSIONS']
       .filter(g => txt.toUpperCase().includes(g)).length;
-    out.push(`rig ${groups} ${host.querySelectorAll('img,script').length}`);
+    emit(`rig ${groups} ${host.querySelectorAll('img,script').length}`);
     // A null must read as "could not tell", never as "no". Three bugs on this
     // rig were exactly that collapse.
     const nulls = (txt.match(/could not tell/g) || []).length;
-    out.push(`rignull ${nulls >= 1 ? 1 : 0} ${txt.includes('usb4vc not running') ? 1 : 0}`);
+    emit(`rignull ${nulls >= 1 ? 1 : 0} ${txt.includes('usb4vc not running') ? 1 : 0}`);
   }
 
   // Three absences, not one. Fed the shapes the rig actually published.
@@ -985,25 +998,101 @@ HARNESS = """
     const fine = say({state:'locked', device:'/dev/video0', device_present:true});
     const detail = deviceTrouble({state:'unavailable', device:'hw:1,0',
       device_present:true, last_error:'[alsa @ 0x1] cannot open audio device hw:1,0 (No such file or directory) | Error opening input'})[1];
-    out.push(`absent3 ${gone !== shut && shut !== dunno && gone !== dunno ? 1 : 0} ${fine === 'null' ? 1 : 0}`);
+    emit(`absent3 ${gone !== shut && shut !== dunno && gone !== dunno ? 1 : 0} ${fine === 'null' ? 1 : 0}`);
     // The reason must survive, without ffmpeg's module and pointer.
-    out.push(`reason ${detail.includes('cannot open audio device hw:1,0') ? 1 : 0} ${detail.startsWith('[') ? 0 : 1}`);
+    emit(`reason ${detail.includes('cannot open audio device hw:1,0') ? 1 : 0} ${detail.startsWith('[') ? 0 : 1}`);
+  }
+
+  // Typing a file in. The failure that matters is a half-typed file: if the
+  // daemon refuses partway, stopping leaves the target with a known prefix
+  // and carrying on leaves it with an unknown mixture.
+  {
+    const posted = [];
+    const realPost = window.post;
+    let refuseAfter = 99;
+    window.post = async (cmd, body) => {
+      posted.push([cmd, body && body.text]);
+      return posted.length > refuseAfter
+        ? {ok: false, error: 'input refused'} : {ok: true};
+    };
+    const file = txt => ({name: 'T.BAT', text: async () => txt});
+
+    // CRLF must not become a blank line after every line.
+    await typeFileForTest(file('ECHO A\r\nECHO B\r\n'));
+    const lines = posted.filter(p => p[0] === 'type').map(p => p[1]);
+    const enters = posted.filter(p => p[0] === 'key').length;
+    emit(`file ${lines.length} ${enters}`);
+    emit(`filetext ${lines[0] === 'ECHO A' && lines[1] === 'ECHO B' ? 1 : 0} 0`);
+
+    // A refusal partway must STOP, not plough on.
+    posted.length = 0; refuseAfter = 2;
+    await typeFileForTest(file('A\nB\nC\nD\nE\n'));
+    emit(`filestop ${posted.length <= 4 ? 1 : 0} ${posted.length}`);
+    window.post = realPost;
   }
 
   // Grabbing the keyboard must not change the LAYOUT. The message used to be
   // a row that appeared, so clicking the picture pushed the picture up -- the
   // reward for using the thing was the thing moving.
   {
-    const before = document.getElementById('mjpeg').getBoundingClientRect();
+    const before = document.getElementById('screen').getBoundingClientRect();
     setArmed(true);
-    const during = document.getElementById('mjpeg').getBoundingClientRect();
+    const during = document.getElementById('screen').getBoundingClientRect();
     const lamp = document.getElementById('lamp-kbd');
     const lit = lamp.classList.contains('on');
     setArmed(false);
-    const after = document.getElementById('mjpeg').getBoundingClientRect();
+    const after = document.getElementById('screen').getBoundingClientRect();
     const still = Math.abs(during.height - before.height) < 0.5
                && Math.abs(after.height - before.height) < 0.5;
-    out.push(`grab ${still ? 1 : 0} ${lit && !lamp.classList.contains('on') ? 1 : 0}`);
+    emit(`grab ${still ? 1 : 0} ${lit && !lamp.classList.contains('on') ? 1 : 0}`);
+  }
+
+  // The file control has to be CLICKABLE. display:none on a file input makes
+  // .click() a no-op in some browsers, which is what "the File button does
+  // not work" was -- a handler that ran perfectly and opened nothing.
+  {
+    const fi = document.getElementById('fileinput');
+    const st = getComputedStyle(fi);
+    const clickable = st.display !== 'none' && st.visibility !== 'hidden';
+    // And it must sit inside the field rather than beside it.
+    const inField = document.getElementById('filebtn').closest('#linewrap') !== null;
+    emit(`file2 ${clickable ? 1 : 0} ${inField ? 1 : 0}`);
+  }
+
+  // The activity flicker must fire on traffic from ANYONE and must not
+  // disturb the state the lamp is already carrying.
+  {
+    setInputLamps(null, {ok: true});          // kbd idle, mouse ready
+    const kbd = document.getElementById('lamp-kbd');
+    const before = kbd.className;
+    flashForCmd('type');
+    const flashed = kbd.classList.contains('flash');
+    const kept = kbd.className.replace(' flash', '') === before;
+    flashForCmd('power');                     // not an input command
+    const mouse = document.getElementById('lamp-mouse');
+    mouse.classList.remove('flash');
+    flashForCmd('mouse_move');
+    emit(`flash ${flashed && kept ? 1 : 0} ${mouse.classList.contains('flash') ? 1 : 0}`);
+  }
+
+  // The input lamps have THREE meanings and held is its own. Red reads as
+  // broken and green reads as available; a lock is neither.
+  {
+    const cls = id => {
+      const e = document.getElementById(id);
+      return e.classList.contains('on') ? 'on'
+           : e.classList.contains('warn') ? 'held'
+           : e.classList.contains('bad') ? 'bad' : 'off';
+    };
+    setInputLamps(null, {ok: true});
+    const free = cls('lamp-mouse');
+    setInputLamps('claude-e2e', {ok: true});
+    const lock = cls('lamp-mouse');
+    const pad = document.getElementById('lamp-mouse').classList.contains('locked');
+    setInputLamps(null, {ok: false, error: 'uinput gone'});
+    const dead = cls('lamp-mouse');
+    setInputLamps(null, {ok: true});
+    emit(`inlamp ${free === 'on' && lock === 'held' && dead === 'bad' ? 1 : 0} ${pad ? 1 : 0}`);
   }
 
   // Power is TRI-STATE. "the machine is off" and "I cannot reach the plug"
@@ -1028,7 +1117,7 @@ HARNESS = """
                reason: 'EHOSTUNREACH'});
     const c = word(), plug = document.getElementById('plugid').textContent
                               + ' ' + document.getElementById('lamp-pwr').title;
-    out.push(`power3 ${a === 'on' && b === 'off' && c === 'unknown' ? 1 : 0} ` +
+    emit(`power3 ${a === 'on' && b === 'off' && c === 'unknown' ? 1 : 0} ` +
              `${plug.includes('retro-rig-plug') && plug.includes('not answering') ? 1 : 0}`);
 
     // The board left the rail but must still reach the power confirmation,
@@ -1038,7 +1127,7 @@ HARNESS = """
     const kept = boardNow.target === 'Macintosh Plus';
     showBoard({id: null, name: null, target: null, reason: 'usb4vc not running'});
     const cleared = !boardNow.target;
-    out.push(`board2 ${kept ? 1 : 0} ${cleared ? 1 : 0}`);
+    emit(`board2 ${kept ? 1 : 0} ${cleared ? 1 : 0}`);
   }
 
   // Full screen: nothing but the picture, and the controls come back as
@@ -1049,21 +1138,21 @@ HARNESS = """
     // first version of this compared a 400% frame against a fitted one and
     // reported full screen as broken.
     zoomMode = 'fit'; crop = null; applyZoom(true);
-    const before = document.getElementById('mjpeg').getBoundingClientRect();
+    const before = document.getElementById('screen').getBoundingClientRect();
     setFullscreen(true);
     zoomMode = 'fit'; crop = null; applyZoom(true);
     const hdr = document.querySelector('header');
     const hidden = getComputedStyle(hdr).display === 'none';
-    const r = document.getElementById('mjpeg').getBoundingClientRect();
-    out.push(`fs ${hidden ? 1 : 0} ${Math.round(r.height)}`);
+    const r = document.getElementById('screen').getBoundingClientRect();
+    emit(`fs ${hidden ? 1 : 0} ${Math.round(r.height)}`);
     document.body.classList.add('peek');
     const ph = getComputedStyle(hdr);
-    const r2 = document.getElementById('mjpeg').getBoundingClientRect();
-    out.push(`fspeek ${ph.display !== 'none' && ph.position === 'fixed' ? 1 : 0} ${Math.round(r2.height)}`);
+    const r2 = document.getElementById('screen').getBoundingClientRect();
+    emit(`fspeek ${ph.display !== 'none' && ph.position === 'fixed' ? 1 : 0} ${Math.round(r2.height)}`);
     setFullscreen(false);
     zoomMode = 'fit'; crop = null; applyZoom(true);
-    const back = document.getElementById('mjpeg').getBoundingClientRect();
-    out.push(`fsback ${Math.abs(back.height - before.height) < 2 ? 1 : 0} ${Math.round(back.height)}`);
+    const back = document.getElementById('screen').getBoundingClientRect();
+    emit(`fsback ${Math.abs(back.height - before.height) < 2 ? 1 : 0} ${Math.round(back.height)}`);
   }
 
   // Rate control. The failure that matters is a loop that only ever goes one
@@ -1088,9 +1177,9 @@ HARNESS = """
     for (let i = 0; i < 40; i++) rateStep(fpsWant);  // and keeps keeping up
     const ceiling = fpsWant;
     ws = realWs;
-    out.push(`rate ${backedOff} ${creptUp}`);
-    out.push(`ratecap ${ceiling} ${sent.length}`);
-    out.push(`srcceil ${ceilAt30} ${Math.round(srcFps)}`);
+    emit(`rate ${backedOff} ${creptUp}`);
+    emit(`ratecap ${ceiling} ${sent.length}`);
+    emit(`srcceil ${ceilAt30} ${Math.round(srcFps)}`);
   }
 
   // The rail popovers must land under the thing that opened them, and must
@@ -1106,10 +1195,10 @@ HARNESS = """
     // Below the anchor, or above it when the anchor is near the bottom --
     // these live in a strip at the foot of the window now.
     const placed = pr.top >= ar.bottom - 1 || pr.bottom <= ar.top + 1;
-    out.push(`pop-${nm} ${onscreen ? 1 : 0} ${placed ? 1 : 0}`);
+    emit(`pop-${nm} ${onscreen ? 1 : 0} ${placed ? 1 : 0}`);
     closePop();
   }
-  out.push(`popclosed ${document.getElementById('pop-sound').hidden
+  emit(`popclosed ${document.getElementById('pop-sound').hidden
                        && document.getElementById('pop-power').hidden ? 1 : 0} 0`);
 
   // Settings must work with the side panel collapsed. It used to live INSIDE
@@ -1122,7 +1211,7 @@ HARNESS = """
   const r = set.getBoundingClientRect();
   const vis = !set.hidden && r.width > 100 && r.height > 100
               && getComputedStyle(set).display !== 'none';
-  out.push(`drawer ${vis ? 1 : 0} ${Math.round(r.width)}`);
+  emit(`drawer ${vis ? 1 : 0} ${Math.round(r.width)}`);
   // It must not cover the rails. The gear that opens settings lives in the
   // top one, so a drawer at inset:0 puts the control underneath the thing it
   // controls and leaves nothing to tap -- which is exactly what shipped.
@@ -1130,20 +1219,20 @@ HARNESS = """
   const strip = document.getElementById('cmdbar').getBoundingClientRect();
   const clearTop = r.top >= hdr.bottom - 1;
   const clearBot = r.bottom <= strip.top + 1;
-  out.push(`drawerbars ${clearTop ? 1 : 0} ${clearBot ? 1 : 0}`);
+  emit(`drawerbars ${clearTop ? 1 : 0} ${clearBot ? 1 : 0}`);
   document.getElementById('setclose').click();
-  out.push(`drawerclosed ${document.getElementById('settings').hidden ? 1 : 0} 0`);
+  emit(`drawerclosed ${document.getElementById('settings').hidden ? 1 : 0} 0`);
   sidebtn.click();
-  out.push(`named ${document.getElementById('themename').textContent.trim()
+  emit(`named ${document.getElementById('themename').textContent.trim()
                      .replace(/\s+/g, '_')} 0`);
 
   // Back to fit, then hide the key rail: its row must go to the picture.
   arm();
   zoomMode = 'fit'; crop = null; applyZoom(true);
   document.getElementById('keysbtn').click();
-  out.push(`view-nokeys ${sc.clientWidth} ${sc.clientHeight}`);
+  emit(`view-nokeys ${sc.clientWidth} ${sc.clientHeight}`);
   say('nokeys');
-  document.getElementById('harness-out').textContent = out.join('|');
+  emit('end 1 1');
  } catch (e) {
   document.getElementById('harness-out').textContent = 'THREW ' + e.message;
  }
@@ -1198,13 +1287,31 @@ def test_zoom_layout_in_a_browser():
         r = subprocess.run(
             [chrome, "--headless", "--disable-gpu", "--no-sandbox",
              "--hide-scrollbars", "--window-size=1580,900",
-             "--virtual-time-budget=6000", "--dump-dom",
+             # 6000 was not enough once the harness started awaiting a
+             # typing loop: it reported "no output", which reads as a broken
+             # page rather than a clock that ran out.
+             "--virtual-time-budget=30000", "--dump-dom",
              "file://" + os.path.join(d, "page.html")],
             capture_output=True, text=True, timeout=90)
         m = re.search(r'<pre id="harness-out">([^<]*)</pre>', r.stdout)
         if not m or not m.group(1).strip():
-            check("the harness reported a measurement", False,
-                  r.stderr.strip()[-200:] or "no output")
+            # Say which of the several ways this can fail actually happened.
+            # "no output" was true and useless: it covers chromium dying, the
+            # page throwing, the clock running out, and the element being
+            # renamed, and those need different fixes.
+            why = ("rc=%d, %d bytes of dom, pre %s, stderr: %s"
+                   % (r.returncode, len(r.stdout),
+                      "present but empty" if "harness-out" in r.stdout
+                      else "MISSING from dom",
+                      r.stderr.strip()[-200:] or "(silent)"))
+            try:
+                shutil.copy(os.path.join(d, "page.html"),
+                            "/tmp/failed-harness.html")
+                with open("/tmp/failed-harness.dom", "w") as fh:
+                    fh.write(r.stdout)
+            except Exception:
+                pass
+            check("the harness reported a measurement", False, why)
             return
         if m.group(1).startswith("THREW"):
             check("the harness ran without throwing", False, m.group(1))
@@ -1299,10 +1406,33 @@ def test_zoom_layout_in_a_browser():
     check("control: without its module tag and pointer",
           got["reason"][1] == 1.0, got["reason"])
 
+    check("a CRLF file types two lines, not two lines and two blanks",
+          got["file"] == (2.0, 2.0), got["file"])
+    check("control: and the text is the text", got["filetext"][0] == 1.0,
+          got["filetext"])
+    check("a refusal partway stops rather than ploughing on",
+          got["filestop"][0] == 1.0, "%d posts after refusing at 2"
+          % got["filestop"][1])
+
     check("grabbing the keyboard moves nothing on the page",
           got["grab"][0] == 1.0, got["grab"])
     check("control: and the KBD lamp lights and unlights",
           got["grab"][1] == 1.0, got["grab"])
+
+    check("the file input can actually be clicked open",
+          got["file2"][0] == 1.0, got["file2"])
+    check("control: and the control sits inside the command field",
+          got["file2"][1] == 1.0, got["file2"])
+
+    check("input traffic flickers the lamp without changing its state",
+          got["flash"][0] == 1.0, got["flash"])
+    check("control: and a mouse command lights the mouse, not the keyboard",
+          got["flash"][1] == 1.0, got["flash"])
+
+    check("free / held / broken are three different lamps",
+          got["inlamp"][0] == 1.0, got["inlamp"])
+    check("control: and held is marked without relying on colour",
+          got["inlamp"][1] == 1.0, got["inlamp"])
 
     check("power reads on / off / unknown, not on / off",
           got["power3"][0] == 1.0, got["power3"])

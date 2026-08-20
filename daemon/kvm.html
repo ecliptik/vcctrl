@@ -82,9 +82,14 @@
      exists not to tell. The dot pulses while frames are ARRIVING, driven off
      the frame counter rather than a timer, so it stops the moment they stop
      and cannot beat over a frozen picture. */
+  /* The word and its underline, nothing else. The glow was written for a
+     7px dot, where a halo reads as a lamp; on a word it draws a green-tinged
+     box around the text, which is a border nobody asked for. Opacity alone
+     dims the glyphs and the rule under them together, because the underline
+     is this element's own border. */
   @keyframes beat {
-    0%, 100% { opacity:1; box-shadow:0 0 0 0 currentColor; }
-    50%      { opacity:.45; box-shadow:0 0 4px 1px currentColor; }
+    0%, 100% { opacity:1; }
+    50%      { opacity:.5; }
   }
   /* The heartbeat moves to the word itself, now that there is no dot to put
      it on. Same rule: it beats only while frames are arriving, so it cannot
@@ -190,6 +195,8 @@
     body #sidebtn { display:none; }
     /* The tab bar carries sound and power here, and a tap on the picture
        captures the keyboard, so these three are duplicates on a phone. */
+    /* The clip stays on a phone: it is inside the field, costs no row, and
+       typing a file in is if anything more useful there. */
     body #grabbtn, body #soundbtn, body #powerbtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
@@ -296,6 +303,18 @@
   .lamp.bad span {
     color:var(--red); font-weight:700; border-bottom-color:var(--red);
   }
+  /* Colour is never the only carrier: held gets a padlock after the word, so
+     a monochrome theme and a colour-blind reader see the same thing. */
+  /* Group markers: identity | state | what the daemon can reach | what the
+     target's own keyboard says. Without them the row is nine words in a
+     line and the eye has to work out which belong together. */
+  .sep { color:var(--rule); font:var(--t-micro)/1 var(--mono); flex:none;
+         user-select:none; }
+  /* A flicker, not a state change: it must not disturb the colour the lamp
+     is already carrying, so it only brightens and fades. */
+  @keyframes lampflash { from { opacity:.2; } to { opacity:1; } }
+  .lamp.flash span { animation:lampflash .22s ease-out; }
+  .lamp.locked span::after { content:"\00a0🔒"; font-size:.85em; }
 
   /* ── stage ───────────────────────────────────────────────────────────────
      The well stays near-black in EVERY theme, including the light ones.
@@ -350,10 +369,13 @@
   /* A label and a caret, not a form field. The one boxed control in a rail
      of borderless icons is the thing your eye keeps going back to, which is
      the wrong place for it: the picture is what deserves that. */
+  /* A MENU BUTTON, styled as one. It kept the rail's borderless treatment,
+     which is right for the icons beside it and wrong for this: the icons are
+     glyphs, this is a labelled control that opens a list, and it belongs to
+     the same family as Keys, Sound and Power at the bottom. */
   #zoombtn {
-    padding:0 7px; font:var(--t-micro) var(--mono); letter-spacing:.06em;
-    border-color:transparent; background:transparent; color:var(--muted);
-    min-width:64px;
+    padding:0 9px; font:500 13px/1 var(--sans); letter-spacing:0;
+    color:var(--text); min-width:66px;
   }
 
   .popmenu { padding:5px; min-width:150px; }
@@ -376,6 +398,14 @@
      picture there is. Full brightness is one click away and is remembered. */
   #stale { filter:grayscale(.35) brightness(.8); }
   #stale.full { filter:none; }
+  /* Small, in the corner, out of the picture's way. It exists only while the
+     notice is dismissed and the signal is still gone. */
+  #veilback {
+    position:absolute; top:8px; right:8px; z-index:5; min-width:32px;
+    padding:0 8px; font-size:15px; color:var(--yellow);
+    background:rgba(0,0,0,.6); border-color:var(--yellow);
+  }
+  #veilback[hidden] { display:none; }
   #veil {
     position:absolute; inset:0; display:none; flex-direction:column;
     align-items:center; justify-content:center; gap:6px; padding:18px;
@@ -411,12 +441,49 @@
   /* The line takes what is left after the controls, and the controls never
      wrap onto a second row: a strip that changes height moves the picture. */
   #cmdbar button { flex:none; white-space:nowrap; }
-  #grabbtn, #soundbtn, #powerbtn { font-size:13px; padding:0 9px; }
+  /* ONE SIZE FOR THE WHOLE STRIP. Send inherited the 15px button default
+     while the four beside it were set to 13, so the row stepped down after
+     the first control. */
+  #cmdbar button { font:500 13px/1 var(--sans); padding:0 9px; }
+  /* The wrapper carries the border and the ground, so the clip and the field
+     read as one control rather than a button parked next to a box. */
+  #linewrap {
+    flex:1 1 auto; min-width:0; display:flex; align-items:stretch;
+    background:var(--bg); border:1px solid var(--rule); border-radius:6px;
+    overflow:hidden;
+  }
+  #linewrap:focus-within { border-color:var(--muted); }
   #line {
     flex:1 1 auto; min-width:0; font:var(--t-data) var(--mono);
-    background:var(--bg); color:var(--text);
-    border:1px solid var(--rule); border-radius:6px;
+    background:transparent; color:var(--text);
+    border:0; border-radius:0;
     padding:0 11px; min-height:var(--tap);
+  }
+  #line:focus { outline:none; }
+  #cmdbar #filebtn, #cmdbar #filestop {
+    flex:none; display:flex; align-items:center; cursor:pointer;
+    border:0; border-right:1px solid var(--rule); border-radius:0;
+    background:transparent; color:var(--muted); padding:0 10px;
+    font:500 13px/1 var(--sans); min-height:0;
+  }
+  #cmdbar #filebtn { font-size:15px; }
+  /* Send mirrors the clip: same height, same ground, on the other end of the
+     same box. Both are things you do TO this field, so both live in it. */
+  #cmdbar #sendline {
+    flex:none; border:0; border-left:1px solid var(--rule); border-radius:0;
+    background:transparent; color:var(--green); padding:0 11px;
+    font:500 13px/1 var(--sans); min-height:0;
+  }
+  #cmdbar #sendline:hover { background:var(--rule); }
+  #cmdbar #sendline:disabled { color:var(--dim); }
+  /* Proportional to the row it divides, like the rail's. */
+  .barsep { font-size:15px; opacity:.6; padding:0 2px; }
+  #cmdbar #filebtn:hover, #cmdbar #filestop:hover { background:var(--rule); }
+  #cmdbar #filestop { color:var(--green); white-space:nowrap; }
+  #cmdbar #filebtn[hidden], #cmdbar #filestop[hidden] { display:none; }
+  #fileinput {
+    position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
   }
   @media (pointer:fine) { #line { min-height:36px; } }
   /* Hidden until capture is on. "Click the screen to capture the keyboard"
@@ -447,7 +514,12 @@
 
   button, select {
     font:500 var(--t-read)/1 var(--sans); color:var(--text);
-    background:var(--panel); border:1px solid var(--rule); border-radius:6px;
+    /* A DARKER GROUND, not another token. --bg and --panel are only a step
+       apart in most of the 22 themes -- in Tokyo Night the panel is actually
+       the darker of the two -- so swapping tokens produced a difference you
+       had to look for. A translucent black reads as "recessed into the
+       surface" on every palette, dark or light, and needs no new colour. */
+    background:rgba(0,0,0,.22); border:1px solid var(--rule); border-radius:6px;
     padding:0 11px; min-height:var(--tap); cursor:pointer;
     touch-action:manipulation;
   }
@@ -461,10 +533,10 @@
      squares next to it read as three more things to look at. The glyph is the
      control; hover and press say the rest. The focus ring is untouched --
      that one is not decoration. */
-  header .ibtn, #sidebtn, #zoombtn {
+  header .ibtn, #sidebtn {
     border-color:transparent; background:transparent;
   }
-  header .ibtn:hover, #sidebtn:hover, #zoombtn:hover {
+  header .ibtn:hover, #sidebtn:hover {
     border-color:transparent; background:var(--rule);
   }
   #sidebtn { min-width:38px; padding:0; color:var(--muted); }
@@ -739,19 +811,20 @@
 <div id="app">
   <header>
     <h1>vcctrl-kvm</h1>
+    <span class="sep" aria-hidden="true">|</span>
     <span class="lamp" id="state" aria-live="polite"><i></i><span>—</span></span>
     <!-- Two more lamps, beside the state word and built like CAP/NUM/SCR: the
          word carries it, colour repeats it, and the tooltip says what the
          colour means. They replace two chips that spent most of their width
          restating a label nobody needed twice. -->
+    <span class="sep" aria-hidden="true">|</span>
     <span class="lamp" id="lamp-pwr"><i></i><span>PWR</span></span>
     <span class="lamp" id="lamp-link"><i></i><span>LINK</span></span>
     <span class="lamp" id="lamp-audio"><i></i><span>AUDIO</span></span>
     <span class="lamp" id="lamp-kbd"><i></i><span>KBD</span></span>
+    <span class="lamp" id="lamp-mouse"><i></i><span>MOS</span></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
-    <!-- Shown only while the lock is HELD. Unheld is the normal case and
-         "input free" is a chip reporting that nothing is happening. -->
-    <span id="c-lock" class="chip" style="display:none"><span class="chiplabel">input </span><b>—</b></span>
+    <span class="sep" aria-hidden="true">|</span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
             title="Caps, Num and Scroll read back over PS/2 — proof a keystroke landed">
       <span class="lamp" id="lamp-caps"><i></i><span>CAP</span></span>
@@ -795,19 +868,44 @@
       <div class="sub" id="veil-sub"></div>
       <div class="age" id="veil-age"></div>
       <div class="row">
-        <button id="dimbtn" title="Show the last frame undimmed">Show full brightness</button>
+        <button id="dimbtn" title="Hide this notice and show the last frame it captured">Show last frame</button>
         <button id="savebtn" title="Download this frame as a JPEG">Save this frame</button>
+        <button id="savebuf" title="Download the whole scrub buffer, so what led up to this can be replayed">Save buffer</button>
       </div>
     </div>
+    <!-- Bring the notice back. Dismissing it is useful -- the last frame is
+         often the only picture there is -- but a dismissed warning with no way
+         back is a warning you have deleted. -->
+    <button id="veilback" title="Show the No Signal notice again" hidden>⚠</button>
   </div>
 
   <div id="cmdbar">
-    <input id="line" placeholder="type a command"
-           autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button id="sendline" class="on" title="Type this line at the target and press Enter">Send ↵</button>
+    <!-- The paper clip lives INSIDE the field, because "put a file in" is the
+         same gesture as "put text in" and they belong in the same place. -->
+    <div id="linewrap">
+      <!-- A LABEL, not a button. Opening a file picker from script is a
+           privileged action and browsers police it differently: the click
+           handler ran and the picker never appeared. A label pointed at the
+           input needs no script at all -- the browser opens it natively,
+           which is the one path every browser agrees on. Stop is a separate
+           control, swapped in while a file is going. -->
+      <label id="filebtn" for="fileinput"
+             title="Type a text file into the target, line by line">📄</label>
+      <button id="filestop" hidden title="Stop where it has got to">■</button>
+      <input id="line" placeholder="type a command"
+             autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button id="sendline" title="Type this line at the target and press Enter">Send ↵</button>
+    </div>
+    <span class="sep barsep" aria-hidden="true">|</span>
     <button id="keysbtn" aria-expanded="true"
             aria-controls="keys" title="Show or hide the key rail">Keys ▾</button>
-    <button id="grabbtn" title="Send what you type straight to the target">⌨️ Type</button>
+    <button id="grabbtn" title="Send what you type straight to the target">⌨️ Grab</button>
+    <!-- NOT display:none. A file input that is display:none is not focusable,
+         and .click() on it is ignored outright by some browsers -- which is
+         exactly why the button appeared to do nothing. Visually hidden but
+         still laid out is the form that works everywhere. -->
+    <input id="fileinput" type="file" accept=".txt,.bat,.ini,.cfg,.sys,text/*"
+           tabindex="-1" aria-hidden="true">
     <button id="soundbtn" aria-haspopup="true" aria-expanded="false"
             title="Sound and volume"><span id="soundglyph">🔇</span> Sound ▾</button>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
@@ -921,10 +1019,11 @@
 </div>
 
 <div id="pop-zoom" class="pop popmenu" role="dialog" aria-label="Zoom" hidden>
-  <button data-zoom="fit" title="The whole screen, as large as it fits">Fit</button>
-  <button data-zoom="1" title="One capture pixel per screen pixel">Original</button>
-  <button data-zoom="2" title="Twice the captured size">200%</button>
-  <button data-zoom="4" title="Four times the captured size">400%</button>
+  <button data-zoom="fit" title="The whole screen, as large as it fits">Fit Screen</button>
+  <button data-zoom="1"
+          title="One capture pixel per screen pixel — 640x480 on the Gateway, 512x342 on the Macintosh">Original — actual resolution</button>
+  <button data-zoom="2" title="Twice the captured size">200% Original</button>
+  <button data-zoom="4" title="Four times the captured size">400% Original</button>
   <hr>
   <button id="fsitem" title="Hide everything but the picture">
     <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -1061,6 +1160,24 @@ let firstFrameTimer = null, lastFrameAt = Date.now(), wsTried = 0;
 // Three states, one word, and the tooltip carries the why. A lamp that is
 // green when the fast path is up and yellow when it is not says everything
 // the two-word chip said in a third of the width.
+// ACTIVITY, not state. The lamps say what is possible; this says something
+// just went past -- the same job the USB4VC's own activity LEDs do, and read
+// the same way: a flicker means traffic, a dark lamp means none.
+function flashLamp(id) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('flash');
+  void el.offsetWidth;            // restart the animation rather than ignore it
+  el.classList.add('flash');
+}
+const KEY_CMDS = new Set(['key', 'type', 'hold', 'combo', 'keydown', 'keyup',
+                          'release_all']);
+const MOUSE_CMDS = new Set(['mouse_move', 'mouse_click']);
+function flashForCmd(cmd) {
+  if (KEY_CMDS.has(cmd)) flashLamp('lamp-kbd');
+  else if (MOUSE_CMDS.has(cmd)) flashLamp('lamp-mouse');
+}
+
 function setLamp(id, cls, title) {
   const el = $(id);
   if (!el) return;
@@ -1082,11 +1199,17 @@ function setXport(x) {
   $('s-xport').textContent = label;
   setLamp('lamp-link',
     x === 'ws' ? 'on' : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
-    x === 'ws' ? 'WebSocket — the picture is coming over the fast path'
-    : x === 'mjpeg' ? 'mjpeg stream — works everywhere, and is the only path '
-                    + 'that survives the HTTP/2 proxy on 443'
-    : x === 'connecting' ? 'Opening a transport…'
-    : 'No transport — no picture is arriving');
+    // NUMBERS, NOT ADJECTIVES. "High performance" and "low performance" are
+    // claims nobody has measured; these two are measured and they are what
+    // actually differs. The WebSocket carries frames the client can retune
+    // live, so it converges on whatever the link and the source allow -- 30
+    // fps here. The mjpeg stream's rate is fixed in the URL at connect time
+    // and cannot be changed without reconnecting.
+    x === 'ws' ? 'WebSocket — up to 30 fps, and the rate follows the link'
+    : x === 'mjpeg' ? 'mjpeg — fixed ' + MJPEG_FPS + ' fps, but it works '
+                    + 'through any proxy'
+    : x === 'connecting' ? 'Connecting…'
+    : 'Disconnected — no picture is arriving');
 }
 
 function gotFrame() {
@@ -1189,6 +1312,9 @@ setInterval(() => {
   rateStep(achievedFps());
 }, 3000);
 
+// The rate the mjpeg stream is asked for, named once so the tooltip that
+// quotes it cannot drift from the URL that sets it.
+const MJPEG_FPS = 12;
 function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
@@ -1197,7 +1323,7 @@ function useMjpeg(why) {
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
-  img.src = '/stream.mjpg?fps=12&t=' + Date.now();
+  img.src = '/stream.mjpg?fps=' + MJPEG_FPS + '&t=' + Date.now();
   img.onload = gotFrame;
   // A dead multipart stream renders as a broken-image icon and stays that way
   // forever. That is what a suspended iOS tab produces on return, and it is
@@ -1397,6 +1523,7 @@ async function post(cmd, body) {
     const r = await fetch('/cmd', {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(Object.assign({cmd}, body))});
+    flashForCmd(cmd);      // ours, immediately -- the poll is 1.5 s behind
     const text = await r.text();
     let j;
     try { j = JSON.parse(text); }
@@ -1470,6 +1597,84 @@ document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   post('power', {action:a});
 });
 
+// ── TYPE A FILE IN ────────────────────────────────────────────────────────
+// There is no file transfer to this machine yet -- no network stack worth the
+// name, and the CF card is a physical trip. But a batch file is just
+// keystrokes, and the daemon already types them at a pace DOS keeps up with.
+// So this is not "upload": it is the operator typing it out, faster and
+// without mistakes, and the wording says so because the difference matters
+// when it goes wrong halfway.
+let sending = null;
+// The confirm() is deliberate and must not be bypassed in the product, so the
+// loop underneath it is a separate function -- the tests drive that, and the
+// dialog stays the only way a person reaches it.
+async function typeFile(file) {
+  const text = await file.text();
+  // CRLF in, LF out. A DOS file will have CRLF and sending the CR as its own
+  // keystroke gives every line a blank one after it.
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  // The daemon paces at 12 ms a character plus the round trip, so a long file
+  // is minutes rather than seconds. Say so before, not during.
+  const secs = Math.round(text.length * 0.012 + lines.length * 0.12);
+  const mins = secs > 90 ? ' (about ' + Math.round(secs / 60) + ' minutes)'
+                         : ' (about ' + secs + ' seconds)';
+  if (!confirm('Type ' + file.name + ' into the target?\n\n'
+      + lines.length + ' lines, ' + text.length + ' characters' + mins
+      + '.\n\nIt is typed as keystrokes, exactly as if you typed it: whatever '
+      + 'is on screen receives it, and there is no undo. Make sure the target '
+      + 'is at a prompt that expects this.')) return;
+
+  return typeFileLines(file.name, lines);
+}
+async function typeFileForTest(file) {
+  const text = await file.text();
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return typeFileLines(file.name, lines);
+}
+async function typeFileLines(name, lines) {
+  const file = {name};
+  sending = {stop: false, n: 0, of: lines.length, name: file.name};
+  setFileBtn();
+  addLine(new Date(), 'file', 'typing ' + file.name + ' — ' + lines.length
+          + ' lines', 'k-cmd');
+  for (const line of lines) {
+    if (sending.stop) break;
+    if (line) {
+      const r = await post('type', {text: line});
+      // Stop at the FIRST refusal. Carrying on would leave the target with
+      // half a file and no way to know which half.
+      if (!r || !r.ok) { sending.stop = true; break; }
+    }
+    const e = await post('key', {keys: ['enter']});
+    if (!e || !e.ok) { sending.stop = true; break; }
+    sending.n++;
+    setFileBtn();
+  }
+  const done = sending.n, stopped = sending.stop;
+  sending = null;
+  setFileBtn();
+  addLine(new Date(), 'file',
+          (stopped ? 'stopped after ' : 'typed ') + done + ' of ' + lines.length
+          + ' lines of ' + file.name, stopped ? 'k-warn' : 'k-vid');
+  hint(stopped ? 'stopped after ' + done + ' of ' + lines.length + ' lines'
+               : 'typed ' + done + ' lines');
+}
+function setFileBtn() {
+  $('filebtn').hidden = !!sending;
+  $('filestop').hidden = !sending;
+  if (sending) $('filestop').textContent = '■ ' + sending.n + '/' + sending.of;
+}
+$('filestop').onclick = () => { if (sending) sending.stop = true; };
+// Cleared on every open so the same file can be sent twice: without it the
+// change event never fires the second time and the control looks broken.
+$('filebtn').onclick = () => { $('fileinput').value = ''; };
+$('fileinput').onchange = () => {
+  const f = $('fileinput').files[0];
+  if (f) typeFile(f);
+};
+
 // -- the line box: the reliable way to type on a phone -----------------------
 // A virtual keyboard does not produce usable keydown events for every key, and
 // autocorrect rewrites text after the fact. Sending a whole line on submit
@@ -1542,7 +1747,9 @@ function setArmed(v, opts) {
   // One word, and the lit state carries the rest -- the two-word label was
   // the only one on the strip and read as an instruction rather than a
   // control. "Capture" is spoken for by screenshots and recording.
-  $('grabbtn').textContent = '⌨️ Type';
+  // The verb says what it does to the KEYBOARD rather than what you then
+  // do with it, which is what "Type" left ambiguous.
+  $('grabbtn').textContent = v ? '⌨️ Ungrab' : '⌨️ Grab';
   $('grabbtn').classList.toggle('on', v);
   $('grabbtn').title = v ? 'Keys are going to the target — click, or press '
                            + 'Ctrl+Alt+Shift, to stop'
@@ -2028,6 +2235,11 @@ async function pollEvents() {
     if (j.missed) note('— gap in log, some events were not seen —');
     for (const e of (j.events||[])) {
       seq = Math.max(seq, e.seq);
+      // Anything driving the target, not just this browser. A harness cell
+      // typing at the Gateway lights the same lamp a person does, which is
+      // the whole point of copying the board's activity LEDs: they report
+      // the WIRE, not the operator.
+      if (e.kind === 'cmd') flashForCmd(e.cmd);
       e._text = e.kind === 'cmd'
         ? `${e.cmd} ${e.detail||''}`.trim() + (e.by ? `  ←${e.by}` : '')
         : Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
@@ -2048,17 +2260,113 @@ let staleBlob = null, staleAge = null;
 
 function applyStale() {
   $('stale').classList.toggle('full', staleFull);
-  $('dimbtn').textContent = staleFull ? 'Dim it' : 'Show full brightness';
 }
-$('dimbtn').onclick = () => {
-  staleFull = !staleFull;
-  localStorage.setItem('vcctrl.stalefull', staleFull ? '1' : '0');
+// DISMISS, don't brighten. The button used to toggle a filter, which meant the
+// notice stayed over the picture either way -- and the picture is what someone
+// staring at a No Signal screen actually wants to read. Dismissing shows the
+// last frame at full brightness with nothing in front of it, and the corner
+// button puts the notice back, because a warning you cannot restore is a
+// warning you have deleted.
+let veilHidden = false;
+function setVeilHidden(v) {
+  veilHidden = v;
+  staleFull = v;                    // undimmed while it is the only picture
   applyStale();
-};
+  const showing = $('veil').dataset.want === '1';
+  $('veil').classList.toggle('show', showing && !v);
+  $('veilback').hidden = !(showing && v);
+}
+$('dimbtn').onclick = () => setVeilHidden(true);
+$('veilback').onclick = () => setVeilHidden(false);
 // Save works on whatever is on screen: the last live frame while the stream is
 // frozen, the current one otherwise. Saving the dimmed version would be saving
 // the presentation rather than the evidence, so this always writes the
 // original bytes the capture stick produced.
+// ── SAVE THE BUFFER ───────────────────────────────────────────────────────
+// The frame on screen answers "what does it look like now". The buffer
+// answers "what happened just before it stopped", which is the question a No
+// Signal screen actually raises -- and it is the only copy: the ring is a
+// rolling window and every second it keeps is a second it is about to lose.
+//
+// Written as a .tar of JPEGs rather than a video: the frames are already
+// JPEG, so re-encoding would cost the Pi time it does not have and lose the
+// exact bytes the daemon judged. The names carry the sequence number and the
+// millisecond offset, so the order and the GAPS survive -- a buffer that has
+// been thinned is not evenly spaced, and a viewer that assumes it is would
+// replay a stall as smooth motion.
+function tarball(files) {
+  const enc = new TextEncoder();
+  const pad = (str, n) => { const b = new Uint8Array(n); b.set(enc.encode(str).slice(0, n - 1)); return b; };
+  const parts = [];
+  for (const [name, bytes] of files) {
+    const h = new Uint8Array(512);
+    h.set(pad(name, 100), 0);
+    h.set(pad('000644 ', 8), 100);
+    h.set(pad('000000 ', 8), 108);
+    h.set(pad('000000 ', 8), 116);
+    h.set(pad(bytes.length.toString(8).padStart(11, '0') + ' ', 12), 124);
+    h.set(pad(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + ' ', 12), 136);
+    h.set(enc.encode('        '), 148);          // checksum field, spaces first
+    h[156] = 48;                                  // typeflag '0'
+    h.set(pad('ustar  ', 8), 257);
+    let sum = 0;
+    for (const b of h) sum += b;
+    h.set(pad(sum.toString(8).padStart(6, '0') + '\0 ', 8), 148);
+    parts.push(h, bytes, new Uint8Array((512 - bytes.length % 512) % 512));
+  }
+  parts.push(new Uint8Array(1024));               // two empty blocks: end
+  return new Blob(parts, {type: 'application/x-tar'});
+}
+
+$('savebuf').onclick = async () => {
+  const b = $('savebuf');
+  const was = b.textContent;
+  try {
+    b.disabled = true;
+    const tl = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
+    const frames = (tl && tl.frames) || [];
+    if (!frames.length) { note('the buffer is empty'); return; }
+    const t0 = frames[0].t;
+    const files = [];
+    for (let i = 0; i < frames.length; i++) {
+      b.textContent = 'Saving ' + (i + 1) + '/' + frames.length;
+      // A frame can age out between the timeline and the fetch -- the ring is
+      // still rolling while this runs. A gap is not a failure; a silent gap
+      // would be, so the count in the manifest is what was actually written.
+      const r = await fetch('/frame.jpg?seq=' + frames[i].seq);
+      if (!r.ok) continue;
+      const ms = Math.round((frames[i].t - t0) * 1000);
+      files.push(['frames/' + String(ms).padStart(8, '0') + '-'
+                  + frames[i].seq + '.jpg',
+                  new Uint8Array(await r.arrayBuffer())]);
+    }
+    const manifest = {
+      saved: new Date().toISOString(),
+      target: (boardNow && boardNow.target) || null,
+      span_s: tl.span_s, asked_frames: frames.length, saved_frames: files.length,
+      note: 'Names are milliseconds since the first frame, then the daemon\'s '
+          + 'sequence number. Spacing is NOT uniform: the buffer is thinned '
+          + 'when it runs out of bytes, so replay by the timestamps.',
+      frames: frames.map(f => ({seq: f.seq, t: f.t, gap_ms: f.gap_ms})),
+    };
+    files.push(['manifest.json',
+                new TextEncoder().encode(JSON.stringify(manifest, null, 1))]);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(tarball(files));
+    a.download = `vcctrl-buffer-${stamp}.tar`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    addLine(new Date(), 'saved', a.download + ' — ' + files.length
+            + ' files, ' + (tl.span_s || 0).toFixed(1) + 's', 'k-vid');
+  } catch (e) {
+    note('save buffer: ' + e);
+  } finally {
+    b.disabled = false;
+    b.textContent = was;
+  }
+};
+
 $('savebtn').onclick = async () => {
   try {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -2130,7 +2438,7 @@ function pill(id, cls, text) {
             'Video: ' + String(text).replace(/^video\s*/, ''));
     return;
   }
-  const map = {'p-lock': 'c-lock'};
+  const map = {};
   const el = $(map[id] || id);
   if (!el) return;
   const b = el.querySelector('b');
@@ -2173,7 +2481,12 @@ async function pollState() {
   const v = j.video || {};
   if (v.state === 'locked') {
     pill('p-video','on','video locked');
+    veil.dataset.want = '0';
     veil.classList.remove('show');
+    $('veilback').hidden = true;
+    // A new signal ends the outage, so the next one starts with the notice
+    // shown again rather than silently suppressed by a click made an hour ago.
+    veilHidden = false;
     hideStale();
   } else {
     pill('p-video','mid','video ' + (v.state||'?'));
@@ -2192,16 +2505,17 @@ async function pollState() {
     // with the same three words.
     const t = deviceTrouble(v);
     $('veil-title').textContent = t ? t[0]
-      : {nosignal: 'No signal', frozen: 'No signal',
+      : {nosignal: 'No Signal', frozen: 'No Signal',
          starting: 'Waiting for the first frame'}[v.state] || v.state || '—';
     // One short line. The full explanation was four lines of prose in the
     // middle of a black screen, which is a document, not a status.
     $('veil-sub').textContent = t ? t[1]
-      : v.state === 'frozen'
-      ? 'Frames are arriving and every one is identical — the stick is holding a dead buffer.'
+      : v.state === 'frozen' ? 'Receiving identical frames, showing buffer.'
       : v.state === 'nosignal' ? 'No frames are arriving at all.' : '';
     showStale();
-    veil.classList.add('show');
+    veil.dataset.want = '1';
+    veil.classList.toggle('show', !veilHidden);
+    $('veilback').hidden = !veilHidden;
   }
   const L = j.lock || {};
   const inf = j.inflight || [];
@@ -2246,9 +2560,8 @@ async function pollState() {
   // the outside. Whether the input link is proven is what the CAP/NUM/SCR
   // lamps already say by going dashed.
   const held = j.lock && j.lock.owner;
-  $('c-lock').style.display = held ? '' : 'none';
-  if (held) pill('p-lock', 'mid', `held by ${L.owner}`);
   setInputHeld(held);
+  setInputLamps(held, j.caps && j.caps.input);
   const A = j.audio || {};
   if (!soundOn) {
     // Even with sound off, say whether the capture path is alive. "silent" and
@@ -2456,6 +2769,29 @@ $('bufsel').onchange = async () => {
 // the refusal landed in the activity log. Typing into a box that quietly
 // discards it is worse than a disabled box that says who has it.
 let inputHeldBy = null;
+// KBD and MOUSE say whether INPUT can reach the target, which is a different
+// question from whether this browser is currently sending it. Held is the
+// state worth a colour of its own: the devices are fine, the path is fine,
+// and it is simply not yours right now -- red would read as broken and green
+// would read as available, and it is neither.
+function setInputLamps(held, inputCap) {
+  const broken = inputCap && inputCap.ok === false;
+  // Short. A tooltip is read at a glance with the pointer already moving; the
+  // long version of this was three lines of explanation for a one-word state,
+  // and the full description lives in the command bar where there is room.
+  const kbd = broken ? 'Keyboard unavailable'
+            : held ? 'Keyboard held by ' + held
+            : armed ? 'Keyboard sending to the target'
+            : 'Keyboard idle — press Grab to send';
+  const mos = broken ? 'Mouse unavailable'
+            : held ? 'Mouse held by ' + held
+            : 'Mouse ready — never yet tested on a target';
+  setLamp('lamp-kbd', broken ? 'bad' : held ? 'warn' : armed ? 'on' : null, kbd);
+  setLamp('lamp-mouse', broken ? 'bad' : held ? 'warn' : 'on', mos);
+  $('lamp-kbd').classList.toggle('locked', !!held);
+  $('lamp-mouse').classList.toggle('locked', !!held);
+}
+
 function setInputHeld(owner) {
   if (owner === inputHeldBy) return;
   inputHeldBy = owner;
@@ -2464,6 +2800,10 @@ function setInputHeld(owner) {
       + 'be refused until it is released.'
     : '';
   $('line').placeholder = owner ? 'input held by ' + owner : 'type a command';
+  // A <label> has no disabled state, so while input is held it stops being a
+  // control at all rather than looking like one that does nothing.
+  $('filebtn').style.pointerEvents = owner ? 'none' : '';
+  $('filebtn').style.opacity = owner ? '.4' : '';
   for (const el of [$('line'), $('sendline'), $('grabbtn')]) {
     el.disabled = !!owner;
     if (owner) el.title = why;
@@ -2703,6 +3043,10 @@ function applyZoom(recentre) {
 // The button wears the current mode, so the rail still reports it at a
 // glance -- a menu that only says "Zoom" makes you open it to find out what
 // the picture is doing.
+// Short in the rail, explicit in the menu. "Original" and "Fit" differ by a
+// factor of nearly two on the Macintosh -- 512x342 native against 976x652
+// fitted, measured -- and by much less on the Gateway, which is exactly when
+// two similar pictures get mistaken for the same one.
 const ZOOMLABEL = {fit: 'Fit', '1': 'Original', '2': '200%', '4': '400%'};
 function setZoom(m) {
   zoomMode = m;
