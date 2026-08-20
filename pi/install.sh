@@ -130,11 +130,21 @@ if [ -f "$FILES/device-pin.conf" ] && \
   echo "pinned capture devices by name (edit the drop-in if the stick changes)"
 fi
 
-# The board-identity patch is LOCAL and must not silently disappear under an
+# Two LOCAL patches to USB4VC that must not silently disappear under an
 # upstream update. --check only reports; it never modifies.
 if [ -f "$SRC/tools/patch-usb4vc-board.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_ui.py ]; then
   sudo python3 "$SRC/tools/patch-usb4vc-board.py" --check || \
     echo "NOTE: board-identity patch is not applied; vcctrl will report board unknown."
+fi
+
+# This one is load-bearing on any 64-bit userland: without it USB4VC discards
+# every input event before it reaches the protocol board, so NOTHING is driven
+# -- no keystrokes, no mouse, no activity LEDs -- while SPI, the OLED and board
+# detection all keep working and make it look like a cable fault. Cost us most
+# of an afternoon on 2026-08-20. See docs/FINDINGS.md sec. 29.
+if [ -f "$SRC/tools/patch-usb4vc-64bit.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_usb_scan.py ]; then
+  sudo python3 "$SRC/tools/patch-usb4vc-64bit.py" --check || \
+    echo "WARNING: 64-bit input_event patch is NOT applied. On this kernel that means no input reaches the target at all."
 fi
 
 
