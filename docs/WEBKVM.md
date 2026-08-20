@@ -1377,6 +1377,29 @@ describes and precisely what this tool was built to catch in *other* software.
 An `except` that discards the reason turns a bug into a lie. 4 is a case of
 implementing the happy path of a rule the plan already stated.
 
+### What it unblocked, which is not what was planned for
+
+The plan justified this tool by *watching* -- see a sweep, see a wedge, take
+over. The first thing it actually unblocked was different, and the `vcctrl`
+session put it better than the plan does:
+
+> An interactive DOS configurator is exactly the class of tool that is unusable
+> over a blind harness and trivial over a screen. My tool's caution was correct
+> given it could not see; the answer was never a braver tool, it was a visible
+> one.
+
+`UVCONFIG.EXE` detects the card, you save, you exit. Three keystrokes into a
+full-screen menu. `vcctrl-uvconfig` was written to write the config files and
+then **refuse to press any keys**, because a harness driving a screen it cannot
+read is how you corrupt a machine -- the same rule as sec. 11.1, applied
+correctly and at cost. The consequence was a half-configured machine that stood
+for six hours while the fault was investigated rather than finished.
+
+The general form is worth keeping, because it predicts what else this unblocks:
+**wherever the harness declined to act because it could not see, the KVM
+converts a refusal into an operation.** Boot menus, configurators, anything
+modal. The blind harness was right to stop; it just had no way to look.
+
 ### Still not done
 
 - Mouse (9), file transfer (8), audio, WebRTC, selectable transport (6.3).
