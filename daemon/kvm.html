@@ -100,6 +100,12 @@
     h1 { display:none; }
     /* These overflow the rail; the same values live in the State panel. */
     #c-lock, #c-power, #c-xport, #c-kbd { display:none; }
+    /* The rail scrolled sideways, so the gear sat off the right edge and could
+       not be tapped. Nothing in a status bar should require scrolling to
+       reach. The tab bar already has a settings tab, and the theme toggle
+       belongs with the themes -- both are duplicates here. */
+    body header { overflow-x:hidden; }
+    body #dbtn, body #gbtn { display:none; }
     header { gap:7px; padding:0 8px;
              height:calc(38px + env(safe-area-inset-top,0px)); }
     .chip { font-size:10px; letter-spacing:.03em; }
@@ -474,6 +480,9 @@
    <div id="panels">
     <section id="settings">
       <h2>Theme</h2>
+      <div class="row" style="margin-bottom:8px">
+        <button id="dbtn2">◐ Switch light / dark</button>
+      </div>
       <div id="themes"></div>
       <label><input type="checkbox" id="opt-auto">
         Follow the system light/dark setting</label>
@@ -569,8 +578,20 @@ const BUILD = '__BUILD__';
 // falls back to mjpeg by itself if the socket does not deliver, so defaulting
 // on costs nothing when it cannot work and saves a support round when it can.
 const OPTS = {probe:false, poll:false, mine:false, ws:true};
-try { Object.assign(OPTS, JSON.parse(localStorage.getItem('vcctrl.opts') || '{}')); }
-catch (e) {}
+// Settings are versioned. `ws` defaulted to false while the WebSocket could
+// not work, and browsers that saved settings in that period keep the false
+// forever -- a stored preference from an era whose reasoning no longer holds,
+// which the operator has now been bitten by twice (once per-origin, once
+// per-era). Bumping the version drops keys whose default has changed.
+const OPTS_V = 2;
+try {
+  const saved = JSON.parse(localStorage.getItem('vcctrl.opts') || '{}');
+  if (saved.v !== OPTS_V) delete saved.ws;
+  delete saved.v;
+  Object.assign(OPTS, saved);
+} catch (e) {}
+OPTS.v = OPTS_V;
+localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
 const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
 const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 
@@ -613,9 +634,8 @@ function gotFrame() {
 function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
-  if (OPTS.ws)
-    addLine(new Date(), 'transport',
-            'websocket ' + why + ' (' + lastWsURL + ') — using mjpeg', 'k-lock');
+  addLine(new Date(), 'transport',
+          'websocket ' + why + ' (' + lastWsURL + ') — using mjpeg', 'k-lock');
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
@@ -683,7 +703,17 @@ async function checkPort() {
 }
 
 function connect() {
-  if (!OPTS.ws) { useMjpeg('disabled in settings'); return; }
+  if (!OPTS.ws) {
+    // Log this unconditionally. It used to be suppressed when the socket was
+    // disabled, so a browser with the setting off produced NO transport lines
+    // at all -- and "no logs about the websocket" is indistinguishable from
+    // "the page never tried", which is exactly what it was.
+    addLine(new Date(), 'transport',
+            'websocket disabled in settings — using the mjpeg stream', 'k-lock');
+    useMjpeg('disabled in settings');
+    return;
+  }
+  addLine(new Date(), 'transport', 'opening ' + wsURL(), 'k-cmd');
   if (portOK === false) { useMjpeg('port ' + tlsPort + ' unreachable'); return; }
   let sock;
   try {
@@ -699,6 +729,8 @@ function connect() {
 
   ws.onopen = () => {
     wsAlive = true;
+    addLine(new Date(), 'transport', 'websocket connected (' + lastWsURL + ')',
+            'k-vid');
     // Ask for a rate suited to the device. A phone on cellular does not want
     // 30 fps of a 70 KB screen, and the server drops rather than queues
     // anyway -- asking for less simply wastes less.
@@ -714,9 +746,8 @@ function connect() {
     // every failure looks the same from here.
     const why = `code=${e.code}${e.reason ? ' ' + e.reason : ''}`
               + ` clean=${e.wasClean} after ${frames} frame(s)`;
-    if (OPTS.ws)
-      addLine(new Date(), 'transport', `websocket closed ${why} (${lastWsURL})`,
-              'k-lock');
+    addLine(new Date(), 'transport', `websocket closed ${why} (${lastWsURL})`,
+            'k-lock');
     if (xport !== 'mjpeg') setTimeout(connect, 1500);
   };
   ws.onmessage = ev => {
@@ -1681,6 +1712,7 @@ function autoPick() {
   }
 })();
 
+$('dbtn2').onclick = () => $('dbtn').onclick();
 $('dbtn').onclick = () => {
   // Manual flip picks the other half of the current pair and stops auto,
   // because an automatic switch would immediately undo it.
