@@ -604,7 +604,7 @@ def test_theme_contrast():
           bad < 3.0)
 
     # Every theme names a pairing, so the light/dark button always has a target.
-    for name, (_g, _d, pair, _r) in T.THEMES.items():
+    for name, (_g, _lab, _d, pair, _r) in T.THEMES.items():
         if pair not in T.THEMES:
             check("%s pairs with an unknown theme %r" % (name, pair), False)
     check("every theme's light/dark pair exists", True)
@@ -897,6 +897,21 @@ HARNESS = """
     out.push(`view-${m} ${sc.clientWidth} ${sc.clientHeight}`);
     say(m, `${sc.scrollWidth > sc.clientWidth + 1 ? 1 : 0}${sc.scrollHeight > sc.clientHeight + 1 ? 1 : 0}`);
   }
+  // The picker builds itself from the stylesheet. When that read fails it
+  // fails SILENTLY -- an empty grid and a raw theme id where the name goes --
+  // which is exactly what a cross-origin cssRules read did on the first
+  // attempt, and what a stale themes.css did on the second.
+  out.push(`themes ${THEMES.length} ${PAIRS.length}`);
+  const chips = document.querySelectorAll('#themes button');
+  let painted = 0;
+  for (const c of chips) {
+    const bg = getComputedStyle(c).backgroundColor;
+    if (bg && bg !== 'rgba(0, 0, 0, 0)') painted++;
+  }
+  out.push(`chips ${chips.length} ${painted}`);
+  out.push(`named ${document.getElementById('themename').textContent.trim()
+                     .replace(/\s+/g, '_')} 0`);
+
   // Back to fit, then hide the key rail: its row must go to the picture.
   arm();
   zoomMode = 'fit'; crop = null; applyZoom(true);
@@ -972,6 +987,9 @@ def test_zoom_layout_in_a_browser():
         got, bars = {}, {}
         for part in m.group(1).split("|"):
             bits = part.split()
+            if bits[0] == "named":
+                got["named_label"] = bits[1]
+                continue
             got[bits[0]] = (float(bits[1]), float(bits[2]))
             if len(bits) > 3:
                 bars[bits[0]] = bits[3]
@@ -981,7 +999,7 @@ def test_zoom_layout_in_a_browser():
     W, H = got["view-fit"]
     print("  viewport %.0fx%.0f: %s" % (W, H, ", ".join(
         "%s=%.0fx%.0f" % (k, v[0], v[1]) for k, v in got.items()
-        if not k.startswith("view-") and k != "loaded")))
+        if not k.startswith("view-") and k not in ("loaded", "named_label"))))
     check("control: the viewport is bigger than the capture",
           W > 640 and H > 480, (W, H))
     # Without this, a picture that never loaded measures 0 and every
@@ -1013,6 +1031,23 @@ def test_zoom_layout_in_a_browser():
         check("%sx spills, so it must offer scrollbars" % m,
               not spills or bars.get(m, "00") != "00",
               (got[m], (W, H), bars.get(m)))
+
+    # The picker: one swatch per identity, each wearing a real palette.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "themes", os.path.join(HERE, os.pardir, "tools", "themes.py"))
+    T = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(T)
+    darks = sum(1 for v in T.THEMES.values() if v[2])
+    check("the page discovers every theme in the table",
+          got["themes"] == (float(len(T.THEMES)), float(darks)),
+          (got["themes"], len(T.THEMES), darks))
+    check("one swatch per pair, and every swatch is painted",
+          got["chips"] == (float(darks), float(darks)), got["chips"])
+    check("control: the name line shows a label, not a raw id",
+          "_" in str(got.get("named_label", "")) or
+          str(got.get("named_label", "")) not in T.THEMES,
+          got.get("named_label"))
 
     # Hiding the key rail collapses its grid row and the stage takes the
     # height. A toggle that changes display fires no resize event, so if the
