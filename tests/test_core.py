@@ -1099,6 +1099,10 @@ HARNESS = r"""
            : e.classList.contains('bad') ? 'bad' : 'off';
     };
     setInputLamps(null, {ok: true});
+    // KBD and MOS must answer the SAME question. KBD used to light only while
+    // this browser was grabbing, which made one lamp in a row of eight mean
+    // something different from its neighbours.
+    const kbdFree = cls('lamp-kbd');
     const free = cls('lamp-mouse');
     setInputLamps('claude-e2e', {ok: true});
     const lock = cls('lamp-mouse');
@@ -1107,6 +1111,7 @@ HARNESS = r"""
     const dead = cls('lamp-mouse');
     setInputLamps(null, {ok: true});
     emit(`inlamp ${free === 'on' && lock === 'held' && dead === 'bad' ? 1 : 0} ${pad ? 1 : 0}`);
+    emit(`samequestion ${kbdFree === free ? 1 : 0} 0`);
   }
 
   // Power is TRI-STATE. "the machine is off" and "I cannot reach the plug"
@@ -1447,6 +1452,9 @@ def test_zoom_layout_in_a_browser():
           got["flash"][0] == 1.0, got["flash"])
     check("control: and a mouse command lights the mouse, not the keyboard",
           got["flash"][1] == 1.0, got["flash"])
+
+    check("KBD and MOS answer the same question",
+          got["samequestion"][0] == 1.0, got["samequestion"])
 
     check("free / held / broken are three different lamps",
           got["inlamp"][0] == 1.0, got["inlamp"])

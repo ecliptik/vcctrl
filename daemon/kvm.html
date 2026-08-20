@@ -761,11 +761,23 @@
   #themes button.sel { outline:2px solid var(--green); outline-offset:1px; }
   /* The name of whatever is under the pointer, or of the current theme --
      one line doing the work the twenty-five labels were doing. */
-  #rig .rgroup {
+  /* Its own scroll, so a long readout cannot push the panels below it off
+     the sidebar -- the same reason the activity log has one. */
+  #sec-state { display:flex; flex-direction:column; min-height:0; }
+  /* Room for its own scrollbar: without it every value sat under the bar and
+     the last character of each was hidden by it. */
+  #stats { overflow-y:auto; -webkit-overflow-scrolling:touch; max-height:38vh;
+           padding-right:9px; }
+  #stats .kv span:first-child { flex:none; white-space:nowrap; }
+  #stats .kv span:last-child { text-align:right; overflow-wrap:anywhere; }
+  #stats .rgroup, #rig .rgroup {
     font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
     text-transform:uppercase; color:var(--dim); margin:11px 0 4px;
   }
-  #rig .rgroup:first-child { margin-top:2px; }
+  #stats .rgroup:first-child, #rig .rgroup:first-child { margin-top:2px; }
+  #stats .warn span:last-child { color:var(--yellow); }
+  #stats .bad  span:last-child { color:var(--red); }
+  #stats .unk  span:last-child { color:var(--dim); font-style:italic; }
   /* The KEY never wraps and the VALUE always may: "video error" broke across
      two lines and read as two rows, one of them labelled "error" with nothing
      beside it. A label that wraps stops being a label. */
@@ -1080,14 +1092,8 @@
    <div id="log"></div>
    <div id="panels">
     <section id="sec-state">
-      <h2>State</h2>
-      <div class="kv"><span>running</span><span id="s-inflight">–</span></div>
-      <div class="kv"><span>last event</span><span id="s-lastev">–</span></div>
-      <div class="kv"><span>frames</span><span id="s-frames">–</span></div>
-      <div class="kv"><span>buffer</span><span id="s-span">–</span></div>
-      <div class="kv"><span>viewers</span><span id="s-viewers">–</span></div>
-      <div class="kv"><span>transport</span><span id="s-xport">–</span></div>
-      <div class="kv"><span>stream</span><span id="s-rate">–</span></div>
+      <h2>Status</h2>
+      <div id="stats"></div>
     </section>
 
    </div>
@@ -1166,6 +1172,13 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // a few seconds, an <img> pointed at multipart/x-mixed-replace takes over --
 // no JS decoding, no canvas, the browser does all of it.
 let ws, wsAlive = false, xport = 'connecting', frames = 0, fpsWin = [];
+// Declared HERE, beside the transport state that writes them, not down by
+// the readout that displays them: setXport() runs at load, so a `let`
+// further down the file is in its temporal dead zone and the whole script
+// stops on the first assignment. That is the third TDZ this page has had,
+// and every one was a variable declared next to its reader rather than
+// next to its writer.
+let pollMs = 0, lastCmd = null, lastLevel = null, xportLabel = '—';
 let byteWin = [];
 // lastFrameAt starts at NOW, not 0. At 0 the staleness watchdog computes
 // Date.now() - 0, which is always greater than eight seconds, so the first
@@ -1223,7 +1236,7 @@ function setXport(x) {
     ? {ws:'WS', mjpeg:'MJPEG', connecting:'…', down:'NONE'}
     : {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
   )[x] || x;
-  $('s-xport').textContent = label;
+  xportLabel = label;
   setLamp('lamp-link',
     x === 'ws' ? 'on' : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
     // NUMBERS, NOT ADJECTIVES. "High performance" and "low performance" are
@@ -2079,6 +2092,7 @@ function meter(pcm) {
   const rms = Math.sqrt(sum / Math.max(1, n));
   const db = v => v > 0 ? 20 * Math.log10(v / 32768) : -91;
   const rdb = db(rms), pdb = db(peak);
+  lastLevel = {mean_db: rdb, peak_db: pdb};
   mSmooth = Math.max(rdb, mSmooth - 3);
   const pct = v => Math.max(0, Math.min(100, (v + 70) / 70 * 100));
   $('mrms').style.width = pct(mSmooth) + '%';
@@ -2266,7 +2280,14 @@ async function pollEvents() {
       // typing at the Gateway lights the same lamp a person does, which is
       // the whole point of copying the board's activity LEDs: they report
       // the WIRE, not the operator.
-      if (e.kind === 'cmd') flashForCmd(e.cmd);
+      if (e.kind === 'cmd') {
+        // Only what just happened. The first poll asks since=0 and gets the
+        // whole ring back, so this flickered its way through an hour of
+        // history on every page load -- activity lights reporting a machine
+        // that had been idle for twenty minutes.
+        if ((Date.now() / 1000) - e.t < 5) flashForCmd(e.cmd);
+        lastCmd = {cmd: e.cmd, t: e.t, by: e.by};
+      }
       e._text = e.kind === 'cmd'
         ? `${e.cmd} ${e.detail||''}`.trim() + (e.by ? `  ←${e.by}` : '')
         : Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
@@ -2503,8 +2524,15 @@ function deviceTrouble(c) {
 let lastState = null;
 async function pollState() {
   let j;
+  const t0 = performance.now();
   try { j = await (await fetch('/state.json')).json(); }
   catch (e) { pill('p-video','off','daemon unreachable'); return; }
+  // Smoothed round trip on a request that was happening anyway. It answers
+  // "is this feeling slow because of the link" without anyone running
+  // anything, and it is the number that went 290 ms -> 20 ms when the
+  // Gateway's Pi moved off 2.4 GHz wifi.
+  const dt = performance.now() - t0;
+  pollMs = pollMs ? pollMs * 0.7 + dt * 0.3 : dt;
   const v = j.video || {};
   if (v.state === 'locked') {
     pill('p-video','on','video locked');
@@ -2546,10 +2574,7 @@ async function pollState() {
   }
   const L = j.lock || {};
   const inf = j.inflight || [];
-  $('s-inflight').textContent = inf.length ? `${inf[0].cmd} · ${fmtAge(inf[0].age_s)}` : 'idle';
-  $('s-lastev').textContent = fmtAge(j.last_event_age_s);
-  $('s-frames').textContent = v.frames ?? '–';
-  $('s-viewers').textContent = j.viewers ?? '–';
+  $('stats').innerHTML = statsRows(j);
   showPower(j.power);
   showBoard(j.board);
   showAudioDevice(j.audio);
@@ -2564,12 +2589,7 @@ async function pollState() {
   // this rig that is the difference between a smooth picture and a stuttering
   // one -- worth being able to see rather than guess at.
   const got = achievedFps();
-  $('s-rate').textContent = got
-    ? got.toFixed(0) + ' fps · ' + streamMbit().toFixed(1) + ' Mbit/s'
-      + (fpsWant ? ' (asking ' + fpsWant : '')
-      + (fpsWant && srcFps ? ' of ' + srcFps.toFixed(0) + ' at source' : '')
-      + (fpsWant ? ')' : '')
-    : '–';
+
   if (j.tls_port !== undefined && j.tls_port !== tlsPort) {
     tlsPort = j.tls_port;
     // Check reachability before retrying, so an unreachable port is reported
@@ -2579,7 +2599,7 @@ async function pollState() {
   }
   if (j.build && BUILD !== '__' + 'BUILD__' && j.build !== BUILD)
     $('stalebar').classList.add('show');
-  $('s-span').textContent = v.span_s != null ? v.span_s.toFixed(1) + 's' : '–';
+
   lamps(j.leds, v.state, j.input_verified);
   // Only while HELD. "input free · link unproven" was two facts in one chip,
   // one of them permanent and neither urgent -- and the operator read it as
@@ -2809,16 +2829,26 @@ function setInputLamps(held, inputCap) {
   // Short. A tooltip is read at a glance with the pointer already moving; the
   // long version of this was three lines of explanation for a one-word state,
   // and the full description lives in the command bar where there is room.
+  // ONE MEANING FOR THE WHOLE ROW: lit means THIS PATH WORKS. KBD was the odd
+  // one out -- it lit only while this browser was grabbing, so it answered
+  // "am I using it" while every lamp beside it answered "does it work". Two
+  // questions in one row of eight, and the operator spotted it by noticing
+  // MOS was always lit and KBD was not.
+  //
+  // Whether YOUR keystrokes are going to the target belongs to your browser
+  // session rather than to the rig, and the Grab button already carries it:
+  // it lights and changes word. The flicker carries traffic. The lamp carries
+  // the path.
   const kbd = broken ? 'Keyboard unavailable'
             : held ? 'Keyboard held by ' + held
-            : armed ? 'Keyboard sending to the target'
-            : 'Keyboard idle — press Grab to send';
+            : armed ? 'Keyboard reachable — and this browser is sending'
+            : 'Keyboard reachable — press Grab to send from here';
   const mos = broken ? 'Mouse unavailable'
             : held ? 'Mouse held by ' + held
             : MOUSE_PROVEN ? 'Mouse ready — cursor movement seen '
                              + MOUSE_PROVEN
             : 'Mouse ready — never yet tested on a target';
-  setLamp('lamp-kbd', broken ? 'bad' : held ? 'warn' : armed ? 'on' : null, kbd);
+  setLamp('lamp-kbd', broken ? 'bad' : held ? 'warn' : 'on', kbd);
   // DASHED MEANS "THIS MAY NOT DESCRIBE THE TARGET" -- what PWR, LNK and AUD
   // already use when they cannot tell, and what CAP/NUM/SCR use on an
   // unproven input link. MOS was dashed for the same reason until today.
@@ -2850,6 +2880,87 @@ function setInputHeld(owner) {
     $('sendline').title = 'Type this line at the target and press Enter';
     $('line').title = '';
   }
+}
+
+// ── STATS FOR NERDS ──────────────────────────────────────────────────────
+// Everything here changes second to second. What identifies the machine --
+// devices, board, plug, host -- is in Settings under Rig, so the two are not
+// two views of the same list.
+//
+// ONE NUMBER PER ROW. The stream line used to pack fps, bitrate, the rate
+// asked for and the source rate into a single value that ran off the end of a
+// 340 px column. A readout you have to reassemble is not a readout.
+function statsRows(j) {
+  const out = [];
+  const g = t => out.push('<div class="rgroup">' + t + '</div>');
+  const kv = (k, v, cls) => out.push(
+    '<div class="kv ' + (cls || '') + '"><span>' + k + '</span><span>'
+    + esc(v == null ? '—' : String(v)) + '</span></div>');
+  const v = j.video || {}, a = j.audio || {}, w = j.ws || {};
+
+  g('Picture');
+  kv('state', v.state || '—',
+     v.state === 'locked' ? '' : 'warn');
+  kv('resolution', capSize() || 'no frame yet', capSize() ? '' : 'unk');
+  kv('at source', srcFps ? srcFps.toFixed(1) + ' fps' : '—');
+  const got = achievedFps();
+  kv('arriving here', got ? got.toFixed(1) + ' fps' : '—',
+     got && srcFps && got < srcFps * 0.6 ? 'warn' : '');
+  kv('asking for', fpsWant ? fpsWant + ' fps' : '—');
+  kv('bitrate', byteWin.length > 1 ? streamMbit().toFixed(2) + ' Mbit/s' : '—');
+  kv('transport', xportLabel);
+  kv('last frame', v.last_frame_age_s != null
+       ? (v.last_frame_age_s * 1000).toFixed(0) + ' ms ago' : '—',
+     v.last_frame_age_s > 2 ? 'bad' : '');
+  kv('frames seen', v.frames != null ? v.frames.toLocaleString() : '—');
+  if (v.fast_failures) kv('restarts', v.fast_failures, 'bad');
+
+  g('Buffer');
+  kv('holding', v.span_s != null ? v.span_s.toFixed(1) + ' s' : '—');
+  kv('asked to hold', v.target_span_s != null ? v.target_span_s + ' s' : '—');
+  kv('frames', v.ring_frames != null ? v.ring_frames.toLocaleString() : '—');
+  kv('memory', v.ring_bytes != null
+       ? (v.ring_bytes / 1048576).toFixed(1) + ' MB' : '—');
+  if (v.mem_limited) kv('capped by', 'free memory', 'warn');
+
+  g('Sound');
+  kv('state', a.state || '—', a.state === 'capturing' ? '' : 'warn');
+  kv('format', a.rate ? (a.rate / 1000) + ' kHz · ' + a.channels + ' ch' : '—');
+  kv('level', lastLevel
+       ? lastLevel.mean_db.toFixed(1) + ' / ' + lastLevel.peak_db.toFixed(1)
+         + ' dBFS' : '—');
+  kv('last chunk', a.last_chunk_age_s != null
+       ? (a.last_chunk_age_s * 1000).toFixed(0) + ' ms ago' : '—');
+
+  g('Link');
+  // Round trip to the daemon and back, measured on the poll this page is
+  // already making. It is the number that answers "is the KVM feeling slow
+  // because of the network" without anyone having to run anything.
+  kv('round trip', pollMs ? pollMs.toFixed(0) + ' ms' : '—',
+     pollMs > 250 ? 'warn' : '');
+  kv('viewers', j.viewers ?? '—');
+  kv('listeners', j.listeners ?? '—');
+  if (w.sent_frames != null) kv('ws frames sent', w.sent_frames.toLocaleString());
+  if (w.dropped) kv('ws frames dropped', w.dropped.toLocaleString(),
+                    'warn');
+
+  g('Daemon');
+  // NOT "in flight". That sampled an instant: a command takes about 3 ms and
+  // this polls every 1500, so it read "idle" through an entire sweep and told
+  // nobody anything. What was actually wanted is whether something is driving
+  // the machine, which is the LAST command and how long ago.
+  kv('last command', lastCmd
+       ? lastCmd.cmd + ' · ' + fmtAge((Date.now() / 1000) - lastCmd.t)
+         + (lastCmd.by ? ' · ' + lastCmd.by : '')
+       : 'nothing yet');
+  kv('input lock', (j.lock && j.lock.owner) || 'free');
+  kv('events', j.seq ?? '—');
+  kv('build', j.build || '—');
+  if (j.host && j.host.uptime_s != null) kv('pi uptime', fmtAge(j.host.uptime_s));
+  if (j.host && j.host.temp_c != null)
+    kv('pi temperature', j.host.temp_c.toFixed(1) + ' °C',
+       j.host.temp_c >= 80 ? 'bad' : j.host.temp_c >= 70 ? 'warn' : '');
+  return out.join('');
 }
 
 function showAudioDevice(a) {
