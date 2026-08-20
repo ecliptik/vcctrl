@@ -1067,6 +1067,14 @@ HARNESS = r"""
   {
     const h = id => Math.round(document.getElementById(id).getBoundingClientRect().height);
     emit(`striph ${h('soundwrap')} ${h('powerbtn')}`);
+    // The command field too. Its minimum lived on the INPUT while the border
+    // lived on the WRAPPER, so the field stood two pixels proud of every
+    // button beside it -- small, and enough to make the strip look crooked.
+    emit(`fieldh ${h('linewrap')} ${h('keysbtn')}`);
+    // Same anatomy as the menu buttons: a glyph cell with a rule, a label.
+    const sb = document.getElementById('sendline');
+    emit(`sendparts ${sb.querySelector('.bi') && sb.querySelector('.bl') ? 1 : 0} `
+       + `${getComputedStyle(sb.querySelector('.bi')).borderRightWidth === '1px' ? 1 : 0}`);
   }
 
   // A DARK TARGET IS NOT A BROKEN TRANSPORT. Both are silence from here, and
@@ -1608,6 +1616,12 @@ def test_zoom_layout_in_a_browser():
           abs(got["striph"][0] - got["striph"][1]) <= 1, got["striph"])
     check("control: and that height is a real one, not zero",
           got["striph"][1] >= 30, got["striph"])
+    check("the command field is the same height as the buttons beside it",
+          got["fieldh"][0] == got["fieldh"][1], got["fieldh"])
+    check("Send is built like the menu buttons: glyph, rule, label",
+          got["sendparts"][0] == 1.0, got["sendparts"])
+    check("and the rule between them is drawn",
+          got["sendparts"][1] == 1.0, got["sendparts"])
 
     check("a fallback schedules a retry, backs off, and resets on success",
           got["wsretry"][0] == 1.0, got["wsretry"])

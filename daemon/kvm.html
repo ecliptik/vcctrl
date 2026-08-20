@@ -510,11 +510,12 @@
     overflow:hidden;
   }
   #linewrap:focus-within { border-color:var(--muted); }
+  #linewrap { min-height:var(--tap); }
   #line {
     flex:1 1 auto; min-width:0; font:var(--t-data) var(--mono);
     background:transparent; color:var(--text);
     border:0; border-radius:0;
-    padding:0 11px; min-height:var(--tap);
+    padding:0 11px; min-height:0;
   }
   #line:focus { outline:none; }
   #cmdbar #filebtn, #cmdbar #filestop {
@@ -546,7 +547,7 @@
     position:absolute; width:1px; height:1px; padding:0; margin:-1px;
     overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
   }
-  @media (pointer:fine) { #line { min-height:36px; } }
+  @media (pointer:fine) { #linewrap { min-height:36px; } }
   /* Hidden until capture is on. "Click the screen to capture the keyboard"
      is a permanent instruction for a one-time action, and it cost a row of the
      picture to say it. The kbd chip in the header carries the affordance; this
@@ -1027,7 +1028,7 @@
       <button id="filestop" hidden title="Stop where it has got to">■</button>
       <input id="line" placeholder="type a command"
              autocapitalize="off" autocorrect="off" spellcheck="false">
-      <button id="sendline" title="Type this line at the target and press Enter">Send ↵</button>
+      <button id="sendline" title="Type this line at the target and press Enter"><span class="bi">↵</span><span class="bl">Send</span></button>
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
     <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
