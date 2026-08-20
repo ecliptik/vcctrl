@@ -1061,6 +1061,29 @@ HARNESS = r"""
     emit(`res ${before.includes('actual resolution') ? 1 : 0} ${after.includes('512×342') ? 1 : 0}`);
   }
 
+  // Ctrl+Alt+Delete must ASK. It sits in a rail of harmless keys, at thumb
+  // distance from Esc, and it is the only one whose mis-tap costs the
+  // machine's state.
+  {
+    const realConfirm = window.confirm, realPost = window.post;
+    let asked = null, sent = 0;
+    window.confirm = m => { asked = m; return false; };
+    window.post = async () => { sent++; return {ok: true}; };
+    const cad = document.querySelector('[data-combo="ctrl,alt,delete"]');
+    cad.onclick();
+    const blocked = sent === 0 && asked && /reboots/i.test(asked);
+    window.confirm = () => true;
+    cad.onclick();
+    const wentThrough = sent === 1;
+    // A plain key must NOT ask -- a rail that confirms everything is a rail
+    // nobody reads the confirmations in.
+    asked = null;
+    document.querySelector('[data-key="esc"]').onclick();
+    const quiet = asked === null;
+    window.confirm = realConfirm; window.post = realPost;
+    emit(`cad ${blocked && wentThrough ? 1 : 0} ${quiet ? 1 : 0}`);
+  }
+
   // The file control has to be CLICKABLE. display:none on a file input makes
   // .click() a no-op in some browsers, which is what "the File button does
   // not work" was -- a handler that ran perfectly and opened nothing.
@@ -1442,6 +1465,11 @@ def test_zoom_layout_in_a_browser():
           got["res"][0] == 1.0, got["res"])
     check("control: and a 512x342 frame reports 512x342",
           got["res"][1] == 1.0, got["res"])
+
+    check("ctrl-alt-delete asks first, and sends when confirmed",
+          got["cad"][0] == 1.0, got["cad"])
+    check("control: an ordinary key does not ask", got["cad"][1] == 1.0,
+          got["cad"])
 
     check("the file input can actually be clicked open",
           got["file2"][0] == 1.0, got["file2"])

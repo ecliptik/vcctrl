@@ -278,7 +278,7 @@
      Lit, hollow or crossed: never colour alone. */
   #lamps { display:flex; gap:7px; flex:none; align-items:center;
            background:transparent; border:0; padding:0 2px; min-height:0;
-           cursor:help; }
+           cursor:default; }
   @media (pointer:coarse) { #lamps { min-height:var(--tap); } }
   /* THE WORD IS THE LAMP. This was a dot with a label under it, and on a
      phone the label was hidden to save width -- which left three unlabelled
@@ -962,6 +962,13 @@
     <button data-key="f5">F5</button><button data-key="f6">F6</button>
     <button data-key="f7">F7</button><button data-key="f8">F8</button>
     <button data-key="f9">F9</button><button data-key="f10">F10</button>
+    <!-- Sendable because a modern keyboard may not have them at all. Caps
+         Lock is the one that matters: it is the LED round trip this rig uses
+         to prove a keystroke reached the machine, and until now the only way
+         to toggle it was to own a keyboard with the key on it. -->
+    <button data-key="capslock">Caps</button>
+    <button data-key="numlock">Num</button>
+    <button data-key="scrolllock">Scroll</button>
     <button data-combo="ctrl,alt,delete" class="danger"
             title="Send Ctrl+Alt+Delete — reboots the target">C-A-Del</button>
   </div>
@@ -1607,8 +1614,23 @@ document.querySelectorAll('[data-mod]').forEach(b => b.onclick = () => {
   else { mods.add(m); b.classList.add('sticky'); }
 });
 document.querySelectorAll('[data-key]').forEach(b => b.onclick = () => tapKey(b.dataset.key));
-document.querySelectorAll('[data-combo]').forEach(b => b.onclick = () =>
-  post('combo', {keys:b.dataset.combo.split(',')}));
+document.querySelectorAll('[data-combo]').forEach(b => b.onclick = () => {
+  const keys = b.dataset.combo.split(',');
+  // CONFIRM THE ONES THAT REBOOT. Ctrl+Alt+Delete sits in a rail of keys that
+  // are all harmless, at thumb distance from Esc and the arrows, and it is
+  // the only one whose mis-tap costs the machine's state. Everything else on
+  // this page that destroys something asks first; this was the gap.
+  //
+  // Named per key rather than by a "danger" class, because the class is a
+  // style and the list of things worth stopping for is a decision.
+  const REBOOTS = {'ctrl,alt,delete':
+    'Send Ctrl + Alt + Delete' + (boardNow.target ? ' to the ' + boardNow.target : '')
+    + '?\n\nThis reboots it immediately. Anything unsaved is lost, and a sweep '
+    + 'in progress is destroyed.'};
+  const warn = REBOOTS[b.dataset.combo];
+  if (warn && !confirm(warn)) return;
+  post('combo', {keys});
+});
 document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   const a = b.dataset.power;
   // ON confirms too, which is not the obvious choice -- switching a machine on
@@ -3571,6 +3593,14 @@ function lamps(leds, videoState, verified) {
     const v = leds && leds[key];
     el.classList.toggle('on', v === 1);
     el.classList.toggle('stale', stale);
+    // On the CONTAINER as well: the button has padding and gaps between the
+    // three lamps, and a pointer resting in one of those found no tooltip at
+    // all -- which reads as "this has no tooltip" rather than "you missed".
+    $('lamps').title = unproven
+      ? 'Caps / Num / Scroll from the PS/2 return channel. Dashed: the input '
+        + 'link is unproven, so these describe the Pi rather than the target.'
+      : 'Caps / Num / Scroll, read back from the target over PS/2 — proof a '
+        + 'keystroke landed.';
     el.title = unproven
       ? 'Dashed: the input link has not been proven, so these lamps describe '
         + 'the Pi\'s end of the wire. Settings → Verify input link.'
