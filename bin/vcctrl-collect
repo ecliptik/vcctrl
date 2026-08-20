@@ -48,7 +48,20 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, vc_json, leds, wait_led, at_prompt, wait_for_prompt, arm_leds,
-    ensure_powered)
+    ensure_powered, spam_menu, flush_input_line, MENU_MAX_KEYS,
+    KBD_BUFFER_KEYS)
+
+# grab() comes from the sweep runner rather than being copied. Since the KVM
+# daemon took ownership of /dev/video0 this is a read of its frame ring, so a
+# screen check costs about 0.2 s -- cheap enough to verify things that used to
+# be assumed.
+import importlib.util                                          # noqa: E402
+from importlib.machinery import SourceFileLoader               # noqa: E402
+_spec = importlib.util.spec_from_loader(
+    "vcsweep", SourceFileLoader("vcsweep", os.path.join(HERE, "vcctrl-sweep")))
+_m = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_m)
+grab = _m.grab
 
 CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
 DEFAULT_INCOMING = os.path.expanduser("~/doskutsu-netiter/incoming")
@@ -76,15 +89,12 @@ CALL_COST_S = 1.5
 #
 # Extra "5<Enter>" pairs landing at a live prompt are harmless; DOS answers
 # "Bad command or file name" and carries on.
-# Bounded two ways on purpose. The window alone was not enough: budgeted at
-# 40 s it ran 71 s, because vcctrl calls block far longer during POST than the
-# 1.76 s they take at idle. Every overrun keystroke lands in the BIOS buffer,
-# which fills at 15 and then beeps once per rejection -- audible from the next
-# room -- and the survivors flush into the prompt as "Bad command or file
-# name". Measured shape of a reboot: caps-clear edge, then RDYPULSE about 12 s
-# later, with the 5 s menu somewhere inside that. 20 s of cover is generous.
-MENU_SPAM_WINDOW_S = 20
-MENU_SPAM_MAX_ATTEMPTS = 12
+# The menu keystrokes now come from vcctrl_common.spam_menu, budgeted in
+# KEYSTROKES against the 15-key BIOS buffer rather than in attempts. The local
+# copy that used to live here was capped at 12 attempts, which is 24 keystrokes
+# -- it overflowed the buffer every single reboot, beeped through the overflow,
+# and then flushed a stray digit onto the front of PUT.BAT. See the header of
+# vcctrl_common for the full account.
 REBOOT_EDGE_TIMEOUT_S = 45      # measured at t+9 s; this is deliberate slack
 READY_TIMEOUT_S = 150           # measured ~11 s post-POST, POST itself varies
 PUT_TIMEOUT_S = 90              # 880 KB/s measured; a log pair is under 400 KB
@@ -108,20 +118,12 @@ def reboot_into_net():
                          % REBOOT_EDGE_TIMEOUT_S)
     print("  reboot edge at t+%.1fs" % edge)
 
-    print("  blanketing the menu window with '%s'+Enter (max %ds / %d attempts)"
-          % (NET_MENU_ITEM, MENU_SPAM_WINDOW_S, MENU_SPAM_MAX_ATTEMPTS))
+    print("  selecting menu item '%s' (budget %d keys, buffer holds %d)"
+          % (NET_MENU_ITEM, MENU_MAX_KEYS, KBD_BUFFER_KEYS))
     t0 = time.time()
-    attempts = 0
-    while (time.time() - t0 < MENU_SPAM_WINDOW_S
-           and attempts < MENU_SPAM_MAX_ATTEMPTS):
-        # One call, not two: the client taps a sequence, so this is ~1.5 s
-        # rather than ~3 s, which is what keeps the cadence inside the menu's
-        # 5 s. Nothing polls the LEDs in here -- a poll is another 1.5 s and
-        # would push the cadence back out past the window it has to hit.
-        vc("key", NET_MENU_ITEM, "enter", check=False)
-        attempts += 1
-    print("  %d attempts over %.1fs (%.1fs apart)"
-          % (attempts, time.time() - t0, (time.time() - t0) / max(attempts, 1)))
+    attempts, keys = spam_menu(NET_MENU_ITEM)
+    print("  %d attempts / %d keys over %.1fs -- %d keys of buffer margin"
+          % (attempts, keys, time.time() - t0, KBD_BUFFER_KEYS - keys))
 
     t1 = time.time()
     if wait_led("scrolllock", True, READY_TIMEOUT_S) is None:
@@ -143,7 +145,52 @@ def reboot_into_net():
     if waited is None:
         raise SystemExit("REFUSED: RDYPULSE fired but no prompt within 60s.")
     print("  prompt live %.1fs later" % waited)
+
+    # Whatever the menu did not consume is still in the buffer, arriving on its
+    # own schedule. Esc discards a partial line so a stray digit cannot prefix
+    # the next command -- which is exactly how the 2026-08-19 M64A collection
+    # became "5C:\MTCP\PUT.BAT M64A" and quietly transferred nothing.
+    flush_input_line()
+
+    # VERIFY THE PROFILE, rather than inferring it from "we pressed 5".
+    # Cheap now: a grab is a read of the daemon's ring. Without this the only
+    # evidence that NET booted was that the harness had typed the digit, which
+    # is the same class of non-check as "the prompt came back" (FINDINGS bug 6)
+    # -- pressing 5 and booting NET are different events, and a missed menu
+    # silently boots something else that also reaches a prompt.
+    if not verify_profile("NET"):
+        raise SystemExit(
+            "REFUSED: booted, but the NET banner is not on screen.\n"
+            "  The menu selection did not land, so this is some other profile\n"
+            "  with no packet driver. Transferring now would time out 90s per\n"
+            "  tag and report missing logs that are actually present.")
     return True
+
+
+def verify_profile(name, tries=3):
+    """Confirm which boot profile came up, by reading its AUTOEXEC banner.
+
+    NET's AUTOEXEC prints "[NET] ready." once the ODI stack and packet driver
+    are up, so the banner is evidence of the whole chain rather than of the
+    menu alone. Retries because the buffer may still be flushing "Bad command
+    or file name" lines, which scroll but do not overwrite.
+    """
+    try:
+        from PIL import Image
+        import pytesseract
+    except ImportError:
+        print("  NO OCR -- cannot verify the profile. Proceeding unverified.")
+        return True
+    for i in range(tries):
+        shot, _ = grab("profile-check")
+        if shot is not None:
+            text = pytesseract.image_to_string(Image.open(shot)).upper()
+            if "[%s]" % name in text or "%s] READY" % name in text:
+                print("  profile verified: [%s] banner on screen" % name)
+                return True
+        if i + 1 < tries:
+            time.sleep(3)
+    return False
 
 
 def snapshot(incoming):

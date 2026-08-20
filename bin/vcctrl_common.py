@@ -27,11 +27,30 @@ VCCTRL = os.path.join(HERE, "vcctrl")
 CALL_COST_S = 1.5
 
 # The CONFIG.SYS menu appears within a few seconds of the POST edge and times
-# out in 5 s. These bound blind selection so it covers that window and stops --
-# every keystroke after it lands in the BIOS 15-key buffer, and once full the
-# machine beeps per rejected key, which the operator hears from across the room.
+# out in 5 s, so selection is blind and has to cover a window.
+#
+# BUDGET IN KEYSTROKES, NOT ATTEMPTS. This was the whole bug. Each attempt is
+# digit-then-Enter, so a cap of 20 attempts is a cap of FORTY keystrokes into a
+# BIOS buffer that holds fifteen. Two get consumed by the menu; the rest either
+# overflow -- one beep per rejected key, audible from the next room -- or sit in
+# the buffer and flush into the command line afterwards.
+#
+# The flush is the dangerous half, and it is why "quieter" was mistaken for
+# "fixed" on 2026-08-19. A surviving digit landed on the FRONT of the next
+# command typed:
+#
+#     C:\>5C:\MTCP\PUT.BAT M64A
+#     Bad command or file name
+#
+# That is a log collection silently turned into a no-op by keystrokes the
+# harness sent itself, eight minutes earlier, for a different purpose.
+#
+# So: a budget the buffer can absorb whole, and verification afterwards instead
+# of volume beforehand. Three pairs covers the jitter; select_boot_profile
+# reports what it spent so a caller can see the margin rather than assume it.
+KBD_BUFFER_KEYS = 15
 MENU_WINDOW_S = 14
-MENU_MAX_ATTEMPTS = 20
+MENU_MAX_KEYS = 6              # 3 x (digit + Enter)
 
 
 def vc(*args, check=True):
@@ -192,32 +211,63 @@ def select_boot_profile(digit, edge_timeout=60, ready_timeout=200):
         return None
 
     t0 = time.time()
-    attempts = 0
-    if digit is not None:
-        # BOUND THE SPAM TWO WAYS, and neither is RDYPULSE.
-        #
-        # The first version fired a fixed count and never polled, because a
-        # leds() check cost ~1.5 s of ssh. The second polled and stopped at
-        # RDYPULSE -- which was worse: polling is now cheap, so it hammered
-        # until readiness, and on a 106 s boot that was 209 attempts against
-        # the 12 it replaced. Optimising the wrong end.
-        #
-        # The menu opens shortly after the POST edge and lives 5 s. It is long
-        # gone well before AUTOEXEC finishes, so RDYPULSE is the wrong stop
-        # signal -- it is minutes late. Bound by the window the menu is
-        # actually in, and by a cap so a slow link cannot extend it.
-        while (time.time() - t0 < MENU_WINDOW_S
-               and attempts < MENU_MAX_ATTEMPTS):
-            if bool(leds().get("scrolllock")):
-                break            # already booted through; nothing to select
-            vc("key", str(digit), "enter", check=False)
-            attempts += 1
+    attempts, keys = spam_menu(digit)
     if wait_led("scrolllock", True, ready_timeout - (time.time() - t0)) is None:
         return None
     ready = time.time() - t0
     if wait_for_prompt(90) is None:
         return None
-    return {"edge_s": edge, "ready_s": ready, "attempts": attempts}
+    return {"edge_s": edge, "ready_s": ready, "attempts": attempts,
+            "keys": keys, "buffer_margin": KBD_BUFFER_KEYS - keys}
+
+
+def spam_menu(digit):
+    """Blind-select a CONFIG.SYS menu entry, within the keyboard buffer budget.
+
+    THE ONE COPY. This logic lived in both select_boot_profile() and
+    vcctrl-collect's reboot_into_net(), with different constants -- 20 attempts
+    in one, 12 in the other -- so the 2026-08-19 overflow fix had to be found
+    twice and was applied to neither for as long as it merely sounded better.
+    Same reason at_prompt() became shared: see the module header.
+
+    Returns (attempts, keys). Sends nothing and returns (0, 0) for digit=None,
+    which is how a caller takes the menu default.
+    """
+    if digit is None:
+        return 0, 0
+    t0 = time.time()
+    attempts, keys = 0, 0
+    while time.time() - t0 < MENU_WINDOW_S and keys + 2 <= MENU_MAX_KEYS:
+        if bool(leds().get("scrolllock")):
+            break                # already booted through; nothing to select
+        vc("key", str(digit), "enter", check=False)
+        attempts += 1
+        keys += 2
+    return attempts, keys
+
+
+def flush_input_line():
+    """Clear anything sitting unentered on the DOS command line.
+
+    Blind menu selection leaves a few keystrokes in the BIOS buffer, and they
+    flush into COMMAND.COM whenever it next reads input. If that happens to be
+    the moment the harness types a command, the stray lands on the FRONT of it:
+
+        C:\\>5C:\\MTCP\\PUT.BAT M64A
+        Bad command or file name
+
+    Esc is COMMAND.COM's cancel-line key, so this discards a partial line
+    without executing it. Call it after a reboot, before the first real
+    command -- it costs two keystrokes and removes a whole class of silent
+    no-op.
+
+    NOT a substitute for keeping the buffer under budget. This clears what is
+    already on the line; it cannot clear what has not arrived yet, which is why
+    the caller should also wait for the screen to stop changing.
+    """
+    vc("key", "escape", check=False)
+    vc("key", "enter", check=False)
+    return wait_for_prompt(30)
 
 
 def ensure_powered(allow_power_on):
