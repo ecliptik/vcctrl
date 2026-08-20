@@ -2,7 +2,7 @@
 /* Roles, not base16 indices: see the module docstring. */
 /* Values marked (fitted) were nudged to clear the contrast floor. */
 
-:root { --themes: "vga vga-light tokyo-night tokyo-night-light solarized-dark solarized-light gruvbox-dark gruvbox-light nord nord-light catppuccin-mocha catppuccin-latte everforest-dark everforest-light ibm-5151 ibm-5151-paper dec-amber dec-amber-paper vt220-white vt220-paper"; }
+:root { --themes: "vga vga-light tokyo-night tokyo-night-light solarized-dark solarized-light gruvbox-dark gruvbox-light nord nord-light catppuccin-mocha catppuccin-latte dracula alucard everforest-dark everforest-light ibm-5151 ibm-5151-paper dec-amber dec-amber-paper vt220-white vt220-paper"; }
 
 :root, [data-theme="vga"] {
   --bg: #17150F;
@@ -260,6 +260,48 @@
   --pair: "catppuccin-mocha";
 }
 /* catppuccin-latte fitted: orange #fe640b->#d85509; green #40a02b->#3d9829 */
+
+[data-theme="dracula"] {
+  --bg: #282a36;
+  --panel: #21222c;
+  --rule: #44475a;
+  --dim: #6272a4;
+  --muted: #bfbfd0;
+  --text: #f8f8f2;
+  --bright: #ffffff;
+  --red: #ff5555;
+  --orange: #ffb86c;
+  --yellow: #f1fa8c;
+  --green: #50fa7b;
+  --cyan: #8be9fd;
+  --blue: #bd93f9;
+  --magenta: #ff79c6;
+  --label: "Dracula";
+  --group: "Editor";
+  --dark: 1;
+  --pair: "alucard";
+}
+
+[data-theme="alucard"] {
+  --bg: #fffbeb;
+  --panel: #f5f1dd;
+  --rule: #dcd8c3;
+  --dim: #6c664b;
+  --muted: #4a4636;
+  --text: #1f1f1f;
+  --bright: #000000;
+  --red: #cb3a2a;
+  --orange: #a34d14;
+  --yellow: #846e15;
+  --green: #14710a;
+  --cyan: #036a96;
+  --blue: #644ac9;
+  --magenta: #a3144d;
+  --label: "Alucard";
+  --group: "Editor";
+  --dark: 0;
+  --pair: "dracula";
+}
 
 [data-theme="everforest-dark"] {
   --bg: #2d353b;

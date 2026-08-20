@@ -108,6 +108,19 @@ THEMES = {
    red="#d20f39", orange="#fe640b", yellow="#8c6a00", green="#40a02b",
    cyan="#179299", blue="#1e66f5", magenta="#8839ef")),
 
+ "dracula": ("Editor", "Dracula", True, "alucard", dict(
+   bg="#282a36", panel="#21222c", rule="#44475a", dim="#6272a4",
+   muted="#bfbfd0", text="#f8f8f2", bright="#ffffff",
+   red="#ff5555", orange="#ffb86c", yellow="#f1fa8c", green="#50fa7b",
+   cyan="#8be9fd", blue="#bd93f9", magenta="#ff79c6")),
+ # Alucard is Dracula's own light theme, published 2024 -- so the pair is the
+ # project's, not one I invented to satisfy the rule.
+ "alucard": ("Editor", "Alucard", False, "dracula", dict(
+   bg="#fffbeb", panel="#f5f1dd", rule="#dcd8c3", dim="#6c664b",
+   muted="#4a4636", text="#1f1f1f", bright="#000000",
+   red="#cb3a2a", orange="#a34d14", yellow="#846e15", green="#14710a",
+   cyan="#036a96", blue="#644ac9", magenta="#a3144d")),
+
  "everforest-dark": ("Editor", "Everforest Dark", True, "everforest-light", dict(
    bg="#2d353b", panel="#343f44", rule="#475258", dim="#859289",
    muted="#9da9a0", text="#d3c6aa", bright="#e8e0cc",

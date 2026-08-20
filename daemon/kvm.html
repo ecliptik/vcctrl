@@ -148,6 +148,8 @@
     #themes button { min-height:42px; }
     /* The tab bar already opens and closes the rail here. */
     body #keysbtn { display:none; }
+    /* The tab bar is the panel here; there is no column to collapse. */
+    body #sidebtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -382,6 +384,16 @@
   button.on { border-color:var(--green); color:var(--green); }
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
+  #sidebtn { font-size:15px; min-width:34px; padding:0; }
+  /* Icon buttons: the glyph IS the label, so it gets the room a label would
+     have had. Emoji presentation is explicit -- ☀ and ⚙ have text-default
+     codepoints and rendered as flat outlines beside colour emoji elsewhere on
+     the page. */
+  .ibtn {
+    font-size:17px; line-height:1; padding:0; min-width:38px;
+    font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",
+                var(--sans);
+  }
 
   /* Activity on top, controls pinned underneath.
      The log was above the controls and unbounded, so a busy sweep pushed
@@ -412,6 +424,13 @@
   .kv span:last-child { color:var(--dim); }
 
   #meter { display:flex; align-items:center; gap:9px; }
+  #volrow { display:flex; align-items:center; gap:6px; margin-top:8px; }
+  /* The mute control is the one you reach for while something is playing, so
+     it is the biggest thing in the row rather than the smallest. */
+  #sbtn { min-width:44px; min-height:40px; font-size:20px; }
+  #voldn, #volup {
+    min-width:34px; padding:0; font:600 var(--t-read)/1 var(--sans);
+  }
   #mbar {
     flex:1; height:5px; background:var(--bg); border:1px solid var(--rule);
     border-radius:3px; overflow:hidden; position:relative; min-width:60px;
@@ -511,6 +530,12 @@
        900px window that is 652 -> 692, which Fit turns straight into
        869x652 -> 923x692 of screen. */
     body.nokeys #keys { display:none; }
+    /* The side panel is 340px of a 1580px window. Collapsing the COLUMN as
+       well as hiding the panel is the load-bearing half: display:none on the
+       panel alone leaves the track sized and the picture exactly where it
+       was. */
+    body.nopanel #body { display:none; }
+    body.nopanel #app { grid-template-columns:minmax(0,1fr) 0; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
     #body   { grid-column:2; grid-row:2/6; height:auto; border-top:0;
@@ -533,9 +558,10 @@
     <span id="c-lock" class="chip"><span class="chiplabel">input </span><b>—</b></span>
     <span id="c-power" class="chip"><span class="chiplabel">power </span><b>—</b></span>
     <span id="c-xport" class="chip"><span class="chiplabel">link </span><b>—</b></span>
-    <button id="c-kbd" class="chip chipb"><span class="chiplabel">kbd </span><b>idle</b></button>
+    <button id="c-kbd" class="chip chipb" title="Capture the keyboard so keys go to the target"><span class="chiplabel">kbd </span><b>idle</b></button>
     <span class="grow"></span>
-    <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove">
+    <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
+            title="Caps, Num and Scroll read back over PS/2 — proof a keystroke landed">
       <span class="lamp" id="lamp-caps"><i></i><span>CAP</span></span>
       <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
       <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
@@ -546,8 +572,12 @@
       <option value="2">2× original</option>
       <option value="4">4× original</option>
     </select>
-    <button id="dbtn" aria-label="switch between light and dark">◐</button>
-    <button id="gbtn" aria-label="settings">⚙</button>
+    <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
+            title="Switch between the light and dark half of this theme">☀️</button>
+    <button id="sidebtn" aria-expanded="true" aria-controls="body"
+            title="Hide the side panel and give the space to the picture">❯</button>
+    <button id="gbtn" class="ibtn" aria-label="settings"
+            title="Open the settings panel">⚙️</button>
   </header>
 
   <div id="stage">
@@ -566,8 +596,8 @@
       <div class="sub" id="veil-sub"></div>
       <div class="age" id="veil-age"></div>
       <div class="row">
-        <button id="dimbtn">Show full brightness</button>
-        <button id="savebtn">Save this frame</button>
+        <button id="dimbtn" title="Show the last frame undimmed">Show full brightness</button>
+        <button id="savebtn" title="Download this frame as a JPEG">Save this frame</button>
       </div>
     </div>
   </div>
@@ -575,13 +605,13 @@
   <div id="cmdbar">
     <input id="line" placeholder="type a command, then Send"
            autocapitalize="off" autocorrect="off" spellcheck="false">
-    <button id="sendline" class="on">Send ↵</button>
+    <button id="sendline" class="on" title="Type this line at the target and press Enter">Send ↵</button>
     <button id="keysbtn" aria-expanded="true"
             aria-controls="keys" title="show or hide the key rail">Keys ▾</button>
   </div>
 
   <div id="stalebar">A newer version of this page is available — reload
-    <button id="reloadbtn">Reload now</button></div>
+    <button id="reloadbtn" title="Reload the page">Reload now</button></div>
 
   <div id="capbar">click the screen to capture the keyboard</div>
 
@@ -602,22 +632,23 @@
     <button data-key="f5">F5</button><button data-key="f6">F6</button>
     <button data-key="f7">F7</button><button data-key="f8">F8</button>
     <button data-key="f9">F9</button><button data-key="f10">F10</button>
-    <button data-combo="ctrl,alt,delete" class="danger">C-A-Del</button>
+    <button data-combo="ctrl,alt,delete" class="danger"
+            title="Send Ctrl+Alt+Delete — reboots the target">C-A-Del</button>
   </div>
 
   <div id="tabs">
-    <button data-tab="none" class="on">SCREEN</button>
-    <button data-tab="keys">KEYS</button>
-    <button data-tab="sound">SOUND</button>
-    <button data-tab="power">POWER</button>
-    <button data-tab="log">LOG</button>
-    <button data-tab="set">⚙</button>
+    <button data-tab="none" class="on" title="Just the picture">SCREEN</button>
+    <button data-tab="keys" title="The key rail and the command line">KEYS</button>
+    <button data-tab="sound" title="Sound and volume">SOUND</button>
+    <button data-tab="power" title="Mains power and the input link">POWER</button>
+    <button data-tab="log" title="What the daemon has been doing">LOG</button>
+    <button data-tab="set" title="Settings">⚙</button>
   </div>
 
   <div id="body">
    <div id="sheethdr">
      <span id="sheettitle">Activity</span>
-     <button id="sheetclose">✕ Close</button>
+     <button id="sheetclose" title="Close this panel">✕ Close</button>
    </div>
    <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
    <div id="log"></div>
@@ -658,13 +689,17 @@
     <section id="sec-sound">
       <h2>Sound</h2>
       <div id="meter">
-        <button id="sbtn">🔇</button>
-        <div id="mbar" title="relative level — a volume knob sits in the signal path">
+        <div id="mbar" title="Level arriving from the capture stick">
           <div id="mrms"></div><div id="mpeak"></div>
         </div>
         <span id="mdb">—</span>
+      </div>
+      <div id="volrow">
+        <button id="sbtn" class="ibtn" title="Turn the sound on">🔇</button>
+        <button id="voldn" title="Volume down 5%">−</button>
         <input id="vol" type="range" min="0" max="100" step="1" value="80"
                aria-label="volume">
+        <button id="volup" title="Volume up 5%">+</button>
         <span id="vpct">80%</span>
       </div>
     </section>
@@ -672,13 +707,13 @@
     <section id="sec-power">
       <h2>Power</h2>
       <div class="row" style="margin-bottom:8px">
-        <button id="verifybtn">Verify input link</button>
+        <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
       </div>
       <div class="row">
-        <button data-power="on">On</button>
-        <button data-power="off" class="danger">Off</button>
-        <button data-power="cycle" class="danger">Cycle</button>
-        <button id="refresh">Refresh video</button>
+        <button data-power="on" title="Switch the mains plug on">On</button>
+        <button data-power="off" class="danger" title="Cut mains power — the target does not shut down first">Off</button>
+        <button data-power="cycle" class="danger" title="Cut mains power, wait, and switch it back on">Cycle</button>
+        <button id="refresh" title="Restart the capture if the picture is stuck">Refresh video</button>
       </div>
     </section>
 
@@ -1314,10 +1349,20 @@ $('vol').addEventListener('input', () => {
   volume = parseInt($('vol').value, 10) || 0;
   applyVolume();
 });
+// Steps either side of the slider. A range input is a poor instrument for a
+// small correction -- it moves by whatever a pixel is worth on the device --
+// and "a bit louder" is most of what anyone asks of a volume control.
+const nudge = d => {
+  volume = Math.max(0, Math.min(100, volume + d));
+  applyVolume();
+};
+$('voldn').onclick = () => nudge(-5);
+$('volup').onclick = () => nudge(5);
 
 function setSound(on) {
   soundOn = on;
   $('sbtn').textContent = on ? '🔊' : '🔇';
+  $('sbtn').title = on ? 'Mute the sound' : 'Turn the sound on';
   $('sbtn').classList.toggle('on', on);
   applyVolume();
   // Off stops the STREAM, not just the output: silence still costs 1.5 Mbit/s,
@@ -1670,9 +1715,11 @@ async function pollState() {
   if (!soundOn) {
     // Even with sound off, say whether the capture path is alive. "silent" and
     // "the ALSA device died" look identical otherwise.
-    $('sbtn').title = A.state === 'capturing'
-      ? 'sound off — capture path is alive'
-      : 'audio ' + (A.state || 'unavailable');
+    // What the button DOES first, then what the capture path is up to:
+    // "silent" and "the ALSA device died" look identical from here otherwise.
+    $('sbtn').title = 'Turn the sound on — ' + (A.state === 'capturing'
+      ? 'the capture path is alive'
+      : 'audio ' + (A.state || 'unavailable'));
   }
 }
 let powerFails = 0;
@@ -1869,6 +1916,40 @@ addEventListener('resize', () => applyZoom());
 // The key rail, on desktop. Hiding it hands its row back to the picture, so
 // the toggle has to re-run the zoom: the stage changed size and nothing else
 // tells us -- a display change fires no resize event.
+// The side panel, on desktop. Same shape as the key rail: hiding it changes
+// the stage size and no resize event says so.
+// Tooltips for the key rail. Written here rather than typed twenty times into
+// the markup: they are all the same sentence with one word changed, and a
+// hand-copied set is a set with one wrong one in it.
+(function keytips() {
+  const NAME = {esc:'Esc', tab:'Tab', enter:'Enter', backspace:'Backspace',
+                up:'Up', down:'Down', left:'Left', right:'Right'};
+  for (const b of document.querySelectorAll('#keys button')) {
+    if (b.title) continue;                       // C-A-Del says more than this
+    const k = b.dataset.key, m = b.dataset.mod;
+    if (k) b.title = 'Send ' + (NAME[k] || k.toUpperCase()) + ' to the target';
+    else if (m) b.title = 'Hold ' + b.textContent
+      + ' for the next key — tap again to release';
+  }
+})();
+
+(function sidepanel() {
+  const b = $('sidebtn');
+  const set = hide => {
+    document.body.classList.toggle('nopanel', hide);
+    // Not ▶/◀: those carry an emoji presentation and came out as a large
+    // orange play button beside two actual emoji.
+    b.textContent = hide ? '❮' : '❯';
+    b.title = hide ? 'Show the side panel'
+                   : 'Hide the side panel and give the space to the picture';
+    b.setAttribute('aria-expanded', hide ? 'false' : 'true');
+    localStorage.setItem('vcctrl.panel', hide ? 'hidden' : 'shown');
+    applyZoom();
+  };
+  set(localStorage.getItem('vcctrl.panel') === 'hidden');
+  b.onclick = () => set(!document.body.classList.contains('nopanel'));
+})();
+
 (function keyrail() {
   const b = $('keysbtn');
   const set = hide => {
@@ -2007,12 +2088,12 @@ function applyTheme(name, remember) {
     b.title = (BY[half] || {}).label || half;
     b.setAttribute('aria-label', b.title);
   }
-  $('dbtn').textContent = DARK.has(name) ? '☀' : '☾';
+  $('dbtn').textContent = DARK.has(name) ? '☀️' : '🌙';
   // Say what pressing it does, not what it is. The header keeps the glyph
   // because it has no room for words; the panel has room.
   $('dbtn2').textContent = DARK.has(name) ? 'Switch to light' : 'Switch to dark';
-  $('dbtn').title = DARK.has(name) ? 'switch to the light pairing'
-                                   : 'switch to the dark pairing';
+  $('dbtn').title = DARK.has(name) ? 'Switch to this theme\'s light half'
+                                   : 'Switch to this theme\'s dark half';
 }
 function systemPrefersDark() {
   return !matchMedia('(prefers-color-scheme: light)').matches;

@@ -909,6 +909,13 @@ HARNESS = """
     if (bg && bg !== 'rgba(0, 0, 0, 0)') painted++;
   }
   out.push(`chips ${chips.length} ${painted}`);
+  // Every button says what it does on hover. The ones that lack a tooltip are
+  // always the ones added last, which is why this is counted rather than
+  // eyeballed.
+  const btns = document.querySelectorAll('button');
+  let untitled = 0;
+  for (const b of btns) if (!b.title.trim()) untitled++;
+  out.push(`tips ${btns.length} ${untitled}`);
   out.push(`named ${document.getElementById('themename').textContent.trim()
                      .replace(/\s+/g, '_')} 0`);
 
@@ -1044,6 +1051,12 @@ def test_zoom_layout_in_a_browser():
           (got["themes"], len(T.THEMES), darks))
     check("one swatch per pair, and every swatch is painted",
           got["chips"] == (float(darks), float(darks)), got["chips"])
+    check("every button has a tooltip",
+          got["tips"][1] == 0.0, "%d of %d have none"
+          % (got["tips"][1], got["tips"][0]))
+    check("control: there are buttons to check", got["tips"][0] > 25,
+          got["tips"])
+
     check("control: the name line shows a label, not a raw id",
           "_" in str(got.get("named_label", "")) or
           str(got.get("named_label", "")) not in T.THEMES,
