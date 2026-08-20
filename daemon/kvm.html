@@ -3,156 +3,253 @@
 <title>vcctrl-kvm</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" id="tcolor" content="#17150F">
+<link rel="stylesheet" href="/themes.css">
 <style>
+  /* ── type ────────────────────────────────────────────────────────────────
+     Monospace is the primary voice: every value on this page is data, and a
+     fixed grid echoes the 8x16 VGA text cell without any retro pastiche.
+     system-ui is demoted to buttons and prose.
+
+     One prominent size, one dense size, one micro size. The largest text is
+     17px because the picture is the point and nothing in the chrome may be
+     visually louder than it. */
   :root {
-    --bg:#14161a; --panel:#1c1f26; --line:#2b303a; --fg:#dfe3ea;
-    --dim:#8a93a3; --ok:#5ac27a; --warn:#e0b341; --bad:#e05c5c;
-    --accent:#7aa2f7;
-    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --t-micro: 10px;      /* units, lamp names, group labels */
+    --t-data: 11.5px;     /* log lines, dense readouts */
+    --t-read: 13px;       /* readout values, buttons */
+    --t-state: 17px;      /* the one prominent size */
     --safe-b: env(safe-area-inset-bottom, 0px);
+    --tap: 44px;          /* iOS/Android minimum touch target */
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; }
-  body { background:var(--bg); color:var(--fg); overflow:hidden;
-         font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
-         -webkit-text-size-adjust:100%; }
+  body {
+    background:var(--bg); color:var(--text); overflow:hidden;
+    font:var(--t-read)/1.45 var(--sans); -webkit-text-size-adjust:100%;
+  }
+
+  /* Visible focus everywhere. The page had none at all. */
+  :focus-visible {
+    outline:2px solid var(--blue); outline-offset:2px; border-radius:3px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation:none !important; transition:none !important; }
+  }
+  @media (prefers-contrast: more) {
+    :root { --rule: var(--muted); }
+  }
 
   #app { display:flex; flex-direction:column; height:100%; }
 
-  header { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
-           padding:6px 10px; padding-top:calc(6px + env(safe-area-inset-top,0px));
-           background:var(--panel); border-bottom:1px solid var(--line);
-           flex:none; }
-  h1 { font-size:13px; font-weight:600; margin:0 4px 0 0; }
-  .pill { font:11px/1 var(--mono); padding:5px 8px; border-radius:999px;
-          border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
-  .pill.on{color:var(--ok);border-color:#2c5c3c}
-  .pill.off{color:var(--bad);border-color:#5c2c2c}
-  .pill.mid{color:var(--warn);border-color:#5c4c2c}
-  .grow{flex:1}
+  /* ── status rail ─────────────────────────────────────────────────────────
+     One line. Never wraps: a status bar that reflows is one you have to read
+     rather than glance at. */
+  header {
+    flex:none; display:flex; align-items:center; gap:10px;
+    padding:0 10px; padding-top:env(safe-area-inset-top,0px);
+    height:calc(38px + env(safe-area-inset-top,0px));
+    background:var(--panel); border-bottom:1px solid var(--rule);
+    overflow-x:auto; scrollbar-width:none;
+  }
+  header::-webkit-scrollbar { display:none; }
+  h1 {
+    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:var(--dim); margin:0; flex:none;
+  }
+  .grow { flex:1 1 auto; min-width:4px; }
 
-  /* The screen. Fixed 4:3 so a phone shows the whole thing rather than a
-     letterbox of black, and it never grows past half the viewport. */
-  #stage { position:relative; background:#000; flex:none;
-           aspect-ratio:4/3; max-height:48vh; width:100%;
-           display:flex; align-items:center; justify-content:center;
-           overflow:hidden; }
-  #stage img, #stage canvas { width:100%; height:100%; object-fit:contain;
-           image-rendering:pixelated; display:block; }
-  /* The last live picture, shown behind the notice when the stream is not
-     live. Dimmed so it can never be mistaken for the current screen. */
-  #stale { position:absolute; inset:0; filter:grayscale(.6) brightness(.55); }
-  #stage.armed { outline:1px solid rgba(90,194,122,.5); outline-offset:-1px; }
-  #stage { cursor:pointer; }
-  /* The capture hint lives BELOW the picture, never over it. A bar across the
-     bottom of the stage sat exactly on the DOS prompt -- the one line you most
-     need to read on this machine. Nothing overlays the picture except the
-     no-signal notice, and that only when there is no picture to cover. */
-  #capbar { flex:none; padding:5px 10px; font:11px/1.4 var(--mono);
-            text-align:center; color:var(--dim); background:#171a21;
-            border-bottom:1px solid var(--line); transition:color .3s; }
-  #capbar.armed { color:var(--ok); }
-  #capbar.armed b { color:var(--ok); font-weight:600; }
-  #capbar.flash { color:#dfe3ea; transition:none; }
-  /* Level meter. Shown whether or not sound is enabled, because "is there
-     audio on the wire" is a different question from "can I hear it" -- and on
-     a muted phone the meter is the only answer available. */
-  #meter { flex:none; display:flex; align-items:center; gap:9px;
-           padding:6px 10px; background:#171a21;
-           border-bottom:1px solid var(--line); font:10px/1 var(--mono);
-           color:var(--dim); }
-  #meter button { padding:6px 9px; font-size:11px; }
-  #mdb { min-width:6.5ch; text-align:right; }
-  #vpct { min-width:4ch; text-align:right; }
-  #vol { flex:0 1 130px; min-width:80px; height:20px; accent-color:var(--ok);
-         background:transparent; cursor:pointer; }
-  #settings { display:none; }
-  #settings.show { display:block; }
-  #settings label { display:flex; align-items:center; gap:8px; padding:4px 0;
-                    font-size:12px; cursor:pointer; }
-  #settings input[type=checkbox] { accent-color:var(--ok); width:15px;
-                                   height:15px; flex:none; }
-  #settings .hint { color:var(--dim); font-size:11px; margin:2px 0 8px; }
-  #mbar { flex:1; height:6px; background:#0f1116; border-radius:3px;
-          overflow:hidden; position:relative; }
-  #mrms { position:absolute; left:0; top:0; bottom:0; width:0%;
-          background:var(--ok); transition:width .08s linear; }
-  #mpeak { position:absolute; top:0; bottom:0; width:2px; background:var(--warn); left:0; }
-  #veil { position:absolute; inset:0; display:none; flex-direction:column;
-          align-items:center; justify-content:center; gap:6px; padding:16px;
-          background:rgba(10,11,14,.85); text-align:center; }
+  /* The state word. Colour never carries the meaning on its own -- the word
+     is the meaning, and the lamp beside it repeats it. Required by the
+     monochrome themes, and what colour-blind users need anyway. */
+  #state {
+    font:600 var(--t-state)/1 var(--mono); letter-spacing:.02em;
+    color:var(--text); flex:none; white-space:nowrap;
+  }
+  .chip {
+    font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
+    text-transform:uppercase; color:var(--dim); white-space:nowrap; flex:none;
+  }
+  .chip b { color:var(--muted); font-weight:500; }
+
+  /* ── the lamps: this page's signature ────────────────────────────────────
+     Caps / Num / Scroll, read from /sys/class/leds. They are the real PS/2
+     return channel -- non-video proof a keystroke reached the machine -- and
+     they were previously buried in a JSON field nobody opens.
+     Lit, hollow or crossed: never colour alone. */
+  #lamps { display:flex; gap:7px; flex:none; align-items:center; }
+  .lamp { display:flex; flex-direction:column; align-items:center; gap:3px; }
+  .lamp i {
+    width:9px; height:9px; border-radius:50%; display:block;
+    border:1px solid var(--rule); background:transparent;
+    transition:background .12s linear, box-shadow .12s linear;
+  }
+  .lamp.on i { background:var(--green); box-shadow:0 0 5px var(--green); }
+  .lamp.stale i { border-style:dashed; opacity:.5; }
+  .lamp span {
+    font:var(--t-micro)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
+  }
+
+  /* ── stage ───────────────────────────────────────────────────────────────
+     The well stays near-black in EVERY theme, including the light ones.
+     Simultaneous contrast: a cream surround makes the captured screen look
+     darker than it is, and judging exactly that is a thing people do on this
+     rig. A theme may recolour every panel it likes; it may not change how the
+     evidence looks. */
+  #stage {
+    position:relative; flex:1 1 auto; min-height:0; background:#000;
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
+  }
+  #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
+  #stage img, #stage canvas {
+    max-width:100%; max-height:100%; width:auto; height:auto;
+    object-fit:contain; image-rendering:pixelated; display:block;
+  }
+  #stale { position:absolute; inset:0; width:100%; height:100%;
+           filter:grayscale(.6) brightness(.55); }
+  #veil {
+    position:absolute; inset:0; display:none; flex-direction:column;
+    align-items:center; justify-content:center; gap:6px; padding:18px;
+    background:rgba(0,0,0,.84); text-align:center;
+  }
   #veil.show { display:flex; }
-  #veil .big { font:600 14px var(--mono); color:var(--warn); }
-  #veil .sub { color:var(--dim); font-size:12px; max-width:44ch; }
+  #veil .big { font:600 var(--t-read)/1.3 var(--mono); color:var(--yellow); }
+  #veil .sub { color:#9a9a94; font:var(--t-data)/1.5 var(--sans); max-width:46ch; }
 
-  /* Key bar: horizontally scrollable so every key stays reachable on a
-     narrow screen without wrapping into a wall of buttons. */
-  #keys { flex:none; display:flex; gap:5px; overflow-x:auto; padding:7px 8px;
-          background:var(--panel); border-bottom:1px solid var(--line);
-          scrollbar-width:none; }
+  /* ── rails ───────────────────────────────────────────────────────────── */
+  #capbar {
+    flex:none; padding:5px 10px; text-align:center; background:var(--panel);
+    border-bottom:1px solid var(--rule); color:var(--dim);
+    font:var(--t-micro)/1.5 var(--mono); letter-spacing:.04em;
+    transition:color .3s;
+  }
+  #capbar.armed { color:var(--green); }
+  #capbar.flash { color:var(--text); transition:none; }
+
+  #keys {
+    flex:none; display:flex; gap:5px; overflow-x:auto; padding:6px 8px;
+    background:var(--panel); border-bottom:1px solid var(--rule);
+    scrollbar-width:none;
+  }
   #keys::-webkit-scrollbar { display:none; }
   #keys button { flex:none; }
 
-  button { font:12px/1 system-ui,sans-serif; color:var(--fg); background:#232833;
-           border:1px solid var(--line); border-radius:7px; padding:9px 11px;
-           cursor:pointer; min-height:36px; touch-action:manipulation; }
-  button:active { background:#2d3442; }
-  button.sticky { border-color:var(--accent); color:var(--accent);
-                  background:#20283a; }
-  button.danger:active { border-color:var(--bad); color:#ffb4b4; }
-  button.primary { border-color:var(--ok); color:var(--ok); }
+  button, select {
+    font:500 var(--t-read)/1 var(--sans); color:var(--text);
+    background:var(--panel); border:1px solid var(--rule); border-radius:6px;
+    padding:0 11px; min-height:var(--tap); cursor:pointer;
+    touch-action:manipulation;
+  }
+  @media (pointer:fine) { button, select { min-height:32px; } }
+  button:hover { border-color:var(--muted); }
+  button:active { background:var(--rule); }
+  button.on { border-color:var(--green); color:var(--green); }
+  button.danger:active { border-color:var(--red); color:var(--red); }
+  header button { padding:0 9px; }
 
-  #body { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
-          padding-bottom:calc(12px + var(--safe-b)); }
+  #body {
+    flex:none; max-height:42vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    background:var(--panel); border-top:1px solid var(--rule);
+    padding-bottom:calc(10px + var(--safe-b));
+  }
+  section { padding:10px 12px; border-bottom:1px solid var(--rule); }
+  h2 {
+    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:var(--dim); margin:0 0 9px;
+    padding-bottom:6px; border-bottom:1px solid var(--rule);
+  }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .kv {
+    display:flex; justify-content:space-between; gap:10px;
+    font:var(--t-data)/1.9 var(--mono);
+  }
+  .kv span:last-child { color:var(--dim); }
+
+  #meter { display:flex; align-items:center; gap:9px; }
+  #mbar {
+    flex:1; height:5px; background:var(--bg); border:1px solid var(--rule);
+    border-radius:3px; overflow:hidden; position:relative; min-width:60px;
+  }
+  #mrms { position:absolute; inset:0 auto 0 0; width:0%; background:var(--green);
+          transition:width .08s linear; }
+  #mpeak { position:absolute; top:0; bottom:0; width:2px; background:var(--yellow); left:0; }
+  #mdb, #vpct { font:var(--t-micro)/1 var(--mono); color:var(--dim);
+                min-width:6ch; text-align:right; }
+  #vol { flex:0 1 120px; min-width:70px; accent-color:var(--green);
+         background:transparent; cursor:pointer; height:var(--tap); }
+  @media (pointer:fine) { #vol { height:24px; } }
+
+  #log { padding:6px 12px; font:var(--t-data)/1.55 var(--mono); }
+  #log div { display:flex; gap:7px; padding:1px 0; }
+  #log .t { color:var(--dim); flex:none; }
+  #log .k { flex:none; width:10ch; overflow:hidden; }
+  #log .d { color:var(--muted); word-break:break-all; }
+  .k-cmd{color:var(--blue)} .k-lock{color:var(--yellow)}
+  .k-taint{color:var(--red);font-weight:600} .k-vid{color:var(--green)}
+
+  #settings { display:none; }
+  #settings.show { display:block; }
+  #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
+                    font:var(--t-read)/1.3 var(--sans); cursor:pointer; }
+  #settings input[type=checkbox] { accent-color:var(--green); width:17px;
+                                   height:17px; flex:none; }
+  .hint { color:var(--dim); font:var(--t-micro)/1.5 var(--sans);
+          margin:0 0 9px 26px; }
+  #themes { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+            gap:4px; margin-bottom:6px; }
+  #themes button { text-align:left; padding:7px 9px; font:var(--t-data)/1 var(--mono);
+                   min-height:34px; }
+  #themes button.sel { border-color:var(--green); color:var(--green); }
+  .tgroup { font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+            text-transform:uppercase; color:var(--dim); margin:10px 0 5px; }
+
+  #ghost { position:absolute; opacity:0; height:1px; width:1px; padding:0;
+           border:0; left:-9999px; top:0; font-size:16px; }
+
+  /* ── desktop ─────────────────────────────────────────────────────────── */
   @media (min-width:900px) {
     #app { display:grid; grid-template-columns:minmax(0,1fr) 340px;
-           grid-template-rows:auto 1fr; height:100vh; }
+           grid-template-rows:auto 1fr auto auto; height:100vh; }
     header { grid-column:1/-1; }
-    #stage { grid-row:2; aspect-ratio:auto; max-height:none; height:100%; }
-    #keys { grid-column:1; grid-row:3; }
-    #body { grid-column:2; grid-row:2/4; border-left:1px solid var(--line);
-            background:var(--panel); }
+    #stage  { grid-column:1; grid-row:2; }
+    #capbar { grid-column:1; grid-row:3; }
+    #keys   { grid-column:1; grid-row:4; border-bottom:0; }
+    /* Activity is the only unbounded content, so it gets the height; the
+       fixed-size controls sit above it rather than competing for scroll. */
+    #body   { grid-column:2; grid-row:2/5; max-height:none; overflow-y:auto;
+              border-top:0; border-left:1px solid var(--rule); }
   }
-
-  section { padding:10px 12px; border-bottom:1px solid var(--line); }
-  h2 { font:600 11px/1 system-ui; letter-spacing:.09em; text-transform:uppercase;
-       color:var(--dim); margin:0 0 8px; }
-  .row { display:flex; gap:6px; flex-wrap:wrap; }
-  .kv { display:flex; justify-content:space-between; gap:10px;
-        font:12px/1.8 var(--mono); }
-  .kv span:last-child { color:var(--dim); }
-  #log { padding:6px 12px; font:11px/1.55 var(--mono); }
-  #log div { display:flex; gap:7px; padding:1px 0; }
-  #log .t { color:#5b6373; flex:none; }
-  #log .k { flex:none; width:10ch; overflow:hidden; }
-  #log .d { color:var(--dim); word-break:break-all; }
-  .k-cmd{color:var(--accent)} .k-lock{color:var(--warn)}
-  .k-taint{color:var(--bad);font-weight:600} .k-vid{color:var(--ok)}
-
-  /* Off-screen but focusable: focusing it is what summons the iOS keyboard.
-     It must not be display:none or hidden, or the keyboard will not appear. */
-  #ghost { position:absolute; opacity:0; height:1px; width:1px;
-           padding:0; border:0; left:-9999px; top:0;
-           font-size:16px; /* <16px makes iOS zoom the page on focus */ }
+  /* Landscape phone: the screen is 4:3 and the phone is not, so give the
+     picture everything and let the panels go away. */
+  @media (max-width:899px) and (orientation:landscape) and (max-height:520px) {
+    #body { max-height:0; padding:0; border:0; overflow:hidden; }
+    #keys { padding:3px 8px; }
+    header { height:32px; }
+  }
 </style>
 
 <div id="app">
   <header>
     <h1>vcctrl-kvm</h1>
-    <span id="p-video" class="pill">video …</span>
-    <span id="p-lock"  class="pill">lock …</span>
-    <span id="p-power" class="pill">power …</span>
-    <span id="p-xport" class="pill">…</span>
-    <span id="p-kbd" class="pill">keyboard idle</span>
-    <span id="p-audio" class="pill">sound off</span>
+    <span id="state" aria-live="polite">—</span>
+    <div id="lamps" title="PS/2 keyboard LEDs — the return channel from the target">
+      <div class="lamp" id="lamp-caps"><i></i><span>CAP</span></div>
+      <div class="lamp" id="lamp-num"><i></i><span>NUM</span></div>
+      <div class="lamp" id="lamp-scroll"><i></i><span>SCR</span></div>
+    </div>
+    <span id="c-lock" class="chip">input <b>—</b></span>
+    <span id="c-power" class="chip">power <b>—</b></span>
+    <span id="c-xport" class="chip">link <b>—</b></span>
+    <span id="c-kbd" class="chip">kbd <b>idle</b></span>
     <span class="grow"></span>
-    <button id="kbtn" class="primary">⌨ Keyboard</button>
-    <button id="gbtn" title="settings">⚙</button>
+    <button id="dbtn" aria-label="switch between light and dark">◐</button>
+    <button id="gbtn" aria-label="settings">⚙</button>
   </header>
 
   <div id="stage">
-    <canvas id="screen" width="640" height="480"></canvas>
+    <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
     <img id="mjpeg" style="display:none" alt="">
     <img id="stale" style="display:none" alt="">
     <div id="veil">
@@ -163,17 +260,6 @@
   </div>
 
   <div id="capbar">click the screen to capture the keyboard</div>
-
-  <div id="meter">
-    <button id="sbtn">🔇 Sound</button>
-    <div id="mbar" title="relative level — a volume knob sits in the signal path">
-      <div id="mrms"></div><div id="mpeak"></div>
-    </div>
-    <span id="mdb">—</span>
-    <input id="vol" type="range" min="0" max="100" step="1" value="80"
-           aria-label="volume">
-    <span id="vpct">80%</span>
-  </div>
 
   <div id="keys">
     <button data-mod="lctrl">Ctrl</button>
@@ -197,35 +283,54 @@
 
   <div id="body">
     <section id="settings">
-      <h2>Settings</h2>
-      <div class="hint">What appears in the activity log. The events still
-        happen and are still recorded by the daemon — this only filters the
-        view.</div>
+      <h2>Theme</h2>
+      <div id="themes"></div>
+      <label><input type="checkbox" id="opt-auto">
+        Follow the system light/dark setting</label>
+      <div class="hint">When on, the theme switches with your OS. The ◐ button
+        picks the other half of the current pair by hand.</div>
+
+      <h2 style="margin-top:14px">Activity log</h2>
+      <div class="hint" style="margin-left:0">These events still happen and the
+        daemon still records them — this only filters the view.</div>
       <label><input type="checkbox" id="opt-probe">
         Show LED and probe traffic</label>
-      <div class="hint">Caps Lock toggles, <code>leds</code>, <code>ledwait</code>
-        and level reads. The harness uses these to test whether the machine is
-        responding, so they repeat constantly and drown everything else.</div>
+      <div class="hint">Caps Lock toggles and LED reads. The harness uses these
+        to test whether the machine is responding, so they repeat constantly.</div>
       <label><input type="checkbox" id="opt-poll">
         Show read-only queries</label>
-      <div class="hint">Screenshots, status and power-state polls — every open
-        tab makes them on a timer.</div>
+      <div class="hint">Screenshots, status and power polls — every open tab
+        makes them on a timer.</div>
       <label><input type="checkbox" id="opt-mine">
         Show this browser's own commands</label>
-      <div class="hint">Off by default: you already know what you just did. The
+      <div class="hint">Off by default: you know what you just did. The
         harness's actions are the ones worth watching.</div>
     </section>
 
     <section>
       <h2>Type</h2>
       <div class="row">
-        <input id="line" placeholder="type a command, press send"
+        <input id="line" placeholder="type a command, then Send"
                autocapitalize="off" autocorrect="off" spellcheck="false"
-               style="flex:1;min-width:140px;font:13px var(--mono);
-                      background:#12141a;color:var(--fg);
-                      border:1px solid var(--line);border-radius:7px;
-                      padding:9px 10px">
-        <button id="sendline" class="primary">Send ↵</button>
+               style="flex:1;min-width:130px;font:var(--t-data) var(--mono);
+                      background:var(--bg);color:var(--text);
+                      border:1px solid var(--rule);border-radius:6px;
+                      padding:0 10px;min-height:var(--tap)">
+        <button id="sendline" class="on">Send ↵</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Sound</h2>
+      <div id="meter">
+        <button id="sbtn">🔇</button>
+        <div id="mbar" title="relative level — a volume knob sits in the signal path">
+          <div id="mrms"></div><div id="mpeak"></div>
+        </div>
+        <span id="mdb">—</span>
+        <input id="vol" type="range" min="0" max="100" step="1" value="80"
+               aria-label="volume">
+        <span id="vpct">80%</span>
       </div>
     </section>
 
@@ -244,17 +349,18 @@
       <div class="kv"><span>running</span><span id="s-inflight">–</span></div>
       <div class="kv"><span>last event</span><span id="s-lastev">–</span></div>
       <div class="kv"><span>frames</span><span id="s-frames">–</span></div>
+      <div class="kv"><span>buffer</span><span id="s-span">–</span></div>
       <div class="kv"><span>viewers</span><span id="s-viewers">–</span></div>
       <div class="kv"><span>transport</span><span id="s-xport">–</span></div>
     </section>
 
-    <h2 style="padding:10px 12px 0">Activity</h2>
+    <h2 style="padding:10px 12px 0;border:0">Activity</h2>
     <div id="log"></div>
   </div>
 </div>
 
 <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
-       autocomplete="off" enterkeyhint="enter">
+       autocomplete="off" enterkeyhint="enter" aria-hidden="true" tabindex="-1">
 
 <script>
 const $ = id => document.getElementById(id);
@@ -506,8 +612,7 @@ function setArmed(v, opts) {
   if (armed === v) return;
   armed = v;
   $('stage').classList.toggle('armed', v);
-  $('kbtn').classList.toggle('sticky', v);
-  $('kbtn').textContent = v ? '⌨ capturing' : '⌨ Keyboard';
+  pill('p-kbd', v ? 'on' : '', v ? 'captured' : 'idle');
   if (v) {
     // Focusing the off-screen input is what summons the on-screen keyboard on
     // a touch device. On desktop it is harmless and keeps key events flowing
@@ -550,7 +655,6 @@ function armFromStage() {
 }
 $('stage').addEventListener('click', armFromStage, true);
 $('stage').addEventListener('pointerup', armFromStage, true);
-$('kbtn').onclick = () => setArmed(!armed);
 
 // Text from a virtual keyboard, dictation or autocorrect.
 ghost.addEventListener('input', () => {
@@ -665,9 +769,8 @@ $('vol').addEventListener('input', () => {
 
 function setSound(on) {
   soundOn = on;
-  $('sbtn').textContent = on ? '🔊 Sound' : '🔇 Sound';
-  $('sbtn').classList.toggle('primary', on);
-  pill('p-audio', on ? 'on' : '', on ? 'sound on' : 'sound off');
+  $('sbtn').textContent = on ? '🔊' : '🔇';
+  $('sbtn').classList.toggle('on', on);
   applyVolume();
   // Off stops the STREAM, not just the output: silence still costs 1.5 Mbit/s,
   // and there is no reason to carry it to a viewer who is not listening. The
@@ -887,8 +990,27 @@ function hideStale() {
 // ------------------------------------------------------------------ status
 const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
   : s < 5400 ? (s/60).toFixed(1)+'m' : (s/3600).toFixed(1)+'h';
+// The old API set six coloured pills. The rail now has one state WORD plus
+// small labelled chips: colour never carries meaning alone, which the
+// monochrome themes force and colour-blind users need anyway.
 function pill(id, cls, text) {
-  const el = $(id); el.className = 'pill ' + cls; el.textContent = text;
+  if (id === 'p-video') {           // the one prominent readout
+    const w = String(text).replace(/^video\s*/, '').toUpperCase();
+    $('state').textContent = w === 'LOCKED' ? 'LOCKED' : w;
+    $('state').style.color = cls === 'on' ? 'var(--text)'
+                           : cls === 'off' ? 'var(--red)' : 'var(--yellow)';
+    return;
+  }
+  const map = {'p-lock':'c-lock', 'p-power':'c-power',
+               'p-xport':'c-xport', 'p-kbd':'c-kbd'};
+  const el = $(map[id] || id);
+  if (!el) return;
+  const b = el.querySelector('b');
+  const val = String(text).replace(/^(input|power|keyboard|link)\s*/, '');
+  if (b) b.textContent = val; else el.textContent = val;
+  el.style.color = cls === 'on' ? 'var(--green)'
+                 : cls === 'off' ? 'var(--red)'
+                 : cls === 'mid' ? 'var(--yellow)' : 'var(--dim)';
 }
 async function pollState() {
   let j;
@@ -924,12 +1046,15 @@ async function pollState() {
   $('s-lastev').textContent = fmtAge(j.last_event_age_s);
   $('s-frames').textContent = v.frames ?? '–';
   $('s-viewers').textContent = j.viewers ?? '–';
+  $('s-span').textContent = v.span_s != null ? v.span_s.toFixed(1) + 's' : '–';
+  lamps(j.leds, v.state);
   const A = j.audio || {};
   if (!soundOn) {
     // Even with sound off, say whether the capture path is alive. "silent" and
     // "the ALSA device died" look identical otherwise.
-    pill('p-audio', A.state === 'capturing' ? '' : 'mid',
-         A.state === 'capturing' ? 'sound off' : 'audio ' + (A.state || '?'));
+    $('sbtn').title = A.state === 'capturing'
+      ? 'sound off — capture path is alive'
+      : 'audio ' + (A.state || 'unavailable');
   }
 }
 async function pollPower() {
@@ -941,4 +1066,128 @@ setInterval(pollState, 1500);
 setInterval(pollEvents, 1500);
 setInterval(pollPower, 20000);
 pollState(); pollEvents(); pollPower();
+
+// ══════════════════════════════════════════════════════════ theme engine
+// Palettes live in /themes.css, generated from tools/themes.py. Switching is a
+// CSS variable swap on <html>: nothing re-renders, no socket reconnects, the
+// stream is undisturbed.
+const THEMES = [
+  ['House', [['vga', 'VGA (default)']]],
+  ['Editor', [
+    ['tokyo-night','Tokyo Night'], ['tokyo-night-light','Tokyo Night Light'],
+    ['dracula','Dracula'], ['nord','Nord'],
+    ['solarized-dark','Solarized Dark'], ['solarized-light','Solarized Light'],
+    ['catppuccin-mocha','Catppuccin Mocha'], ['catppuccin-macchiato','Catppuccin Macchiato'],
+    ['catppuccin-frappe','Catppuccin Frappé'], ['catppuccin-latte','Catppuccin Latte'],
+    ['gruvbox-dark','Gruvbox Dark'], ['gruvbox-light','Gruvbox Light'],
+    ['rose-pine','Rosé Pine'], ['rose-pine-moon','Rosé Pine Moon'],
+    ['rose-pine-dawn','Rosé Pine Dawn'],
+    ['everforest-dark','Everforest Dark'], ['everforest-light','Everforest Light'],
+    ['kanagawa-wave','Kanagawa Wave'], ['kanagawa-dragon','Kanagawa Dragon'],
+    ['kanagawa-lotus','Kanagawa Lotus'],
+  ]],
+  ['Phosphor', [
+    ['apple-ii-green','Apple II Green (P1)'], ['ibm-5151','IBM 5151 (P39)'],
+    ['dec-amber','DEC Amber (P3)'], ['vt220-white','VT220 White (P4)'],
+  ]],
+];
+const DARK = new Set(['vga','tokyo-night','dracula','nord','solarized-dark',
+  'catppuccin-mocha','catppuccin-macchiato','catppuccin-frappe','gruvbox-dark',
+  'rose-pine','rose-pine-moon','everforest-dark','kanagawa-wave',
+  'kanagawa-dragon','apple-ii-green','ibm-5151','dec-amber','vt220-white']);
+
+let theme = localStorage.getItem('vcctrl.theme') || 'vga';
+let autoTheme = localStorage.getItem('vcctrl.autotheme') !== '0';
+
+function pairOf(name) {
+  // Each theme names its opposite in --pair, emitted by the generator, so the
+  // light/dark button always has somewhere to go.
+  const v = getComputedStyle(document.documentElement)
+              .getPropertyValue('--pair').trim().replace(/^"|"$/g, '');
+  return v || name;
+}
+function applyTheme(name, remember) {
+  theme = name;
+  document.documentElement.setAttribute('data-theme', name);
+  if (remember) localStorage.setItem('vcctrl.theme', name);
+  // Match the iOS status bar to the page rather than letting it clash.
+  requestAnimationFrame(() => {
+    const bg = getComputedStyle(document.documentElement)
+                 .getPropertyValue('--bg').trim();
+    if (bg) $('tcolor').setAttribute('content', bg);
+  });
+  for (const b of document.querySelectorAll('#themes button'))
+    b.classList.toggle('sel', b.dataset.theme === name);
+  $('dbtn').textContent = DARK.has(name) ? '☀' : '☾';
+  $('dbtn').title = DARK.has(name) ? 'switch to the light pairing'
+                                   : 'switch to the dark pairing';
+}
+function systemPrefersDark() {
+  return !matchMedia('(prefers-color-scheme: light)').matches;
+}
+function autoPick() {
+  // Follow the OS, but stay within the pair the operator last chose: if they
+  // picked Gruvbox, dark mode should be Gruvbox Dark, not the house theme.
+  const want = systemPrefersDark();
+  if (DARK.has(theme) === want) return;
+  applyTheme(pairOf(theme), false);
+}
+
+(function buildPicker() {
+  const host = $('themes');
+  for (const [group, list] of THEMES) {
+    const h = document.createElement('div');
+    h.className = 'tgroup'; h.textContent = group;
+    h.style.gridColumn = '1/-1';
+    host.appendChild(h);
+    for (const [id, label] of list) {
+      const b = document.createElement('button');
+      b.dataset.theme = id; b.textContent = label;
+      b.onclick = () => { autoTheme = false;
+        localStorage.setItem('vcctrl.autotheme','0');
+        $('opt-auto').checked = false; applyTheme(id, true); };
+      host.appendChild(b);
+    }
+  }
+})();
+
+$('dbtn').onclick = () => {
+  // Manual flip picks the other half of the current pair and stops auto,
+  // because an automatic switch would immediately undo it.
+  autoTheme = false;
+  localStorage.setItem('vcctrl.autotheme','0');
+  $('opt-auto').checked = false;
+  applyTheme(pairOf(theme), true);
+};
+$('opt-auto').checked = autoTheme;
+$('opt-auto').onchange = () => {
+  autoTheme = $('opt-auto').checked;
+  localStorage.setItem('vcctrl.autotheme', autoTheme ? '1' : '0');
+  if (autoTheme) autoPick();
+};
+matchMedia('(prefers-color-scheme: light)')
+  .addEventListener('change', () => { if (autoTheme) autoPick(); });
+
+applyTheme(theme, false);
+if (autoTheme) autoPick();
+
+// ══════════════════════════════════════════════════════════ the lamps
+// Caps / Num / Scroll straight off /sys/class/leds. Lit, hollow, or dashed:
+// the LED level is a RETAINED state, so a powered-off host publishes nothing
+// and the last value stands. Drawn dashed when the picture says the machine is
+// not showing anything, because a lamp that looks live on a dead machine is
+// the same lie in miniature that cost a wrong readiness report.
+function lamps(leds, videoState) {
+  const stale = videoState === 'nosignal' || videoState === 'unavailable';
+  for (const [key, id] of [['capslock','lamp-caps'], ['numlock','lamp-num'],
+                           ['scrolllock','lamp-scroll']]) {
+    const el = $(id);
+    if (!el) continue;
+    const v = leds && leds[key];
+    el.classList.toggle('on', v === 1);
+    el.classList.toggle('stale', stale);
+    el.title = (leds ? (v === 1 ? 'lit' : 'dark') : 'unknown')
+             + (stale ? ' — retained, the target is not showing a picture' : '');
+  }
+}
 </script>

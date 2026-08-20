@@ -548,6 +548,61 @@ def test_watchdogs_survive_one_pass():
           "an attribute its class lacks", err == ["AttributeError"], err)
 
 
+def test_theme_contrast():
+    """Every colour a theme ships must clear the WCAG floor on every surface.
+
+    Checking four schemes by eye is plausible; checking twenty-five is not, and
+    several published schemes place accents near 2:1 against their own
+    background -- fine for a syntax token inside a wall of code, not fine for
+    the only thing telling you a machine is unreachable.
+
+    tools/themes.py keeps the schemes verbatim and the generator nudges any
+    value that misses the floor, reporting what it changed. This asserts the
+    EMITTED values, which is what a browser actually renders.
+    """
+    print("\ntheme contrast")
+    import os
+    sys.path.insert(0, os.path.join(HERE, os.pardir, "tools"))
+    import themes as T
+
+    worst_text, worst_accent, checked = 99.0, 99.0, 0
+    for name in T.THEMES:
+        roles, _notes = T.fitted(name)
+        for surface in ("bg", "panel"):
+            for role in ("text", "muted"):
+                c = T.contrast(roles[role], roles[surface])
+                worst_text = min(worst_text, c)
+                checked += 1
+                if c < 4.5:
+                    check("%s: %s on %s is %.2f:1" % (name, role, surface, c),
+                          False)
+            for role in T.ACCENTS + ("dim",):
+                c = T.contrast(roles[role], roles[surface])
+                worst_accent = min(worst_accent, c)
+                checked += 1
+                if c < 3.0:
+                    check("%s: %s on %s is %.2f:1" % (name, role, surface, c),
+                          False)
+    check("%d colour pairs across %d themes clear the floor"
+          % (checked, len(T.THEMES)), True)
+    check("worst body text ratio %.2f:1 (floor 4.5)" % worst_text,
+          worst_text >= 4.5)
+    check("worst indicator ratio %.2f:1 (floor 3.0)" % worst_accent,
+          worst_accent >= 3.0)
+
+    # Control: the check must be able to fail. A floor nothing can trip is not
+    # a floor.
+    bad = T.contrast("#777777", "#808080")
+    check("control: the same measure rejects grey on grey (%.2f:1)" % bad,
+          bad < 3.0)
+
+    # Every theme names a pairing, so the light/dark button always has a target.
+    for name, (_g, _d, pair, _r) in T.THEMES.items():
+        if pair not in T.THEMES:
+            check("%s pairs with an unknown theme %r" % (name, pair), False)
+    check("every theme's light/dark pair exists", True)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -562,6 +617,7 @@ if __name__ == "__main__":
     test_activity_age()
     test_audio_levels()
     test_watchdogs_survive_one_pass()
+    test_theme_contrast()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)

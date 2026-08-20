@@ -10,6 +10,7 @@ sudo mkdir -p "$PREFIX"
 sudo install -m 0755 "$SRC/daemon/vcctrld.py"    "$PREFIX/vcctrld.py"
 sudo install -m 0644 "$SRC/daemon/vcweb.py"      "$PREFIX/vcweb.py"
 sudo install -m 0644 "$SRC/daemon/kvm.html"      "$PREFIX/kvm.html"
+sudo install -m 0644 "$SRC/daemon/themes.css"    "$PREFIX/themes.css"
 sudo install -m 0755 "$SRC/bin/vcctrl-client"    /usr/local/bin/vcctrl
 
 sudo tee /etc/systemd/system/vcctrld.service >/dev/null <<'UNIT'

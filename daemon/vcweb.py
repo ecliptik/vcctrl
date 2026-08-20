@@ -138,6 +138,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/":
                 return self._send(200, self.cap.page(), "text/html; charset=utf-8")
+            if path == "/themes.css":
+                with open(os.path.join(HERE, "themes.css"), "rb") as f:
+                    return self._send(200, f.read(), "text/css; charset=utf-8")
             if path == "/state.json":
                 return self._json(self.cap.snapshot())
             if path in ("/shot.jpg", "/lastgood.jpg"):
@@ -377,7 +380,15 @@ class WebCapability(object):
         """Everything the page needs to answer "is it stuck", in one request."""
         vid = self.video()
         act = self.call("activity", {})
+        # The PS/2 LEDs are the page's signature indicator and its only
+        # non-video evidence that a keystroke reached the target, so they ride
+        # in the same poll as everything else rather than needing a second one.
+        try:
+            leds = self.registry.devs.read_leds()
+        except Exception:
+            leds = None
         return {"video": vid._state() if vid else {"state": "unavailable"},
+                "leds": leds,
                 "inflight": act.get("inflight"),
                 "lock": act.get("lock"),
                 "last_event_age_s": act.get("last_event_age_s"),
