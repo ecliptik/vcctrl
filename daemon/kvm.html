@@ -555,12 +555,21 @@
      phosphors it was a colour that scheme does not contain. Yellow still
      carries the meaning, as the text and the edge. */
   #stalebar {
-    flex:none; display:none; align-items:center; justify-content:center;
-    gap:10px; padding:7px 10px; background:var(--panel); color:var(--yellow);
-    border-top:1px solid var(--yellow); border-bottom:1px solid var(--yellow);
+    position:absolute; z-index:75; top:9px; left:50%;
+    transform:translateX(-50%);
+    display:none; align-items:center; justify-content:center;
+    gap:10px; padding:7px 12px; background:var(--panel); color:var(--yellow);
+    border:1px solid var(--yellow); border-radius:8px;
+    box-shadow:0 8px 22px rgba(0,0,0,.42);
     font:600 var(--t-data)/1.3 var(--sans); text-align:center;
+    max-width:min(92vw, 520px);
   }
-  #stalebar.show { display:flex; }
+  #stalebar.show { display:flex; animation:toastin .18s ease-out; }
+  @keyframes toastin {
+    from { opacity:0; transform:translate(-50%, -8px); }
+    to   { opacity:1; transform:translate(-50%, 0); }
+  }
+  @media (prefers-reduced-motion: reduce) { #stalebar.show { animation:none; } }
   #stalebar button { min-height:30px; padding:0 10px; background:var(--bg);
                      color:var(--yellow); border-color:var(--yellow);
                      font:600 var(--t-data) var(--sans); }
@@ -921,6 +930,17 @@
   </header>
 
   <div id="stage">
+   <!-- Under the header, over the picture. As a row in the flow it sat down
+        by the control strip -- far from anything it was about -- and it took
+        a row of the picture and re-fitted it the moment it appeared. It is a
+        toast: it hovers, it is only as wide as its sentence, and the picture
+        underneath does not move.
+        Inside the stage rather than fixed to the window, so it centres on the
+        PICTURE. Window-centred put it off to one side whenever the column was
+        open, and it needed the header's measured height to know where the top
+        was; anchored here it needs neither, and it follows full screen. -->
+   <div id="stalebar" role="status">A newer version of this page is available
+     <button id="reloadbtn" title="Reload the page">Reload now</button></div>
    <div id="scroll">
     <div id="frame">
      <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
@@ -987,10 +1007,6 @@
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
             title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power ▾</span></button>
   </div>
-
-  <div id="stalebar">A newer version of this page is available — reload
-    <button id="reloadbtn" title="Reload the page">Reload now</button></div>
-
 
   <div id="keys">
     <button data-mod="lctrl">Ctrl</button>
