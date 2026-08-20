@@ -1077,6 +1077,19 @@ class VideoCapability(Capability):
             frozen = None
             if len(recent) >= self.FROZEN_RUN:
                 frozen = len(set(hashlib.md5(f).digest() for f in recent)) == 1
+
+            # A pin that outlives its usefulness turns the KVM stale, which is
+            # the failure this whole tool exists to prevent. Expire it.
+            with self.lock:
+                if self.pinned_at is not None and \
+                        time.time() - self.pinned_at > self.PIN_TIMEOUT_S:
+                    self.pinned_at = None
+                    expired = True
+                else:
+                    expired = False
+            if expired:
+                self._publish("video.pin", state="expired")
+
             if not owned:
                 continue
             if proc is not None and proc.poll() is not None:
@@ -1590,18 +1603,6 @@ class AudioCapability(Capability):
                 age = (time.time() - self.last_chunk_t) if self.last_chunk_t \
                     else (time.time() - self.spawn_t if self.spawn_t else None)
                 state = self.state
-            # A pin that outlives its usefulness turns the KVM stale, which is
-            # the failure this whole tool exists to prevent. Expire it.
-            with self.lock:
-                if self.pinned_at is not None and \
-                        time.time() - self.pinned_at > self.PIN_TIMEOUT_S:
-                    self.pinned_at = None
-                    expired = True
-                else:
-                    expired = False
-            if expired:
-                self._publish("video.pin", state="expired")
-
             if not owned:
                 continue
             if proc is not None and proc.poll() is not None:

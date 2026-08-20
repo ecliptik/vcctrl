@@ -479,6 +479,75 @@ def test_audio_levels():
           d["mean_db"] > -89.0, d["mean_db"])
 
 
+def test_watchdogs_survive_one_pass():
+    """Every capability's watchdog must complete a pass without raising.
+
+    This exists because one did not. A pin-expiry block intended for
+    VideoCapability landed in AudioCapability's watchdog by a text-anchored
+    edit that matched the wrong class -- both define _watchdog, and the anchor
+    happened to be unique to the wrong one. The thread died on an
+    AttributeError one second after every start, so audio ran with NO
+    SUPERVISION at all.
+
+    Nothing caught it. `caps` reported audio healthy, because caps asks whether
+    the device opened, not whether its supervisor survived -- a dead watchdog is
+    invisible to the check that would tell you the subsystem is fine.
+    """
+    print("\nwatchdogs")
+    import threading
+
+    # Build each capability through its REAL __init__, which opens no device
+    # and spawns nothing. The first version of this test filled in any missing
+    # attribute with None, which would have papered over exactly the bug it
+    # exists to catch: the point is that AudioCapability does NOT define
+    # pinned_at, so a watchdog touching it must fail here.
+    devs = make_devices()
+    for cls in vcctrld.CAPABILITIES:
+        if not hasattr(cls, "_watchdog"):
+            continue
+        try:
+            cap = cls(devs, None)
+        except TypeError:
+            cap = cls(devs)
+        cap.running = True
+        cap.spawn_t = time.time()
+        err = []
+
+        def run(c=cap, e=err):
+            try:
+                threading.Timer(0.05, lambda: setattr(c, "running", False)).start()
+                c._watchdog()
+            except Exception as exc:
+                e.append("%s: %s" % (type(exc).__name__, exc))
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join(timeout=4)
+        check("%s watchdog completes a pass" % cls.name, not err,
+              err[0] if err else "")
+
+    # Control: prove the check can actually detect the failure it claims to.
+    # A green result here otherwise says nothing about whether the test works.
+    class Broken(vcctrld.AudioCapability):
+        name = "broken"
+
+        def _watchdog(self):
+            while self.running:
+                time.sleep(0.01)
+                _ = self.pinned_at          # AudioCapability never defines this
+
+    cap = Broken(devs, None)
+    cap.running = True
+    err = []
+    try:
+        threading.Timer(0.05, lambda: setattr(cap, "running", False)).start()
+        cap._watchdog()
+    except Exception as exc:
+        err.append(type(exc).__name__)
+    check("control: the same check DOES catch a watchdog touching "
+          "an attribute its class lacks", err == ["AttributeError"], err)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -492,6 +561,7 @@ if __name__ == "__main__":
     test_event_bus()
     test_activity_age()
     test_audio_levels()
+    test_watchdogs_survive_one_pass()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
