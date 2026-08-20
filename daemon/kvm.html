@@ -173,23 +173,20 @@
        One flat scrolling row, no boxes, generous targets. Bordered buttons at
        phone size spend most of their width on the border and read as a form;
        these are keys, and a key you are about to hit wants the space. */
-    body #keys {
-      gap:0; padding:0 2px; background:var(--panel);
-      border-top:1px solid var(--rule); border-bottom:0;
-    }
-    body #keys button {
-      border:0; border-radius:0; background:transparent; color:var(--text);
+    body #pop-keys { gap:4px; padding:8px; }
+    body #pop-keys button {
+      border:0; border-radius:5px; background:transparent; color:var(--text);
       min-height:46px; padding:0 13px; font:500 15px/1 var(--sans);
     }
-    body #keys button:active { background:var(--rule); }
-    body #keys button.on { color:var(--green); background:transparent; }
-    body #keys button.danger { color:var(--red); }
+    body #pop-keys button:active { background:var(--rule); }
+    body #pop-keys button.on { color:var(--green); background:transparent; }
+    body #pop-keys button.danger { color:var(--red); }
     #zoom { max-width:66px; font-size:10px; padding:0 3px; }
     /* Room for a thumb: a 34px swatch is a comfortable target with a mouse
        and a miss on a phone. */
     #themes { grid-template-columns:repeat(auto-fill,minmax(42px,1fr)); }
     #themes button { min-height:42px; }
-    /* The tab bar already opens and closes the rail here. */
+    /* The tab bar already opens and closes the menu here. */
     body #keysbtn { display:none; }
     /* The tab bar is the panel here; there is no column to collapse. */
     body #actbtn, body #statbtn { display:none; }
@@ -205,8 +202,6 @@
        further down took precedence and every tab showed the key rail. */
     body #cmdbar { display:none; }
     body #cmdbar.open { display:flex; }
-    body #keys { display:none; }
-    body #keys.open { display:flex; }
 
     body #tabs {
       display:flex; flex:none; border-top:1px solid var(--rule);
@@ -575,13 +570,17 @@
   #stalebar button { min-height:30px; padding:0 10px; background:var(--bg);
                      color:var(--yellow); border-color:var(--yellow);
                      font:600 var(--t-data) var(--sans); }
-  #keys {
-    flex:none; display:flex; gap:5px; overflow-x:auto; padding:6px 8px;
-    background:var(--panel); border-bottom:1px solid var(--rule);
-    scrollbar-width:none;
+  /* It WRAPS now rather than scrolling sideways. A single scrolling row was
+     right when it spanned the window; in a popover half the keys would have
+     been off the right-hand edge behind a scrollbar nobody looks for. */
+  #pop-keys {
+    display:flex; flex-wrap:wrap; gap:5px; padding:9px 10px;
+    width:min(438px, calc(100vw - 16px));
   }
-  #keys::-webkit-scrollbar { display:none; }
-  #keys button { flex:none; }
+  /* .pop[hidden] is (0,2,0) and loses to the id above, so it has to be said
+     again at id strength or the menu is permanently open. */
+  #pop-keys[hidden] { display:none; }
+  #pop-keys button { flex:none; }
 
   button, select {
     font:500 var(--t-read)/1 var(--sans); color:var(--text);
@@ -632,7 +631,7 @@
      resize and re-fit the picture every time you reached for a control,
      which is the opposite of looking directly connected. */
   body.fs header, body.fs #cmdbar,
-  body.fs #keys, body.fs #tabs, body.fs #body { display:none; }
+  body.fs #tabs, body.fs #body { display:none; }
   body.fs.peek header, body.fs.peek #cmdbar {
     display:flex; position:fixed; left:0; right:0; z-index:80;
     background:var(--panel);
@@ -820,11 +819,17 @@
 
   #stats .kv span:first-child { flex:none; white-space:nowrap; }
   #stats .kv span:last-child { text-align:right; overflow-wrap:anywhere; }
+  /* Nine groups down a narrow column, and at --t-micro in --dim they were
+     the same weight as the rows they were meant to be separating. Bigger,
+     heavier, in the text colour, with a rule under them -- the same treatment
+     the page's other section headings already get. */
   #stats .rgroup {
-    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
-    text-transform:uppercase; color:var(--dim); margin:11px 0 4px;
+    font:700 var(--t-data)/1.2 var(--mono); letter-spacing:.14em;
+    text-transform:uppercase; color:var(--text); margin:16px 0 5px;
+    padding-bottom:4px; border-bottom:1px solid var(--rule);
   }
-  #stats .rgroup:first-child { margin-top:2px; }
+  #stats .rgroup:first-child { margin-top:4px; }
+  #stats .good span:last-child { color:var(--green); }
   #stats .warn span:last-child { color:var(--yellow); }
   #stats .bad  span:last-child { color:var(--red); }
   #stats .unk  span:last-child { color:var(--dim); font-style:italic; }
@@ -859,12 +864,6 @@
        mixed, which is why a power chip that looked like a readout was also a
        menu, and a keyboard chip nobody could see a reason to press. */
     #cmdbar { grid-column:1/-1; grid-row:3; }
-    #keys   { grid-column:1/-1; grid-row:5; border-bottom:0; }
-    /* The rail costs about 40px of picture and is not always wanted. Hiding
-       it collapses its grid row, so the stage takes the height back -- on a
-       900px window that is 652 -> 692, which Fit turns straight into
-       869x652 -> 923x692 of screen. */
-    body.nokeys #keys { display:none; }
     /* The side panel is 340px of a 1580px window. Collapsing the COLUMN as
        well as hiding the panel is the load-bearing half: display:none on the
        panel alone leaves the track sized and the picture exactly where it
@@ -881,7 +880,7 @@
      picture everything and let the panels go away. */
   @media (max-width:899px) and (orientation:landscape) and (max-height:520px) {
     #body { height:0; padding:0; border:0; overflow:hidden; }
-    #keys { padding:3px 8px; }
+
     header { height:32px; }
   }
 </style>
@@ -921,6 +920,10 @@
             title="What the daemon has been doing"><span class="bi">📋</span><span class="bl">Activity</span></button>
     <button id="statbtn" class="lbtn pbtn" aria-expanded="false" aria-controls="body"
             title="Measured state of the rig"><span class="bi">📊</span><span class="bl">Status</span></button>
+    <!-- The two above RESERVE SPACE: opening them narrows the picture.
+         Settings and light/dark do not. Three identical-looking buttons doing
+         two different things to your picture is worth a rule between them. -->
+    <span class="sep" aria-hidden="true">|</span>
     <button id="gbtn" class="lbtn" aria-label="settings"
             title="Themes, video, input and the rest"><span class="bi">⚙️</span><span class="bl">Settings</span></button>
     <!-- The one bare glyph left, and the only separator. It is not a panel --
@@ -987,7 +990,8 @@
       <button id="sendline" title="Type this line at the target and press Enter">Send ↵</button>
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
-    <button id="keysbtn" aria-expanded="true" aria-controls="keys"
+    <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
+            aria-controls="pop-keys"
             title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys ▾</span></button>
     <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
     <!-- NOT display:none. A file input that is display:none is not focusable,
@@ -1010,7 +1014,12 @@
             title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power ▾</span></button>
   </div>
 
-  <div id="keys">
+  <!-- A POPOVER, like Sound and Power. As a row in the flow it took ~40px of
+       picture whenever it was open, and opening it re-fitted the whole stage
+       -- so reaching for a key resized the thing you were about to type at.
+       It is the same kind of object as the other two menus and now behaves
+       like one. -->
+  <div id="pop-keys" class="pop" role="dialog" aria-label="Keys" hidden>
     <button data-mod="lctrl">Ctrl</button>
     <button data-mod="lalt">Alt</button>
     <button data-mod="lshift">Shift</button>
@@ -2313,7 +2322,8 @@ for (const k of Object.keys(OPTS)) {
 // Popovers in the rail. One at a time, anchored under whatever opened them,
 // and clamped to the window -- a menu that opens off the right edge of a
 // phone is a menu you cannot use.
-const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn'};
+const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn',
+             keys: 'keysbtn'};
 let openPopName = null;
 function closePop() {
   if (!openPopName) return;
@@ -2348,9 +2358,18 @@ function openPop(name) {
   el.style.left = left + 'px';
   // Below the anchor, unless there is no room below it -- these controls sit
   // in a strip at the BOTTOM of the window, where "below" is off the screen.
+  //
+  // Measured off the BAR, not off the button. A button sits a few pixels
+  // inside its bar's padding, so clearing the button still left the menu
+  // lying across the edge of the strip that opened it -- measured at 2px of
+  // overlap, which is small but is the same rule the settings drawer and the
+  // mobile sheet both had to be taught: an overlay must never cover the
+  // control that opens it.
   const h = el.offsetHeight;
-  el.style.top = (a.bottom + 6 + h > window.innerHeight - 8
-                  ? Math.max(8, a.top - h - 6) : a.bottom + 6) + 'px';
+  const bar = anchor.closest('header, #cmdbar');
+  const br = bar ? bar.getBoundingClientRect() : a;
+  el.style.top = (br.bottom + 6 + h > window.innerHeight - 8
+                  ? Math.max(8, br.top - h - 6) : br.bottom + 6) + 'px';
 }
 
 // How much of the window the two bars are using. Not hardcoded: the rails
@@ -2360,7 +2379,7 @@ function measureBars() {
   const hdr = document.querySelector('header');
   const top = hdr ? hdr.getBoundingClientRect().bottom : 0;
   let bot = window.innerHeight;
-  for (const id of ['cmdbar', 'keys', 'tabs']) {
+  for (const id of ['cmdbar', 'tabs']) {
     const el = $(id);
     if (!el || getComputedStyle(el).display === 'none') continue;
     const r = el.getBoundingClientRect();
@@ -2994,7 +3013,7 @@ function setInputHeld(owner) {
     el.disabled = !!owner;
     if (owner) el.title = why;
   }
-  for (const b of document.querySelectorAll('#keys button')) b.disabled = !!owner;
+  for (const b of document.querySelectorAll('#pop-keys button')) b.disabled = !!owner;
   if (owner && armed) setArmed(false);
   if (!owner) {
     $('sendline').title = 'Type this line at the target and press Enter';
@@ -3010,6 +3029,19 @@ function setInputHeld(owner) {
 // ONE NUMBER PER ROW. The stream line used to pack fps, bitrate, the rate
 // asked for and the source rate into a single value that ran off the end of a
 // 340 px column. A readout you have to reassemble is not a readout.
+// A NUMBER IS ONLY WORTH COLOURING IF IT HAS A LIMIT. Most of this readout
+// is facts -- a device path, a build hash, a frame count -- and painting
+// those green would say "healthy" about things that cannot be unhealthy,
+// which is how a wall of green stops meaning anything. These two are used
+// only where there is a real ceiling or floor to be near.
+const band = (v, warn, bad) =>
+  v == null || !isFinite(v) ? '' : v >= bad ? 'bad' : v >= warn ? 'warn' : 'good';
+// For the ones where SMALL is the problem: a frame rate that has fallen, a
+// buffer not holding what it was asked for.
+const bandLow = (v, warn, bad) =>
+  v == null || !isFinite(v) ? '' : v <= bad ? 'bad' : v <= warn ? 'warn' : 'good';
+const pct = n => Math.round(n * 100) + '%';
+
 function statsRows(j) {
   const out = [];
   const g = t => out.push('<div class="rgroup">' + t + '</div>');
@@ -3024,19 +3056,26 @@ function statsRows(j) {
   kv('resolution', capSize() || 'no frame yet', capSize() ? '' : 'unk');
   kv('at source', srcFps ? srcFps.toFixed(1) + ' fps' : '—');
   const got = achievedFps();
-  kv('arriving here', got ? got.toFixed(1) + ' fps' : '—',
-     got && srcFps && got < srcFps * 0.6 ? 'warn' : '');
+  // Against what the SOURCE is producing: 18 fps is excellent from a 20 fps
+  // source and poor from a 30 fps one, so the bare number cannot be judged.
+  kv('arriving here',
+     got ? got.toFixed(1) + ' fps' + (srcFps ? ' · ' + pct(got / srcFps) : '') : '—',
+     got && srcFps ? bandLow(got / srcFps, 0.6, 0.35) : '');
   kv('asking for', fpsWant ? fpsWant + ' fps' : '—');
   kv('bitrate', byteWin.length > 1 ? streamMbit().toFixed(2) + ' Mbit/s' : '—');
   kv('transport', xportLabel);
   kv('last frame', v.last_frame_age_s != null
        ? (v.last_frame_age_s * 1000).toFixed(0) + ' ms ago' : '—',
-     v.last_frame_age_s > 2 ? 'bad' : '');
+     band(v.last_frame_age_s, 0.5, 2));
   kv('frames seen', v.frames != null ? v.frames.toLocaleString() : '—');
   if (v.fast_failures) kv('restarts', v.fast_failures, 'bad');
 
   g('Buffer');
-  kv('holding', v.span_s != null ? v.span_s.toFixed(1) + ' s' : '—');
+  // Against what it was ASKED to hold. Short of that means the ring is being
+  // squeezed -- by memory, or by frames too large for the span to fit.
+  kv('holding', v.span_s != null ? v.span_s.toFixed(1) + ' s' : '—',
+     v.span_s != null && v.target_span_s
+       ? bandLow(v.span_s / v.target_span_s, 0.9, 0.5) : '');
   kv('asked to hold', v.target_span_s != null ? v.target_span_s + ' s' : '—');
   kv('frames', v.ring_frames != null ? v.ring_frames.toLocaleString() : '—');
   kv('memory', v.ring_bytes != null
@@ -3056,8 +3095,11 @@ function statsRows(j) {
   // Round trip to the daemon and back, measured on the poll this page is
   // already making. It is the number that answers "is the KVM feeling slow
   // because of the network" without anyone having to run anything.
+  // Banded only when there IS a measurement: pollMs is 0 before the first
+  // poll returns, and 0 is comfortably under every threshold, so the dash
+  // came out green -- a health reading about a number we do not have.
   kv('round trip', pollMs ? pollMs.toFixed(0) + ' ms' : '—',
-     pollMs > 250 ? 'warn' : '');
+     pollMs ? band(pollMs, 120, 250) : '');
   kv('viewers', j.viewers ?? '—');
   kv('listeners', j.listeners ?? '—');
   if (w.sent_frames != null) kv('ws frames sent', w.sent_frames.toLocaleString());
@@ -3101,9 +3143,23 @@ function statsRows(j) {
     if (h.governor) kv('governor', h.governor);
     const th = heat(h);
     if (th) kv('throttling', th.text, th.now ? 'bad' : 'warn');
-    if (h.mem_total_mb) kv('memory', h.mem_used_mb + ' / ' + h.mem_total_mb + ' MB');
-    if (h.disk_total_gb) kv('disk', h.disk_used_gb + ' / ' + h.disk_total_gb + ' GB');
-    if (h.load) kv('load', Array.isArray(h.load) ? h.load.join(' ') : h.load);
+    if (h.mem_total_mb)
+      kv('memory', h.mem_used_mb + ' / ' + h.mem_total_mb + ' MB · '
+                   + pct(h.mem_used_mb / h.mem_total_mb),
+         band(h.mem_used_mb / h.mem_total_mb, 0.85, 0.95));
+    if (h.disk_total_gb)
+      kv('disk', h.disk_used_gb + ' / ' + h.disk_total_gb + ' GB · '
+                 + pct(h.disk_used_gb / h.disk_total_gb),
+         band(h.disk_used_gb / h.disk_total_gb, 0.85, 0.95));
+    if (h.load) {
+      const one = Array.isArray(h.load) ? h.load[0] : Number(h.load);
+      // Per core, because 2.0 is half idle on this Pi and twice oversubscribed
+      // on a single-core one. Uncoloured when the daemon does not say how many
+      // cores there are: a load with no denominator has no limit to be near.
+      kv('load', (Array.isArray(h.load) ? h.load.join(' ') : h.load)
+                 + (h.cores ? ' · ' + pct(one / h.cores) + ' of ' + h.cores + ' cores' : ''),
+         h.cores ? band(one / h.cores, 0.85, 1.5) : '');
+    }
   }
 
   g('Daemon');
@@ -3121,7 +3177,7 @@ function statsRows(j) {
   if (j.host && j.host.uptime_s != null) kv('pi uptime', fmtAge(j.host.uptime_s));
   if (j.host && j.host.temp_c != null)
     kv('pi temperature', j.host.temp_c.toFixed(1) + ' °C',
-       j.host.temp_c >= 80 ? 'bad' : j.host.temp_c >= 70 ? 'warn' : '');
+       band(j.host.temp_c, 70, 80));
   return out.join('');
 }
 
@@ -3178,7 +3234,7 @@ function setTab(name) {
   // them on screen with nothing highlighted -- a panel with no way back to
   // the button that owns it.
   if (name !== 'set') showSettings(false);
-  if (name !== 'sound' && name !== 'power') closePop();
+  if (name !== 'sound' && name !== 'power' && name !== 'keys') closePop();
   // The long panels open as a full-screen sheet; the short ones stay a strip
   // at the bottom. Reading a log through a 150px window is not reading.
   // Settings is a drawer of its own now, not one of these panels.
@@ -3186,7 +3242,6 @@ function setTab(name) {
   for (const b of document.querySelectorAll('#tabs button'))
     b.classList.toggle('on', b.dataset.tab === name);
   $('cmdbar').classList.toggle('open', name === 'keys');
-  $('keys').classList.toggle('open', name === 'keys');
   body.className = '';
   panels.className = '';
   if (asSheet) body.classList.add('sheet');
@@ -3202,6 +3257,7 @@ function setTab(name) {
   // Sound and power are popovers in the rail now, not panels down here. The
   // tab still opens them; it just opens the same thing the header does,
   // rather than a second copy that can disagree with it.
+  else if (name === 'keys') { openPop('keys'); body.classList.add('closed'); }
   else if (name === 'sound') { openPop('sound'); body.classList.add('closed'); }
   else if (name === 'power') { openPop('power'); body.classList.add('closed'); }
   else if (name === 'set')   { showSettings(true); body.classList.add('closed'); }
@@ -3328,7 +3384,7 @@ function applyZoom(recentre) {
   // Coming down from 4x the scrollbars are still there when we measure, so
   // the fit lands ~10px short and then the scrollbars go away, leaving a gap
   // that nothing on screen explains.
-  let scale = 0;
+  let scale = 0, pw = 0, ph = 0;
   for (let pass = 0; pass < 2; pass++) {
     const W = sc.clientWidth, H = sc.clientHeight;
     if (!W || !H) return;
@@ -3336,14 +3392,25 @@ function applyZoom(recentre) {
                                       : Number(zoomMode);
     if (want === scale) break;
     scale = want;
+    // WHOLE PIXELS, AND NEVER LARGER THAN THE BOX. scale is a float, so a
+    // fitted 480-line frame comes out 651.9999999999999 or 652.0000000000001
+    // depending on the window height -- and the browser rounds the second one
+    // up into a real scrollbar that scrolls one pixel. The epsilon is there
+    // so the first one does not floor away a whole pixel instead.
+    pw = Math.floor(nw * scale + 0.001);
+    ph = Math.floor(nh * scale + 0.001);
+    // Only when nothing is cropped. A crop fits the DRAWN REGION to the box,
+    // which means the full frame is deliberately larger and must be allowed
+    // to overflow -- that overflow is the thing you scroll.
+    if (zoomMode === 'fit' && !crop) { pw = Math.min(pw, W); ph = Math.min(ph, H); }
     for (const id of ['screen', 'mjpeg', 'stale']) {
       const e = $(id);
-      e.style.width = (nw * scale) + 'px';
-      e.style.height = (nh * scale) + 'px';
+      e.style.width = pw + 'px';
+      e.style.height = ph + 'px';
     }
   }
 
-  const over = nw * scale > sc.clientWidth + 1 || nh * scale > sc.clientHeight + 1;
+  const over = pw > sc.clientWidth + 1 || ph > sc.clientHeight + 1;
   fr.classList.toggle('zoomed', over);
   // Only on a deliberate change. Re-centring on every re-measure would drag
   // the view back under the operator every five seconds.
@@ -3407,7 +3474,7 @@ addEventListener('resize', () => applyZoom());
 (function keytips() {
   const NAME = {esc:'Esc', tab:'Tab', enter:'Enter', backspace:'Backspace',
                 up:'Up', down:'Down', left:'Left', right:'Right'};
-  for (const b of document.querySelectorAll('#keys button')) {
+  for (const b of document.querySelectorAll('#pop-keys button')) {
     if (b.title) continue;                       // C-A-Del says more than this
     const k = b.dataset.key, m = b.dataset.mod;
     if (k) b.title = 'Send ' + (NAME[k] || k.toUpperCase()) + ' to the target';
@@ -3510,19 +3577,7 @@ function showPanel(which) {
 // draw every one. The rail is still a tap away on the KEYS tab, which does
 // not move while you look at it.
 
-(function keyrail() {
-  const b = $('keysbtn');
-  const set = hide => {
-    document.body.classList.toggle('nokeys', hide);
-    b.querySelector('.bl').textContent = hide ? 'Keys \u25b4' : 'Keys \u25be';
-    b.setAttribute('aria-expanded', hide ? 'false' : 'true');
-    localStorage.setItem('vcctrl.keys', hide ? 'hidden' : 'shown');
-    measureBars();
-    applyZoom();
-  };
-  set(localStorage.getItem('vcctrl.keys') === 'hidden');
-  b.onclick = () => set(!document.body.classList.contains('nokeys'));
-})();
+$('keysbtn').onclick = () => openPop('keys');
 
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.

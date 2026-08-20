@@ -641,11 +641,15 @@ class WebCapability(object):
                  "governor": None, "temp_c": None, "throttled": None,
                  "mem_used_mb": None, "mem_total_mb": None,
                  "disk_used_gb": None, "disk_total_gb": None,
-                 "uptime_s": None, "load": None}
+                 "uptime_s": None, "load": None, "cores": None}
         try:
             facts["model"] = (_read("/proc/device-tree/model") or "").replace("\x00", "") or None
             uname = os.uname()
             facts["kernel"], facts["arch"] = uname.release, uname.machine
+            # Load average means nothing without it. The page was about to
+            # colour a load of 2.0 against a hardcoded four cores, which would
+            # have been right on this Pi and wrong on the next machine.
+            facts["cores"] = os.cpu_count()
             facts["governor"] = _read(
                 "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
             t = _read("/sys/class/thermal/thermal_zone0/temp")

@@ -1338,12 +1338,32 @@ HARNESS = r"""
   emit(`named ${document.getElementById('themename').textContent.trim()
                      .replace(/\s+/g, '_')} 0`);
 
-  // Back to fit, then hide the key rail: its row must go to the picture.
+  // The key rail is a POPOVER now, so the assertion is the opposite of what
+  // it used to be: opening it must leave the picture exactly where it is.
   arm();
   zoomMode = 'fit'; crop = null; applyZoom(true);
+  const kH = sc.clientHeight;
   document.getElementById('keysbtn').click();
-  emit(`view-nokeys ${sc.clientWidth} ${sc.clientHeight}`);
-  say('nokeys');
+  const pk = document.getElementById('pop-keys');
+  const kr = pk.getBoundingClientRect();
+  emit(`keysmenu ${!pk.hidden && kr.height > 20 ? 1 : 0} `
+     + `${Math.round(sc.clientHeight - kH)}`);
+  // It must clear the strip that opened it -- a menu covering its own button
+  // is the bug the tabs and the settings drawer both had.
+  const cr = document.getElementById('cmdbar').getBoundingClientRect();
+  emit(`keysbars ${kr.bottom <= cr.top + 1 ? 1 : 0} `
+     + `${kr.width > 120 ? 1 : 0}`);
+  document.getElementById('keysbtn').click();
+  emit(`keysshut ${pk.hidden ? 1 : 0} 0`);
+
+  // A FIT THAT SCROLLS IS NOT A FIT. The scale is a float, so nh*scale lands
+  // a millionth of a pixel over the box on some window heights and the
+  // browser rounds that up into a real scrollbar that scrolls one pixel.
+  arm();
+  zoomMode = 'fit'; crop = null; applyZoom(true);
+  const sr = document.getElementById('scroll');
+  emit(`fitscroll ${sr.scrollHeight - sr.clientHeight} `
+     + `${sr.scrollWidth - sr.clientWidth}`);
   emit('end 1 1');
  } catch (e) {
   document.getElementById('harness-out').textContent = 'THREW ' + e.message;
@@ -1640,14 +1660,21 @@ def test_zoom_layout_in_a_browser():
           str(got.get("named_label", "")) not in T.THEMES,
           got.get("named_label"))
 
-    # Hiding the key rail collapses its grid row and the stage takes the
-    # height. A toggle that changes display fires no resize event, so if the
-    # zoom is not re-run by hand the picture keeps its old size.
-    check("hiding the key rail makes the fitted picture bigger",
-          got["nokeys"][1] > got["fit"][1] + 8, (got["fit"], got["nokeys"]))
-    check("control: it is still a fit, not a crop",
-          got["nokeys"][0] <= got["view-nokeys"][0] + 0.5,
-          (got["nokeys"], got["view-nokeys"]))
+    # The key rail was a row in the flow: opening it took ~40px of picture
+    # and re-fitted the stage, so reaching for a key resized the thing you
+    # were about to type at. As a popover it must cost the picture nothing.
+    check("the Keys menu opens", got["keysmenu"][0] == 1.0, got["keysmenu"])
+    check("and the picture does not move when it does",
+          got["keysmenu"][1] == 0.0, got["keysmenu"])
+    check("the Keys menu clears the strip that opened it",
+          got["keysbars"][0] == 1.0, got["keysbars"])
+    check("control: it is a real menu, not a collapsed box",
+          got["keysbars"][1] == 1.0, got["keysbars"])
+    check("and the same button closes it",
+          got["keysshut"][0] == 1.0, got["keysshut"])
+    check("a fitted picture does not overflow vertically",
+          got["fitscroll"][0] <= 0, got["fitscroll"])
+    check("nor horizontally", got["fitscroll"][1] <= 0, got["fitscroll"])
 
 
 def test_favicon_single_source():
