@@ -386,6 +386,15 @@ class WebCapability(object):
         self.ws_last_error = None
         self.ws_last_agent = None
         self.ws_dropped = 0
+        # Per-connection accounting. The WebSocket question could not be
+        # settled from either end alone: the browser reports what it received,
+        # the daemon reported only that it wrote without error. If the daemon
+        # says it wrote 200 frames and the page says it saw none, the frames
+        # were lost between them -- which is the whole question, and needs no
+        # browser scripting to answer.
+        self.ws_sent_frames = 0
+        self.ws_sent_bytes = 0
+        self.ws_last = None
         self.listeners = 0
         self.lock = threading.Lock()
 
@@ -438,6 +447,9 @@ class WebCapability(object):
                           else {"state": "unavailable"}),
                 "ws": {"opened": self.ws_opened, "closed": self.ws_closed,
                        "dropped": self.ws_dropped,
+                       "sent_frames": self.ws_sent_frames,
+                       "sent_bytes": self.ws_sent_bytes,
+                       "last": self.ws_last,
                        "last_error": self.ws_last_error,
                        "last_agent": self.ws_last_agent},
                 "caps": self.registry.report()}
@@ -453,6 +465,9 @@ class WebCapability(object):
             self.clients += 1
             self.ws_opened += 1
             self.ws_last_agent = agent
+            self.ws_sent_frames = 0     # per connection, so the number answers
+            self.ws_sent_bytes = 0      # "did THIS client get anything"
+            self.ws_last = "open"
         stop = threading.Event()
         held = set()
         # A list so the input thread can retune it live: the client knows how
@@ -470,6 +485,8 @@ class WebCapability(object):
             with self.lock:
                 self.clients -= 1
                 self.ws_closed += 1
+                self.ws_last = "closed after %d frames / %d bytes written" % (
+                    self.ws_sent_frames, self.ws_sent_bytes)
             # Release anything this viewer was holding. A dropped wifi
             # connection mid-keypress must not leave a key down at the g2k,
             # where at a DOS prompt it types until the buffer fills.
@@ -518,6 +535,9 @@ class WebCapability(object):
                         sock.sendall(ws_frame(item[2], opcode=0x2))
                     except Exception:
                         return
+                    with self.lock:
+                        self.ws_sent_frames += 1
+                        self.ws_sent_bytes += len(item[2])
                 else:
                     with self.lock:
                         self.ws_dropped += 1
