@@ -917,6 +917,23 @@ HARNESS = """
   for (const b of btns) if (!b.title.trim()) untitled++;
   out.push(`tips ${btns.length} ${untitled}`);
 
+  // Hovering a swatch previews it, and leaving puts it back. The failure
+  // that matters is the second half: a preview that sticks has silently
+  // changed the theme without anyone choosing it.
+  {
+    const root = document.documentElement;
+    const before = root.getAttribute('data-theme');
+    const chip = [...document.querySelectorAll('#themes button')]
+                   .find(c => c.dataset.theme !== before);
+    chip.onmouseenter();
+    const during = root.getAttribute('data-theme');
+    chip.onmouseleave();
+    const after = root.getAttribute('data-theme');
+    const selNow = document.querySelector('#themes button.sel');
+    out.push(`preview ${during === chip.dataset.theme ? 1 : 0} ${after === before ? 1 : 0}`);
+    out.push(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
+  }
+
   // Settings must work with the side panel collapsed. It used to live INSIDE
   // that panel, so collapsing the column took the settings with it and the
   // gear did nothing at all -- silently, since the click handler ran fine.
@@ -1071,6 +1088,13 @@ def test_zoom_layout_in_a_browser():
           % (got["tips"][1], got["tips"][0]))
     check("control: there are buttons to check", got["tips"][0] > 25,
           got["tips"])
+
+    check("hovering a swatch previews that theme", got["preview"][0] == 1.0,
+          got["preview"])
+    check("and leaving puts the chosen one back", got["preview"][1] == 1.0,
+          got["preview"])
+    check("control: a preview does not change the selection",
+          got["selkept"][0] == 1.0, got["selkept"])
 
     check("settings opens with the side panel collapsed",
           got["drawer"][0] == 1.0 and got["drawer"][1] > 100, got["drawer"])

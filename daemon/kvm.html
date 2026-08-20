@@ -605,22 +605,22 @@
       <option value="2">2× original</option>
       <option value="4">4× original</option>
     </select>
+    <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
+            title="Switch between the light and dark half of this theme">☀️</button>
+    <button id="gbtn" class="ibtn" aria-label="settings"
+            title="Open the settings panel">⚙️</button>
     <!-- A drawn icon, not a glyph: every character that means "panel" either
          carries an emoji presentation or renders differently in each font,
          and the last two attempts here were a chevron pointing nowhere in
          particular and a large orange play button. This is the editor
          convention -- a pane on the right, filled while it is there. -->
     <button id="sidebtn" aria-expanded="true" aria-controls="body"
-            title="Hide the side panel and give the space to the picture">
+            title="Hide side panel">
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <rect class="frame" x="2" y="3.6" width="16" height="12.8" rx="2.4"/>
         <rect class="pane" x="12.1" y="4.9" width="4.6" height="10.2" rx="1.2"/>
       </svg>
     </button>
-    <button id="gbtn" class="ibtn" aria-label="settings"
-            title="Open the settings panel">⚙️</button>
-    <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
-            title="Switch between the light and dark half of this theme">☀️</button>
   </header>
 
   <div id="stage">
@@ -1999,8 +1999,7 @@ addEventListener('resize', () => applyZoom());
   const b = $('sidebtn');
   const set = hide => {
     document.body.classList.toggle('nopanel', hide);
-    b.title = hide ? 'Show the side panel'
-                   : 'Hide the side panel and give the space to the picture';
+    b.title = hide ? 'Show side panel' : 'Hide side panel';
     b.setAttribute('aria-expanded', hide ? 'false' : 'true');
     localStorage.setItem('vcctrl.panel', hide ? 'hidden' : 'shown');
     applyZoom();
@@ -2119,6 +2118,17 @@ function pairOf(name) {
               .getPropertyValue('--pair').trim().replace(/^"|"$/g, '');
   return v || name;
 }
+// Preview: the attribute only. Not applyTheme -- that records the choice,
+// repaints the swatch grid to the other half of every pair, and rewrites the
+// light/dark button, so hovering would shuffle the grid under the pointer and
+// a mouse that left the window mid-hover would have silently changed the
+// theme. Nothing here is remembered, so leaving puts it straight back.
+function previewTheme(name) {
+  document.documentElement.setAttribute('data-theme', name);
+}
+function endPreview() {
+  document.documentElement.setAttribute('data-theme', theme);
+}
 function applyTheme(name, remember) {
   theme = name;
   document.documentElement.setAttribute('data-theme', name);
@@ -2170,7 +2180,14 @@ function autoPick() {
   // Hover names it, leaving names the current one back: the name line is the
   // only text here, so it has to be right whichever way you got to it.
   const show = id => { name.textContent = (BY[id] || {}).label || id; };
-  host.addEventListener('pointerleave', () => show(theme));
+  const enter = id => { show(id); previewTheme(id); };
+  const leave = () => { show(theme); endPreview(); };
+  host.addEventListener('pointerleave', leave);
+  // A pointer can leave the grid without a pointerleave firing on it -- the
+  // window loses focus, the drawer closes under the cursor. Both put the page
+  // back rather than stranding it in a preview nobody chose.
+  addEventListener('blur', leave);
+  $('setclose').addEventListener('click', leave);
   PAIRS.forEach((p, i) => {
     const b = document.createElement('button');
     b.dataset.pair = i;
@@ -2178,8 +2195,10 @@ function autoPick() {
     // Two bars over the theme's own background: the accent it will use for
     // live state, and the text it will use for everything else.
     b.innerHTML = '<i class="a"></i><i class="b"></i>';
-    b.onmouseenter = () => show(b.dataset.theme);
-    b.onfocus = () => show(b.dataset.theme);
+    b.onmouseenter = () => enter(b.dataset.theme);
+    b.onfocus = () => enter(b.dataset.theme);      // and for the keyboard
+    b.onmouseleave = leave;
+    b.onblur = leave;
     b.onclick = () => { autoTheme = false;
       localStorage.setItem('vcctrl.autotheme','0');
       $('opt-auto').checked = false; applyTheme(b.dataset.theme, true); };
