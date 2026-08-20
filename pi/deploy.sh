@@ -99,12 +99,46 @@ print(",".join(sorted(w for w in who if w and w != "None")) or ("harness" if who
 #
 # Copy to a temp name and mv into place: the mv is atomic within the
 # filesystem, so no request can ever be served half a file.
+#
+# BOUNDED, because ssh to this host can hang forever rather than fail.
+# Diagnosed by the vcctrl session 2026-08-20: systemd-journald blocks in
+# file_tty_write on /dev/console, which is tty1, which has ixon enabled -- so
+# a Ctrl-S aimed at the DOS box is XOFF on the PI'S OWN console. The virtual
+# keyboard is a keyboard to the Pi as well as to the target, which is the same
+# reason install.sh masks ctrl-alt-del.target. Output suspends, the console
+# write never returns, journald stops draining its socket, and every writer
+# behind it blocks -- including sshd, which completes the TCP handshake and
+# then never sends a banner. There is no client-side banner timeout, so
+# `timeout` is the only thing that turns that into an error.
+#
+# THE DISCRIMINATOR IS HTTP: the daemon does not go through sshd, so if
+# /state.json answers while ssh does not, the Pi is up and this is the console
+# wedge rather than anything about the deploy.
+SSH="timeout 45 ssh -o BatchMode=yes -o ConnectTimeout=10"
+SCP="timeout 45 scp -q -o BatchMode=yes -o ConnectTimeout=10"
+
+explain_hang() {
+  echo "ssh to $HOST did not complete." >&2
+  if curl -fsS --max-time 5 \
+      "${VCCTRL_WEB:-https://vcctrl-pi.example.ts.net}/state.json" \
+      >/dev/null 2>&1; then
+    echo "The daemon IS answering over HTTP, so the Pi is up and the network" >&2
+    echo "is fine -- this is the console wedge: journald blocked on tty1 takes" >&2
+    echo "sshd with it. A Ctrl-S sent to the target does this. Nothing was" >&2
+    echo "installed; the running page is unchanged." >&2
+  else
+    echo "HTTP is not answering either, so the Pi or the tailnet is down." >&2
+  fi
+  exit 1
+}
+
 if [ "${1:-}" = "--page" ]; then
   for f in kvm.html themes.css; do
     [ -f "$SRC/daemon/$f" ] || continue
-    scp -q "$SRC/daemon/$f" "$HOST:/tmp/$f.new"
-    ssh "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
-      && mv -f /opt/vcctrl/.$f.tmp /opt/vcctrl/$f' && rm -f /tmp/$f.new"
+    $SCP "$SRC/daemon/$f" "$HOST:/tmp/$f.new" || explain_hang
+    $SSH "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
+      && mv -f /opt/vcctrl/.$f.tmp /opt/vcctrl/$f' && rm -f /tmp/$f.new" \
+      || explain_hang
     echo "installed $f (no restart)"
   done
   exit 0
