@@ -866,7 +866,15 @@ class VideoCapability(Capability):
 
     name = "video"
 
-    DEVICE = "/dev/video0"
+    # Overridable for the same reason the ALSA device is: a device NODE is not
+    # a device. /dev/video0 is whatever enumerated first, and a UVC capture
+    # stick can present two nodes (capture and metadata) in either order on a
+    # machine whose other video devices differ. Named here so a machine that
+    # numbers them differently is a systemd Environment= line rather than an
+    # edit to this file on the box, at the point in a migration where editing
+    # source on hardware is the last thing anyone should be doing.
+    # /dev/v4l/by-id/... is the stable name if the index ever moves.
+    DEVICE = os.environ.get("VCCTRL_VIDEO", "/dev/video0")
     # 48 MB. 30 s at 30 fps is 900 frames: 13.5 MB of text console but 63 MB of
     # a dense screen, a 4.7x spread. A buffer sized in seconds has no fixed
     # cost and one sized in bytes has no fixed duration, so this is capped in
