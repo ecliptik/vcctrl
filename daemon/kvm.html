@@ -381,7 +381,10 @@
      which is right for the icons beside it and wrong for this: the icons are
      glyphs, this is a labelled control that opens a list, and it belongs to
      the same family as Keys, Sound and Power at the bottom. */
-  #zoombtn { color:var(--text); min-width:124px; }
+  /* Wide enough for the LONGEST label, measured -- "Fit to Screen" is 141px
+     and "400% Original" is 124, so a button sized for the shorter one changes
+     width when you change mode and shoves the three buttons beside it. */
+  #zoombtn { color:var(--text); min-width:141px; }
   /* A real gap, not a space in the string: HTML collapses runs of whitespace,
      so "🖥️  Fit" and "🖥️ Fit" render identically and the emoji sits right on
      the F. Flex gap is the only version that actually moves it. */
@@ -642,7 +645,7 @@
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
   /* These three were drawn without a box, on the argument that a glyph is
-     its own control. Beside a boxed Fit Screen -- and above a strip where
+     its own control. Beside a boxed Fit to Screen -- and above a strip where
      every control is boxed -- the exception is what stood out, so they take
      the same ground, border, radius and height as everything else and the
      rail reads as one set of buttons. */
@@ -952,8 +955,8 @@
     </button>
     <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
-            title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit Screen ▾</span></button>
-    <!-- Fit Screen acts on the PICTURE; the three to its right open panels
+            title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen ▾</span></button>
+    <!-- Fit to Screen acts on the PICTURE; the three to its right open panels
          about the rig. The rule is where that changes. -->
     <span class="sep" aria-hidden="true">|</span>
     <!-- The two column panels, and they behave like the tabs on a phone:
@@ -1192,7 +1195,7 @@
 </div>
 
 <div id="pop-zoom" class="pop popmenu" role="dialog" aria-label="Zoom" hidden>
-  <button data-zoom="fit" title="The whole screen, as large as it fits">Fit Screen</button>
+  <button data-zoom="fit" title="The whole screen, as large as it fits">Fit to Screen</button>
   <button data-zoom="1"
           title="One capture pixel per screen pixel — 640x480 on the Gateway, 512x342 on the Macintosh">Original — actual resolution</button>
   <button data-zoom="2" title="Twice the captured size">200% Original</button>
@@ -3550,7 +3553,7 @@ function showCapture() {
                                    : 'Original — actual resolution';
   if ($('stats').clientHeight && lastState) $('stats').innerHTML = statsRows(lastState);
 }
-const ZOOMLABEL = {fit: 'Fit Screen', '1': 'Original',
+const ZOOMLABEL = {fit: 'Fit to Screen', '1': 'Original',
                    '2': '200%', '4': '400%'};
 function setZoom(m) {
   zoomMode = m;
