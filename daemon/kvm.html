@@ -43,18 +43,18 @@
   /* The last live picture, shown behind the notice when the stream is not
      live. Dimmed so it can never be mistaken for the current screen. */
   #stale { position:absolute; inset:0; filter:grayscale(.6) brightness(.55); }
-  #stage.armed { outline:3px solid var(--ok); outline-offset:-3px;
-                 box-shadow:inset 0 0 26px rgba(90,194,122,.28); }
+  #stage.armed { outline:1px solid rgba(90,194,122,.5); outline-offset:-1px; }
   #stage { cursor:pointer; }
-  #hint { position:absolute; left:0; right:0; bottom:0; padding:5px 8px;
-          font:11px/1.3 var(--mono); text-align:center; color:#0e1116;
-          background:rgba(90,194,122,.92); display:none; }
-  #stage.armed #hint { display:block; }
-  #grab { position:absolute; inset:0; display:flex; align-items:flex-end;
-          justify-content:center; padding-bottom:10px; pointer-events:none; }
-  #grab span { font:11px/1 var(--mono); color:var(--dim);
-               background:rgba(10,11,14,.7); padding:5px 9px; border-radius:999px; }
-  #stage.armed #grab { display:none; }
+  /* The capture hint lives BELOW the picture, never over it. A bar across the
+     bottom of the stage sat exactly on the DOS prompt -- the one line you most
+     need to read on this machine. Nothing overlays the picture except the
+     no-signal notice, and that only when there is no picture to cover. */
+  #capbar { flex:none; padding:5px 10px; font:11px/1.4 var(--mono);
+            text-align:center; color:var(--dim); background:#171a21;
+            border-bottom:1px solid var(--line); transition:color .3s; }
+  #capbar.armed { color:var(--ok); }
+  #capbar.armed b { color:var(--ok); font-weight:600; }
+  #capbar.flash { color:#dfe3ea; transition:none; }
   #veil { position:absolute; inset:0; display:none; flex-direction:column;
           align-items:center; justify-content:center; gap:6px; padding:16px;
           background:rgba(10,11,14,.85); text-align:center; }
@@ -129,14 +129,14 @@
     <canvas id="screen" width="640" height="480"></canvas>
     <img id="mjpeg" style="display:none" alt="">
     <img id="stale" style="display:none" alt="">
-    <div id="grab"><span>click to capture keyboard</span></div>
-    <div id="hint">keyboard captured — press <b>Ctrl + Alt + Shift</b> to release</div>
     <div id="veil">
       <div class="big" id="veil-title">connecting…</div>
       <div class="sub" id="veil-sub"></div>
       <div class="sub" id="veil-age"></div>
     </div>
   </div>
+
+  <div id="capbar">click the screen to capture the keyboard</div>
 
   <div id="keys">
     <button data-mod="lctrl">Ctrl</button>
@@ -442,12 +442,16 @@ function setArmed(v, opts) {
     // a touch device. On desktop it is harmless and keeps key events flowing
     // to one place.
     ghost.focus({preventScroll:true});
-    pill('p-kbd', 'on', 'keyboard CAPTURED');
+    pill('p-kbd', 'on', 'keyboard captured');
+    $('capbar').classList.add('armed');
+    $('capbar').innerHTML = 'keyboard captured — press <b>Ctrl + Alt + Shift</b> to release';
     if (!opts || !opts.quiet)
       addLine(new Date(), 'ui', 'keyboard captured — Ctrl+Alt+Shift releases',
               'k-lock');
   } else {
     pill('p-kbd', '', 'keyboard idle');
+    $('capbar').classList.remove('armed');
+    $('capbar').textContent = 'click the screen to capture the keyboard';
     ghost.blur();
     // Anything still held goes up, on this side and at the g2k. Releasing
     // capture with a key down would leave it down at a DOS prompt, typing
@@ -466,9 +470,9 @@ function armFromStage() {
   if (armed) {
     // Already captured. Do not silently do nothing -- the previous build's
     // real bug was invisible state, so say what is true.
-    const h = $('hint');
-    h.style.transition = 'none'; h.style.background = '#fff';
-    setTimeout(() => { h.style.transition = 'background .4s'; h.style.background = ''; }, 60);
+    const b = $('capbar');
+    b.classList.add('flash');
+    setTimeout(() => b.classList.remove('flash'), 90);
     return;
   }
   setArmed(true);
