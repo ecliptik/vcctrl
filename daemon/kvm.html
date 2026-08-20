@@ -1233,6 +1233,15 @@ function setLamp(id, cls, title) {
   el.title = title;
 }
 
+// Click the lamp to try the fast path now. It is where the state is shown,
+// which is where someone who does not like the state will press.
+$('lamp-link').style.cursor = 'pointer';
+$('lamp-link').onclick = () => {
+  wsRetryDelay = 60000;
+  addLine(new Date(), 'transport', 'retrying the websocket by hand', 'k-note');
+  restart();
+};
+
 function setXport(x) {
   xport = x;
   // Not "fallback" any more. On this deployment the HTTPS proxy speaks HTTP/2
@@ -1254,12 +1263,16 @@ function setXport(x) {
     // and cannot be changed without reconnecting.
     x === 'ws' ? 'WebSocket — up to 30 fps, and the rate follows the link'
     : x === 'mjpeg' ? 'mjpeg — fixed ' + MJPEG_FPS + ' fps, but it works '
-                    + 'through any proxy'
+                    + 'through any proxy. Click to try the websocket now'
     : x === 'connecting' ? 'Connecting…'
     : 'Disconnected — no picture is arriving');
 }
 
 function gotFrame() {
+  // A working socket earns back the full patience. Without this the backoff
+  // only ever grows, so an hour of good connection followed by one blip would
+  // wait five minutes to try again.
+  if (xport === 'ws') wsRetryDelay = 60000;
   if (!frames) setTimeout(() => applyZoom(true), 60);  // sizes known now
   frames++;
   const now = performance.now();
@@ -1362,6 +1375,30 @@ setInterval(() => {
 // The rate the mjpeg stream is asked for, named once so the tooltip that
 // quotes it cannot drift from the URL that sets it.
 const MJPEG_FPS = 12;
+// IT NEVER CAME BACK BY ITSELF, and that was the actual bug. ws.onclose only
+// reconnects while `xport !== 'mjpeg'`, so the first fallback was permanent:
+// one bad moment during a game and the session stayed on the slower path
+// until someone found "Refresh video" in the Power menu, which is not a place
+// anyone looks for a transport.
+//
+// Backoff rather than a fixed interval, because each attempt costs a real
+// interruption -- the stream is torn down and rebuilt -- so a retry that
+// keeps failing must get rarer rather than keep costing.
+let wsRetryTimer = null, wsRetryDelay = 60000;
+function scheduleWsRetry(reason) {
+  clearTimeout(wsRetryTimer);
+  if (!OPTS.ws) return;                 // turned off in settings: respect it
+  const wait = wsRetryDelay;
+  wsRetryTimer = setTimeout(() => {
+    if (xport !== 'mjpeg') return;
+    addLine(new Date(), 'transport',
+            'retrying the websocket after ' + Math.round(wait / 1000) + 's',
+            'k-note');
+    restart();
+  }, wait);
+  wsRetryDelay = Math.min(300000, wsRetryDelay * 2);
+}
+
 function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
@@ -1377,6 +1414,7 @@ function useMjpeg(why) {
   // indistinguishable from "the machine is off" to anyone looking at it --
   // exactly the lie this tool exists to not tell.
   img.onerror = () => { addLine(new Date(),'transport','stream dropped — restarting','k-note'); restart(); };
+  scheduleWsRetry(why);
 }
 
 // MJPEG is the PRIMARY transport, not a fallback. `tailscale serve` negotiates

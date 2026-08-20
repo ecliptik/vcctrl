@@ -1061,6 +1061,29 @@ HARNESS = r"""
     emit(`res ${before.includes('actual resolution') ? 1 : 0} ${after.includes('512×342') ? 1 : 0}`);
   }
 
+  // Falling back to mjpeg must not be PERMANENT. ws.onclose only reconnects
+  // while the transport is not already mjpeg, so the first fallback used to
+  // stick until someone found Refresh video in the Power menu.
+  {
+    const realRestart = window.restart;
+    let restarts = 0;
+    window.restart = () => { restarts++; };
+    wsRetryDelay = 60000;
+    scheduleWsRetry('test');
+    const armed = wsRetryTimer !== null;
+    const grew = wsRetryDelay === 120000;      // next wait is longer
+    // A working socket must reset the patience, or one blip after an hour of
+    // health would wait the maximum.
+    const wasXport = xport;
+    xport = 'ws'; gotFrame(); xport = wasXport;
+    const reset = wsRetryDelay === 60000;
+    clearTimeout(wsRetryTimer);
+    // And the lamp is a control: clicking it retries now.
+    document.getElementById('lamp-link').onclick();
+    window.restart = realRestart;
+    emit(`wsretry ${armed && grew && reset ? 1 : 0} ${restarts >= 1 ? 1 : 0}`);
+  }
+
   // Ctrl+Alt+Delete must ASK. It sits in a rail of harmless keys, at thumb
   // distance from Esc, and it is the only one whose mis-tap costs the
   // machine's state.
@@ -1465,6 +1488,11 @@ def test_zoom_layout_in_a_browser():
           got["res"][0] == 1.0, got["res"])
     check("control: and a 512x342 frame reports 512x342",
           got["res"][1] == 1.0, got["res"])
+
+    check("a fallback schedules a retry, backs off, and resets on success",
+          got["wsretry"][0] == 1.0, got["wsretry"])
+    check("control: and the link lamp retries on click",
+          got["wsretry"][1] == 1.0, got["wsretry"])
 
     check("ctrl-alt-delete asks first, and sends when confirmed",
           got["cad"][0] == 1.0, got["cad"])
