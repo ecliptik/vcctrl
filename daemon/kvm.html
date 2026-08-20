@@ -314,7 +314,19 @@
      is already carrying, so it only brightens and fades. */
   @keyframes lampflash { from { opacity:.2; } to { opacity:1; } }
   .lamp.flash span { animation:lampflash .22s ease-out; }
-  .lamp.locked span::after { content:"\00a0🔒"; font-size:.85em; }
+  /* Colour is never the only carrier, and neither is ABSENCE. The padlock
+     used to appear only when input was held, so its two states were "a
+     lock" and "nothing" -- and nothing reads as "this lamp has no lock"
+     rather than as "the lock is open". Both states are drawn now.
+     .locked is second so it wins on source order at equal specificity. */
+  /* Emoji sit low: their glyph box is taller than the text around them and
+     the baseline lands below the letters. The underline is this span's
+     own border, so a padlock hanging past it reads as a second row. */
+  .lamp.lockable span::after {
+    content:"\00a0🔓"; font-size:.8em; opacity:.6;
+    line-height:1; vertical-align:.12em;
+  }
+  .lamp.lockable.locked span::after { content:"\00a0🔒"; opacity:1; }
 
   /* ── stage ───────────────────────────────────────────────────────────────
      The well stays near-black in EVERY theme, including the light ones.
@@ -375,8 +387,13 @@
      the same family as Keys, Sound and Power at the bottom. */
   #zoombtn {
     padding:0 9px; font:500 13px/1 var(--sans); letter-spacing:0;
-    color:var(--text); min-width:92px;
+    color:var(--text); min-width:124px;
+    display:flex; align-items:center; gap:7px;
   }
+  /* A real gap, not a space in the string: HTML collapses runs of whitespace,
+     so "🖥️  Fit" and "🖥️ Fit" render identically and the emoji sits right on
+     the F. Flex gap is the only version that actually moves it. */
+  .bi { flex:none; font-size:14px; line-height:1; }
 
   .popmenu { padding:5px; min-width:150px; }
   .popmenu button {
@@ -821,8 +838,8 @@
     <span class="lamp" id="lamp-pwr"><i></i><span>PWR</span></span>
     <span class="lamp" id="lamp-link"><i></i><span>LNK</span></span>
     <span class="lamp" id="lamp-audio"><i></i><span>AUD</span></span>
-    <span class="lamp" id="lamp-kbd"><i></i><span>KBD</span></span>
-    <span class="lamp" id="lamp-mouse"><i></i><span>MOS</span></span>
+    <span class="lamp lockable" id="lamp-kbd"><i></i><span>KBD</span></span>
+    <span class="lamp lockable" id="lamp-mouse"><i></i><span>MOS</span></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
     <span class="sep" aria-hidden="true">|</span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
@@ -833,7 +850,7 @@
     </button>
     <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
-            title="How the picture is sized">Fit ▾</button>
+            title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit Screen ▾</span></button>
     <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
             title="Switch between the light and dark half of this theme">☀️</button>
     <button id="gbtn" class="ibtn" aria-label="settings"
@@ -898,8 +915,8 @@
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
     <button id="keysbtn" aria-expanded="true"
-            aria-controls="keys" title="Show or hide the key rail">Keys ▾</button>
-    <button id="grabbtn" title="Send what you type straight to the target">⌨️ Grab</button>
+            aria-controls="keys" title="Show or hide the key rail">⌨️ Keys ▾</button>
+    <button id="grabbtn" title="Send what you type straight to the target">🔐 Grab</button>
     <!-- NOT display:none. A file input that is display:none is not focusable,
          and .click() on it is ignored outright by some browsers -- which is
          exactly why the button appeared to do nothing. Visually hidden but
@@ -1173,6 +1190,16 @@ function flashLamp(id) {
 const KEY_CMDS = new Set(['key', 'type', 'hold', 'combo', 'keydown', 'keyup',
                           'release_all']);
 const MOUSE_CMDS = new Set(['mouse_move', 'mouse_click']);
+// PROVEN 2026-08-20, and this constant is the record. Until today no finding
+// anywhere said a cursor had ever moved on any target from this daemon --
+// the device existed, USB4VC had discovered it, and both are facts about the
+// Pi's end of the wire. Measured from the picture, independently of the
+// session driving it: under a mouse_move burst in Windows 3.11 at 640x480, a
+// 12x20 bright region relocated across the screen -- (360,269) -> (461,298)
+// -> (281,112) -> (102,1) -> (2,1) -- against a still-frame noise floor of
+// about 1.0 mean absolute difference. A redraw shows as a box that does not
+// move. This one moved.
+const MOUSE_PROVEN = '2026-08-20';
 function flashForCmd(cmd) {
   if (KEY_CMDS.has(cmd)) flashLamp('lamp-kbd');
   else if (MOUSE_CMDS.has(cmd)) flashLamp('lamp-mouse');
@@ -1749,7 +1776,7 @@ function setArmed(v, opts) {
   // control. "Capture" is spoken for by screenshots and recording.
   // The verb says what it does to the KEYBOARD rather than what you then
   // do with it, which is what "Type" left ambiguous.
-  $('grabbtn').textContent = v ? '⌨️ Ungrab' : '⌨️ Grab';
+  $('grabbtn').textContent = v ? '🔐 Ungrab' : '🔐 Grab';
   $('grabbtn').classList.toggle('on', v);
   $('grabbtn').title = v ? 'Keys are going to the target — click, or press '
                            + 'Ctrl+Alt+Shift, to stop'
@@ -2788,9 +2815,15 @@ function setInputLamps(held, inputCap) {
             : 'Keyboard idle — press Grab to send';
   const mos = broken ? 'Mouse unavailable'
             : held ? 'Mouse held by ' + held
+            : MOUSE_PROVEN ? 'Mouse ready — cursor movement seen '
+                             + MOUSE_PROVEN
             : 'Mouse ready — never yet tested on a target';
   setLamp('lamp-kbd', broken ? 'bad' : held ? 'warn' : armed ? 'on' : null, kbd);
+  // DASHED MEANS "THIS MAY NOT DESCRIBE THE TARGET" -- what PWR, LNK and AUD
+  // already use when they cannot tell, and what CAP/NUM/SCR use on an
+  // unproven input link. MOS was dashed for the same reason until today.
   setLamp('lamp-mouse', broken ? 'bad' : held ? 'warn' : 'on', mos);
+  $('lamp-mouse').classList.toggle('stale', !broken && !held && !MOUSE_PROVEN);
   $('lamp-kbd').classList.toggle('locked', !!held);
   $('lamp-mouse').classList.toggle('locked', !!held);
 }
@@ -3069,11 +3102,12 @@ function showCapture() {
                                    : 'Original — actual resolution';
   if (!$('settings').hidden && lastState) $('rig').innerHTML = rigRows(lastState);
 }
-const ZOOMLABEL = {fit: 'Fit Screen', '1': 'Original', '2': '200%', '4': '400%'};
+const ZOOMLABEL = {fit: 'Fit Screen', '1': 'Original',
+                   '2': '200%', '4': '400%'};
 function setZoom(m) {
   zoomMode = m;
   localStorage.setItem('vcctrl.zoom2', m);
-  $('zoombtn').textContent = (ZOOMLABEL[m] || m) + ' ▾';
+  $('zoomlabel').textContent = (ZOOMLABEL[m] || m) + ' ▾';
   for (const b of document.querySelectorAll('#pop-zoom button'))
     b.classList.toggle('sel', b.dataset.zoom === m);
   crop = null;                             // re-measure on the next frame
@@ -3182,7 +3216,7 @@ $('stage').addEventListener('pointerdown', e => {
   const b = $('keysbtn');
   const set = hide => {
     document.body.classList.toggle('nokeys', hide);
-    b.textContent = hide ? 'Keys \u25b4' : 'Keys \u25be';
+    b.textContent = hide ? '⌨️ Keys \u25b4' : '⌨️ Keys \u25be';
     b.setAttribute('aria-expanded', hide ? 'false' : 'true');
     localStorage.setItem('vcctrl.keys', hide ? 'hidden' : 'shown');
     measureBars();
