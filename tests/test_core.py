@@ -802,14 +802,14 @@ def test_zoom_modes():
     with open(page, encoding="utf-8") as f:
         h = f.read()
 
-    sel = re.search(r'<select id="zoom".*?</select>', h, re.S).group(0)
-    markup = re.findall(r'<option value="([^"]+)"', sel)
+    sel = re.search(r'<div id="pop-zoom".*?</div>', h, re.S).group(0)
+    markup = re.findall(r'data-zoom="([^"]+)"', sel)
     arr = re.search(r"const ZOOMS = \[([^\]]*)\]", h).group(1)
     script = re.findall(r"'([^']+)'", arr)
     # A value in one and not the other is silent either way: a stored mode the
     # script rejects resets to fit, a listed mode the script never validates
     # would sail past the guard.
-    check("every <option> is a known mode and vice versa",
+    check("every menu entry is a known mode and vice versa",
           markup == script, "%s vs %s" % (markup, script))
 
     # ── the arithmetic, ported from applyZoom() ────────────────────────────
@@ -948,6 +948,31 @@ HARNESS = """
     const selNow = document.querySelector('#themes button.sel');
     out.push(`preview ${during === chip.dataset.theme ? 1 : 0} ${after === before ? 1 : 0}`);
     out.push(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
+  }
+
+  // Full screen: nothing but the picture, and the controls come back as
+  // overlays rather than by taking their space back -- reflowing the stage
+  // every time you reach for a control is the opposite of the point.
+  {
+    // Measure the before-picture in the SAME mode as the after-picture: the
+    // first version of this compared a 400% frame against a fitted one and
+    // reported full screen as broken.
+    zoomMode = 'fit'; crop = null; applyZoom(true);
+    const before = document.getElementById('mjpeg').getBoundingClientRect();
+    setFullscreen(true);
+    zoomMode = 'fit'; crop = null; applyZoom(true);
+    const hdr = document.querySelector('header');
+    const hidden = getComputedStyle(hdr).display === 'none';
+    const r = document.getElementById('mjpeg').getBoundingClientRect();
+    out.push(`fs ${hidden ? 1 : 0} ${Math.round(r.height)}`);
+    document.body.classList.add('peek');
+    const ph = getComputedStyle(hdr);
+    const r2 = document.getElementById('mjpeg').getBoundingClientRect();
+    out.push(`fspeek ${ph.display !== 'none' && ph.position === 'fixed' ? 1 : 0} ${Math.round(r2.height)}`);
+    setFullscreen(false);
+    zoomMode = 'fit'; crop = null; applyZoom(true);
+    const back = document.getElementById('mjpeg').getBoundingClientRect();
+    out.push(`fsback ${Math.abs(back.height - before.height) < 2 ? 1 : 0} ${Math.round(back.height)}`);
   }
 
   // Rate control. The failure that matters is a loop that only ever goes one
@@ -1158,6 +1183,17 @@ def test_zoom_layout_in_a_browser():
           got["preview"])
     check("control: a preview does not change the selection",
           got["selkept"][0] == 1.0, got["selkept"])
+
+    # Full screen has to actually give the picture the room, and the bars have
+    # to come back without moving it.
+    check("full screen hides the rail", got["fs"][0] == 1.0, got["fs"])
+    check("and the picture takes the height", got["fs"][1] > got["fsback"][1],
+          (got["fs"], got["fsback"]))
+    check("peeking overlays the rail rather than reflowing",
+          got["fspeek"][0] == 1.0 and abs(got["fspeek"][1] - got["fs"][1]) < 2,
+          (got["fspeek"], got["fs"]))
+    check("control: leaving full screen puts it back",
+          got["fsback"][0] == 1.0, got["fsback"])
 
     # Asking for 14 and getting 6 must come down near 6, not to the floor.
     check("a starved stream backs off toward what arrives",

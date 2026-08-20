@@ -345,7 +345,22 @@
     image-rendering:pixelated; display:block;
   }
   #stage #stale { position:absolute; inset:0; }
-  #zoom { padding:0 6px; font:var(--t-micro) var(--mono); }
+  /* A label and a caret, not a form field. The one boxed control in a rail
+     of borderless icons is the thing your eye keeps going back to, which is
+     the wrong place for it: the picture is what deserves that. */
+  #zoombtn {
+    padding:0 7px; font:var(--t-micro) var(--mono); letter-spacing:.06em;
+    border-color:transparent; background:transparent; color:var(--muted);
+    min-width:64px;
+  }
+
+  .popmenu { padding:5px; min-width:150px; }
+  .popmenu button {
+    display:block; width:100%; text-align:left; border:0; border-radius:5px;
+    background:transparent; font:var(--t-read)/1 var(--sans); padding:0 9px;
+  }
+  .popmenu button:hover { background:var(--rule); }
+  .popmenu button.sel { color:var(--green); }
   /* Says "drag to move" once, when a mode first spills past the edges. */
   #zhint {
     position:absolute; right:10px; bottom:10px; z-index:3; pointer-events:none;
@@ -454,13 +469,37 @@
      squares next to it read as three more things to look at. The glyph is the
      control; hover and press say the rest. The focus ring is untouched --
      that one is not decoration. */
-  header .ibtn, #sidebtn {
+  header .ibtn, #sidebtn, #fsbtn, #zoombtn {
     border-color:transparent; background:transparent;
   }
-  header .ibtn:hover, #sidebtn:hover {
+  header .ibtn:hover, #sidebtn:hover, #fsbtn:hover, #zoombtn:hover {
     border-color:transparent; background:var(--rule);
   }
-  #sidebtn { min-width:38px; padding:0; color:var(--muted); }
+  #sidebtn, #fsbtn { min-width:38px; padding:0; color:var(--muted); }
+  #fsbtn svg { width:18px; height:18px; display:block; margin:0 auto; }
+  #fsbtn path { fill:none; stroke:currentColor; stroke-width:1.5;
+                stroke-linecap:round; stroke-linejoin:round; }
+  #fsbtn .fsin { display:none; }
+  body.fs #fsbtn .fsout { display:none; }
+  body.fs #fsbtn .fsin { display:block; }
+
+  /* ── full screen ─────────────────────────────────────────────────────
+     Nothing but the picture, so it reads as a machine you are sitting at
+     rather than a machine in a web page. The bars come back as OVERLAYS
+     rather than by taking their space back: reflowing the stage would
+     resize and re-fit the picture every time you reached for a control,
+     which is the opposite of looking directly connected. */
+  body.fs header, body.fs #cmdbar, body.fs #capbar,
+  body.fs #keys, body.fs #tabs, body.fs #body { display:none; }
+  body.fs.peek header, body.fs.peek #cmdbar {
+    display:flex; position:fixed; left:0; right:0; z-index:80;
+    background:var(--panel);
+  }
+  body.fs.peek header { top:0; border-bottom:1px solid var(--rule); }
+  body.fs.peek #cmdbar {
+    bottom:0; border-bottom:0; border-top:1px solid var(--rule);
+    padding-bottom:calc(7px + env(safe-area-inset-bottom,0px));
+  }
   #sidebtn svg { width:19px; height:19px; display:block; margin:0 auto; }
   #sidebtn .frame { fill:none; stroke:currentColor; stroke-width:1.4; }
   #sidebtn .pane  { fill:currentColor; opacity:0; transition:opacity .12s linear; }
@@ -671,7 +710,7 @@
        panel alone leaves the track sized and the picture exactly where it
        was. */
     body.nopanel #body { display:none; }
-    body.nopanel #app { grid-template-columns:minmax(0,1fr) 0; }
+    body.nopanel #app, body.fs #app { grid-template-columns:minmax(0,1fr) 0; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
     #body   { grid-column:2; grid-row:2; height:auto; border-top:0;
@@ -702,12 +741,8 @@
       <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
       <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
     </button>
-    <select id="zoom" aria-label="zoom">
-      <option value="fit">Fit</option>
-      <option value="1">Original</option>
-      <option value="2">2× original</option>
-      <option value="4">4× original</option>
-    </select>
+    <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
+            title="How the picture is sized">Fit ▾</button>
     <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
             title="Switch between the light and dark half of this theme">☀️</button>
     <button id="gbtn" class="ibtn" aria-label="settings"
@@ -717,6 +752,13 @@
          and the last two attempts here were a chevron pointing nowhere in
          particular and a large orange play button. This is the editor
          convention -- a pane on the right, filled while it is there. -->
+    <button id="fsbtn" aria-pressed="false"
+            title="Full screen — just the picture">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path class="fsout" d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>
+        <path class="fsin" d="M7.5 3v4.5H3M17 7.5h-4.5V3M12.5 17v-4.5H17M3 12.5h4.5V17"/>
+      </svg>
+    </button>
     <button id="sidebtn" aria-expanded="true" aria-controls="body"
             title="Hide side panel">
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -851,6 +893,13 @@
     <button id="volup" title="Volume up 5%">+</button>
     <span id="vpct">80%</span>
   </div>
+</div>
+
+<div id="pop-zoom" class="pop popmenu" role="dialog" aria-label="Zoom" hidden>
+  <button data-zoom="fit" title="The whole screen, as large as it fits">Fit</button>
+  <button data-zoom="1" title="One capture pixel per screen pixel">Original</button>
+  <button data-zoom="2" title="Twice the captured size">200%</button>
+  <button data-zoom="4" title="Four times the captured size">400%</button>
 </div>
 
 <div id="pop-power" class="pop" role="dialog" aria-label="Power" hidden>
@@ -1708,7 +1757,7 @@ for (const k of Object.keys(OPTS)) {
 // Popovers in the rail. One at a time, anchored under whatever opened them,
 // and clamped to the window -- a menu that opens off the right edge of a
 // phone is a menu you cannot use.
-const POP = {sound: 'soundbtn', power: 'powerbtn'};
+const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn'};
 let openPopName = null;
 function closePop() {
   if (!openPopName) return;
@@ -1786,6 +1835,7 @@ addEventListener('keydown', e => {
   if (e.key !== 'Escape' || armed) return;
   if (openPopName) closePop();
   else if (!$('settings').hidden) showSettings(false);
+  else if (fsOn) setFullscreen(false);
 });
 
 // Traffic the harness generates to ASK QUESTIONS rather than to do anything.
@@ -2131,9 +2181,9 @@ if (matchMedia('(max-width:640px)').matches)
 //   removed -- measured on a 1240x652 stage it came out 3% away from 2x, so
 //   it was a second magnifier wearing the name of a fitting mode.
 //
-// The numbered steps are multiples of the CAPTURE'S OWN PIXELS. "Original" is
-// the 640x480 we get from the stick, unadjusted, one capture pixel per CSS
-// pixel; 2x is twice that. Multiples of fit were tried and are worse: fit
+// The numbered steps are percentages of the CAPTURE'S OWN PIXELS. "Original"
+// is the 640x480 we get from the stick, unadjusted, one capture pixel per CSS
+// pixel -- so it is the 100% the others are measured against. Multiples of fit were tried and are worse: fit
 // depends on the window, so "2x" meant a different picture on every device and
 // on every window resize, and there was no size you could name and return to.
 const ZOOMS = ['fit', '1', '2', '4'];
@@ -2195,6 +2245,14 @@ function measureCrop() {
   return {x0, y0, bw, bh, w, h};
 }
 
+function hint(text) {
+  const hn = $('zhint');
+  hn.textContent = text;
+  hn.classList.add('show');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => hn.classList.remove('show'), 2600);
+}
+
 function applyZoom(recentre) {
   const sc = $('scroll'), fr = $('frame');
   const el = mediaEl();
@@ -2235,22 +2293,28 @@ function applyZoom(recentre) {
   // spills, say it in words.
   if (over && zoomMode !== lastHinted) {
     lastHinted = zoomMode;
-    const hn = $('zhint');
-    hn.textContent = 'drag or scroll to move';
-    hn.classList.add('show');
-    clearTimeout(hintTimer);
-    hintTimer = setTimeout(() => hn.classList.remove('show'), 2400);
+    hint('drag or scroll to move');
   }
   if (!over) lastHinted = null;
 }
 
-$('zoom').value = zoomMode;
-$('zoom').onchange = () => {
-  zoomMode = $('zoom').value;
-  localStorage.setItem('vcctrl.zoom2', zoomMode);
+// The button wears the current mode, so the rail still reports it at a
+// glance -- a menu that only says "Zoom" makes you open it to find out what
+// the picture is doing.
+const ZOOMLABEL = {fit: 'Fit', '1': 'Original', '2': '200%', '4': '400%'};
+function setZoom(m) {
+  zoomMode = m;
+  localStorage.setItem('vcctrl.zoom2', m);
+  $('zoombtn').textContent = (ZOOMLABEL[m] || m) + ' ▾';
+  for (const b of document.querySelectorAll('#pop-zoom button'))
+    b.classList.toggle('sel', b.dataset.zoom === m);
   crop = null;                             // re-measure on the next frame
   applyZoom(true);
-};
+}
+$('zoombtn').onclick = () => openPop('zoom');
+for (const b of document.querySelectorAll('#pop-zoom button'))
+  b.onclick = () => { setZoom(b.dataset.zoom); closePop(); };
+setZoom(zoomMode);
 addEventListener('resize', () => applyZoom());
 
 // The key rail, on desktop. Hiding it hands its row back to the picture, so
@@ -2272,6 +2336,56 @@ addEventListener('resize', () => applyZoom());
       + ' for the next key — tap again to release';
   }
 })();
+
+// ── FULL SCREEN ─────────────────────────────────────────────────────────
+// The Fullscreen API where it exists, and the CSS half everywhere: an iPhone
+// has no Element.requestFullscreen at all, so on one it means "hide every
+// control" rather than "take the display". That still gets most of the way to
+// looking directly connected, and it degrades without a branch anyone has to
+// remember.
+let fsOn = false;
+function setFullscreen(v) {
+  fsOn = v;
+  document.body.classList.toggle('fs', v);
+  if (!v) document.body.classList.remove('peek');
+  const b = $('fsbtn');
+  b.setAttribute('aria-pressed', v ? 'true' : 'false');
+  b.title = v ? 'Leave full screen' : 'Full screen — just the picture';
+  try {
+    const el = document.documentElement;
+    if (v && !document.fullscreenElement && el.requestFullscreen)
+      el.requestFullscreen().catch(() => {});
+    if (!v && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  } catch (e) {}
+  if (v) hint(matchMedia('(pointer:coarse)').matches
+    ? 'tap the top edge for the controls'
+    : 'move to the top or bottom edge for the controls — Esc leaves');
+  // After the layout settles, not during: the bars are display:none by then
+  // and the stage has taken the room.
+  setTimeout(() => { measureBars(); applyZoom(true); }, 60);
+}
+$('fsbtn').onclick = () => setFullscreen(!fsOn);
+// The browser can leave without us -- Esc, its own toolbar, a trackpad
+// gesture -- and the page would keep pretending otherwise.
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && fsOn) setFullscreen(false);
+});
+// Desktop: the edges are the affordance, and nothing has to be pressed.
+addEventListener('pointermove', e => {
+  if (!fsOn || e.pointerType === 'touch') return;
+  document.body.classList.toggle('peek',
+    e.clientY < 64 || e.clientY > innerHeight - 64);
+});
+// Touch: a tap in the top band, and ONLY the top band. Everywhere else on
+// the picture already means "give the keyboard to the target", which is the
+// one gesture on a phone that cannot be replaced -- iOS will not raise its
+// keyboard for anything but a real tap on a real field.
+$('stage').addEventListener('pointerdown', e => {
+  if (!fsOn || e.clientY > 64) return;
+  e.preventDefault();
+  e.stopPropagation();
+  document.body.classList.toggle('peek');
+}, true);
 
 (function sidepanel() {
   const b = $('sidebtn');
