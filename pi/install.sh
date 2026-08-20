@@ -118,6 +118,18 @@ echo i2c-dev | sudo tee /etc/modules-load.d/i2c-dev.conf >/dev/null
 # level costs nothing and needs no patch to upstream.
 echo "options bluetooth disable_ertm=1" | sudo tee /etc/modprobe.d/usb4vc-ertm.conf >/dev/null
 
+# Capture devices pinned by name. Installed ONLY IF ABSENT, like config.json,
+# because the values are specific to whichever capture stick is attached and a
+# swap to the Macintosh's HDMI device needs different ones. Overwriting a local
+# edit here would silently repoint capture at hardware that is not there.
+if [ -f "$FILES/device-pin.conf" ] && \
+   [ ! -f /etc/systemd/system/vcctrld.service.d/device-pin.conf ]; then
+  sudo mkdir -p /etc/systemd/system/vcctrld.service.d
+  sudo install -m 0644 "$FILES/device-pin.conf" \
+    /etc/systemd/system/vcctrld.service.d/device-pin.conf
+  echo "pinned capture devices by name (edit the drop-in if the stick changes)"
+fi
+
 # The board-identity patch is LOCAL and must not silently disappear under an
 # upstream update. --check only reports; it never modifies.
 if [ -f "$SRC/tools/patch-usb4vc-board.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_ui.py ]; then
