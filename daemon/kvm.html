@@ -139,8 +139,40 @@
     header { gap:7px; padding:0 8px;
              height:calc(38px + env(safe-area-inset-top,0px)); }
     .chip { font-size:10px; letter-spacing:.03em; }
-    .lamp span { display:none; }
-    .lamp i { width:9px; height:9px; }
+    /* THE WORD IS THE LAMP HERE. Three unlabelled dots in a phone rail are
+       three dots: the labels were hidden to save width, which left the one
+       indicator on the page that cannot be read at all. So the dot goes and
+       the word carries it -- and because a monochrome theme and a
+       colour-blind reader both need more than colour, "on" is also heavier
+       and underscored, and "stale" is dashed. */
+    /* `body` in front of each: the base .lamp rules sit LATER in the file at
+       equal specificity, so without it the dot stayed and the phone got the
+       word AND the speck it was meant to replace. */
+    body .lamp i { display:none; }
+    body .lamp span { display:block; font-size:10px; color:var(--dim);
+                      border-bottom:1px solid transparent; padding-bottom:1px;
+                      letter-spacing:.04em; }
+    body .lamp.on span {
+      color:var(--green); font-weight:700; border-bottom-color:var(--green);
+    }
+    body .lamp.stale span { opacity:.55; border-bottom-style:dashed; }
+
+    /* ── the key rail, as an accessory bar ────────────────────────────────
+       Modelled on La Terminal's: one flat scrolling row above the system
+       keyboard, no boxes, generous targets. Bordered buttons at phone size
+       spend most of their width on the border and read as a form; these are
+       keys, and a key you are about to hit wants the space instead. */
+    body #keys {
+      gap:0; padding:0 2px; background:var(--panel);
+      border-top:1px solid var(--rule); border-bottom:0;
+    }
+    body #keys button {
+      border:0; border-radius:0; background:transparent; color:var(--text);
+      min-height:46px; padding:0 13px; font:500 15px/1 var(--sans);
+    }
+    body #keys button:active { background:var(--rule); }
+    body #keys button.on { color:var(--green); background:transparent; }
+    body #keys button.danger { color:var(--red); }
     #zoom { max-width:88px; font-size:10px; }
     /* Room for a thumb: a 34px swatch is a comfortable target with a mouse
        and a miss on a phone. */
@@ -175,6 +207,11 @@
       border-top:2px solid transparent;
     }
     #tabs button.on { color:var(--green); border-top-color:var(--green); }
+    /* The one tab whose label is a picture: at the rail's 11.5px it was a
+       speck between five words. */
+    .tabicon { font-size:19px; line-height:1;
+               font-family:"Apple Color Emoji","Segoe UI Emoji",
+                           "Noto Color Emoji",var(--sans); }
 
     /* Long panels take the whole screen and are dismissed, rather than
        squeezing into a third of it. A log worth reading is worth reading. */
@@ -787,7 +824,7 @@
     <button data-tab="sound" title="Sound and volume">SOUND</button>
     <button data-tab="power" title="Mains power and the input link">POWER</button>
     <button data-tab="log" title="What the daemon has been doing">LOG</button>
-    <button data-tab="set" title="Settings">⚙</button>
+    <button data-tab="set" title="Settings"><span class="tabicon">⚙️</span></button>
   </div>
 
   <div id="body">
@@ -1963,8 +2000,16 @@ pollState(); pollEvents(); pollPower();
 // ══════════════════════════════════════════════════════════ tabs (phone)
 // Exactly one panel at a time, and SCREEN means none -- the picture is the
 // point, so the default state gives it everything.
+let curTab = 'none';
 function setTab(name) {
   const body = $('body'), panels = $('panels');
+  curTab = name;
+  // Closing a tab has to close what the tab opened. Settings and the two
+  // popovers are their own surfaces now, so switching away from them left
+  // them on screen with nothing highlighted -- a panel with no way back to
+  // the button that owns it.
+  if (name !== 'set') showSettings(false);
+  if (name !== 'sound' && name !== 'power') closePop();
   // The long panels open as a full-screen sheet; the short ones stay a strip
   // at the bottom. Reading a log through a 150px window is not reading.
   // Settings is a drawer of its own now, not one of these panels.
@@ -1992,7 +2037,10 @@ function setTab(name) {
   setTimeout(() => applyZoom(true), 80);   // the stage just changed size
 }
 for (const b of document.querySelectorAll('#tabs button'))
-  b.onclick = () => setTab(b.dataset.tab);
+  // Tap it again to put it away. Every one of these opens something over the
+  // picture, and the picture is what the page is for -- so the button that
+  // opened it is the obvious thing to press to get it back.
+  b.onclick = () => setTab(curTab === b.dataset.tab ? 'none' : b.dataset.tab);
 if (matchMedia('(max-width:640px)').matches)
   setTab(localStorage.getItem('vcctrl.tab') || 'none');
 
