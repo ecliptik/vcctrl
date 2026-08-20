@@ -2,7 +2,7 @@
 /* Roles, not base16 indices: see the module docstring. */
 /* Values marked (fitted) were nudged to clear the contrast floor. */
 
-:root {
+:root, [data-theme="vga"] {
   --bg: #17150F;
   --panel: #201E19;
   --rule: #322D25;

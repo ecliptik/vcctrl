@@ -259,7 +259,12 @@ def css():
            ""]
     for name, (_group, _dark, pair, _raw) in THEMES.items():
         roles, notes = fitted(name)
-        sel = ":root" if name == "vga" else '[data-theme="%s"]' % name
+        # The house theme is the bare :root default AND an addressable name,
+        # so a swatch can wear it like any other. Without the second selector
+        # the one theme with no [data-theme] block is the one whose swatch
+        # comes out blank.
+        sel = (':root, [data-theme="vga"]' if name == "vga"
+               else '[data-theme="%s"]' % name)
         out.append("%s {" % sel)
         for r in ROLES:
             out.append("  --%s: %s;" % (r, roles[r]))

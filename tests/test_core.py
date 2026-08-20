@@ -805,8 +805,6 @@ def test_zoom_modes():
         x0, y0, bw, bh = crop or (0, 0, nw, nh)
         if mode == "fit":
             k = 1.0 if crop is None else min(W / bw, H / bh) / s0
-        elif mode == "fill":
-            k = max(W / bw, H / bh) / s0
         else:
             k = float(mode) / s0
         return bw * s0 * k, bh * s0 * k
@@ -830,12 +828,6 @@ def test_zoom_modes():
     check("fit shows the whole frame", w <= W + 0.5 and hh <= H + 0.5, (w, hh))
     check("control: fit leaves the sides black on a wide stage",
           w < W - 100, w)
-
-    w, hh = shown("fill", W, H, nw, nh)
-    check("fill covers the stage in both axes",
-          w >= W - 0.5 and hh >= H - 0.5, (w, hh))
-    check("fill does not overshoot -- one axis lands exactly",
-          abs(w - W) < 0.5 or abs(hh - H) < 0.5, (w, hh))
 
     # A 512x384 mode centred in the capture: fit works on the picture, not on
     # the frame, so the black border does not eat into the size.
@@ -876,33 +868,45 @@ HARNESS = """
 <script>
 // Measure what the ENGINE lays out, not what the model predicts it will.
 //
-// The page's own transport logic keeps running underneath this, and it will
+// The page's own transport logic keeps running underneath this and will
 // happily re-point the img at a stream that does not exist on file:// and
-// hide it again. So every measurement re-asserts the element it is about to
-// measure rather than assuming the setup survived.
+// hide it again, so every measurement re-asserts its element first.
+//
+// No requestAnimationFrame anywhere: getBoundingClientRect forces layout on
+// the spot, and waiting for frames under a virtual-time budget is how this
+// harness hung the first time -- measuring nothing, silently.
 (async () => {
+ try {
   const CAP = 'CAPSRC';
   const img = document.getElementById('mjpeg'), cv = document.getElementById('screen');
-  // No requestAnimationFrame anywhere: getBoundingClientRect forces layout on
-  // the spot, and waiting for frames under a virtual-time budget is how this
-  // harness hung the first time -- measuring nothing, silently.
+  const sc = document.getElementById('scroll');
   const arm = () => { cv.style.display = 'none'; img.style.display = 'block'; };
   arm();
   await new Promise(r => { img.onload = r; img.onerror = r; img.src = CAP; });
   const out = [];
-  const st = document.getElementById('stage').getBoundingClientRect();
-  out.push(`stage ${st.width.toFixed(2)} ${st.height.toFixed(2)}`);
   out.push(`loaded ${img.naturalWidth} ${img.naturalHeight}`);
-  for (const m of ['fit', 'fill', '1', '2', '4']) {
-    arm();
-    zoomMode = m; panX = panY = 0; crop = null; applyZoom();
+  const say = (name, extra) => {
     const b = img.getBoundingClientRect();
-    // object-fit:contain letterboxes the picture INSIDE the box, so the box
-    // is not the picture. What the operator sees is the picture.
-    const s = Math.min(b.width / img.naturalWidth, b.height / img.naturalHeight);
-    out.push(`${m} ${(img.naturalWidth * s).toFixed(2)} ${(img.naturalHeight * s).toFixed(2)}`);
+    out.push(`${name} ${b.width.toFixed(2)} ${b.height.toFixed(2)}` +
+             (extra === undefined ? '' : ' ' + extra));
+  };
+  for (const m of ['fit', '1', '2', '4']) {
+    arm();
+    zoomMode = m; crop = null; applyZoom(true);
+    // clientWidth excludes any scrollbar, which is the space a fit has.
+    out.push(`view-${m} ${sc.clientWidth} ${sc.clientHeight}`);
+    say(m, `${sc.scrollWidth > sc.clientWidth + 1 ? 1 : 0}${sc.scrollHeight > sc.clientHeight + 1 ? 1 : 0}`);
   }
+  // Back to fit, then hide the key rail: its row must go to the picture.
+  arm();
+  zoomMode = 'fit'; crop = null; applyZoom(true);
+  document.getElementById('keysbtn').click();
+  out.push(`view-nokeys ${sc.clientWidth} ${sc.clientHeight}`);
+  say('nokeys');
   document.getElementById('harness-out').textContent = out.join('|');
+ } catch (e) {
+  document.getElementById('harness-out').textContent = 'THREW ' + e.message;
+ }
 })();
 </script>
 """
@@ -962,36 +966,37 @@ def test_zoom_layout_in_a_browser():
             check("the harness reported a measurement", False,
                   r.stderr.strip()[-200:] or "no output")
             return
-        got = {}
+        if m.group(1).startswith("THREW"):
+            check("the harness ran without throwing", False, m.group(1))
+            return
+        got, bars = {}, {}
         for part in m.group(1).split("|"):
             bits = part.split()
             got[bits[0]] = (float(bits[1]), float(bits[2]))
+            if len(bits) > 3:
+                bars[bits[0]] = bits[3]
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
-    W, H = got["stage"]
-    print("  stage %.0fx%.0f: %s" % (W, H, ", ".join(
+    W, H = got["view-fit"]
+    print("  viewport %.0fx%.0f: %s" % (W, H, ", ".join(
         "%s=%.0fx%.0f" % (k, v[0], v[1]) for k, v in got.items()
-        if k != "stage")))
-    check("control: the stage is bigger than the capture",
+        if not k.startswith("view-") and k != "loaded")))
+    check("control: the viewport is bigger than the capture",
           W > 640 and H > 480, (W, H))
-    # Without this, a picture that never loaded measures NaN and every
+    # Without this, a picture that never loaded measures 0 and every
     # comparison below fails for a reason that has nothing to do with zoom.
     check("control: the harness actually had a 640x480 picture",
           got.get("loaded") == (640.0, 480.0), got.get("loaded"))
 
     w, h = got["fit"]
-    # The regression itself: this is what a picture that is never scaled up
-    # measures, and it is what shipped for three rounds.
+    # The regression: this is what a picture that is never scaled up measures,
+    # and it is what shipped for three rounds.
     check("fit is not just the raw 640x480", (w, h) != (640.0, 480.0), (w, h))
     check("fit overflows neither axis", w <= W + 0.5 and h <= H + 0.5, (w, h))
     check("fit fills one axis exactly",
           abs(w - W) < 0.5 or abs(h - H) < 0.5, (w, h))
-
-    w, h = got["fill"]
-    check("fill covers both axes", w >= W - 0.5 and h >= H - 0.5, (w, h))
-    check("fill fills one axis exactly, no overshoot",
-          abs(w - W) < 0.5 or abs(h - H) < 0.5, (w, h))
+    check("fit raises no scrollbars", bars.get("fit") == "00", bars.get("fit"))
 
     check("original is exactly 640x480 on screen",
           abs(got["1"][0] - 640) < 0.5 and abs(got["1"][1] - 480) < 0.5,
@@ -1000,6 +1005,23 @@ def test_zoom_layout_in_a_browser():
           abs(got["2"][0] - 1280) < 1 and abs(got["2"][1] - 960) < 1, got["2"])
     check("4x original is exactly 2560x1920",
           abs(got["4"][0] - 2560) < 2 and abs(got["4"][1] - 1920) < 2, got["4"])
+
+    # What the operator asked for: if it is cropped, it scrolls.
+    for m in ("2", "4"):
+        w, h = got[m]
+        spills = w > W + 1 or h > H + 1
+        check("%sx spills, so it must offer scrollbars" % m,
+              not spills or bars.get(m, "00") != "00",
+              (got[m], (W, H), bars.get(m)))
+
+    # Hiding the key rail collapses its grid row and the stage takes the
+    # height. A toggle that changes display fires no resize event, so if the
+    # zoom is not re-run by hand the picture keeps its old size.
+    check("hiding the key rail makes the fitted picture bigger",
+          got["nokeys"][1] > got["fit"][1] + 8, (got["fit"], got["nokeys"]))
+    check("control: it is still a fit, not a crop",
+          got["nokeys"][0] <= got["view-nokeys"][0] + 0.5,
+          (got["nokeys"], got["view-nokeys"]))
 
 
 if __name__ == "__main__":

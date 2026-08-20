@@ -129,6 +129,12 @@
     .lamp span { display:none; }
     .lamp i { width:9px; height:9px; }
     #zoom { max-width:88px; font-size:10px; }
+    /* Room for a thumb: a 34px swatch is a comfortable target with a mouse
+       and a miss on a phone. */
+    #themes { grid-template-columns:repeat(auto-fill,minmax(42px,1fr)); }
+    #themes button { min-height:42px; }
+    /* The tab bar already opens and closes the rail here. */
+    body #keysbtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -215,14 +221,30 @@
      evidence looks. */
   #stage {
     position:relative; flex:1 1 auto; min-height:0; background:#000;
-    display:flex; align-items:center; justify-content:center; overflow:hidden;
+    overflow:hidden;
   }
   #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
-  #frame {
-    position:relative; width:100%; height:100%;
-    display:flex; align-items:center; justify-content:center;
-    transform-origin:center center; will-change:transform;
+  /* THE PICTURE SCROLLS, THE OVERLAYS DO NOT. The no-signal notice and the
+     phone's tap-target are absolutely positioned against the stage, so if the
+     stage itself were the scroller they would slide away with the picture.
+     One inner element scrolls; everything else stays put over it. */
+  #scroll {
+    position:absolute; inset:0; overflow:auto; display:flex;
+    scrollbar-width:thin; scrollbar-color:var(--rule) transparent;
   }
+  #scroll::-webkit-scrollbar { width:10px; height:10px; }
+  #scroll::-webkit-scrollbar-track { background:transparent; }
+  #scroll::-webkit-scrollbar-thumb {
+    background:var(--rule); border-radius:5px;
+    border:2px solid transparent; background-clip:content-box;
+  }
+  #scroll::-webkit-scrollbar-thumb:hover { background:var(--muted);
+                                           background-clip:content-box; }
+  /* margin:auto, NOT justify/align-center: a flex item centred by the
+     container's alignment cannot be scrolled back to when it overflows --
+     the top and left of it become unreachable. auto margins centre the same
+     way and collapse to zero the moment there is overflow. */
+  #frame { margin:auto; position:relative; flex:none; }
   #frame.zoomed { cursor:grab; }
   #frame.dragging { cursor:grabbing; }
   /* A DEFINITE BOX, so object-fit has something to fit INTO. With width:auto
@@ -233,17 +255,27 @@
      the "lots of blank space around it" that survived three rounds of fixing
      the arithmetic: the arithmetic was fine and the box was wrong. Measured
      in Chromium at 1240x652: 640x480 before, 869x652 after. */
+  /* Sized in CSS pixels by applyZoom, so the picture is exactly as many
+     pixels as the mode says and normal layout does the overflow. The values
+     here only cover the moment before the first frame. */
   #stage img, #stage canvas {
-    width:100%; height:100%;
-    object-fit:contain; image-rendering:pixelated; display:block;
+    width:640px; height:480px; max-width:none; max-height:none;
+    image-rendering:pixelated; display:block;
   }
   #stage #stale { position:absolute; inset:0; }
   #zoom { padding:0 6px; font:var(--t-micro) var(--mono); }
+  /* Says "drag to move" once, when a mode first spills past the edges. */
+  #zhint {
+    position:absolute; right:10px; bottom:10px; z-index:3; pointer-events:none;
+    font:var(--t-micro) var(--mono); letter-spacing:.06em; color:var(--text);
+    background:rgba(0,0,0,.72); border:1px solid var(--rule); border-radius:5px;
+    padding:5px 8px; opacity:0; transition:opacity .25s linear;
+  }
+  #zhint.show { opacity:1; }
   /* The last live picture, behind the notice. Dimmed so it cannot be mistaken
      for the current screen -- but readable, because it is often the only
      picture there is. Full brightness is one click away and is remembered. */
-  #stale { width:100%; height:100%;
-           filter:grayscale(.35) brightness(.8); }
+  #stale { filter:grayscale(.35) brightness(.8); }
   #stale.full { filter:none; }
   #veil {
     position:absolute; inset:0; display:none; flex-direction:column;
@@ -401,11 +433,29 @@
                                    height:17px; flex:none; }
   .hint { color:var(--dim); font:var(--t-micro)/1.5 var(--sans);
           margin:0 0 9px 26px; }
-  #themes { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
-            gap:4px; margin-bottom:6px; }
-  #themes button { text-align:left; padding:7px 9px; font:var(--t-data)/1 var(--mono);
-                   min-height:34px; }
-  #themes button.sel { border-color:var(--green); color:var(--green); }
+  /* Twenty-five named buttons filled the settings panel and pushed
+     everything else below the fold, for a control you touch about twice. A
+     swatch wears its own palette -- each chip carries data-theme, so the
+     generated variables apply to the chip itself -- which is more legible
+     than the name anyway: you are choosing how it will look. */
+  #themes {
+    display:grid; grid-template-columns:repeat(auto-fill,minmax(36px,1fr));
+    gap:5px; margin:0 0 7px;
+  }
+  #themes button {
+    min-height:34px; padding:0; border-radius:5px; overflow:hidden;
+    background:var(--bg); border:1px solid var(--rule);
+    display:flex; flex-direction:column; justify-content:flex-end; gap:0;
+  }
+  #themes button i { display:block; height:5px; }
+  #themes button .a { background:var(--green); }
+  #themes button .b { background:var(--text); opacity:.75; }
+  #themes button:hover { border-color:var(--muted); }
+  #themes button.sel { box-shadow:inset 0 0 0 2px var(--text); }
+  /* The name of whatever is under the pointer, or of the current theme --
+     one line doing the work the twenty-five labels were doing. */
+  #themename { font:var(--t-data)/1 var(--mono); color:var(--muted);
+               flex:1 1 auto; min-width:0; }
   .tgroup { font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
             text-transform:uppercase; color:var(--dim); margin:10px 0 5px; }
 
@@ -424,6 +474,11 @@
     #cmdbar { grid-column:1; grid-row:3; }
     #capbar { grid-column:1; grid-row:4; }
     #keys   { grid-column:1; grid-row:5; border-bottom:0; }
+    /* The rail costs about 40px of picture and is not always wanted. Hiding
+       it collapses its grid row, so the stage takes the height back -- on a
+       900px window that is 652 -> 692, which Fit turns straight into
+       869x652 -> 923x692 of screen. */
+    body.nokeys #keys { display:none; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
     #body   { grid-column:2; grid-row:2/6; height:auto; border-top:0;
@@ -455,7 +510,6 @@
     </button>
     <select id="zoom" aria-label="zoom">
       <option value="fit">Fit</option>
-      <option value="fill">Fill window</option>
       <option value="1">Original</option>
       <option value="2">2× original</option>
       <option value="4">4× original</option>
@@ -465,11 +519,14 @@
   </header>
 
   <div id="stage">
-   <div id="frame">
-    <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
-    <img id="mjpeg" style="display:none" alt="">
-    <img id="stale" style="display:none" alt="">
+   <div id="scroll">
+    <div id="frame">
+     <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
+     <img id="mjpeg" style="display:none" alt="">
+     <img id="stale" style="display:none" alt="">
+    </div>
    </div>
+    <div id="zhint" aria-hidden="true"></div>
     <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
            autocomplete="off" enterkeyhint="enter" aria-label="type at the target">
     <div id="veil">
@@ -487,6 +544,8 @@
     <input id="line" placeholder="type a command, then Send"
            autocapitalize="off" autocorrect="off" spellcheck="false">
     <button id="sendline" class="on">Send ↵</button>
+    <button id="keysbtn" aria-expanded="true"
+            aria-controls="keys" title="show or hide the key rail">Keys ▾</button>
   </div>
 
   <div id="stalebar">A newer version of this page is available — reload
@@ -533,37 +592,35 @@
    <div id="panels">
     <section id="settings">
       <h2>Theme</h2>
-      <div class="row" style="margin-bottom:8px">
-        <button id="dbtn2">◐ Switch light / dark</button>
-      </div>
       <div id="themes"></div>
+      <div class="row" style="margin-bottom:8px">
+        <span id="themename">—</span>
+        <button id="dbtn2" title="pick the other half of this pair">Switch to light</button>
+      </div>
       <label><input type="checkbox" id="opt-auto">
         Follow the system light/dark setting</label>
-      <div class="hint">When on, the theme switches with your OS. The ◐ button
-        picks the other half of the current pair by hand.</div>
+
+      <h2 style="margin-top:14px">Video</h2>
+      <label><input type="checkbox" id="opt-ws">
+        Use WebSocket when it works</label>
+      <div class="hint">Falls back to the mjpeg stream by itself if no frame
+        arrives. Runs on port 8443: a WebSocket does not survive the HTTP/2
+        proxy on 443.</div>
 
       <h2 style="margin-top:14px">Activity log</h2>
-      <div class="hint" style="margin-left:0">These events still happen and the
-        daemon still records them — this only filters the view.</div>
-      <label><input type="checkbox" id="opt-ws">
-        Use WebSocket for video when it works</label>
-      <div class="hint">On by default; falls back to the mjpeg stream by itself
-        if the socket does not deliver a frame. WebSocket does not survive the
-        HTTP/2 proxy on port 443, so the page opens it against port 8443, which
-        the daemon serves directly over HTTP/1.1.</div>
-
+      <div class="hint" style="margin-left:0">Filters the view only — the
+        daemon records these either way.</div>
       <label><input type="checkbox" id="opt-probe">
-        Show LED and probe traffic</label>
-      <div class="hint">Caps Lock toggles and LED reads. The harness uses these
-        to test whether the machine is responding, so they repeat constantly.</div>
+        LED and probe traffic</label>
+      <div class="hint">Caps Lock toggles and LED reads, which the harness
+        repeats constantly to test whether the machine answers.</div>
       <label><input type="checkbox" id="opt-poll">
-        Show read-only queries</label>
-      <div class="hint">Screenshots, status and power polls — every open tab
-        makes them on a timer.</div>
+        Read-only queries</label>
+      <div class="hint">Screenshots, status and power polls, on a timer from
+        every open tab.</div>
       <label><input type="checkbox" id="opt-mine">
-        Show this browser's own commands</label>
-      <div class="hint">Off by default: you know what you just did. The
-        harness's actions are the ones worth watching.</div>
+        This browser&rsquo;s own commands</label>
+      <div class="hint">Off by default: you know what you just did.</div>
     </section>
 
     <section id="sec-sound">
@@ -701,7 +758,7 @@ function setXport(x) {
 }
 
 function gotFrame() {
-  if (!frames) setTimeout(applyZoom, 60);   // first frame: sizes are known now
+  if (!frames) setTimeout(() => applyZoom(true), 60);  // sizes known now
   frames++;
   const now = performance.now();
   lastFrameAt = Date.now();
@@ -1624,7 +1681,7 @@ function setTab(name) {
                                $('settings').classList.add('show'); }
   else body.classList.add('closed');
   localStorage.setItem('vcctrl.tab', name);
-  setTimeout(applyZoom, 80);        // the stage just changed size
+  setTimeout(() => applyZoom(true), 80);   // the stage just changed size
 }
 for (const b of document.querySelectorAll('#tabs button'))
   b.onclick = () => setTab(b.dataset.tab);
@@ -1639,20 +1696,19 @@ if (matchMedia('(max-width:640px)').matches)
 //   measures that region and works on it rather than on the whole frame.
 //
 //   THE STAGE IS NOT 4:3. It is whatever is left after the header and the
-//   command line -- usually much wider than tall -- so fitting a 4:3 picture
-//   leaves black down both sides, and trimming the capture's margin cannot
-//   help because the limit is height, not width. On a full-screen text mode
-//   there is no margin at all, which is why trimming it looked identical to
-//   fitting: it WAS identical, to the pixel. "Fill" is the answer to this
-//   one. It covers the stage and pushes the overflow past the edges, which
-//   you drag back.
+//   command line, so a fitted 4:3 picture leaves black down one pair of
+//   edges. There is no fixing that without throwing screen away: once Fit
+//   fills the short axis, the picture is as large as it gets, and every
+//   larger size crops. A "Fill" mode that covered the stage was tried and
+//   removed -- measured on a 1240x652 stage it came out 3% away from 2x, so
+//   it was a second magnifier wearing the name of a fitting mode.
 //
 // The numbered steps are multiples of the CAPTURE'S OWN PIXELS. "Original" is
 // the 640x480 we get from the stick, unadjusted, one capture pixel per CSS
 // pixel; 2x is twice that. Multiples of fit were tried and are worse: fit
 // depends on the window, so "2x" meant a different picture on every device and
 // on every window resize, and there was no size you could name and return to.
-const ZOOMS = ['fit', 'fill', '1', '2', '4'];
+const ZOOMS = ['fit', '1', '2', '4'];
 // Renamed key: '2' used to mean twice FIT and now means twice ORIGINAL, and a
 // value that quietly changes meaning under a stored setting is how you get a
 // window that opens at the wrong size with no way to tell why.
@@ -1660,7 +1716,7 @@ let zoomMode = localStorage.getItem('vcctrl.zoom2') || 'fit';
 // A stored mode that no longer exists would leave the select blank while
 // still applying the vanished factor.
 if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
-let panX = 0, panY = 0, crop = null;
+let crop = null, lastHinted = null, hintTimer = null;
 
 function mediaEl() {
   return $('mjpeg').style.display === 'none' ? $('screen') : $('mjpeg');
@@ -1711,64 +1767,80 @@ function measureCrop() {
   return {x0, y0, bw, bh, w, h};
 }
 
-function applyZoom() {
-  const st = $('stage'), fr = $('frame');
+function applyZoom(recentre) {
+  const sc = $('scroll'), fr = $('frame');
   const el = mediaEl();
   const nw = el.naturalWidth || el.width || 640;
   const nh = el.naturalHeight || el.height || 480;
-  const W = st.clientWidth, H = st.clientHeight;
-  if (!W || !H) return;
-  const s0 = Math.min(W / nw, H / nh);     // scale object-fit:contain applied
-  let k = 1, tx = panX, ty = panY;
-
-  // THE PICTURE IS NOT ALWAYS THE CAPTURE. A mode drawing 320x240 centred in
-  // the frame leaves a black border that carries no information, so every mode
-  // here works on the drawn region when there is one. That is what "Crop to
-  // picture" used to be, and it is what people mean by fit -- keeping it as a
-  // separate entry only meant Fit had a known-worse twin sitting next to it.
   if (!crop) crop = measureCrop();
   const r = crop || {x0: 0, y0: 0, bw: nw, bh: nh};
-  // Put the region's centre on the stage centre, in post-scale pixels.
-  const centre = () => {
-    tx += -((r.x0 + r.bw / 2) - nw / 2) * s0 * k;
-    ty += -((r.y0 + r.bh / 2) - nh / 2) * s0 * k;
-  };
 
-  if (zoomMode === 'fit') {
-    // With no border to trim, fit is the identity -- stated rather than
-    // computed, so a rounding error cannot leave it slightly zoomed.
-    if (!crop) { tx = ty = 0; k = 1; }
-    else { k = Math.min(W / r.bw, H / r.bh) / s0; centre(); }
-  } else if (zoomMode === 'fill') {
-    // max, not min: cover the stage and let the overflow go past the edges.
-    k = Math.max(W / r.bw, H / r.bh) / s0;
-    centre();
-  } else {
-    // s0 is what the browser already did to make the frame fit; dividing it
-    // out lands on capture pixels exactly, whatever the window is doing.
-    k = Number(zoomMode) / s0;
-    centre();
+  // Two passes, because a scrollbar changes the space a fit has to fit into.
+  // Coming down from 4x the scrollbars are still there when we measure, so
+  // the fit lands ~10px short and then the scrollbars go away, leaving a gap
+  // that nothing on screen explains.
+  let scale = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    const W = sc.clientWidth, H = sc.clientHeight;
+    if (!W || !H) return;
+    const want = (zoomMode === 'fit') ? Math.min(W / r.bw, H / r.bh)
+                                      : Number(zoomMode);
+    if (want === scale) break;
+    scale = want;
+    for (const id of ['screen', 'mjpeg', 'stale']) {
+      const e = $(id);
+      e.style.width = (nw * scale) + 'px';
+      e.style.height = (nh * scale) + 'px';
+    }
   }
-  fr.style.transform = (k === 1 && !tx && !ty)
-    ? 'none' : `translate(${tx}px, ${ty}px) scale(${k})`;
-  // Draggable when the picture actually overflows, which is not the same as
-  // k > 1: fit-with-a-border scales up and still fits, Original on a big
-  // stage scales down. The scrollbar-ish affordance should follow the thing
-  // it affords.
-  const over = r.bw * s0 * k > W + 1 || r.bh * s0 * k > H + 1;
+
+  const over = nw * scale > sc.clientWidth + 1 || nh * scale > sc.clientHeight + 1;
   fr.classList.toggle('zoomed', over);
-  if (!over) { panX = panY = 0; }
+  // Only on a deliberate change. Re-centring on every re-measure would drag
+  // the view back under the operator every five seconds.
+  if (recentre) {
+    sc.scrollLeft = (r.x0 + r.bw / 2) * scale - sc.clientWidth / 2;
+    sc.scrollTop = (r.y0 + r.bh / 2) * scale - sc.clientHeight / 2;
+  }
+  // Scrollbars are the affordance on a desktop and are invisible on a
+  // trackpad or a phone until something moves, so the first time a mode
+  // spills, say it in words.
+  if (over && zoomMode !== lastHinted) {
+    lastHinted = zoomMode;
+    const hn = $('zhint');
+    hn.textContent = 'drag or scroll to move';
+    hn.classList.add('show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => hn.classList.remove('show'), 2400);
+  }
+  if (!over) lastHinted = null;
 }
 
 $('zoom').value = zoomMode;
 $('zoom').onchange = () => {
   zoomMode = $('zoom').value;
   localStorage.setItem('vcctrl.zoom2', zoomMode);
-  panX = panY = 0;
   crop = null;                             // re-measure on the next frame
-  applyZoom();
+  applyZoom(true);
 };
-addEventListener('resize', applyZoom);
+addEventListener('resize', () => applyZoom());
+
+// The key rail, on desktop. Hiding it hands its row back to the picture, so
+// the toggle has to re-run the zoom: the stage changed size and nothing else
+// tells us -- a display change fires no resize event.
+(function keyrail() {
+  const b = $('keysbtn');
+  const set = hide => {
+    document.body.classList.toggle('nokeys', hide);
+    b.textContent = hide ? 'Keys \u25b4' : 'Keys \u25be';
+    b.setAttribute('aria-expanded', hide ? 'false' : 'true');
+    localStorage.setItem('vcctrl.keys', hide ? 'hidden' : 'shown');
+    applyZoom();
+  };
+  set(localStorage.getItem('vcctrl.keys') === 'hidden');
+  b.onclick = () => set(!document.body.classList.contains('nokeys'));
+})();
+
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.
 setInterval(() => {
@@ -1777,26 +1849,32 @@ setInterval(() => {
   applyZoom();
 }, 5000);
 
-// Drag to pan when the picture is larger than the stage.
+// Drag to pan, which is the same thing as scrolling now that the picture
+// lives in a real scroller -- so it moves the scroller rather than keeping a
+// second copy of the position that the scrollbars would then disagree with.
 (function pan() {
-  let down = false, sx = 0, sy = 0;
-  const fr = $('frame');
+  const sc = $('scroll'), fr = $('frame');
+  let down = false, sx = 0, sy = 0, l = 0, t = 0;
   const start = e => {
     if (!fr.classList.contains('zoomed')) return;
-    down = true; fr.classList.add('dragging');
+    down = true;
+    fr.classList.add('dragging');
     const p = e.touches ? e.touches[0] : e;
-    sx = p.clientX - panX; sy = p.clientY - panY;
+    sx = p.clientX; sy = p.clientY;
+    l = sc.scrollLeft; t = sc.scrollTop;
   };
   const move = e => {
     if (!down) return;
     const p = e.touches ? e.touches[0] : e;
-    panX = p.clientX - sx; panY = p.clientY - sy;
-    applyZoom();
+    sc.scrollLeft = l - (p.clientX - sx);
+    sc.scrollTop = t - (p.clientY - sy);
     if (e.cancelable) e.preventDefault();
   };
   const end = () => { down = false; fr.classList.remove('dragging'); };
+  // On the stage, not the scroller: on a phone the tap-target covers the
+  // picture, and these events bubble up through it.
   $('stage').addEventListener('pointerdown', start);
-  addEventListener('pointermove', move, {passive:false});
+  addEventListener('pointermove', move, {passive: false});
   addEventListener('pointerup', end);
   addEventListener('pointercancel', end);
 })();
@@ -1852,7 +1930,18 @@ function applyTheme(name, remember) {
   });
   for (const b of document.querySelectorAll('#themes button'))
     b.classList.toggle('sel', b.dataset.theme === name);
+  // The name line is the picker's only text; it has to follow the theme even
+  // when the theme changed from somewhere else -- the light/dark button, the
+  // OS switching under us.
+  const nm = $('themename');
+  if (nm) {
+    const t = THEMES.flatMap(g => g[1]).find(x => x[0] === name);
+    nm.textContent = t ? t[1] : name;
+  }
   $('dbtn').textContent = DARK.has(name) ? '☀' : '☾';
+  // Say what pressing it does, not what it is. The header keeps the glyph
+  // because it has no room for words; the panel has room.
+  $('dbtn2').textContent = DARK.has(name) ? 'Switch to light' : 'Switch to dark';
   $('dbtn').title = DARK.has(name) ? 'switch to the light pairing'
                                    : 'switch to the dark pairing';
 }
@@ -1868,21 +1957,30 @@ function autoPick() {
 }
 
 (function buildPicker() {
-  const host = $('themes');
-  for (const [group, list] of THEMES) {
-    const h = document.createElement('div');
-    h.className = 'tgroup'; h.textContent = group;
-    h.style.gridColumn = '1/-1';
-    host.appendChild(h);
+  const host = $('themes'), name = $('themename');
+  const named = id => (THEMES.flatMap(g => g[1]).find(t => t[0] === id) || [])[1];
+  // Hover names it, leaving names the current one back: the name line is the
+  // only text here, so it has to be right whichever way you got to it.
+  const show = id => { name.textContent = named(id) || id; };
+  host.addEventListener('pointerleave', () => show(theme));
+  for (const [, list] of THEMES) {
     for (const [id, label] of list) {
       const b = document.createElement('button');
-      b.dataset.theme = id; b.textContent = label;
+      b.dataset.theme = id;
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      // Two bars over the theme's own background: the accent it will use for
+      // live state, and the text it will use for everything else.
+      b.innerHTML = '<i class="a"></i><i class="b"></i>';
+      b.onmouseenter = () => show(id);
+      b.onfocus = () => show(id);
       b.onclick = () => { autoTheme = false;
         localStorage.setItem('vcctrl.autotheme','0');
         $('opt-auto').checked = false; applyTheme(id, true); };
       host.appendChild(b);
     }
   }
+  show(theme);
 })();
 
 $('dbtn2').onclick = () => $('dbtn').onclick();
