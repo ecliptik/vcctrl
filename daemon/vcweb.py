@@ -575,6 +575,15 @@ class WebCapability(object):
                 # The page uses this to open its WebSocket against the port
                 # that speaks HTTP/1.1, rather than the h2 proxy on 443.
                 "tls_port": self.tls_port if self.tls_up else 0,
+                # Plug identity so a consumer can say WHICH plug it is about
+                # -- "power: on" is not actionable when the rig has one plug
+                # that serves whichever machine is currently connected to it.
+                # Cached, never a live query: see PowerCapability.snapshot().
+                "power": (self.registry.caps["power"].snapshot()
+                          if "power" in self.registry.caps else
+                          {"host": None, "alias": None, "model": None,
+                           "on": None, "age_s": None, "stale": None,
+                           "reason": "power capability failed to start"}),
                 "viewers": self.clients,
                 "listeners": self.listeners,
                 "audio": (self.audio()._state() if self.audio()

@@ -785,6 +785,66 @@ class PowerCapability(Capability):
     # the ring wrapping.
     AUDIT = "/var/lib/vcctrl/power.log"
 
+    # A cached reading older than this is reported as stale. The plug only
+    # changes when something acts on it, so an old reading is usually still
+    # true -- but "usually true" is exactly the kind of value this rig has been
+    # burned by, so the age travels with it and the consumer is told rather
+    # than left to assume.
+    STALE_S = 120.0
+
+    def __init__(self, *a, **kw):
+        super(PowerCapability, self).__init__(*a, **kw)
+        self._seen = None      # last successful power_state() result
+        self._seen_t = 0.0
+        self._seen_host = None
+
+    def start(self):
+        # One identity read at startup, off the main thread. The plug is on the
+        # LAN and a dead plug must not delay or fail daemon startup -- power is
+        # the capability most likely to be unreachable and least likely to be
+        # needed in the first seconds.
+        threading.Thread(target=self._refresh, name="power-id",
+                         daemon=True).start()
+
+    def _refresh(self):
+        try:
+            host = load_config().get("kasa_host")
+            if host:
+                self._remember(host, power_state(host))
+        except Exception:
+            pass       # absence is reported by snapshot(), not raised here
+
+    def _remember(self, host, st):
+        self._seen, self._seen_t, self._seen_host = st, time.time(), host
+
+    def snapshot(self):
+        """Plug identity and last known relay state, for /state.json.
+
+        EVERY KEY IS ALWAYS PRESENT, null where unknown. A consumer that has to
+        branch on which keys exist ends up encoding the daemon's internal
+        states in the page, and a key that is sometimes absent has already
+        broken the KVM twice this week.
+
+        This is deliberately NOT a live query. state.json is polled every 1.5 s
+        by every open tab; querying the plug on that cadence would put the mains
+        control of a 1995 machine behind a network request per tab per poll.
+        """
+        cfg_host = None
+        try:
+            cfg_host = load_config().get("kasa_host")
+        except Exception:
+            pass
+        st, t = self._seen, self._seen_t
+        if not st:
+            return {"host": cfg_host, "alias": None, "model": None,
+                    "on": None, "age_s": None, "stale": None,
+                    "reason": "the plug has not answered since the daemon started"}
+        age = round(time.time() - t, 1)
+        return {"host": self._seen_host or cfg_host,
+                "alias": st.get("alias"), "model": st.get("model"),
+                "on": st.get("on"), "age_s": age,
+                "stale": age > self.STALE_S, "reason": None}
+
     def commands(self):
         return {"power": self._power, "powerlog": self._powerlog}
 
@@ -823,7 +883,9 @@ class PowerCapability(Capability):
                     "no kasa_host configured (set it in %s)" % CONFIG_PATH}
         action = req.get("action", "state")
         if action == "state":
-            return {"ok": True, "power": power_state(host)}
+            st = power_state(host)
+            self._remember(host, st)
+            return {"ok": True, "power": st}
         # Reads are not audited -- they happen on a timer from every open
         # browser tab and would bury the two lines that matter.
         self._audit(action, req.get("as"), "requested")
@@ -841,6 +903,7 @@ class PowerCapability(Capability):
             return {"ok": False, "error": "unknown power action: %r" % action}
         time.sleep(0.5)
         st = power_state(host)
+        self._remember(host, st)
         self._audit(action, req.get("as"), "done on=%s" % st.get("on"))
         return {"ok": True, "power": st}
 
