@@ -64,41 +64,81 @@ POLL_SECONDS = 15
 VCCTRL_WEB = os.environ.get("VCCTRL_WEB", "http://100.64.0.1:8080")
 
 
+def _daemon_alive(timeout=2.0):
+    """Is the daemon answering at all? Cheap, and load-bearing -- see grab()."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen("%s/state.json" % VCCTRL_WEB, timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def grab(tag, n=16):
     """Capture a frame. Returns (path, mean_brightness) or (None, None).
 
     Unchanged contract, three orders of magnitude faster: the daemon holds a
     rolling ring of recent frames, so this is a read rather than a capture.
 
-    (None, None) still means NO PICTURE, and it now covers one more case than
-    it used to. As well as "every frame in the burst was a duplicate", the
-    daemon reports a stream that is frozen -- frames arriving but all
-    byte-identical, which is what DOS text mode 03h produces, and what it
-    produces is flat black rather than a stale screen. Either way there is
-    nothing to judge, and saying so remains the useful answer.
+    (None, None) means NO PICTURE, and it covers one more case than it used to.
+    As well as "every frame in the burst was a duplicate", the daemon reports a
+    stream that is frozen -- frames arriving but all byte-identical, which is
+    what DOS text mode 03h produces, and what it produces is flat black rather
+    than a stale screen. Either way there is nothing to judge.
 
-    Falls back to the old one-shot ffmpeg path if the daemon is not answering.
-    Capture is how a wedged machine gets diagnosed, so the recovery path must
-    not depend on the thing being recovered from.
+    **The fallback is gated on the daemon actually being down**, which is not
+    the obvious design and is the important part. The vcctrl session caught the
+    first version: it fell back to ffmpeg on any non-503 error, so a single
+    timeout against a HEALTHY daemon dropped into a direct capture that could
+    only fail -- the daemon holds /dev/video0, so ffmpeg gets EBUSY, produces
+    no frames, and returns (None, None) forty seconds later. That is a false
+    "no picture" arrived at slowly, and it is the shape this rig keeps
+    producing: a check that cannot tell "no picture" from "could not look".
+
+    So: retry the daemon once (one timeout is not evidence of anything), then
+    ask whether it is alive. If it is, do not fall back at all -- a direct
+    capture is guaranteed to fail by construction -- and say so loudly on
+    stderr. The return value is still (None, None), because callers depend on
+    that contract and refusing to proceed IS the right behaviour when you could
+    not look; what was missing was any way to tell afterwards which happened.
     """
     sp = os.environ.get("VCCTRL_SHOTS", "/tmp/vcctrl-shots")
     os.makedirs(sp, exist_ok=True)
     dest = os.path.join(sp, "%s.jpg" % tag)
-    try:
-        import urllib.request
-        url = "%s/shot.jpg?n=%d" % (VCCTRL_WEB, int(n))
-        with urllib.request.urlopen(url, timeout=10) as r:
-            data = r.read()
-            mean = r.headers.get("X-Frame-Mean")
-        with open(dest, "wb") as f:
-            f.write(data)
-        return dest, (float(mean) if mean else None)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 503:
-            return None, None          # no picture, and the daemon said so
-        return _grab_ffmpeg(tag, sp, dest)
-    except Exception:
-        return _grab_ffmpeg(tag, sp, dest)
+
+    import urllib.error
+    import urllib.request
+    url = "%s/shot.jpg?n=%d" % (VCCTRL_WEB, int(n))
+    last = None
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as r:
+                data = r.read()
+                mean = r.headers.get("X-Frame-Mean")
+            with open(dest, "wb") as f:
+                f.write(data)
+            return dest, (float(mean) if mean else None)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503:
+                return None, None      # the daemon looked and saw no picture
+            last = exc
+            break                      # it answered, so it is up; do not retry
+        except Exception as exc:
+            last = exc
+            if attempt == 1:
+                time.sleep(0.4)
+
+    if _daemon_alive():
+        sys.stderr.write(
+            "grab: daemon is up but served no frame (%s). NOT falling back to "
+            "ffmpeg -- the daemon holds /dev/video0, so a direct capture would "
+            "fail with EBUSY and return a false 'no picture' 40s from now. "
+            "Returning (None, None) meaning COULD NOT LOOK.\n" % (last,))
+        return None, None
+
+    sys.stderr.write("grab: daemon unreachable (%s), falling back to a direct "
+                     "ffmpeg capture\n" % (last,))
+    return _grab_ffmpeg(tag, sp, dest)
 
 
 def _grab_ffmpeg(tag, sp, dest):
@@ -123,6 +163,13 @@ def _grab_ffmpeg(tag, sp, dest):
         from PIL import Image, ImageStat
         fs = sorted(glob.glob(os.path.join(sp, "vcraw*.jpg")))
         if not fs:
+            # Zero frames is a TOOL failure, not a reading. The return value
+            # cannot carry that distinction without breaking the contract, so
+            # it goes to stderr where a log will keep it.
+            sys.stderr.write("grab: direct ffmpeg capture produced no frames "
+                             "at all -- device busy, unplugged, or ffmpeg "
+                             "missing. This is 'could not look', not 'no "
+                             "picture'.\n")
             return None, None
         digests = {}
         for f in fs:
