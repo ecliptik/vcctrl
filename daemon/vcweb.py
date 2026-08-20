@@ -30,7 +30,30 @@ import time
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-WS_GUID = "258EAFA5-E914-47DA-95CA-5AB0DC85B11D"
+# RFC 6455 section 1.3. Verified against the RFC's own test vector rather than
+# transcribed: key "dGhlIHNhbXBsZSBub25jZQ==" must yield accept
+# "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", and tests/test_core.py asserts exactly that.
+#
+# This was wrong for hours. The final group was written 5AB0DC85B11D instead of
+# C5AB0DC85B11 -- the same twelve characters rotated by one. Every probe I
+# wrote to test the handshake imported this constant, so all four of them
+# computed the same wrong accept, agreed with the server, and reported the
+# WebSocket healthy. Only Firefox, which has its own copy, ever disagreed.
+#
+# A measurement tool that shares a constant with the thing it measures cannot
+# find a bug in that constant.
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+class _NullLock(object):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_NULLLOCK = _NullLock()
 
 # A self-contained WebSocket measurement. Opens a socket against this same
 # origin, counts binary frames for six seconds, and reports the result through
@@ -330,6 +353,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not a websocket request"}, 400)
         accept = base64.b64encode(
             hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        # Firefox rejects this value with "Sec-WebSocket-Accept check failed"
+        # while an independent implementation computes the same thing and
+        # agrees. Record exactly what arrived and what went back, because the
+        # disagreement has to be in the input, not the arithmetic.
+        try:
+            raw = self.headers.get_all("Sec-WebSocket-Key") or []
+        except Exception:
+            raw = []
+        self.cap.ws_hs = {"key": repr(key), "keys_seen": [repr(r) for r in raw],
+                          "accept": accept}
         self.send_response(101)
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
@@ -467,6 +500,8 @@ class WebCapability(object):
         self.ws_sent_frames = 0
         self.ws_sent_bytes = 0
         self.ws_last = None
+        self.ws_client_ops = []
+        self.ws_hs = None
         self.listeners = 0
         self.lock = threading.Lock()
 
@@ -541,6 +576,8 @@ class WebCapability(object):
                        "sent_frames": self.ws_sent_frames,
                        "sent_bytes": self.ws_sent_bytes,
                        "last": self.ws_last,
+                       "client_ops": self.ws_client_ops,
+                       "handshake": self.ws_hs,
                        "last_error": self.ws_last_error,
                        "last_agent": self.ws_last_agent},
                 "caps": self.registry.report()}
@@ -570,9 +607,21 @@ class WebCapability(object):
     # -- the stream ---------------------------------------------------------
 
     def serve_ws(self, sock, agent=None, fps=20.0):
+        # ONE writer at a time. Two threads share this socket -- the frame
+        # pump and the input reader, which answers pings with pongs -- and on
+        # the TLS port that socket is an SSLSocket. Concurrent writes to one
+        # SSL connection interleave inside the record layer and produce a
+        # corrupt record, which the peer reports as a connection error rather
+        # than as anything diagnosable.
+        #
+        # This is the only behavioural difference between the probes that
+        # stream 455 KB happily and a browser that dies after two frames: the
+        # probes never make the daemon write from both threads at once.
+        wlock = threading.Lock()
         with self.lock:
             self.clients += 1
             self.ws_opened += 1
+            self.ws_client_ops = []
             self.ws_last_agent = agent
             self.ws_sent_frames = 0     # per connection, so the number answers
             self.ws_sent_bytes = 0      # "did THIS client get anything"
@@ -584,8 +633,9 @@ class WebCapability(object):
         rate = [fps]
         try:
             threading.Thread(target=self._ws_input,
-                             args=(sock, stop, held, rate), daemon=True).start()
-            self._ws_frames(sock, stop, rate)
+                             args=(sock, stop, held, rate, wlock),
+                             daemon=True).start()
+            self._ws_frames(sock, stop, rate, wlock)
         except Exception as exc:
             with self.lock:
                 self.ws_last_error = "%s: %s" % (type(exc).__name__, exc)
@@ -609,7 +659,7 @@ class WebCapability(object):
             except Exception:
                 pass
 
-    def _ws_frames(self, sock, stop, rate):
+    def _ws_frames(self, sock, stop, rate, wlock=None):
         """Send frames, dropping rather than queueing when the client is slow.
 
         This is the backpressure rule the plan called for and the first version
@@ -641,7 +691,8 @@ class WebCapability(object):
                 if writable:
                     last_t = item[0]
                     try:
-                        sock.sendall(ws_frame(item[2], opcode=0x2))
+                        with (wlock or _NULLLOCK):
+                            sock.sendall(ws_frame(item[2], opcode=0x2))
                     except Exception:
                         return
                     with self.lock:
@@ -653,8 +704,9 @@ class WebCapability(object):
             if state != last_state:
                 last_state = state
                 try:
-                    sock.sendall(ws_frame(
-                        json.dumps({"state": state}).encode(), opcode=0x1))
+                    with (wlock or _NULLLOCK):
+                        sock.sendall(ws_frame(
+                            json.dumps({"state": state}).encode(), opcode=0x1))
                 except Exception:
                     return
             time.sleep(1.0 / max(1.0, rate[0]))
@@ -715,7 +767,7 @@ class WebCapability(object):
             except Exception:
                 pass
 
-    def _ws_input(self, sock, stop, held, rate=None):
+    def _ws_input(self, sock, stop, held, rate=None, wlock=None):
         while not stop.is_set():
             try:
                 got = ws_read(sock)
@@ -724,11 +776,17 @@ class WebCapability(object):
             if got is None:
                 break
             opcode, data = got
+            with self.lock:
+                if len(self.ws_client_ops) < 12:
+                    self.ws_client_ops.append(hex(opcode))
             if opcode == 0x8:
+                with self.lock:
+                    self.ws_client_ops.append("close")
                 break
             if opcode == 0x9:
                 try:
-                    sock.sendall(ws_frame(data, opcode=0xA))
+                    with (wlock or _NULLLOCK):
+                        sock.sendall(ws_frame(data, opcode=0xA))
                 except Exception:
                     break
                 continue

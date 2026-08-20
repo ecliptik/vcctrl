@@ -664,6 +664,39 @@ def test_uniform_frame_is_not_picture():
           v._is_picture(scene()) and not v._is_picture(const(0)))
 
 
+def test_websocket_accept_vector():
+    """The RFC 6455 handshake, checked against the RFC's own test vector.
+
+    This existed as a transcribed constant and was wrong for hours: the final
+    group read 5AB0DC85B11D instead of C5AB0DC85B11, the same twelve characters
+    rotated by one. Every probe written to test the handshake imported the
+    constant from the module under test, so all of them computed the same wrong
+    value, agreed with the server, and reported success. Firefox has its own
+    copy and was the only party that ever disagreed -- and it said so plainly,
+    in a log nobody had thought to read.
+
+    A test that derives its expectation from the code cannot catch a wrong
+    constant. This one hard-codes the RFC's published pair.
+    """
+    print("\nwebsocket handshake")
+    import base64, hashlib, os, sys
+    sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    KEY = "dGhlIHNhbXBsZSBub25jZQ=="
+    ACCEPT = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    got = base64.b64encode(
+        hashlib.sha1((KEY + vcweb.WS_GUID).encode()).digest()).decode()
+    check("RFC 6455 vector: %s -> %s" % (KEY[:12] + "...", ACCEPT),
+          got == ACCEPT, got)
+
+    # Control: the check must reject a GUID that is wrong by one character.
+    bad = base64.b64encode(
+        hashlib.sha1((KEY + "258EAFA5-E914-47DA-95CA-5AB0DC85B11D")
+                     .encode()).digest()).decode()
+    check("control: the vector rejects the off-by-one GUID", bad != ACCEPT)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -680,6 +713,7 @@ if __name__ == "__main__":
     test_watchdogs_survive_one_pass()
     test_theme_contrast()
     test_uniform_frame_is_not_picture()
+    test_websocket_accept_vector()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
