@@ -30,6 +30,38 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-5AB0DC85B11D"
+
+# A self-contained WebSocket measurement. Opens a socket against this same
+# origin, counts binary frames for six seconds, and reports the result through
+# the daemon's own event bus using the `as` field -- which needs no new route
+# and no CORS, and lands somewhere readable from another machine.
+WSPROBE = """<!doctype html><meta charset="utf-8"><title>ws probe</title>
+<body style="font:16px monospace;padding:16px"><div id="r">running…</div>
+<script>
+let n=0, bytes=0, opened=false, code='', clean='', err='', t0=Date.now();
+let ws;
+try { ws = new WebSocket((location.protocol==='https:'?'wss':'ws')
+                          + '://' + location.host + '/ws'); }
+catch (e) { err = 'ctor:' + e; }
+if (ws) {
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { opened = true; };
+  ws.onerror = () => { err += ' onerror'; };
+  ws.onclose = e => { code = e.code; clean = e.wasClean; };
+  ws.onmessage = e => {
+    if (typeof e.data !== 'string') { n++; bytes += e.data.byteLength; }
+  };
+}
+setTimeout(() => {
+  const tag = 'WSPROBE ua=' + (navigator.userAgent.match(/Firefox|Chrome|Safari/)||['?'])[0]
+    + ' proto=' + (performance.getEntriesByType('navigation')[0]||{}).nextHopProtocol
+    + ' open=' + opened + ' frames=' + n + ' bytes=' + bytes
+    + ' code=' + code + ' clean=' + clean + ' ' + err;
+  document.getElementById('r').textContent = tag;
+  fetch('/cmd', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({cmd:'lock', action:'status', as: tag})});
+}, 6000);
+</script>""".encode("utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -190,6 +222,13 @@ class Handler(BaseHTTPRequestHandler):
                         if part.startswith("since="):
                             since = int(part[6:] or 0)
                 return self._json(self.cap.call("events", {"since": since}))
+            if path == "/wsprobe":
+                # Served from the daemon's OWN origin so the result can be
+                # posted back without CORS. A file:// test page could open the
+                # socket but never report, which is why the WebSocket question
+                # went unanswered for an hour: the measurement kept failing for
+                # a reason unrelated to what was being measured.
+                return self._send(200, WSPROBE, "text/html; charset=utf-8")
             if path == "/stream.mjpg":
                 return self._mjpeg()
             if path == "/ws":

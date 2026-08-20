@@ -35,6 +35,32 @@ guard_busy() {
     echo "VCCTRL_FORCE=1 if you know it is safe." >&2
     return 1
   fi
+  # In-flight only catches a command running *right now*. A harness wait loop
+  # polls `leds` several times a second between commands, so the instantaneous
+  # check sees an idle daemon while a cell is very much running. Recent
+  # activity from anyone who is not a browser is the better signal.
+  local busy
+  busy="$(curl -fsS --max-time 5 \
+      "${VCCTRL_WEB:-https://vcctrl-pi.example.ts.net}/events?since=0" 2>/dev/null \
+      | python3 -c '
+import json, sys, time
+try:
+    evs = json.load(sys.stdin).get("events", [])
+except Exception:
+    print(""); raise SystemExit
+now = time.time()
+who = {str(e.get("by")) for e in evs
+       if e.get("kind") == "cmd" and e.get("by") != "browser"
+       and now - e.get("t", 0) < 45}
+print(",".join(sorted(w for w in who if w and w != "None")) or ("harness" if who else ""))
+' 2>/dev/null || true)"
+  if [ -n "$busy" ]; then
+    echo "REFUSING TO DEPLOY: the daemon has served commands from '$busy'" >&2
+    echo "in the last 45 seconds -- something is driving the target." >&2
+    echo "Ask them, or set VCCTRL_FORCE=1 if you know it is safe." >&2
+    return 1
+  fi
+
   if [ "${inflight:-0}" -gt 0 ]; then
     echo "REFUSING TO DEPLOY: $inflight command(s) in flight on the daemon." >&2
     echo "Wait for them, or set VCCTRL_FORCE=1." >&2
