@@ -18,6 +18,21 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # is exactly the right signal: whoever is driving the machine holds it, and a
 # deploy that would interrupt them is refused rather than merely discouraged.
 #
+# THE GUARD IS A NET, NOT PERMISSION. Three blind spots observed in one
+# evening, each of which reported "safe" during a real run:
+#
+#   1. in-flight only        a wait loop lives BETWEEN commands, so a 150 s
+#                            cell is mostly not in flight
+#   2. recent activity       a DOS-side reboot makes no daemon calls at all,
+#                            so a cell mid-reboot looks completely idle
+#   3. neither                a BAT running on the target never touches the
+#                            daemon in any way
+#
+# Only the input lock spans all three, because it is held for the duration of
+# the thing being protected rather than sampled from its side effects. That is
+# the primary signal; everything below is a net under it. An ALLOWED here means
+# "no evidence of a run", which is not the same as "no run".
+#
 # Override with VCCTRL_FORCE=1 when you genuinely need to deploy anyway --
 # deliberately awkward, and it prints who you are interrupting.
 guard_busy() {
