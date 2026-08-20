@@ -1326,6 +1326,9 @@ class VideoCapability(Capability):
         self.thin_passes = 0
         self.dropped_pinned = 0
         self.pinned_at = None
+        # Per-frame change scores, by sequence number. Filled lazily when a
+        # timeline is asked for, never on the capture path.
+        self._chg = {}
         self.mem_limited = False
 
     # -- device lifecycle ---------------------------------------------------
@@ -1743,6 +1746,60 @@ class VideoCapability(Capability):
                 "ring_frames": frames, "span_s": round(actual, 2),
                 "mem_limited": cap < asked}
 
+    def _score_changes(self, items):
+        """How much each frame differs from the one before it.
+
+        WHAT THE SCRUB BAR SHOULD ANSWER. It used to colour by how far apart
+        frames were in the ring, which is a fact about the RECORDER -- byte
+        pressure, thinning -- and not about the machine. Reported exactly that
+        way: "the colours don't mean anything to me, I ran DIR for ten seconds
+        and it didn't change". Quite right. Where the screen changed is the
+        question a timeline exists to answer.
+
+        Decoded at 1/8 scale through draft(), which uses the JPEG's own DCT
+        scaling rather than decoding and resizing -- about half a millisecond
+        a frame instead of eight. Scoring a full ring costs a third of a
+        second, once, and only when somebody opens the timeline: putting this
+        on the capture path would spend 2% of a core forever to save it.
+
+        Cached by sequence number. The ring is append-only, so a frame's score
+        cannot change; a second open scores only what has arrived since.
+        """
+        try:
+            from PIL import Image, ImageChops, ImageStat
+        except Exception:
+            return {}                      # no Pillow: no waveform, not a crash
+        import io as _io
+        cache = self._chg
+        start = len(items)
+        for i, (_t, sq, _f) in enumerate(items):
+            if sq not in cache:
+                # One frame EARLIER than the first unscored one, because a
+                # difference needs something to differ from.
+                start = max(0, i - 1)
+                break
+        prev = None
+        for i in range(start, len(items)):
+            _t, sq, f = items[i]
+            try:
+                im = Image.open(_io.BytesIO(f))
+                im.draft("L", (max(1, im.size[0] // 8), max(1, im.size[1] // 8)))
+                im = im.convert("L")
+            except Exception:
+                prev = None
+                cache.setdefault(sq, None)
+                continue
+            if prev is not None and prev.size == im.size:
+                cache[sq] = round(
+                    ImageStat.Stat(ImageChops.difference(prev, im)).mean[0], 2)
+            else:
+                cache.setdefault(sq, None)
+            prev = im
+        live = set(sq for _t, sq, _f in items)
+        for k in [k for k in cache if k not in live]:
+            del cache[k]
+        return cache
+
     def _timeline(self, req):
         """Index of what is in the buffer: one entry per frame, no pixels.
 
@@ -1758,9 +1815,11 @@ class VideoCapability(Capability):
             used = self.ring_bytes
             thins = self.thin_passes
             memlim = self.mem_limited
+        chg = self._score_changes(items) if req.get("change", True) else {}
         out, prev = [], None
         for t, sq, f in items:
             out.append({"seq": sq, "t": round(t, 3), "bytes": len(f),
+                        "change": chg.get(sq),
                         "gap_ms": None if prev is None
                         else round((t - prev) * 1000.0, 1)})
             prev = t

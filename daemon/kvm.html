@@ -392,6 +392,27 @@
               opacity:.18; display:none; pointer-events:none; }
   #scrubhead { position:absolute; top:0; bottom:0; width:2px;
                background:var(--yellow); pointer-events:none; }
+  /* WHERE THE ENDS ARE, before there is a range to shade. Marking in and
+     then hunting for the out point meant working blind: the tint only
+     appeared once both existed. Each pin shows the moment it is set. */
+  .markpin { position:absolute; top:0; bottom:0; width:2px;
+             background:var(--green); pointer-events:none; }
+  .markpin[hidden] { display:none; }
+  .markpin::after {
+    content:''; position:absolute; left:-3px; width:8px; height:5px;
+    background:var(--green);
+  }
+  #markin::after  { top:0; clip-path:polygon(0 0, 100% 0, 0 100%); }
+  #markout::after { bottom:0; clip-path:polygon(100% 100%, 100% 0, 0 100%); }
+  /* The frame under the pointer, while dragging. A timeline you can only
+     read by letting go is one you scrub twice. */
+  #scrubtip {
+    position:absolute; bottom:calc(100% + 7px); width:196px; height:147px;
+    border:1px solid var(--muted); border-radius:5px; background:#000;
+    box-shadow:0 8px 22px rgba(0,0,0,.5); pointer-events:none;
+    image-rendering:pixelated; transform:translateX(-50%);
+  }
+  #scrubtip[hidden] { display:none; }
   #scrubbar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   #scrubbar button { min-height:30px; padding:0 9px; }
   #scrubpos { font:var(--t-micro)/1 var(--mono); color:var(--dim);
@@ -1041,7 +1062,10 @@
       <div id="scrubtrack" title="Click or drag to move through the buffer">
         <canvas id="scrubmap"></canvas>
         <div id="scrubsel"></div>
+        <div class="markpin" id="markin" hidden></div>
+        <div class="markpin" id="markout" hidden></div>
         <div id="scrubhead"></div>
+        <img id="scrubtip" alt="" hidden>
       </div>
       <div id="scrubbar">
         <button id="scrubprev" title="Back one frame (←)">◀</button>
@@ -2767,16 +2791,29 @@ function exitReview() {
   tl = null;
   bufFrom = bufTo = null;
   $('scrub').hidden = true;
+  hideTip();
+  $('markin').hidden = $('markout').hidden = true;
   setBufOpen(false);
   $('review').style.display = 'none';
   $('scrubsel').style.display = 'none';
   holdBuffer(false);
 }
 
-// WHERE THE BUFFER WAS THINNED, drawn rather than described. The ring drops
-// every other frame when it runs out of bytes, so its spacing is not uniform
-// -- and a bar that looked uniform while stepping 1/30 s in one place and
-// 1/8 s in another would be lying about the one thing you came to see.
+// WHAT THE SCREEN WAS DOING, drawn as a waveform.
+//
+// This bar used to be coloured by how far apart frames were in the ring --
+// which is a fact about the RECORDER, not about the machine. Reported the
+// moment it met a real session: "the colours don't mean anything to me, the
+// buffer was a static DOS screen, then I ran DIR for ten seconds and it
+// scrolled, and the bar didn't change at all." Exactly right, and the fault
+// was mine: I drew the only number I had rather than the one the question
+// needed. The daemon measures per-frame change now and this draws it.
+//
+// THREE FACTS, THREE PLACES, so none of them hides another:
+//   the bar height   how much the screen changed at that moment
+//   a missing column no frame there -- the ring had been thinned
+//   the top strip    how badly, so "nothing happened" and "we were not
+//                    looking" cannot be mistaken for one another
 function drawMap() {
   const cv = $('scrubmap'), tr = $('scrubtrack');
   const w = Math.max(1, Math.round(tr.clientWidth));
@@ -2784,22 +2821,51 @@ function drawMap() {
   cv.width = w; cv.height = h;
   const x = cv.getContext('2d');
   const css = getComputedStyle(document.documentElement);
-  const g = css.getPropertyValue('--green').trim();
-  const y = css.getPropertyValue('--yellow').trim();
-  const r = css.getPropertyValue('--red').trim();
+  const green = css.getPropertyValue('--green').trim();
+  const yellow = css.getPropertyValue('--yellow').trim();
+  const red = css.getPropertyValue('--red').trim();
+  const rule = css.getPropertyValue('--rule').trim();
   x.clearRect(0, 0, w, h);
+
   const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
-  // The median is the buffer's own idea of normal, so "thinned" means thinned
-  // RELATIVE TO THIS RECORDING rather than to a constant that would be wrong
-  // on a slower source.
+  const px = k => Math.round(((k.t - t0) / span) * (w - 1));
+
+  // AGAINST THIS RECORDING'S OWN BUSIEST MOMENTS, not a constant: a scrolling
+  // DIR and a mode change are orders of magnitude apart, and a fixed scale
+  // would flatten one of them. The floor matters as much -- an idle analog
+  // capture still differs frame to frame by about 1 from sampling noise, and
+  // normalising to that would fill the bar with a picture of nothing.
+  const vals = f.map(k => k.change).filter(v => v != null).sort((a, b) => a - b);
+  const p95 = vals.length ? vals[Math.min(vals.length - 1,
+                                          Math.floor(vals.length * 0.95))] : 0;
+  const norm = Math.max(3, p95);
+  const STRIP = 3, base = h, top = STRIP + 1;
+
   const gaps = f.map(k => k.gap_ms).filter(v => v != null).sort((a, b) => a - b);
   const med = gaps.length ? gaps[gaps.length >> 1] : 33;
+
+  x.fillStyle = rule;
+  x.globalAlpha = 0.5;
+  x.fillRect(0, h - 1, w, 1);               // a floor, so the empty is legible
+  x.globalAlpha = 1;
+
   for (const k of f) {
-    const px = Math.round(((k.t - t0) / span) * (w - 1));
+    const cx = px(k);
+    const v = k.change;
+    if (v != null) {
+      const hh = Math.max(1, Math.round(Math.min(1, v / norm) * (base - top)));
+      // Bright where it moved, dim where it merely existed: a still screen
+      // should read as a floor you can see past, not as data.
+      x.globalAlpha = v / norm > 0.12 ? 0.95 : 0.4;
+      x.fillStyle = green;
+      x.fillRect(cx, base - hh, 1, hh);
+    }
     const gm = k.gap_ms == null ? med : k.gap_ms;
-    x.fillStyle = gm > med * 4 ? r : gm > med * 1.8 ? y : g;
-    x.globalAlpha = gm > med * 1.8 ? 0.95 : 0.55;
-    x.fillRect(px, 0, 1, h);
+    if (gm > med * 1.8) {
+      x.globalAlpha = 0.9;
+      x.fillStyle = gm > med * 4 ? red : yellow;
+      x.fillRect(cx, 0, 1, STRIP);
+    }
   }
   x.globalAlpha = 1;
 }
@@ -2826,19 +2892,41 @@ async function seekIdx(i) {
   $('stale').style.display = 'none';
 }
 
+// Each end shows as soon as it is set, and the tint only once both are.
+// Marking in and then hunting for the out point used to be done blind.
 function markRange() {
   const sel = $('scrubsel');
-  if (bufFrom == null || bufTo == null) { sel.style.display = 'none'; return; }
+  if (!tl) return;
   const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
   const at = sq => {
     const k = f.find(v => v.seq === sq) || f[0];
     return ((k.t - t0) / span) * ($('scrubtrack').clientWidth - 1);
   };
+  for (const [sq, id] of [[bufFrom, 'markin'], [bufTo, 'markout']]) {
+    const pin = $(id);
+    pin.hidden = sq == null;
+    if (sq != null) pin.style.left = Math.round(at(sq)) + 'px';
+  }
+  if (bufFrom == null || bufTo == null) { sel.style.display = 'none'; return; }
   const a = at(Math.min(bufFrom, bufTo)), b = at(Math.max(bufFrom, bufTo));
   sel.style.left = Math.round(a) + 'px';
   sel.style.width = Math.max(2, Math.round(b - a)) + 'px';
   sel.style.display = 'block';
 }
+
+// The frame under the pointer while dragging. The full-size picture behind
+// follows too, but it is a fetch away and the whole point of a scrub bar is
+// deciding WHERE to stop before you stop there.
+let tipSeq = null;
+function showTip(k, cx) {
+  const tip = $('scrubtip'), tr = $('scrubtrack');
+  const half = tip.offsetWidth / 2 || 98;
+  tip.style.left = Math.max(half + 2,
+                            Math.min(tr.clientWidth - half - 2, cx)) + 'px';
+  tip.hidden = false;
+  if (k.seq !== tipSeq) { tipSeq = k.seq; tip.src = '/frame.jpg?seq=' + k.seq; }
+}
+function hideTip() { $('scrubtip').hidden = true; tipSeq = null; }
 
 function stopPlay() {
   clearInterval(playTimer);
@@ -2860,15 +2948,31 @@ $('scrubtrack').addEventListener('pointerdown', e => {
     f.forEach((k, i) => { const d = Math.abs(k.t - want);
                           if (d < bd) { bd = d; best = i; } });
     seekIdx(best);
+    showTip(f[best], frac * r.width);
   };
   stopPlay();
   seek(e);
   const move = ev => seek(ev);
-  const up = () => { removeEventListener('pointermove', move);
+  const up = () => { hideTip();
+                     removeEventListener('pointermove', move);
                      removeEventListener('pointerup', up); };
   addEventListener('pointermove', move);
   addEventListener('pointerup', up);
 });
+// Hovering shows it too, without committing to a seek -- the cheapest way to
+// find the moment you are after.
+$('scrubtrack').addEventListener('pointermove', e => {
+  if (!tl || e.buttons) return;
+  const r = $('scrubtrack').getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
+  const want = t0 + frac * span;
+  let best = 0, bd = Infinity;
+  f.forEach((k, i) => { const d = Math.abs(k.t - want);
+                        if (d < bd) { bd = d; best = i; } });
+  showTip(f[best], frac * r.width);
+});
+$('scrubtrack').addEventListener('pointerleave', hideTip);
 $('scrubprev').onclick = () => { stopPlay(); seekIdx(tlAt - 1); };
 $('scrubnext').onclick = () => { stopPlay(); seekIdx(tlAt + 1); };
 $('scrubexit').onclick = exitReview;
