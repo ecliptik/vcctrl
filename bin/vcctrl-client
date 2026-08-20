@@ -34,6 +34,11 @@ USAGE = """usage: vcctrl <command> [args]
                             lifetime; `release` frees it for a tool that opens
                             the device directly.
   framestats [n]            duplicate-hash stats over the last n frames
+  audio [state|acquire|release]
+                            ALSA capture. The daemon owns hw:1,0 for its
+                            lifetime; `release` frees it for a direct capture.
+  level [ms]                mean/peak dBFS over the last ms, from the PCM ring
+  powerlog [n]              append-only record of every mains action taken
   shot [--out F] [n]        one selected frame, or an explicit "no picture"
   lastgood [--out F]        the last frame that was positively picture, aged
   events [since]            activity log since a sequence number
@@ -137,6 +142,12 @@ def main(argv):
         req = {"cmd": "shot", "n": int(rest[0]) if rest else 16}
     elif cmd == "lastgood":
         req = {"cmd": "lastgood"}
+    elif cmd == "audio":
+        req = {"cmd": "audio", "action": rest[0] if rest else "state"}
+    elif cmd == "level":
+        req = {"cmd": "level", "ms": int(rest[0]) if rest else 3000}
+    elif cmd == "powerlog":
+        req = {"cmd": "powerlog", "n": int(rest[0]) if rest else 50}
     elif cmd == "lock":
         req = {"cmd": "lock", "action": rest[0] if rest else "status"}
     elif cmd == "leds":

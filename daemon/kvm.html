@@ -406,7 +406,18 @@ document.querySelectorAll('[data-combo]').forEach(b => b.onclick = () =>
   post('combo', {keys:b.dataset.combo.split(',')}));
 document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   const a = b.dataset.power;
-  if (a !== 'on' && !confirm(`Power ${a} the vcctrl-kvm target?\n\nIf a sweep is running this will destroy it.`)) return;
+  // ON confirms too, which is not the obvious choice -- switching a machine on
+  // is not destructive to data. It is confirmed because of what this
+  // particular machine is: the operator has had the case open repeatedly to
+  // swap video cards, and energising a board somebody's hands are inside is a
+  // worse outcome than any lost sweep. The wording says so rather than
+  // reciting a generic warning.
+  const WARN = {
+    on:    'Switch the vcctrl-kvm target ON?\n\nMake sure the case is closed and nobody is working inside it.',
+    off:   'Power OFF the vcctrl-kvm target?\n\nIf a sweep is running this will destroy it.',
+    cycle: 'Power CYCLE the vcctrl-kvm target?\n\nRails drop for 15s and it takes ~90s to reach a prompt. If a sweep is running this will destroy it.',
+  };
+  if (!confirm(WARN[a] || `Power ${a}?`)) return;
   post('power', {action:a});
 });
 

@@ -712,8 +712,46 @@ class PowerCapability(Capability):
 
     name = "power"
 
+    # Mains control is the most consequential thing this rig can do, and the
+    # event bus is in MEMORY. A daemon restart erases it -- and a restart is
+    # exactly the event most likely to be happening around an unexplained power
+    # change, so the record disappears precisely when it is needed.
+    #
+    # Found the hard way: the g2k was discovered powered off, and answering
+    # "did anything here turn it off" required reasoning from absence rather
+    # than reading a line. An append-only file survives restarts, reboots and
+    # the ring wrapping.
+    AUDIT = "/var/lib/vcctrl/power.log"
+
     def commands(self):
-        return {"power": self._power}
+        return {"power": self._power, "powerlog": self._powerlog}
+
+    def _audit(self, action, who, outcome):
+        line = "%s\t%s\taction=%s\tby=%s\t%s\n" % (
+            time.strftime("%Y-%m-%dT%H:%M:%S%z"), int(time.time()),
+            action, who if who else "(unidentified)", outcome)
+        try:
+            os.makedirs(os.path.dirname(self.AUDIT), exist_ok=True)
+            with open(self.AUDIT, "a") as f:
+                f.write(line)
+        except Exception as exc:
+            sys.stderr.write("power audit write failed: %s\n" % exc)
+        # journald too, so it is in the same place as everything else and
+        # survives the file being lost.
+        sys.stderr.write("POWER %s" % line)
+        sys.stderr.flush()
+
+    def _powerlog(self, req):
+        n = int(req.get("n", 50))
+        try:
+            with open(self.AUDIT) as f:
+                lines = f.read().splitlines()
+        except FileNotFoundError:
+            return {"ok": True, "entries": [], "note": "no power action has "
+                    "been recorded since the audit log was added"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "entries": lines[-n:], "total": len(lines)}
 
     def _power(self, req):
         cfg = load_config()
@@ -724,6 +762,9 @@ class PowerCapability(Capability):
         action = req.get("action", "state")
         if action == "state":
             return {"ok": True, "power": power_state(host)}
+        # Reads are not audited -- they happen on a timer from every open
+        # browser tab and would bury the two lines that matter.
+        self._audit(action, req.get("as"), "requested")
         if action == "on":
             power_set(host, True)
         elif action == "off":
@@ -737,7 +778,9 @@ class PowerCapability(Capability):
         else:
             return {"ok": False, "error": "unknown power action: %r" % action}
         time.sleep(0.5)
-        return {"ok": True, "power": power_state(host)}
+        st = power_state(host)
+        self._audit(action, req.get("as"), "done on=%s" % st.get("on"))
+        return {"ok": True, "power": st}
 
 
 class VideoCapability(Capability):
