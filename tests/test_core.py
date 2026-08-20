@@ -18,6 +18,7 @@ session. They are not here because they cannot be honestly faked.
 
 import importlib.util
 import os
+import re
 import sys
 import threading
 import time
@@ -870,6 +871,137 @@ def test_zoom_modes():
     check("control: a centred 320x240 mode is", is_letterbox(160, 120, 479, 359))
 
 
+HARNESS = """
+<pre id="harness-out"></pre>
+<script>
+// Measure what the ENGINE lays out, not what the model predicts it will.
+//
+// The page's own transport logic keeps running underneath this, and it will
+// happily re-point the img at a stream that does not exist on file:// and
+// hide it again. So every measurement re-asserts the element it is about to
+// measure rather than assuming the setup survived.
+(async () => {
+  const CAP = 'CAPSRC';
+  const img = document.getElementById('mjpeg'), cv = document.getElementById('screen');
+  // No requestAnimationFrame anywhere: getBoundingClientRect forces layout on
+  // the spot, and waiting for frames under a virtual-time budget is how this
+  // harness hung the first time -- measuring nothing, silently.
+  const arm = () => { cv.style.display = 'none'; img.style.display = 'block'; };
+  arm();
+  await new Promise(r => { img.onload = r; img.onerror = r; img.src = CAP; });
+  const out = [];
+  const st = document.getElementById('stage').getBoundingClientRect();
+  out.push(`stage ${st.width.toFixed(2)} ${st.height.toFixed(2)}`);
+  out.push(`loaded ${img.naturalWidth} ${img.naturalHeight}`);
+  for (const m of ['fit', 'fill', '1', '2', '4']) {
+    arm();
+    zoomMode = m; panX = panY = 0; crop = null; applyZoom();
+    const b = img.getBoundingClientRect();
+    // object-fit:contain letterboxes the picture INSIDE the box, so the box
+    // is not the picture. What the operator sees is the picture.
+    const s = Math.min(b.width / img.naturalWidth, b.height / img.naturalHeight);
+    out.push(`${m} ${(img.naturalWidth * s).toFixed(2)} ${(img.naturalHeight * s).toFixed(2)}`);
+  }
+  document.getElementById('harness-out').textContent = out.join('|');
+})();
+</script>
+"""
+
+
+def test_zoom_layout_in_a_browser():
+    """Lay the page out in a real engine and measure the picture.
+
+    Three rounds of this were fixed in the arithmetic and stayed broken,
+    because the arithmetic was right and the assumption under it was not.
+    `width:auto; max-width:100%` takes the element's intrinsic 640x480 and
+    only ever SHRINKS it -- object-fit had nothing to do, since the box
+    already matched the content -- so on any stage larger than the capture the
+    picture sat at 640x480 with the rest of the well empty, while every mode
+    scaled against a fit the layout was never applying.
+
+    A ported model cannot catch that: the port asserted the same wrong
+    premise, and agreed with itself. Only the engine knows how big the picture
+    is, so the test asks the engine.
+    """
+    print("\nzoom layout (measured in chromium)")
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    chrome = (shutil.which("chromium") or shutil.which("chromium-browser")
+              or shutil.which("google-chrome"))
+    if not chrome:
+        print("  SKIP  no chromium on this host")
+        return
+
+    src = os.path.join(HERE, os.pardir, "daemon")
+    d = tempfile.mkdtemp(prefix="kvmlayout")
+    try:
+        with open(os.path.join(src, "kvm.html"), encoding="utf-8") as f:
+            page = f.read().replace('href="/themes.css"', 'href="themes.css"')
+        shutil.copy(os.path.join(src, "themes.css"), os.path.join(d, "themes.css"))
+        import base64
+        import io as _io
+        from PIL import Image
+        buf = _io.BytesIO()
+        Image.new("RGB", (640, 480), (16, 16, 16)).save(buf, "JPEG")
+        cap = "data:image/jpeg;base64," + base64.b64encode(
+            buf.getvalue()).decode()
+        with open(os.path.join(d, "page.html"), "w", encoding="utf-8") as f:
+            f.write(page + HARNESS.replace("CAPSRC", cap))
+
+        r = subprocess.run(
+            [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+             "--hide-scrollbars", "--window-size=1580,900",
+             "--virtual-time-budget=6000", "--dump-dom",
+             "file://" + os.path.join(d, "page.html")],
+            capture_output=True, text=True, timeout=90)
+        m = re.search(r'<pre id="harness-out">([^<]*)</pre>', r.stdout)
+        if not m or not m.group(1).strip():
+            check("the harness reported a measurement", False,
+                  r.stderr.strip()[-200:] or "no output")
+            return
+        got = {}
+        for part in m.group(1).split("|"):
+            bits = part.split()
+            got[bits[0]] = (float(bits[1]), float(bits[2]))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    W, H = got["stage"]
+    print("  stage %.0fx%.0f: %s" % (W, H, ", ".join(
+        "%s=%.0fx%.0f" % (k, v[0], v[1]) for k, v in got.items()
+        if k != "stage")))
+    check("control: the stage is bigger than the capture",
+          W > 640 and H > 480, (W, H))
+    # Without this, a picture that never loaded measures NaN and every
+    # comparison below fails for a reason that has nothing to do with zoom.
+    check("control: the harness actually had a 640x480 picture",
+          got.get("loaded") == (640.0, 480.0), got.get("loaded"))
+
+    w, h = got["fit"]
+    # The regression itself: this is what a picture that is never scaled up
+    # measures, and it is what shipped for three rounds.
+    check("fit is not just the raw 640x480", (w, h) != (640.0, 480.0), (w, h))
+    check("fit overflows neither axis", w <= W + 0.5 and h <= H + 0.5, (w, h))
+    check("fit fills one axis exactly",
+          abs(w - W) < 0.5 or abs(h - H) < 0.5, (w, h))
+
+    w, h = got["fill"]
+    check("fill covers both axes", w >= W - 0.5 and h >= H - 0.5, (w, h))
+    check("fill fills one axis exactly, no overshoot",
+          abs(w - W) < 0.5 or abs(h - H) < 0.5, (w, h))
+
+    check("original is exactly 640x480 on screen",
+          abs(got["1"][0] - 640) < 0.5 and abs(got["1"][1] - 480) < 0.5,
+          got["1"])
+    check("2x original is exactly 1280x960",
+          abs(got["2"][0] - 1280) < 1 and abs(got["2"][1] - 960) < 1, got["2"])
+    check("4x original is exactly 2560x1920",
+          abs(got["4"][0] - 2560) < 2 and abs(got["4"][1] - 1920) < 2, got["4"])
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -889,6 +1021,7 @@ if __name__ == "__main__":
     test_websocket_accept_vector()
     test_page_dom_references()
     test_zoom_modes()
+    test_zoom_layout_in_a_browser()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
