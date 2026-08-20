@@ -52,11 +52,129 @@ if [[ $# -eq 0 ]]; then
   exec ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" vcctrl --help
 fi
 
-# Quote each argument so shell metacharacters survive the ssh round trip.
-# Without this, `vcctrl type "CD \DOSKUTSU"` loses its backslash and quoting.
-quoted=()
+# ---------------------------------------------------------------------------
+# --out / --out-dir MEAN THE CALLER'S DISK.
+#
+# Everything above forwards to the Pi, so before this the client's `--out` was
+# a path on the PI. From the VM that is wrong in two ways. A path that does
+# not exist there fails with an ENOENT that reads like a local permissions
+# problem -- two rounds went into that on 2026-08-20. Far worse, a path that
+# exists on BOTH machines succeeds and returns 0, and the caller then reads
+# whatever ITS copy happens to hold: nothing, or a frame from an earlier run.
+# That is exactly the stale-frame failure --out's two-valued contract was
+# written to prevent, reappearing one host over where the contract cannot see
+# it. The contract was sound; its scope was one machine and nothing said so.
+#
+# So: run to a temp path on the Pi, copy back, remove the remote copy.
+#
+# The alternative -- stream the bytes on stdout and let the shell redirect --
+# is cleaner and is NOT used, because the shell creates the target file before
+# the command runs. A failure would leave a zero-byte file behind, and a file
+# that looks like evidence and is not is the thing this rig keeps producing.
+# ---------------------------------------------------------------------------
+local_out=""; out_flag=""; rdir=""; made_dir=0
+args=()
 for a in "$@"; do
+  if [[ -n "$out_flag" && -z "$local_out" ]]; then
+    local_out="$a"
+    # Placeholder; replaced once we know the remote temp dir.
+    args+=("@@REMOTE_OUT@@")
+  else
+    case "$a" in
+      --out|--out-dir) out_flag="$a"; args+=("$a") ;;
+      *) args+=("$a") ;;
+    esac
+  fi
+done
+
+if [[ -z "$local_out" ]]; then
+  quoted=()
+  for a in "${args[@]}"; do quoted+=("$(printf '%q' "$a")"); done
+  exec ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" vcctrl "${quoted[@]}"
+fi
+
+# Refuse before touching the target if the destination cannot receive the
+# file. Finding that out afterwards means a capture that succeeded on the Pi
+# and was then thrown away.
+dest_dir=$(dirname -- "$local_out")
+if [[ ! -d "$dest_dir" ]]; then
+  echo "vcctrl: $dest_dir does not exist, so $local_out cannot be written" >&2
+  exit 3
+fi
+if [[ ! -w "$dest_dir" ]]; then
+  echo "vcctrl: $dest_dir is not writable" >&2
+  exit 3
+fi
+
+if [[ "$out_flag" == "--out-dir" ]]; then
+  # We may have to remove this directory to honour the two-valued rule, so
+  # refuse anything we would not be entitled to delete. Removing a directory
+  # the caller named, that already held their files, is not a contract -- it
+  # is data loss wearing one.
+  if [[ -e "$local_out" && ! -d "$local_out" ]]; then
+    echo "vcctrl: $local_out exists and is not a directory" >&2
+    exit 3
+  fi
+  if [[ -d "$local_out" ]] && [[ -n "$(ls -A -- "$local_out" 2>/dev/null)" ]]; then
+    echo "vcctrl: $local_out is not empty. Refusing, because a failed run has" >&2
+    echo "  to leave no output behind and that would mean deleting your files." >&2
+    exit 3
+  fi
+  [[ -d "$local_out" ]] || made_dir=1
+fi
+
+rdir="/tmp/vcctrl-out.$$.$RANDOM"
+base=$(basename -- "$local_out")
+if [[ "$out_flag" == "--out-dir" ]]; then
+  remote_target="$rdir"
+else
+  remote_target="$rdir/$base"
+fi
+
+cleanup() { ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" "rm -rf -- $(printf '%q' "$rdir")" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+quoted=()
+for a in "${args[@]}"; do
+  [[ "$a" == "@@REMOTE_OUT@@" ]] && a="$remote_target"
   quoted+=("$(printf '%q' "$a")")
 done
 
-exec ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" vcctrl "${quoted[@]}"
+# `|| rc=$?` rather than a bare call: `set -e` is on, so a non-zero status
+# would abort the script here and the cleanup below would never run.
+rc=0
+ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" \
+  "mkdir -p $(printf '%q' "$rdir") && vcctrl ${quoted[*]}" || rc=$?
+
+# TWO-VALUED, ACROSS THE HOST BOUNDARY TOO. On any non-zero status the local
+# destination must NOT exist afterwards -- otherwise a caller that does
+# `vcctrl frame 42 --out f.jpg; analyse f.jpg` analyses the PREVIOUS run's
+# file believing it is current, which is the precise failure the client's own
+# contract exists to prevent.
+if [[ $rc -ne 0 ]]; then
+  if [[ "$out_flag" == "--out-dir" ]]; then
+    # Only ever remove a directory we created ourselves, or one we already
+    # verified was empty.
+    rm -rf -- "$local_out" 2>/dev/null || true
+  else
+    rm -f -- "$local_out" 2>/dev/null || true
+  fi
+  exit $rc
+fi
+
+if [[ "$out_flag" == "--out-dir" ]]; then
+  mkdir -p -- "$local_out" || { echo "vcctrl: cannot create $local_out" >&2; exit 3; }
+  if ! scp -q "${SSH_OPTS[@]}" -r "$VCCTRL_HOST:$rdir/." "$local_out/" 2>/dev/null; then
+    if [[ $made_dir -eq 1 ]]; then rm -rf -- "$local_out" 2>/dev/null || true
+    else rm -rf -- "$local_out"/* 2>/dev/null || true; fi
+    echo "vcctrl: the command succeeded on $VCCTRL_HOST but the copy back failed" >&2
+    exit 3
+  fi
+else
+  if ! scp -q "${SSH_OPTS[@]}" "$VCCTRL_HOST:$remote_target" "$local_out" 2>/dev/null; then
+    rm -f -- "$local_out" 2>/dev/null || true
+    echo "vcctrl: the command succeeded on $VCCTRL_HOST but the copy back failed" >&2
+    exit 3
+  fi
+fi
+exit 0

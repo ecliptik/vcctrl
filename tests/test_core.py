@@ -2123,6 +2123,98 @@ def test_stall_tracker_three_states():
         check("sig_differs REFUSES a null signature", True)
 
 
+def test_avi_is_a_real_file_ffmpeg_can_decode():
+    """Mux known frames, then make ffmpeg tell us what it got.
+
+    A test that parsed my own header with my own reader would agree with
+    itself no matter how wrong the header was -- the failure this repo has
+    already had under the name "a port inherits the premise". ffmpeg has
+    never seen this writer and has no reason to be kind to it, so its frame
+    count, dimensions and duration are an outside opinion.
+    """
+    import subprocess, tempfile, shutil, json as _json
+    T = vcctrld
+
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        print("  SKIP  ffmpeg/ffprobe not installed")
+        return
+
+    # Three distinguishable frames, made by ffmpeg so the JPEGs are real ones
+    # rather than bytes this test also invented.
+    d = tempfile.mkdtemp()
+    try:
+        jpegs = []
+        for i, colour in enumerate(("red", "green", "blue")):
+            f = os.path.join(d, "%d.jpg" % i)
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+                 "-i", "color=c=%s:s=320x240" % colour, "-frames:v", "1", f],
+                check=True)
+            jpegs.append(open(f, "rb").read())
+
+        check("control: the fixture JPEGs carry readable dimensions",
+              T.jpeg_dims(jpegs[0]) == (320, 240), T.jpeg_dims(jpegs[0]))
+
+        # Ten frames at 10 fps: one second, and a count ffprobe can confirm.
+        blob = T.avi_mjpeg([jpegs[i % 3] for i in range(10)], 10.0, 320, 240)
+        out = os.path.join(d, "b.avi")
+        open(out, "wb").write(blob)
+
+        p = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-count_frames", "-show_entries",
+             "stream=codec_name,width,height,nb_read_frames,r_frame_rate",
+             "-of", "json", out],
+            capture_output=True, text=True)
+        check("ffprobe reads the file at all", p.returncode == 0, p.stderr[:200])
+        st = _json.loads(p.stdout or "{}").get("streams", [{}])[0]
+        check("ffprobe says it is mjpeg", st.get("codec_name") == "mjpeg", st)
+        check("with the dimensions we wrote",
+              (st.get("width"), st.get("height")) == (320, 240), st)
+        check("and every frame we put in",
+              str(st.get("nb_read_frames")) == "10", st)
+        check("at the rate we asked for",
+              st.get("r_frame_rate") == "10/1", st)
+
+        # DECODE one back out and confirm the bytes survived. A container that
+        # plays but hands back a different image would pass everything above.
+        png = os.path.join(d, "f0.png")
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", out,
+                        "-frames:v", "1", png], check=True)
+        px = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
+             "-of", "csv=p=0", png], capture_output=True, text=True)
+        check("and the first frame decodes to the right size",
+              px.stdout.strip().startswith("320,240"), px.stdout.strip())
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_avi_preserves_stalls_rather_than_smoothing_them():
+    """A gap in the ring must cost frames in the file.
+
+    This is the property the whole design turns on: the buffer is thinned
+    when it runs out of bytes, so a file written at the average rate would
+    replay a stall as smooth motion -- a lie about the one thing the
+    recording exists to show.
+    """
+    T = vcctrld
+    # A synthetic ring: ten frames 100ms apart, then a one-second stall.
+    ts = [i * 0.1 for i in range(10)] + [1.9]
+    med = 0.1
+    fps = min(30.0, max(1.0, round(1.0 / med)))
+    reps = []
+    for i, t in enumerate(ts):
+        dur = (ts[i + 1] - t) if i + 1 < len(ts) else med
+        reps.append(max(1, int(round(dur * fps))))
+    check("control: an evenly spaced frame is written once",
+          reps[0] == 1, reps)
+    check("the frame that spanned the stall is repeated to cover it",
+          reps[9] == 10, reps)
+    check("control: and the rate came from the data, not a constant",
+          fps == 10.0, fps)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -2142,6 +2234,8 @@ if __name__ == "__main__":
     test_websocket_accept_vector()
     test_page_dom_references()
     test_buffer_span()
+    test_avi_is_a_real_file_ffmpeg_can_decode()
+    test_avi_preserves_stalls_rather_than_smoothing_them()
     test_no_unbound_names()
     test_ffmpeg_stderr_is_kept()
     test_zoom_modes()
@@ -2303,3 +2397,60 @@ def test_installed_board_id_never_guesses():
         check("reads the IBM PC id", vcctrld.installed_board_id() == 1)
     finally:
         vcctrld.BoardCapability.FILE = orig
+
+
+def test_wrapper_out_is_the_callers_disk():
+    """`--out` must mean the caller's filesystem, not the daemon host's.
+
+    bin/vcctrl forwards to the Pi over ssh, so before this `--out` was a path
+    on the PI. The failing case was merely confusing -- an ENOENT that reads
+    like a local permissions problem. The SUCCEEDING case was the dangerous
+    one: a path that exists on both machines writes on the Pi and returns 0,
+    and the caller then reads whatever its own copy holds, which may be a
+    frame from an earlier run. That is precisely the stale-frame failure the
+    two-valued contract was written to prevent, one host over where the
+    contract could not see it.
+
+    Only the branches that exit BEFORE any ssh are exercised here, so this
+    runs without the rig. They are also the dangerous ones: refusing to
+    destroy a directory the caller named.
+    """
+    import subprocess
+    import tempfile
+
+    wrapper = os.path.join(HERE, os.pardir, "bin", "vcctrl")
+
+    def run(*args):
+        return subprocess.run([wrapper] + list(args), capture_output=True,
+                              text=True, timeout=30,
+                              env=dict(os.environ, VCCTRL_HOST="127.0.0.1"))
+
+    d = tempfile.mkdtemp(prefix="vcout")
+
+    r = run("shot", "--out", os.path.join(d, "missing", "x.jpg"))
+    check("a missing destination directory is refused before the target is "
+          "touched", r.returncode == 3 and "does not exist" in r.stderr,
+          (r.returncode, r.stderr.strip()[:120]))
+
+    # THE one that must never regress: a --out-dir with the caller's files in
+    # it. The two-valued rule says a failed run leaves no output, and honouring
+    # that by emptying a directory somebody named is data loss wearing a
+    # contract.
+    full = os.path.join(d, "full")
+    os.makedirs(full)
+    keep = os.path.join(full, "precious.txt")
+    with open(keep, "w") as f:
+        f.write("the caller's existing work")
+    r = run("burst", "4", "--out-dir", full)
+    check("a non-empty --out-dir is REFUSED rather than emptied",
+          r.returncode == 3 and "not empty" in r.stderr,
+          (r.returncode, r.stderr.strip()[:120]))
+    check("and the caller's file is still there", os.path.exists(keep))
+
+    notdir = os.path.join(d, "afile")
+    with open(notdir, "w") as f:
+        f.write("x")
+    r = run("burst", "4", "--out-dir", notdir)
+    check("--out-dir pointing at a regular file is refused",
+          r.returncode == 3 and "not a directory" in r.stderr,
+          (r.returncode, r.stderr.strip()[:120]))
