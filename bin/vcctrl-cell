@@ -62,7 +62,8 @@ from importlib.machinery import SourceFileLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from vcctrl_common import vc, at_prompt, wait_for_prompt  # noqa: E402
+from vcctrl_common import (  # noqa: E402
+    vc, at_prompt, wait_for_prompt, set_lock_owner, get_lock_owner)
 
 _l = SourceFileLoader("sw", os.path.join(HERE, "vcctrl-sweep"))
 _s = importlib.util.spec_from_loader("sw", _l)
@@ -140,8 +141,12 @@ def take_lock(tag):
     must say so, because "no lock" and "lock taken" are otherwise identical
     from the outside.
     """
+    owner = "%s-%s" % (LOCK_AS, tag)
     try:
-        vc("lock", "acquire", "--as", "%s-%s" % (LOCK_AS, tag))
+        vc("lock", "acquire", "--as", owner)
+        # Present the same identity on every later input call, or the daemon
+        # refuses OUR keystrokes too and the cell dies holding its own lock.
+        set_lock_owner(owner)
         return True
     except Exception as exc:
         print("   NOTE: could not take the input lock (%s)." % exc)
@@ -150,10 +155,14 @@ def take_lock(tag):
 
 
 def drop_lock():
+    owner = get_lock_owner()
     try:
-        vc("lock", "release", "--as", LOCK_AS, check=False)
+        if owner:
+            vc("lock", "release", "--as", owner, check=False)
     except Exception:
         pass
+    finally:
+        set_lock_owner(None)
 
 
 def main(argv):

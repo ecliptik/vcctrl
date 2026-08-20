@@ -55,8 +55,39 @@ MENU_WINDOW_S = 14
 MENU_MAX_KEYS = 6              # 3 x (digit + Enter)
 
 
+# Identity to present to the daemon's input lock. While a cell holds the lock,
+# EVERY input call has to identify as the holder or the daemon refuses it --
+# including the harness's own. Taking the lock without setting this locks the
+# caller out of its own machine, which is precisely what happened the first
+# time vcctrl-cell acquired one.
+LOCK_OWNER = None
+
+
+def set_lock_owner(name):
+    global LOCK_OWNER
+    LOCK_OWNER = name
+
+
+def get_lock_owner():
+    """Read it through a call, never by importing the name. `from x import
+    LOCK_OWNER` binds the value at import time and never sees a later set,
+    which left a cell holding a lock it then could not name to release."""
+    return LOCK_OWNER
+
+
+# Commands that actually deliver input, and so are subject to the lock. Reads
+# (status, leds, video, framestats) are never gated -- observation must not
+# depend on holding a lock, or diagnosing a stuck run would require taking
+# input away from it.
+_INPUT_CMDS = {"key", "type", "hold", "keydown", "keyup", "release-all",
+               "release_all", "combo", "mouse"}
+
+
 def vc(*args, check=True):
-    r = subprocess.run([VCCTRL] + list(args), capture_output=True, text=True)
+    args = list(args)
+    if LOCK_OWNER and args and args[0] in _INPUT_CMDS and "--as" not in args:
+        args += ["--as", LOCK_OWNER]
+    r = subprocess.run([VCCTRL] + args, capture_output=True, text=True)
     if check and r.returncode != 0:
         raise RuntimeError("vcctrl %s failed: %s" % (" ".join(args), r.stderr.strip()))
     return r.stdout.strip()
@@ -299,7 +330,7 @@ SHORT_CMD_CHARS = 12
 # How long the mode 12h console needs to render a typed line before it can be
 # read back. Measured generously: the cost of waiting too long is latency, the
 # cost of waiting too little is discarding a command that arrived fine.
-ECHO_DRAW_S = 1.5
+ECHO_DRAW_S = 3.0
 
 
 def _screen_text():
@@ -389,6 +420,15 @@ def type_command(cmd, retries=3, settle=4.0, press_enter=True):
 
     for attempt in range(retries):
         flush_input_line()
+        # Force the console into UPPER CASE first. DOS does not care, but OCR
+        # does, enormously: mode 12h lowercase glyphs read back as "he L Lowor
+        # Ld" for "helloworld", which made the echo check reject commands that
+        # had arrived perfectly. Caps Lock ends up off because at_prompt()
+        # toggles it as its probe and does not always restore it -- so the
+        # readiness check was silently degrading the legibility of the screen
+        # that the command check depends on.
+        if not bool(leds().get("capslock")):
+            vc("key", "capslock", check=False)
         vc("type", cmd)
         # Let the console actually DRAW it before looking. Mode 12h text is
         # planar read-modify-write and visibly crawls -- reading the screen the
