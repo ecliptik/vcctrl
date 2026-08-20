@@ -306,6 +306,34 @@ def main(argv):
     print("  bands: pass %.2f-%.2f  inconclusive %.2f-%.2f  outside = investigate"
           % (DELTA_PASS + DELTA_INCONCLUSIVE))
 
+    # REPORTED, NOT SCORED -- deliberately. The naive delta is what the
+    # pre-registered band applies to, and moving the verdict onto a better
+    # statistic after seeing the data is the thing this whole tool exists to
+    # avoid. But the naive delta is BIASED, and the reader should see by how
+    # much.
+    #
+    # In execution order C A C A the control cells sit at positions 1 and 3
+    # (mean 2.0) and the arm cells at 2 and 4 (mean 3.0), so the arm mean is
+    # one cell-interval later and the delta carries slope x 1 cell. Fit a
+    # common linear drift plus a constant arm offset -- four points, three
+    # parameters -- and the offset is what the delta would have been with the
+    # arms balanced. The residual on the fourth cell is the check: the model
+    # has one degree of freedom left, so a non-zero residual means "constant
+    # offset plus linear drift" does not describe this run.
+    slope = (now[CONTROL[1]]["fps"] - now[CONTROL[0]]["fps"]) / 2.0
+    offset = now[ARM[0]]["fps"] - (now[CONTROL[0]]["fps"] + slope)
+    resid = now[ARM[1]]["fps"] - (now[CONTROL[0]]["fps"] + offset + 3 * slope)
+    print("\n  drift %+.3f fps/cell  ->  delta carries a bias of %+.2f"
+          % (slope, slope))
+    print("  drift-corrected offset %+.2f   (residual %+.3f)" % (offset, resid))
+    if abs(resid) > 0.05:
+        print("  RESIDUAL IS NOT ZERO: 'constant offset plus linear drift' does")
+        print("  not describe this run, so the correction above is not")
+        print("  trustworthy either. Do not use it.")
+    print("  Reported, NOT scored -- the band above was fixed on the naive")
+    print("  delta and is not being moved after the fact. The fix for the bias")
+    print("  is a counterbalanced C A A C cell order in a successor sweep.")
+
     # The two verdicts are NOT independent, so they are not combined
     # symmetrically. The delta window came from SD(delta) = sigma at sigma =
     # 0.10, and the pair spread is precisely what estimates sigma. A run whose

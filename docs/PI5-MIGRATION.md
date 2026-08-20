@@ -526,11 +526,55 @@ supposed to detect it measures something else. Building one needs repeats that
 are not separated in time — interleaved rather than appended — and that is a
 change to the sweep, not to the scorer.
 
-**And the delta is more robust than the argument that chose it.** It was picked
-because it cancels an additive session confound. It also cancels within-sweep
-drift, because drift hits both arms equally — which is exactly why it
-reproduced to the digit while every single cell moved. The instrument survived
-a confound nobody had identified when they selected it.
+**RETRACTED: the delta does not cancel drift.** This document briefly claimed
+it did, on the reasoning that drift hits both arms equally. It does not, and
+the benchmarking session found the error while following up the "no variance
+test" point above.
+
+The two arms are not sampled at the same average time. In execution order
+`C A C A` the control cells sit at positions 1 and 3, mean 2.0; the arm cells
+at 2 and 4, mean 3.0. **The arm mean is one cell-interval later**, so the delta
+carries a bias of slope x 1 cell. Fit each session to a common linear drift
+plus a constant arm offset — four points, three parameters — and:
+
+    session   slope/cell   drift-corrected offset   naive delta   residual
+    Pi 3        -0.05             +1.35               +1.30         0.000
+    Pi 5        -0.10             +1.40               +1.30         0.000
+
+Both runs report +1.30. **The drift-corrected offsets are not equal, and the
+bias grew exactly as the drift grew** — the direction that masks a change in
+the true offset rather than exposing one.
+
+How hard to push this: 0.05 is below the 0.1 reporting resolution, so **the
+phase-6 agreement is not being called an artifact and the PASS is not
+reopened.** The claim is narrower and still worth having: there is a structural
+bias in the design that should not be there, and it scales with a quantity just
+observed to double.
+
+What the delta *does* cancel exactly is an additive session-level shift, which
+is the confound it was chosen for. That part stands unchanged.
+
+**The fix is counterbalancing, `C A A C`.** Both means land at position 2.5 and
+the imbalance is exactly zero. That is a change to PUMP.BAT and it breaks
+comparability with both banked runs, so it belongs in a successor sweep rather
+than a retrofit — PUMP stays as it is while it is the migration's reference.
+
+**And the current order is not an oversight.** The variance-friendly layout
+`C C A A` would put the whole arm pair later than the whole control pair,
+contaminating the delta directly and at full magnitude instead of at one-cell
+imbalance. The banner's "order is load-bearing" is telling the truth.
+Counterbalancing improves it; reordering for variance would wreck it.
+
+**Sigma may be unmeasurable at current precision.** That same fit leaves a
+residual of exactly zero in both sessions — the data are fully described by
+"constant offset plus linear drift" with nothing left over. That is consistent
+with per-cell scatter below the 0.1 reporting granularity, i.e. sigma < 0.05,
+in which case no design can measure it until `per_loop_fps` gains a decimal
+place. So the open item is two items: a design that separates drift from
+scatter, and enough resolution for the scatter to appear in the output at all.
+The clean instrument for the first is not PUMP but a separate sweep of N
+identical cells, where consecutive differences estimate scatter and the overall
+trend estimates drift.
 
 **Pre-registered re-run criteria**, fixed before the data as before:
 
