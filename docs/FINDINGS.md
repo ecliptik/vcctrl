@@ -1235,7 +1235,7 @@ understanding does not.
 
 ---
 
-## 28. The control path vanished and every instrument said healthy  [measured 2026-08-20]
+## 28. The control path vanished and every instrument said healthy  [measured 2026-08-20; MECHANISM CORRECTED, see the end]
 
 Mid-session, `ssh <rig>` stopped answering for about three minutes. Not slow
 -- a bare TCP connect to port 22 completed and then sat there with no banner.
@@ -1297,3 +1297,116 @@ was taking, and the only reason it got taken is that a command hung rather
 than returning a wrong answer.
 
 Related: sec. 24, the harness cannot see its own cable.
+
+### CORRECTION, two hours later: the mechanism above is WRONG
+
+Everything in this section about *what journald was doing* is retracted. The
+symptom, the blast radius and the generalisable part all stand. The cause does
+not.
+
+The claim was that 824 MB across 101 files made journald too slow to meet its
+deadline. **One number in the kill line refutes it:**
+
+    systemd-journald.service: Consumed 2.704s CPU time.
+
+2.7 seconds across a 45-minute lifetime. Something grinding through a file
+pile burns CPU. This was **blocked, not busy**, and the file-pile story never
+explained that -- it was assembled from a plausible-looking correlation (a big
+journal was present, and a big journal is a known problem) and never tested
+against the one figure that was sitting in the same log line.
+
+Capping the journal to 100M/12 files was real disk hygiene and changed nothing:
+the kills continued at the same ~3 minute cadence, which is the watchdog limit
+itself, because a restarted instance immediately re-enters the stall and dies
+at its first deadline.
+
+**Second wrong mechanism.** The next candidate was ssh session churn -- which
+is documented in the header of `bin/vcctrl` as the cause of the 2026-08-19
+outage, and is correct *for that outage*: every plain ssh spawns a full systemd
+user session, ~20 journal lines per call, 676 entries in ten minutes. It does
+not describe this one. Measured with the churn eliminated: **zero new login
+sessions in 15 minutes, 23 journal entries in 5 minutes, kills continuing.**
+
+Worth recording that the harness was never the churner. `bin/vcctrl` has passed
+ControlMaster since that fix. What churned was ad-hoc `ssh <rig>` from outside
+the wrapper -- including a monitoring loop I had armed to watch for this exact
+fault, polling with plain ssh, i.e. reproducing the fault it was watching for.
+There was no `~/.ssh/config` on the VM at all, so nothing outside the wrapper
+multiplexed. Fixed by configuring it at the host level, sharing the wrapper's
+ControlPath: three consecutive plain `ssh <rig>` calls now leave the session
+counter unchanged where they previously created three sessions.
+
+### What it actually was, measured rather than reconstructed
+
+A probe sampling `/proc` every 2 s from tmpfs -- so it neither wrote to SD nor
+entered the journal, and could not perturb what it measured:
+
+    wchan=file_tty_write  nr=146 (writev)  fd=41  target=/dev/console
+    ttyfds: 41=>/dev/console          <- the only tty fd journald held
+
+Blocked in a `writev()` to `/dev/console`, continuously, 31 of 31 samples
+through a stall, while PID 1 stayed healthy.
+
+**Why a console write never returns here, and this is the rig-specific part.**
+The kernel console is `console=tty1`, a physical VT on a headless Pi, with
+`ixon` enabled. The vcctrl virtual keyboard is a keyboard to the **Pi** as well
+as to the DOS target -- which is already why `pi/install.sh` masks
+`ctrl-alt-del.target`. A `Ctrl-S` aimed at the g2k is XOFF on tty1: output
+suspends, the next console write blocks forever, journald stops draining its
+sockets, and sshd, PAM, logind and sudo all block behind it. **Same class of
+bug as the ctrl-alt-del one, on a different chord**, and the existing mask is
+the proof that this class was already known.
+
+Corroboration arrived by accident: `stty -F /dev/tty1 -ixon` also hangs, because
+`n_tty_write()` holds `termios_rwsem` while blocked and setting termios needs
+the write lock. The command that would clear the condition queues behind it.
+
+### The fix, and what it does not fix
+
+    ForwardToConsole=no    MaxLevelConsole=emerg
+    ForwardToWall=no       MaxLevelWall=emerg
+
+`ForwardToConsole` was already off by default with no drop-ins, so the write was
+the wall path. All four are set explicitly, because the point is that journald
+must never touch a tty a stray keystroke can stop.
+
+The evidence this worked is **structural, not statistical** -- which matters,
+because the two wrong mechanisms above were each declared fixed on an absence
+of events during what turned out to be a normal quiet gap:
+
+    10:04:14  jd=9918   file_tty_write  fd=41 -> /dev/console  ttyfds: 41=>...
+    10:04:16  jd=14545  do_epoll_wait   fd=32 -> eventpoll     ttyfds:
+
+journald now holds **no tty fd at all**. Blocking on a console write is not
+merely unobserved, it is unavailable.
+
+**The root cause is untouched.** tty1 is still flow-stopped; a Ctrl-S can still
+freeze it; anything else writing to `/dev/console` still hangs forever. This
+removes journald from the blast radius, which is what was taking sshd down.
+A real fix is boot-time: clear `ixon` on tty1 before anything writes, or take
+the console off tty1 entirely.
+
+### What this cost, and the part worth keeping
+
+Three times in one investigation the instrument damaged the thing it measured:
+a monitor polling with plain ssh reproduced the churn fault; a `pkill -f
+journald-probe.sh` matched its own ssh command line and killed the shell
+running it, silently, three times; and retried `stty -F /dev/tty1` calls each
+spun a full core for their whole timeout window -- nine at once, on a machine
+at 3.6% idle, while the operator was watching the video stream stutter. One of
+those is still spinning: it survives SIGKILL because it is stuck in a kernel
+path that does not process signals, and it will clear on reboot.
+
+Two tooling failures were silent rather than loud. `strtonum()` is a gawk
+extension and Debian ships mawk, so the field that resolved the fd came back
+empty and read as "no fd" rather than "parser broken" -- the decisive fact was
+lost for a round to a function that does not exist. And a monitor comparing
+`NRestarts` with `!=` instead of `>` reported an explicit restart's counter
+reset as a fresh kill.
+
+**The rule that would have shortened all of this:** when a process is failing a
+deadline, establish *blocked or busy* before proposing any mechanism. It is one
+number, it is printed in the kill line itself, and it eliminates entire
+families of explanation before they are written down. Both wrong mechanisms
+here were stories about journald having too much work, and the CPU figure had
+already ruled that out before either was proposed.
