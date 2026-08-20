@@ -308,6 +308,10 @@ class WebCapability(object):
         "mouse_move", "mouse_click", "power", "leds", "status", "caps",
         "events", "activity", "lock", "shot", "lastgood", "video",
         "framestats",
+        # Read-only. `level` is needed by both the page meter and by
+        # bin/vcctrl-audio, which reaches the daemon over HTTPS now that plain
+        # http is off -- it was missing here and the tool got a 403.
+        "level", "powerlog",
     ])
 
     def __init__(self, registry, bind, port):
