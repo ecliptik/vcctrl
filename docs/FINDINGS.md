@@ -643,3 +643,131 @@ the KVM daemon's frame ring. **Making a check cheap is what turns an assumption
 into a verification** -- the second time in one day that the same trade paid
 off, and the strongest practical argument for the daemon architecture in
 sec. 19.
+
+
+---
+
+## 21. An offered framebuffer the engine declines  [measured 2026-08-19]
+
+The Mach64 at 640x480 rendered **nothing** -- the DOS console stayed on screen,
+untouched, for a whole 158 s cell, with three captures 45 s apart byte-identical.
+Black on the physical monitor too, so not a capture fault.
+
+### The controlled swap
+
+Same card, same pin, same boot profile, same seed. The only variable is whether
+`C:\UNIVBE\UNIVBE.EXE` exists on disk.
+
+    cell   UniVBE   has_lfb  use_lfb  pitches_match  src_pitch  draws  fps
+    M64A   absent      0        0          1            640      YES   26.9
+    M64B   present     1        0          0            320      no    19.9
+    M64D   present     1        0          0            320      no     --
+    NUVB   absent      0        0          1            640      YES   26.8
+
+### Defect 1: banked writes fail only when an LFB was available
+
+With `has_lfb=0` the engine takes `banked_multibank` and it works. With
+`has_lfb=1` it takes the *same* banked path and the writes never reach visible
+VRAM. So the fault is not "banked is broken" -- it is **banked is broken when
+an LFB was offered and declined**, which is a much narrower and stranger claim,
+and it is why this survived every previous test: nothing had ever presented the
+engine with an LFB it then refused.
+
+It also costs 30%: 19.9 against a 26.8/26.9 pair.
+
+### Defect 2: src_pitch is not re-derived after a mode change
+
+UniVBE supplies a 320x240 mode (`0x01F8`), so mode-set #1 lands there and #2
+moves to 640x480. The engine keeps `src_pitch=320` against `vram_pitch=640`.
+Without UniVBE that mode does not exist, #1 goes straight to 640x480, and the
+pitch is correct by construction.
+
+**The pin is not the variable.** It was stood down in all four cells above. The
+MODE LIST is the variable, and UniVBE determines the mode list. Every earlier
+conclusion that framed this as a pin question -- including two of mine -- was
+looking at the wrong lever.
+
+### What this cost, and why
+
+The rig spent an evening on this, and the delay was not the defect. It was that
+**every check available said the machine was fine**:
+
+  - the cell reported success and exited 0
+  - the environment verified, all five variables read back
+  - the log recorded both mode-sets, ending at 640x480
+  - capture was locked, frames arriving, non-repeating
+  - `grab()` reported PICTURE with a plausible brightness
+
+Each of those answers a real question. None of them answers *"is there a game
+on the screen"*, and the one that came closest -- duplicate-hash rejection --
+called a uniform constant a picture, because it tests for repetition and a flat
+frame need not repeat. See sec. 22.
+
+The operator settled it in one sentence: **"I remember seeing the mach64 at
+640x480 in the KVM playing, so it was working."** That is a memory of the
+system in a working state, and it dated the regression to within a few hours
+when no instrument on the rig could. Twice tonight the decisive evidence came
+from the person in the room rather than from the harness -- the other being
+eight beeps across a room (sec. 20).
+
+### Operating state
+
+`UNIVBE.EXE` is renamed to `UNIVBE.SAV`. AUTOEXEC line 36 is not `IF EXIST`
+guarded, so it fails harmlessly and every other TSR still loads. Reverse with:
+
+    REN C:\UNIVBE\UNIVBE.SAV UNIVBE.EXE
+
+**26.8/26.9 is a valid 640x480 pair** -- both `pitches_match=1`, both drawing,
+both provider-attested, spread 0.1. It is NOT comparable to the existing corpus,
+which was measured on UniVBE with a linear framebuffer. New baseline or nothing.
+
+### Unrelated, and now isolated
+
+The **missing background tiles** are present in the NUVB frames -- no UniVBE,
+no LFB, `pitches_match=1`. So that artifact is independent of both defects here
+and needs its own investigation. It had been convenient to assume it was a
+pitch symptom. It is not.
+
+
+---
+
+## 22. Zero variance is not a picture  [measured 2026-08-19]
+
+`grab()` reported `PICTURE mean 7.0` for two frames taken twenty seconds apart
+during a cell that was displaying nothing:
+
+    md5 163305a5...   15011 bytes   extrema (7, 7)
+
+Byte-identical, every pixel exactly 7. It passed because duplicate-hash
+rejection asks **"is this frame a repeat?"** and a uniform frame can be a
+singleton in the sampled window.
+
+But a flat field is not a picture whether or not it repeats. The check answers
+a narrower question than the one being asked -- the same fault as every other
+entry in this document, appearing inside the detector all the others are judged
+with.
+
+**The fix is an independent test, not a better threshold.** A real capture of
+any scene, however dark, has a spread of values: analog sampling noise alone
+guarantees it. Equal extrema means the hardware is emitting a constant.
+
+Measured by the web-KVM session at their 1/8 decode scale: real captures span
+77-226 even when almost entirely black (one at mean 0.10); a constant is exactly
+0. A floor of 4 sits far below any real frame and far above a blank.
+
+### The constant is one constant
+
+Four independent confirmations, hours apart, for unrelated causes -- two
+in-game frames, a `MODE03` test, a `lastgood` off the NET profile -- all
+byte-identical at 15011 bytes.
+
+So the stick emits **one** constant whenever it cannot lock, and that constant
+does not encode the reason. `frozen` is honestly one state, not two: no video
+diagnostic can ever distinguish "the cable is out" from "the mode is
+unlockable", and the LED channel does not separate them either, being up in
+both. The distinguishing evidence has to come from the boot profile or a
+`MODESET` line.
+
+**This retracted a result already passed to another session**, who were about
+to special-case a "brief gap at cell launch" in the KVM overlay -- writing a
+real fault out of the interface on the strength of a false frame.
