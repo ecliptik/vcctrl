@@ -506,7 +506,12 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // a few seconds, an <img> pointed at multipart/x-mixed-replace takes over --
 // no JS decoding, no canvas, the browser does all of it.
 let ws, wsAlive = false, xport = 'connecting', frames = 0, fpsWin = [];
-let firstFrameTimer = null, lastFrameAt = 0, wsTried = 0;
+// lastFrameAt starts at NOW, not 0. At 0 the staleness watchdog computes
+// Date.now() - 0, which is always greater than eight seconds, so the first
+// tick after load tore down a socket that was merely still connecting. A
+// watchdog whose initial state means "already failed" fires against healthy
+// start-ups and looks exactly like the fault it is watching for.
+let firstFrameTimer = null, lastFrameAt = Date.now(), wsTried = 0;
 
 function setXport(x) {
   xport = x;
@@ -602,8 +607,17 @@ function connect() {
     ws.send(JSON.stringify({t:'rate', fps: small ? 12 : 25}));
   };
   ws.onerror = () => { useMjpeg('errored'); };
-  ws.onclose = () => {
+  ws.onclose = e => {
     wsAlive = false;
+    // The close CODE is the one datum that names the reason, and it was being
+    // thrown away: 1006 is an abnormal drop with no close frame, 1002 a
+    // protocol error, 1009 a message the client judged too large. Without it
+    // every failure looks the same from here.
+    const why = `code=${e.code}${e.reason ? ' ' + e.reason : ''}`
+              + ` clean=${e.wasClean} after ${frames} frame(s)`;
+    if (OPTS.ws)
+      addLine(new Date(), 'transport', `websocket closed ${why} (${lastWsURL})`,
+              'k-lock');
     if (xport !== 'mjpeg') setTimeout(connect, 1500);
   };
   ws.onmessage = ev => {
@@ -659,6 +673,8 @@ addEventListener('online', restart);
 setInterval(() => {
   if (document.visibilityState !== 'visible') return;
   if (xport === 'connecting') return;
+  if (!frames) return;          // nothing has ever arrived: the connect path
+                                // owns that case, with its own 4s timer
   if (Date.now() - lastFrameAt > 8000) {
     addLine(new Date(), 'transport', 'no frames for 8s — restarting', 'k-lock');
     restart();
