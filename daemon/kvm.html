@@ -520,6 +520,9 @@
 
     <section id="sec-power">
       <h2>Power</h2>
+      <div class="row" style="margin-bottom:8px">
+        <button id="verifybtn">Verify input link</button>
+      </div>
       <div class="row">
         <button data-power="on">On</button>
         <button data-power="off" class="danger">Off</button>
@@ -944,6 +947,16 @@ function setArmed(v, opts) {
 // pointerup as well as click because a touch that moves slightly may not
 // produce a click at all.
 $('reloadbtn').onclick = () => location.reload(true);
+// Sends a Caps Lock and watches for the LED to come back. The only check that
+// says anything about the wire rather than about this end of it.
+$('verifybtn').onclick = async () => {
+  addLine(new Date(), 'verify', 'sending a keystroke and watching for the LED…', 'k-lock');
+  const j = await post('verify_input', {});
+  if (j) addLine(new Date(), 'verify',
+                 j.verified ? 'link proven — the target answered'
+                            : 'NO ANSWER — keystrokes are not arriving',
+                 j.verified ? 'k-vid' : 'k-taint');
+};
 $('c-kbd').onclick = () => setArmed(!armed);
 
 function armFromStage() {
@@ -1397,8 +1410,6 @@ async function pollState() {
     veil.classList.add('show');
   }
   const L = j.lock || {};
-  pill('p-lock', L.owner ? 'mid' : 'on',
-       L.owner ? `held by ${L.owner}` : 'input free');
   const inf = j.inflight || [];
   $('s-inflight').textContent = inf.length ? `${inf[0].cmd} · ${fmtAge(inf[0].age_s)}` : 'idle';
   $('s-lastev').textContent = fmtAge(j.last_event_age_s);
@@ -1414,7 +1425,11 @@ async function pollState() {
   if (j.build && BUILD !== '__' + 'BUILD__' && j.build !== BUILD)
     $('stalebar').classList.add('show');
   $('s-span').textContent = v.span_s != null ? v.span_s.toFixed(1) + 's' : '–';
-  lamps(j.leds, v.state);
+  lamps(j.leds, v.state, j.input_verified);
+  const iv = j.input_verified;
+  pill('p-lock', L.owner ? 'mid' : (iv && iv.ok ? 'on' : ''),
+       L.owner ? `held by ${L.owner}`
+               : (iv && iv.ok ? 'free · link ok' : 'free · link unproven'));
   const A = j.audio || {};
   if (!soundOn) {
     // Even with sound off, say whether the capture path is alive. "silent" and
@@ -1692,8 +1707,14 @@ if (autoTheme) autoPick();
 // and the last value stands. Drawn dashed when the picture says the machine is
 // not showing anything, because a lamp that looks live on a dead machine is
 // the same lie in miniature that cost a wrong readiness report.
-function lamps(leds, videoState) {
-  const stale = videoState === 'nosignal' || videoState === 'unavailable';
+function lamps(leds, videoState, verified) {
+  // Unverified is the default, and it is drawn as such. With the PS/2 lead
+  // physically unplugged the daemon still reports both devices held, input ok,
+  // and plausible LED values -- all true, and all about the Pi's end of the
+  // wire. Lit lamps on an unverified link are a reassuring lie.
+  const unproven = !verified || verified.ok !== true || verified.age_s > 900;
+  const stale = videoState === 'nosignal' || videoState === 'unavailable'
+                || unproven;
   for (const [key, id] of [['capslock','lamp-caps'], ['numlock','lamp-num'],
                            ['scrolllock','lamp-scroll']]) {
     const el = $(id);
@@ -1704,7 +1725,13 @@ function lamps(leds, videoState) {
     el.title = (leds ? (v === 1 ? 'lit' : 'dark') : 'unknown')
              + (stale ? ' — retained, the target is not showing a picture' : '');
   }
-  $('lamps').title = LAMP_ATTESTS + (stale
+  $('lamps').title = LAMP_ATTESTS
+    + (verified
+       ? `\n\nLink last proven by round trip ${fmtAge(verified.age_s)} ago: `
+         + (verified.ok ? 'the target answered.' : 'NO ANSWER — keystrokes are not arriving.')
+       : '\n\nThe link has not been proven this session. Tap VERIFY to send a '
+         + 'key and watch for the LED to come back.')
+    + (stale
     ? '\n\nDashed: the target is not showing a picture, so these values are '
       + 'retained from whenever it last published them.' : '');
 }

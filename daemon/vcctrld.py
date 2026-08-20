@@ -606,9 +606,19 @@ class Arbiter(object):
 
 
 class Capability(object):
-    """One device or concern. Subclasses declare a name and a command map."""
+    """One device or concern. Subclasses declare a name and a command map.
+
+    Every capability has a `bus`, set by the registry after construction. It
+    used to be passed to whichever constructors happened to accept it, with a
+    TypeError fallback for the rest -- so LedsCapability had no `bus` at all,
+    and the first line of code that touched it raised. That is the same defect
+    as the watchdog reaching for `pinned_at` on a class that never defined it:
+    an attribute that exists on some siblings and not others, with nothing
+    saying which.
+    """
 
     name = None
+    bus = None
 
     def __init__(self, devs):
         self.devs = devs
@@ -686,8 +696,56 @@ class LedsCapability(Capability):
 
     name = "leds"
 
+    # When was the input path last PROVEN, rather than assumed?
+    verified_at = None
+    verified_ok = None
+
     def commands(self):
-        return {"leds": self._leds, "ledwait": self._ledwait}
+        return {"leds": self._leds, "ledwait": self._ledwait,
+                "verify_input": self._verify_input}
+
+    def _verify_input(self, req):
+        """Prove the input path by round trip, because nothing else can.
+
+        The vcctrl session unplugged the PS/2 lead and the harness reported
+        everything healthy: usb4vc holding both devices, input ok, LEDs
+        returning plausible values. All true, and all about the Pi -- the
+        uinput nodes exist whether or not the STM32 is attached to anything.
+        Every status this daemon publishes about input is a statement about
+        its own end of the wire.
+
+        A round trip is different in kind: toggle Caps Lock and watch for the
+        LED to come back. The value returns only if the target's keyboard
+        controller received the key and published its state, which cannot
+        happen with the lead out. It proves the LINK, not that DOS read
+        anything -- Caps Lock is BIOS-serviced, and conflating those is a
+        separate mistake this rig has already paid for.
+        """
+        before = self.devs.read_leds()
+        try:
+            self.devs.key(["capslock"])
+        except Exception as exc:
+            return {"ok": False, "error": "could not send: %s" % exc}
+        changed, deadline = False, time.time() + 1.5
+        while time.time() < deadline:
+            if self.devs.read_leds() != before:
+                changed = True
+                break
+            time.sleep(0.02)
+        try:
+            self.devs.key(["capslock"])          # put it back
+        except Exception:
+            pass
+        LedsCapability.verified_at = time.time()
+        LedsCapability.verified_ok = changed
+        if self.bus:
+            self.bus.publish("input.verify", ok=changed)
+        return {"ok": True, "verified": changed, "before": before,
+                "after": self.devs.read_leds(),
+                "note": ("the target acknowledged a keystroke"
+                         if changed else
+                         "no LED change -- the PS/2 link is not carrying "
+                         "keystrokes, whatever the device status says")}
 
     def _leds(self, req):
         return {"ok": True, "leds": self.devs.read_leds()}
@@ -1850,13 +1908,13 @@ class Registry(object):
         self.routes = {}
         for cls in CAPABILITIES:
             try:
-                # Capabilities that publish take the bus; the original three
-                # do not, so the signature stays optional rather than forcing
-                # a churn through classes that have no use for it.
                 try:
                     cap = cls(devs, self.bus)
                 except TypeError:
                     cap = cls(devs)
+                # Set unconditionally, so every capability has one whether or
+                # not its constructor asked for it.
+                cap.bus = self.bus
                 cap.start()
             except Exception as exc:
                 self.failed[cls.name] = "%s: %s" % (type(exc).__name__, exc)

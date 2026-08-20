@@ -468,7 +468,7 @@ class WebCapability(object):
         "key", "type", "hold", "combo", "keydown", "keyup", "release_all",
         "mouse_move", "mouse_click", "power", "leds", "status", "caps",
         "events", "activity", "lock", "shot", "lastgood", "video",
-        "framestats",
+        "framestats", "verify_input",
         # Read-only. `level` is needed by both the page meter and by
         # bin/vcctrl-audio, which reaches the daemon over HTTPS now that plain
         # http is off -- it was missing here and the tool got a 403.
@@ -557,8 +557,15 @@ class WebCapability(object):
             leds = self.registry.devs.read_leds()
         except Exception:
             leds = None
+        leds_cap = self.registry.caps.get("leds")
         return {"video": vid._state() if vid else {"state": "unavailable"},
                 "leds": leds,
+                # Every other input status describes the Pi's own end of the
+                # wire. This is the only field that means the target answered.
+                "input_verified": (
+                    None if not leds_cap or leds_cap.verified_at is None
+                    else {"ok": leds_cap.verified_ok,
+                          "age_s": round(time.time() - leds_cap.verified_at, 1)}),
                 "inflight": act.get("inflight"),
                 "lock": act.get("lock"),
                 "last_event_age_s": act.get("last_event_age_s"),

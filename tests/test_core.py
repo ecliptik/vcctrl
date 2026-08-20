@@ -233,6 +233,12 @@ def test_registry():
           resp == {"ok": False, "error": "unknown command: 'nope'"}, resp)
 
     resp = vcctrld.handle(d, reg, {"cmd": "caps"})
+    # Every capability must have a bus, whatever its constructor accepts.
+    # LedsCapability did not, and the first command that published an event
+    # raised AttributeError at the point of use rather than at start-up.
+    for name, cap in reg.caps.items():
+        check("%s has a bus" % name, hasattr(cap, "bus"))
+
     check("caps reports every capability",
           resp["ok"] and set(["input", "leds", "power", "video"]) <=
           set(resp["capabilities"]), sorted(resp.get("capabilities", {})))
