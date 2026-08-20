@@ -794,45 +794,59 @@ def test_zoom_modes():
     # would sail past the guard.
     check("every <option> is a known mode and vice versa",
           markup == script, "%s vs %s" % (markup, script))
-    check("4x and 8x are gone", "4" not in markup and "8" not in markup,
-          markup)
 
     # ── the arithmetic, ported from applyZoom() ────────────────────────────
-    def k_for(mode, W, H, nw, nh, crop=None):
+    # k is the transform on top of what object-fit:contain already did, so the
+    # honest thing to check is the size the picture ends up on screen.
+    def shown(mode, W, H, nw, nh, crop=None):
+        """(width, height) of the drawn picture in CSS pixels."""
         s0 = min(W / nw, H / nh)
-        if mode in ("crop", "fill"):
-            x0, y0, bw, bh = crop or (0, 0, nw, nh)
-            k = (min(W / bw, H / bh) if mode == "crop"
-                 else max(W / bw, H / bh)) / s0
-        elif mode == "fit":
-            k = 1.0
+        x0, y0, bw, bh = crop or (0, 0, nw, nh)
+        if mode == "fit":
+            k = 1.0 if crop is None else min(W / bw, H / bh) / s0
+        elif mode == "fill":
+            k = max(W / bw, H / bh) / s0
         else:
-            k = float(mode)
-        return k, s0
+            k = float(mode) / s0
+        return bw * s0 * k, bh * s0 * k
 
-    # A real desktop stage: everything left after the header and command line.
+    # A real desktop stage: whatever is left after the header and command line.
     W, H, nw, nh = 1580, 600, 640, 480
 
-    k, s0 = k_for("fit", W, H, nw, nh)
-    check("fit is exactly the identity", k == 1.0, k)
+    # "Original" means what came off the capture stick, unadjusted. It is the
+    # one mode whose answer does not depend on the window, which is the whole
+    # reason for measuring the ladder from here.
+    for stage in ((1580, 600), (1024, 768), (390, 300)):
+        w, hh = shown("1", stage[0], stage[1], nw, nh)
+        check("original is %dx%d on a %dx%d stage" % (nw, nh, *stage),
+              abs(w - nw) < 0.01 and abs(hh - nh) < 0.01, (w, hh))
+    for mult in ("2", "4"):
+        w, hh = shown(mult, W, H, nw, nh)
+        check("%sx original is exactly %s times it" % (mult, mult),
+              abs(w - nw * float(mult)) < 0.01, w)
+
+    w, hh = shown("fit", W, H, nw, nh)
+    check("fit shows the whole frame", w <= W + 0.5 and hh <= H + 0.5, (w, hh))
     check("control: fit leaves the sides black on a wide stage",
-          nw * s0 * k < W - 100, nw * s0 * k)
+          w < W - 100, w)
 
-    k, s0 = k_for("fill", W, H, nw, nh)
-    fw, fh = nw * s0 * k, nh * s0 * k
+    w, hh = shown("fill", W, H, nw, nh)
     check("fill covers the stage in both axes",
-          fw >= W - 0.5 and fh >= H - 0.5, (fw, fh))
+          w >= W - 0.5 and hh >= H - 0.5, (w, hh))
     check("fill does not overshoot -- one axis lands exactly",
-          abs(fw - W) < 0.5 or abs(fh - H) < 0.5, (fw, fh))
+          abs(w - W) < 0.5 or abs(hh - H) < 0.5, (w, hh))
 
-    k, _ = k_for("crop", W, H, nw, nh)
-    check("control: with no letterbox, crop IS fit -- the reported symptom",
-          k == 1.0, k)
-
-    # 512x384 centred in the capture: the case crop exists for.
-    k, s0 = k_for("crop", W, H, nw, nh, (64, 48, 512, 384))
-    check("crop scales a centred 512x384 mode to the full stage height",
-          abs(384 * s0 * k - H) < 0.5, 384 * s0 * k)
+    # A 512x384 mode centred in the capture: fit works on the picture, not on
+    # the frame, so the black border does not eat into the size.
+    box = (64, 48, 512, 384)
+    w, hh = shown("fit", W, H, nw, nh, box)
+    check("fit of a letterboxed mode fills the stage height",
+          abs(hh - H) < 0.5, hh)
+    # Fitting the frame instead would put the same 384 rows at 384/480 of the
+    # stage: 480 px, a fifth smaller, with black above and below it.
+    naive = shown("fit", W, H, nw, nh)[1] * box[3] / nh
+    check("control: fitting the frame instead would be a fifth smaller",
+          naive < hh - 1, (naive, hh))
 
     # ── what counts as a letterbox, ported from measureCrop() ─────────────
     def is_letterbox(x0, y0, x1, y1, w=640, h=480):

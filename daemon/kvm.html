@@ -448,10 +448,9 @@
     <select id="zoom" aria-label="zoom">
       <option value="fit">Fit</option>
       <option value="fill">Fill window</option>
-      <option value="crop">Crop to picture</option>
-      <option value="1.5">1.5× fit</option>
-      <option value="2">2× fit</option>
-      <option value="3">3× fit</option>
+      <option value="1">Original</option>
+      <option value="2">2× original</option>
+      <option value="4">4× original</option>
     </select>
     <button id="dbtn" aria-label="switch between light and dark">◐</button>
     <button id="gbtn" aria-label="settings">⚙</button>
@@ -1628,22 +1627,28 @@ if (matchMedia('(max-width:640px)').matches)
 // Two different things waste space here, and they need two different answers.
 //
 //   THE CAPTURE LETTERBOXES. A game drawing 320x240 or 512x384 sits centred
-//   inside the 640x480 frame with dead margin around it. "Crop to picture"
-//   finds that region and scales it up.
+//   inside the 640x480 frame with dead margin around it. Every mode below
+//   measures that region and works on it rather than on the whole frame.
 //
 //   THE STAGE IS NOT 4:3. It is whatever is left after the header and the
 //   command line -- usually much wider than tall -- so fitting a 4:3 picture
 //   leaves black down both sides, and trimming the capture's margin cannot
-//   help because the limit is height, not width. That is why "Crop to
-//   picture" looked the same as "Fit" on a full-screen text mode: it WAS the
-//   same, to the pixel. "Fill window" is the answer to this one. It covers
-//   the stage and pushes the overflow past the edges, which you drag back.
+//   help because the limit is height, not width. On a full-screen text mode
+//   there is no margin at all, which is why trimming it looked identical to
+//   fitting: it WAS identical, to the pixel. "Fill" is the answer to this
+//   one. It covers the stage and pushes the overflow past the edges, which
+//   you drag back.
 //
-// The numbered steps are multiples of FIT, not of capture pixels. 4x and 8x
-// are gone: on a 640x480 source they show a sixteenth of the screen as very
-// large squares, which is not something anyone needed to look at.
-const ZOOMS = ['fit', 'fill', 'crop', '1.5', '2', '3'];
-let zoomMode = localStorage.getItem('vcctrl.zoom') || 'fit';
+// The numbered steps are multiples of the CAPTURE'S OWN PIXELS. "Original" is
+// the 640x480 we get from the stick, unadjusted, one capture pixel per CSS
+// pixel; 2x is twice that. Multiples of fit were tried and are worse: fit
+// depends on the window, so "2x" meant a different picture on every device and
+// on every window resize, and there was no size you could name and return to.
+const ZOOMS = ['fit', 'fill', '1', '2', '4'];
+// Renamed key: '2' used to mean twice FIT and now means twice ORIGINAL, and a
+// value that quietly changes meaning under a stored setting is how you get a
+// window that opens at the wrong size with no way to tell why.
+let zoomMode = localStorage.getItem('vcctrl.zoom2') || 'fit';
 // A stored mode that no longer exists would leave the select blank while
 // still applying the vanished factor.
 if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
@@ -1708,38 +1713,49 @@ function applyZoom() {
   const s0 = Math.min(W / nw, H / nh);     // scale object-fit:contain applied
   let k = 1, tx = panX, ty = panY;
 
-  if (zoomMode === 'crop' || zoomMode === 'fill') {
-    // Both modes act on the picture rather than on the capture: if there is a
-    // letterbox, fill fills with what is inside it, not with the black.
-    if (!crop) crop = measureCrop();
-    const r = crop || {x0: 0, y0: 0, bw: nw, bh: nh};
-    // min => all of that region is visible; max => it covers the stage.
-    k = (zoomMode === 'crop' ? Math.min(W / r.bw, H / r.bh)
-                             : Math.max(W / r.bw, H / r.bh)) / s0;
-    // Move the region's centre to the stage centre, in post-scale pixels.
+  // THE PICTURE IS NOT ALWAYS THE CAPTURE. A mode drawing 320x240 centred in
+  // the frame leaves a black border that carries no information, so every mode
+  // here works on the drawn region when there is one. That is what "Crop to
+  // picture" used to be, and it is what people mean by fit -- keeping it as a
+  // separate entry only meant Fit had a known-worse twin sitting next to it.
+  if (!crop) crop = measureCrop();
+  const r = crop || {x0: 0, y0: 0, bw: nw, bh: nh};
+  // Put the region's centre on the stage centre, in post-scale pixels.
+  const centre = () => {
     tx += -((r.x0 + r.bw / 2) - nw / 2) * s0 * k;
     ty += -((r.y0 + r.bh / 2) - nh / 2) * s0 * k;
-  } else if (zoomMode !== 'fit') {
-    // Multiples of FIT, not of capture pixels. The old scale meant "one
-    // capture pixel per CSS pixel", so on a phone where fit is already about
-    // 0.5, the option labelled 100% rendered at roughly twice fit and every
-    // number was wrong by a device-dependent factor. Nobody reading "200%"
-    // means "relative to the source resolution of a 1995 VGA card".
-    k = Number(zoomMode);
+  };
+
+  if (zoomMode === 'fit') {
+    // With no border to trim, fit is the identity -- stated rather than
+    // computed, so a rounding error cannot leave it slightly zoomed.
+    if (!crop) { tx = ty = 0; k = 1; }
+    else { k = Math.min(W / r.bw, H / r.bh) / s0; centre(); }
+  } else if (zoomMode === 'fill') {
+    // max, not min: cover the stage and let the overflow go past the edges.
+    k = Math.max(W / r.bw, H / r.bh) / s0;
+    centre();
+  } else {
+    // s0 is what the browser already did to make the frame fit; dividing it
+    // out lands on capture pixels exactly, whatever the window is doing.
+    k = Number(zoomMode) / s0;
+    centre();
   }
-  // Fit is the identity, stated rather than computed, so a leftover pan or a
-  // rounding error cannot leave it slightly zoomed.
-  if (zoomMode === 'fit') { tx = ty = 0; k = 1; }
   fr.style.transform = (k === 1 && !tx && !ty)
     ? 'none' : `translate(${tx}px, ${ty}px) scale(${k})`;
-  fr.classList.toggle('zoomed', k > 1.01);
-  if (k <= 1.01) { panX = panY = 0; }
+  // Draggable when the picture actually overflows, which is not the same as
+  // k > 1: fit-with-a-border scales up and still fits, Original on a big
+  // stage scales down. The scrollbar-ish affordance should follow the thing
+  // it affords.
+  const over = r.bw * s0 * k > W + 1 || r.bh * s0 * k > H + 1;
+  fr.classList.toggle('zoomed', over);
+  if (!over) { panX = panY = 0; }
 }
 
 $('zoom').value = zoomMode;
 $('zoom').onchange = () => {
   zoomMode = $('zoom').value;
-  localStorage.setItem('vcctrl.zoom', zoomMode);
+  localStorage.setItem('vcctrl.zoom2', zoomMode);
   panX = panY = 0;
   crop = null;                             // re-measure on the next frame
   applyZoom();
@@ -1748,7 +1764,9 @@ addEventListener('resize', applyZoom);
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.
 setInterval(() => {
-  if (zoomMode === 'crop' || zoomMode === 'fill') { crop = null; applyZoom(); }
+  if (document.hidden) return;   // a readback nobody can see is just battery
+  crop = null;
+  applyZoom();
 }, 5000);
 
 // Drag to pan when the picture is larger than the stage.
