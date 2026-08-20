@@ -550,3 +550,458 @@ expensive enough to be the fault. Worth checking wherever an observer shares
 resources with the observed -- and it is the strongest argument yet for the
 persistent-daemon architecture the web-KVM work is building, which removes the
 per-call connection entirely rather than making it cheaper.
+
+
+---
+
+## 20. A correct signal, overruled by a belief  [diagnosed 2026-08-19]
+
+The other failures in this document are proxies going wrong: a stale LED level
+read as current state, a returned prompt read as a successful command, file
+arrival read as readiness. Each is a reading that could not distinguish success
+from failure.
+
+This one is not that. **The reading was right, available for hours, and
+discarded.**
+
+### What was heard
+
+The operator, from the next room, after every reboot:
+
+> btw on reboots, sometimes I think there are too many keyboard buffers, there
+> are 4 rapid beeps after the PNP boot beep
+
+That is the BIOS type-ahead buffer overflowing. It holds 15 keystrokes and
+beeps once per key rejected past that. The beep is not a symptom that needs
+interpreting -- it is the buffer reporting its own overflow, in hardware,
+correctly, every time.
+
+A fix was made: blind menu selection dropped from 209 attempts to 12. The beeps
+got quieter. That was reported as fixed.
+
+Hours later, same operator:
+
+> I still keep on hearing like 8 or so beeps whenever you reboot, I thought that
+> was fixed?
+
+### What was actually wrong
+
+The budget was expressed in **attempts** while the thing that overflows counts
+**keystrokes**. Every attempt is digit-then-Enter:
+
+    vcctrl-collect     12 attempts  =  24 keys   into a 15-key buffer
+    vcctrl_common      20 attempts  =  40 keys   into a 15-key buffer
+
+A unit error, hiding inside a cap that looked conservative. The menu consumes
+two. Of the remaining twenty-two, some overflow -- one beep each, which is what
+was audible -- and the rest **sit in the buffer until COMMAND.COM next reads
+input**, which may be minutes later:
+
+    C:\>5C:\MTCP\PUT.BAT M64A
+    Bad command or file name
+
+That is a stray keystroke from the boot menu arriving inside a log transfer and
+prefixing it. Keystrokes from one operation landing inside another, minutes
+later. The transfer silently did nothing.
+
+### Why the bad fix survived
+
+The attempt count went down and the noise went down with it, so the metric that
+was being watched improved. Nobody looked at the screen afterwards -- and the
+screen showed eight `Bad command or file name` lines the entire time, one call
+away, for hours.
+
+**The beep had already answered the question and was overruled by a belief
+about a fix.** That is worse than a proxy failing, because a proxy that cannot
+distinguish success from failure at least never claimed to. Here the
+distinguishing evidence existed, was correct, was reported by a human, and lost
+an argument to a number that had improved.
+
+### The rule
+
+**A partial improvement in a metric is not evidence that the fault is gone.**
+When someone reports that a symptom persists, the symptom outranks the fix.
+
+And the narrower one, worth stating because it generalises past this rig:
+**bound a resource in the units the resource is measured in.** The buffer holds
+keys. Anything counted in attempts, rounds, or iterations is a proxy for keys
+and will drift from it the moment the number of keys per attempt changes.
+
+### What replaced it
+
+- The bound is keystrokes (6, against a 15-key buffer), in
+  `vcctrl_common.spam_menu` -- **one** implementation, because the loop existed
+  twice with different constants, which is why the fix had to be found twice.
+- `flush_input_line()` sends Esc before the first command after a reboot, so a
+  survivor cannot prefix it.
+- The reboot path **verifies the profile** by reading NET's `[NET] ready`
+  banner off the screen. Pressing 5 and booting NET are different events, and a
+  missed menu boots something else that also reaches a prompt.
+
+That last check was unaffordable at 40 s per capture and costs 0.2 s through
+the KVM daemon's frame ring. **Making a check cheap is what turns an assumption
+into a verification** -- the second time in one day that the same trade paid
+off, and the strongest practical argument for the daemon architecture in
+sec. 19.
+
+
+---
+
+## 21. An offered framebuffer the engine declines  [RETRACTED -- see sec. 23]
+
+**The central claim of this section is wrong.** There was no engine defect. A
+half-written UniVBE configuration advertised a mode the card cannot produce, and
+everything below is the engine faithfully using it. Kept unedited because the
+reasoning is a worked example of how far a wrong root cause can be carried on
+correct-looking evidence; the correction is sec. 23.
+
+## 21 (as originally written). An offered framebuffer the engine declines
+
+The Mach64 at 640x480 rendered **nothing** -- the DOS console stayed on screen,
+untouched, for a whole 158 s cell, with three captures 45 s apart byte-identical.
+Black on the physical monitor too, so not a capture fault.
+
+### The controlled swap
+
+Same card, same pin, same boot profile, same seed. The only variable is whether
+`C:\UNIVBE\UNIVBE.EXE` exists on disk.
+
+    cell   UniVBE   has_lfb  use_lfb  pitches_match  src_pitch  draws  fps
+    M64A   absent      0        0          1            640      YES   26.9
+    M64B   present     1        0          0            320      no    19.9
+    M64D   present     1        0          0            320      no     --
+    NUVB   absent      0        0          1            640      YES   26.8
+
+### Defect 1: banked writes fail only when an LFB was available
+
+With `has_lfb=0` the engine takes `banked_multibank` and it works. With
+`has_lfb=1` it takes the *same* banked path and the writes never reach visible
+VRAM. So the fault is not "banked is broken" -- it is **banked is broken when
+an LFB was offered and declined**, which is a much narrower and stranger claim,
+and it is why this survived every previous test: nothing had ever presented the
+engine with an LFB it then refused.
+
+It also costs 30%: 19.9 against a 26.8/26.9 pair.
+
+### Defect 2: src_pitch is not re-derived after a mode change
+
+UniVBE supplies a 320x240 mode (`0x01F8`), so mode-set #1 lands there and #2
+moves to 640x480. The engine keeps `src_pitch=320` against `vram_pitch=640`.
+Without UniVBE that mode does not exist, #1 goes straight to 640x480, and the
+pitch is correct by construction.
+
+**The pin is not the variable.** It was stood down in all four cells above. The
+MODE LIST is the variable, and UniVBE determines the mode list. Every earlier
+conclusion that framed this as a pin question -- including two of mine -- was
+looking at the wrong lever.
+
+### What this cost, and why
+
+The rig spent an evening on this, and the delay was not the defect. It was that
+**every check available said the machine was fine**:
+
+  - the cell reported success and exited 0
+  - the environment verified, all five variables read back
+  - the log recorded both mode-sets, ending at 640x480
+  - capture was locked, frames arriving, non-repeating
+  - `grab()` reported PICTURE with a plausible brightness
+
+Each of those answers a real question. None of them answers *"is there a game
+on the screen"*, and the one that came closest -- duplicate-hash rejection --
+called a uniform constant a picture, because it tests for repetition and a flat
+frame need not repeat. See sec. 22.
+
+The operator settled it in one sentence: **"I remember seeing the mach64 at
+640x480 in the KVM playing, so it was working."** That is a memory of the
+system in a working state, and it dated the regression to within a few hours
+when no instrument on the rig could. Twice tonight the decisive evidence came
+from the person in the room rather than from the harness -- the other being
+eight beeps across a room (sec. 20).
+
+### Operating state
+
+`UNIVBE.EXE` is renamed to `UNIVBE.SAV`. AUTOEXEC line 36 is not `IF EXIST`
+guarded, so it fails harmlessly and every other TSR still loads. Reverse with:
+
+    REN C:\UNIVBE\UNIVBE.SAV UNIVBE.EXE
+
+**26.8/26.9 is a valid 640x480 pair** -- both `pitches_match=1`, both drawing,
+both provider-attested, spread 0.1. It is NOT comparable to the existing corpus,
+which was measured on UniVBE with a linear framebuffer. New baseline or nothing.
+
+### Unrelated, and now isolated
+
+The **missing background tiles** are present in the NUVB frames -- no UniVBE,
+no LFB, `pitches_match=1`. So that artifact is independent of both defects here
+and needs its own investigation. It had been convenient to assume it was a
+pitch symptom. It is not.
+
+
+---
+
+## 22. Zero variance is not a picture  [measured 2026-08-19]
+
+`grab()` reported `PICTURE mean 7.0` for two frames taken twenty seconds apart
+during a cell that was displaying nothing:
+
+    md5 163305a5...   15011 bytes   extrema (7, 7)
+
+Byte-identical, every pixel exactly 7. It passed because duplicate-hash
+rejection asks **"is this frame a repeat?"** and a uniform frame can be a
+singleton in the sampled window.
+
+But a flat field is not a picture whether or not it repeats. The check answers
+a narrower question than the one being asked -- the same fault as every other
+entry in this document, appearing inside the detector all the others are judged
+with.
+
+**The fix is an independent test, not a better threshold.** A real capture of
+any scene, however dark, has a spread of values: analog sampling noise alone
+guarantees it. Equal extrema means the hardware is emitting a constant.
+
+Measured by the web-KVM session at their 1/8 decode scale: real captures span
+77-226 even when almost entirely black (one at mean 0.10); a constant is exactly
+0. A floor of 4 sits far below any real frame and far above a blank.
+
+### The constant is one constant
+
+Four independent confirmations, hours apart, for unrelated causes -- two
+in-game frames, a `MODE03` test, a `lastgood` off the NET profile -- all
+byte-identical at 15011 bytes.
+
+So the stick emits **one** constant whenever it cannot lock, and that constant
+does not encode the reason. `frozen` is honestly one state, not two: no video
+diagnostic can ever distinguish "the cable is out" from "the mode is
+unlockable", and the LED channel does not separate them either, being up in
+both. The distinguishing evidence has to come from the boot profile or a
+`MODESET` line.
+
+**This retracted a result already passed to another session**, who were about
+to special-case a "brief gap at cell launch" in the KVM overlay -- writing a
+real fault out of the interface on the strength of a false frame.
+
+
+---
+
+## 23. The configurator that was never finished  [measured 2026-08-19]
+
+Six hours of investigation, three retracted theories, two falsely reported
+engine defects, and a rig left unusable. One cause, and it printed itself on
+the screen the moment the procedure was run properly:
+
+> **Note that the ATI Mach64-CT and Mach64-ET based boards do not support
+> double scanning, so all 320x200 and 320x240 resolution modes are not
+> available.**  -- SciTech UniVBE 6.70, on this card
+
+### What happened
+
+`vcctrl-uvconfig` ran `UVCONFIG.EXE` at 14:47, then declined to press keys into
+a screen it could not read. Refusing to drive blind was correct. **Writing
+first and refusing second was not.** `UVCONFIG` writes `UNIVBE.DRV` and
+`UVCONFIG.DAT` as it runs, so the files had already changed by the time
+anything could decide to stop.
+
+The result advertised `0x01F8` 320x240 on a board that physically cannot
+double-scan. The game asks for 320x240, closest-match returned the mode that
+did not exist, and from there:
+
+    mode-set #1 -> 0x01F8 320x240 (impossible)   src_pitch latched at 320
+    mode-set #3 -> 0x0101 640x480                vram_pitch 640
+    pitches_match=0, LFB declined, nothing drawn
+
+Every one of those is correct behaviour given a false mode table.
+
+### Three checks that agreed, and were all wrong
+
+- `at_prompt()` said the configurator had finished. It is a BIOS Caps Lock
+  probe and returns True while a program sits waiting (sec. 20). The check that
+  cannot see DOS was used to certify a DOS program had completed.
+- File size and timestamp on `UNIVBE.DRV` looked correct throughout, before and
+  after a rollback. **A config file is not the configuration.** The mode list
+  the running system offers is, and it is only visible in a cell log.
+- The cell reported success, the environment verified, capture locked, the log
+  recorded both mode-sets. None of them asks whether anything was drawn.
+
+### The unfixable part
+
+`UVCONFIG` writes to the text buffer at `0xB800`. In mode 12h -- the mode the
+capture stick requires -- those writes land in memory that is not displayed, so
+the menus are invisible to the harness **and** to anyone at the monitor. In text
+mode 03h they are visible on the monitor but the stick cannot lock 70Hz.
+
+**There is no video mode in which the harness and the configurator can both see
+the screen.** So the answer was never a braver tool. Interactive configurators
+are operator work on this rig, permanently.
+
+### The rule
+
+**Refuse to write anything unless the whole procedure can complete.** Not "be
+more cautious" -- the tool was already cautious, in the wrong half. A machine
+left neither configured nor untouched is worse than one left alone, and the
+guard belongs before the first write rather than before the first keystroke.
+
+### What was measured once it was configured properly
+
+    per_loop_fps  28.3
+    oem_string    'Universal VESA VBE 6.70'
+    0x01F8        no matches            (the card cannot double-scan)
+    LFB-decision  use_lfb=1             taken unaided, no FORCE_LFB needed
+    FB-INIT       pitches_match=0  src_pitch=512  vram_pitch=640
+
+So **defect 1 is retracted and defect 2 is real.** `src_pitch` is genuinely not
+re-derived when a later mode-set changes VRAM dimensions -- mode-set #1 lands on
+512x384 and #3 moves to 640x480, and the engine keeps composing 512 wide. That
+is why 28.3 matches the 512x384 control pair exactly: it is a 512x384 workload
+with a 640x480 presentation, and it is **not** a 640x480 measurement.
+
+### What actually resolved it
+
+Not the harness. The operator: *"I don't get why you couldn't just do the 'we
+know there was a video card swap, so we'll run uvconfig, reboot, and things are
+all good' like we've done dozens of times before."*
+
+That is the third time in one session the decisive input came from the person in
+the room -- after eight beeps heard across a room (sec. 20) and a memory of the
+card working earlier (sec. 21). Each time the harness had evidence that looked
+sufficient and was not, and each time the human had context the instruments
+could not hold: what the procedure normally is, what the machine normally sounds
+like, what it looked like an hour ago.
+
+
+---
+
+## 24. The harness cannot see its own cable  [measured 2026-08-19]
+
+With the USB4VC PS/2 lead **physically unplugged from the target**, the harness
+reported everything healthy:
+
+    usb4vc:  {'vcctrl virtual keyboard': True, 'vcctrl virtual mouse': True}
+    caps:    input ok, leds ok, power ok, video ok
+    leds:    {'capslock': 1, 'numlock': 0, 'scrolllock': 1}
+
+Every check green. None of them can detect that the cable is out.
+
+The reason is structural rather than a missing test. Those devices are `uinput`
+nodes **on the Pi**; they exist whether or not the STM32 is connected to
+anything, and the LED values are the last ones published, so they read plausible
+rather than absent. **The harness reports on its own side of a cable whose far
+end it cannot see.**
+
+Same family as the physical-layer limit: every instrument on this rig reports
+software state, so anything upstream of that -- a half-seated card, an unplugged
+lead, a marginal edge connector -- is invisible while all the greens stay green.
+
+**The only honest test of the input path is a round trip**: type something and
+confirm it appeared, which is what `type_command()` does (sec. 20). Anything
+that asks the Pi about the Pi will answer yes.
+
+
+---
+
+## 25. The POST chirp  [RESOLVED by the operator -- see the end]
+
+A PC-speaker chirp during POST appeared "new" tonight and looked like evidence
+of damage, arriving alongside a NIC that had dropped off the PCI bus. Chased
+properly, by the operator, with three controlled boots:
+
+    cold boot,   USB4VC connected, harness talking     no chirp
+    warm reboot, USB4VC connected, harness talking     CHIRP
+    warm reboot, USB4VC connected, harness SILENT      CHIRP
+    warm reboot, USB4VC UNPLUGGED ENTIRELY             CHIRP
+
+So: **warm reboot only, nothing to do with the harness or its PS/2 emulation.**
+The operator's own hypothesis -- that it was the harness pulsing Caps/Num/Scroll
+Lock -- was ruled out by a silence test rather than argued about, which is what
+made the result trustworthy.
+
+Conclusion: the machine has almost certainly always chirped on a warm reboot.
+It became audible because **the rig changed the workload**. Before the harness,
+warm reboots were occasional; a sweep does dozens in an evening. A rare event at
+a new rate reads as a new event.
+
+### Worth generalising
+
+**Automation changes what is normal, and the baseline nobody wrote down is the
+operator's ear.** Two symptoms tonight were reported by hearing before any
+instrument had them -- this one, and the keyboard-buffer overflow of sec. 20.
+The difference is that the buffer overflow was real and this was not, and
+neither could be told apart from the other without a controlled test.
+
+So the rule is not "trust the operator's report" or "distrust it" -- it is that
+a report from the room is a genuine independent channel, and the way to use it
+is to design the experiment that separates the cases. Both times, the
+experiment was cheap and the speculation was expensive.
+
+
+### CORRECTION, same evening: the conclusion above is not established
+
+The operator then pressed the **hardware reset button** -- bypassing
+Ctrl-Alt-Del entirely -- and heard the chirp again. And he is confident it is
+new as of today.
+
+    cold boot                                        no chirp
+    warm reboot, Ctrl-Alt-Del, harness talking       CHIRP
+    warm reboot, Ctrl-Alt-Del, harness silent        CHIRP
+    warm reboot, Ctrl-Alt-Del, USB4VC unplugged      CHIRP
+    warm start,  HARDWARE RESET BUTTON               CHIRP
+
+So it is **any warm start**, not the key combination -- which is a better
+characterisation than before. But "the machine always did this and automation
+made it audible" was **my inference from the change in rate**, not a measured
+fact, and it is contradicted by the person who has listened to this machine for
+far longer than the rig has existed.
+
+Retracting it, and noting why it was attractive: it explained the observation,
+required nothing to be wrong, and arrived the moment I had a story that fit.
+That is the same failure as the three NIC mechanisms (sec. 23) -- **a plausible
+cause proposed before anything constrained the search.** I wrote the rule about
+the operator's report being an independent channel in this very section, and
+then used my own reasoning to overrule it two paragraphs later.
+
+**What actually distinguishes cold from warm here:** a cold boot resets PnP ISA
+cards and re-runs full initialisation; a warm start retains configured state and
+skips it. The Vibra16S is a PnP ISA card, it was fitted today, and the operator
+notes the only previous beep was "the PnP initialisation before the boot menu" --
+so the new tone is adjacent to a subsystem that changed today.
+
+**The test is one variable and the card is coming out anyway** (see
+SOUND-PROFILES): remove the Vibra16S, warm-start, listen. Not yet run.
+
+
+### RESOLVED: the chirp is the PCI NIC, on any warm start
+
+The operator isolated it in one move — pull the Intel PRO/100 and warm-start:
+
+    NIC INSTALLED    Ctrl-Alt-Del  ->  CHIRP     reset button  ->  CHIRP
+    NIC REMOVED      Ctrl-Alt-Del  ->  none      reset button  ->  none
+
+One variable, both warm-start paths, both directions. **The chirp is the NIC.**
+
+And it explains the novelty completely, which my "you only just started noticing
+it" story never did: **the NIC is not normally fitted.** It goes in for transfers
+and comes out again, so there had never been a reason to hear it. The tone is
+benign — the adapter's boot-agent option ROM re-entered on a warm start, where a
+cold boot initialises it as part of the full POST sequence.
+
+### The scoreboard for this one symptom
+
+Three explanations were offered before the right one, all mine, all plausible,
+all wrong:
+
+1. the harness pulsing Caps/Num/Scroll Lock  (killed by a silence test)
+2. USB4VC's PS/2 emulation                   (killed by unplugging it)
+3. "it always did this, automation made it audible"  (killed by the reset button)
+
+Every one was proposed before anything constrained the search, and each looked
+sufficient at the time. The operator's method beat all three and it was not
+cleverer — it was **remove one thing and listen**. He also supplied the
+discriminating observation for free: *"the NIC isn't usually in the system"*,
+which is baseline knowledge no instrument on this rig holds and none of my
+reasoning could have reconstructed.
+
+### What to do with it
+
+Nothing. It is expected behaviour whenever the NIC is fitted, which under the
+new standing configuration is during transfers. **Do not investigate it again**,
+and do not read it as a symptom during a collect — that is exactly the window
+where it will be heard and exactly the window where it means nothing.

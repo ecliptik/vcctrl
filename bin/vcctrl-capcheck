@@ -41,15 +41,55 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from vcctrl_common import vc, wait_for_prompt  # noqa: E402
+from vcctrl_common import vc, vc_json, wait_for_prompt  # noqa: E402
 
 SHOTS = os.environ.get("VCCTRL_SHOTS", "/tmp/vcctrl-shots")
 HOST = os.environ.get("VCCTRL_HOST", "usb4vc")
 
 
-def burst(tag, n=16):
-    """Raw burst. Returns (list of paths, list of md5s). No selection here --
-    the whole point is to look at the distribution."""
+def profile(n=16):
+    """Duplicate-hash distribution over the last n frames, plus a brightness.
+
+    The daemon owns /dev/video0 for its lifetime now (docs/WEBKVM.md sec. 4),
+    so this tool can no longer open the device -- it would get EBUSY. The
+    distribution this tool exists to report is exactly what `framestats` was
+    built to give, so the daemon path is a straight read rather than a 40 s
+    capture.
+
+    Two calls, not one: `framestats` gives the hash distribution and `shot`
+    gives the selected frame's brightness. They read the ring about 1.5 s apart
+    (each is an ssh round-trip), which is safe ONLY because characterise()
+    holds the screen static across both -- do not reuse this while anything is
+    moving on screen.
+
+    Returns a dict, or None if the daemon is not answering, in which case the
+    caller falls back to the ffmpeg path. Capture is how a wedged machine gets
+    diagnosed, so the recovery path must not depend on the thing being
+    recovered from.
+    """
+    try:
+        fs = vc_json("framestats", str(n))
+        sh = vc_json("shot", str(n))
+    except Exception:
+        return None
+    if not fs.get("ok"):
+        return None
+    frames = fs.get("n", 0)
+    distinct = fs.get("distinct", 0)
+    # live == frames whose hash appears exactly once. framestats reports how
+    # many hash GROUPS repeated, so the singleton count is the difference.
+    live = distinct - fs.get("repeated", 0)
+    mean = sh.get("mean") if sh.get("picture") else None
+    return {"frames": frames, "unique": distinct, "live": live,
+            "mean": mean, "source": "daemon"}
+
+
+def profile_ffmpeg(n=16):
+    """The original path: open the device directly and take a burst.
+
+    Only reachable when the daemon is down, which is also the only time the
+    device is free. Costs ~40 s.
+    """
     os.makedirs(SHOTS, exist_ok=True)
     subprocess.run(
         ["ssh", HOST,
@@ -62,7 +102,21 @@ def burst(tag, n=16):
     subprocess.run(["scp", "-q", "%s:/tmp/vcraw*.jpg" % HOST, SHOTS],
                    capture_output=True)
     fs = sorted(glob.glob(os.path.join(SHOTS, "vcraw*.jpg")))
-    return fs, [hashlib.md5(open(f, "rb").read()).hexdigest() for f in fs]
+    if not fs:
+        return {"frames": 0, "unique": 0, "live": 0, "mean": None,
+                "source": "ffmpeg"}
+    hashes = [hashlib.md5(open(f, "rb").read()).hexdigest() for f in fs]
+    live = [f for f, h in zip(fs, hashes) if hashes.count(h) == 1]
+    mean = None
+    if live:
+        try:
+            from PIL import Image, ImageStat
+            mean = max(ImageStat.Stat(Image.open(f).convert("L")).mean[0]
+                       for f in live)
+        except ImportError:
+            pass
+    return {"frames": len(fs), "unique": len(set(hashes)), "live": len(live),
+            "mean": mean, "source": "ffmpeg"}
 
 
 def characterise(mode_cmd, label):
@@ -81,40 +135,35 @@ def characterise(mode_cmd, label):
         vc("type", "VER")
         vc("key", "enter")
         time.sleep(2)
-    fs, hashes = burst("cap")
-    if not fs:
-        print("  frames=0  -- ffmpeg returned nothing at all.")
-        print("  VERDICT: NO SIGNAL (device produced no frames)")
-        return {"mode": label, "frames": 0, "unique": 0, "verdict": "no-frames"}
+    p = profile()
+    if p is None:
+        print("  daemon not answering -- falling back to a direct capture")
+        p = profile_ffmpeg()
+    frames, uniq, live, mean = p["frames"], p["unique"], p["live"], p["mean"]
 
-    uniq = len(set(hashes))
-    live = [f for f, h in zip(fs, hashes) if hashes.count(h) == 1]
-    mean = None
-    if live:
-        try:
-            from PIL import Image, ImageStat
-            mean = max(ImageStat.Stat(Image.open(f).convert("L")).mean[0]
-                       for f in live)
-        except ImportError:
-            pass
+    if frames == 0:
+        print("  frames=0  -- the capture path produced nothing at all.")
+        print("  VERDICT: NO SIGNAL (device produced no frames)")
+        return {"mode": label, "frames": 0, "unique": 0, "live": 0,
+                "brightness": None, "verdict": "no-frames"}
 
     if uniq == 1:
         verdict = "no-lock"
         note = ("every frame identical -- the capture path is emitting a "
                 "constant, which is what it does when it cannot lock")
-    elif len(live) == 0:
+    elif live == 0:
         verdict = "no-lock"
-        note = "no non-repeating frame in the burst"
+        note = "no non-repeating frame in the window"
     else:
         verdict = "locked"
-        note = "%d non-repeating frames" % len(live)
+        note = "%d non-repeating frames" % live
 
-    print("  frames=%d  unique=%d  live=%d  brightness=%s"
-          % (len(fs), uniq, len(live),
-             ("%.1f" % mean) if mean is not None else "n/a"))
+    print("  frames=%d  unique=%d  live=%d  brightness=%s  [%s]"
+          % (frames, uniq, live,
+             ("%.1f" % mean) if mean is not None else "n/a", p["source"]))
     print("  VERDICT: %s -- %s" % (verdict.upper(), note))
-    return {"mode": label, "frames": len(fs), "unique": uniq,
-            "live": len(live), "brightness": mean, "verdict": verdict}
+    return {"mode": label, "frames": frames, "unique": uniq,
+            "live": live, "brightness": mean, "verdict": verdict}
 
 
 def main(argv):

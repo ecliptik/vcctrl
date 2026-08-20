@@ -35,11 +35,15 @@ Usage:
 
 PER-CARD DEFAULTS, because a decision that has to be remembered gets forgotten.
 
-  mach64  sets DOSKUTSU_PIN_NATIVE_MODE=0, which the operator chose as the
-          default for this card on 2026-08-19. Without it the game runs at
-          512x384 -- outside the capture stick's 60 Hz range -- and the
-          harness is blind for the whole cell. Costs about 3% fps against
-          the 512x384 figure, which he judged worth paying to see the screen.
+  mach64  sets DOSKUTSU_PIN_NATIVE_MODE=0, which is REQUIRED on this card,
+          not preferred. Without it the game runs at 512x384 -- outside the
+          capture stick's 60 Hz range -- and the harness is blind for the
+          whole cell: no mid-cell frame, no wedge diagnosis, no screenshot.
+          512x384 was briefly kept as an opt-in for the ~3% it is faster;
+          the operator withdrew that on 2026-08-19. This now REFUSES rather
+          than warns, because leaving the variable unset IS 512x384 -- it is
+          the card's own closest match to 320x240, so the blind mode is what
+          you get by doing nothing.
 
   virge   NO pin change. The ViRGE picks 320x240 exactly, and standing the pin
           down would let a later mode-set take it to 640x480 -- changing the
@@ -58,7 +62,8 @@ from importlib.machinery import SourceFileLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from vcctrl_common import vc, at_prompt, wait_for_prompt  # noqa: E402
+from vcctrl_common import (  # noqa: E402
+    vc, at_prompt, wait_for_prompt, set_lock_owner, get_lock_owner)
 
 _l = SourceFileLoader("sw", os.path.join(HERE, "vcctrl-sweep"))
 _s = importlib.util.spec_from_loader("sw", _l)
@@ -120,6 +125,46 @@ def read_env_text():
         return shot, None
 
 
+LOCK_AS = "vcctrl-cell"
+
+
+def take_lock(tag):
+    """Hold the daemon's input lock for the duration of a cell.
+
+    A cell is 150 s of the target's time plus a reboot either side and it is
+    NOT resumable, so an interruption does not degrade one, it destroys it. A
+    vcctrld restart landed inside a cell on 2026-08-19 and did exactly that.
+    pi/deploy.sh refuses to run while this lock is held -- but only if somebody
+    takes it, which is this function's entire reason to exist.
+
+    Best-effort: a daemon too old to know the verb must not stop a cell, but it
+    must say so, because "no lock" and "lock taken" are otherwise identical
+    from the outside.
+    """
+    owner = "%s-%s" % (LOCK_AS, tag)
+    try:
+        vc("lock", "acquire", "--as", owner)
+        # Present the same identity on every later input call, or the daemon
+        # refuses OUR keystrokes too and the cell dies holding its own lock.
+        set_lock_owner(owner)
+        return True
+    except Exception as exc:
+        print("   NOTE: could not take the input lock (%s)." % exc)
+        print("   The cell will run, but a deploy cannot see it and may kill it.")
+        return False
+
+
+def drop_lock():
+    owner = get_lock_owner()
+    try:
+        if owner:
+            vc("lock", "release", "--as", owner, check=False)
+    except Exception:
+        pass
+    finally:
+        set_lock_owner(None)
+
+
 def main(argv):
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -149,6 +194,8 @@ def main(argv):
         return 2
     try:
         print("== cell %s ==" % tag)
+        if take_lock(tag):
+            print("   input lock held -- deploys refuse while this runs")
         if wait_for_prompt(60) is None:
             print("REFUSED: not at a prompt."); return 2
         if not cmd("CD \\DOSKUTSU"):
@@ -161,18 +208,34 @@ def main(argv):
                   "DOSKUTSU_LOG_TAG": tag}
         if card == "mach64":
             wanted["DOSKUTSU_PIN_NATIVE_MODE"] = "0"
-            print("   card=mach64 -> pin stood down, 640x480 (the default"
-                  " for this card)")
+            print("   card=mach64 -> pin stood down, 640x480 (REQUIRED)")
         elif card in ("virge", "cirrus"):
             print("   card=%s -> pin left engaged (its own mode captures)" % card)
         elif card is None:
-            print("   NO --card GIVEN. Per-card defaults not applied; on a"
-                  " Mach64 this")
-            print("   means 512x384 and a blind cell. Pass --card to avoid"
-                  " relying on memory.")
+            print("REFUSED: no --card given. Per-card defaults exist because")
+            print("  the right mode is not the same on every card, and on the")
+            print("  Mach64 the wrong one is a blind cell. Pass --card.")
+            return 2
         for s in sets:
             k, _, v = s.partition("=")
             wanted[k.upper()] = v
+
+        # OPERATOR DECISION 2026-08-19: on the Mach64, 640x480 is the ONLY
+        # permitted mode. 512x384 was previously kept as an opt-in because it
+        # is ~3% faster; that is withdrawn. The stick is 60 Hz-only firmware
+        # and 512x384 is outside its range, so a cell in that mode is blind for
+        # its whole duration -- no mid-cell frame, no wedge diagnosis, no
+        # screenshot for the operator. Speed does not buy back observability.
+        #
+        # Enforced rather than documented, because "just leave the variable
+        # unset" is what 512x384 looks like: it is the card's own preference
+        # and reasserts itself the moment nobody is paying attention.
+        if card == "mach64" and wanted.get("DOSKUTSU_PIN_NATIVE_MODE") != "0":
+            print("   REFUSED: DOSKUTSU_PIN_NATIVE_MODE=%r would run this"
+                  % wanted.get("DOSKUTSU_PIN_NATIVE_MODE"))
+            print("   card at 512x384, which the capture stick cannot lock.")
+            print("   640x480 is required on the Mach64. Remove the override.")
+            return 2
 
         print("-- clearing and setting environment --")
         if not cmd("CALL CLRENV", 90):
@@ -216,11 +279,27 @@ def main(argv):
             # The specific signature of the bug that cost a cell: a copy
             # overwrite prompt sitting in the transcript means it ate whatever
             # was typed next.
-            if "YES/NO/AL" in up or "OVERWRIT" in up or "QUERURIT" in up:
-                print("   *** AN OVERWRITE PROMPT IS ON SCREEN ***")
-                print("   It consumes the next character typed. Whatever command")
-                print("   followed it was truncated. Do not trust this cell.")
+            # An overwrite prompt in the transcript is NOT by itself a fault.
+            # This tool answers that prompt on purpose, so the text it looks
+            # for is text it produces itself -- as written, the check refused
+            # its own correct behaviour and failed cell M64A with all five
+            # variables verifiably set.
+            #
+            # The discriminator is one line further down. DOS prints "1 file(s)
+            # copied" only after the question has been answered; an unanswered
+            # prompt is still sitting there with nothing under it. So the fault
+            # is the prompt WITHOUT a completion, not the prompt.
+            prompt_seen = ("YES/NO/AL" in up or "OVERWRIT" in up
+                           or "QUERURIT" in up)
+            copy_done = "FILE(S)COPIED" in up or "FILES)COPIED" in up
+            if prompt_seen and not copy_done:
+                print("   *** AN UNANSWERED OVERWRITE PROMPT IS ON SCREEN ***")
+                print("   No completion line under it. It consumes the next")
+                print("   character typed, so whatever command followed it was")
+                print("   truncated. Do not trust this cell.")
                 return 1
+            if prompt_seen:
+                print("   overwrite prompt answered, copy completed")
             if missing:
                 print("   REFUSED: %d variable(s) not found in the environment."
                       % len(missing))
@@ -253,6 +332,20 @@ def main(argv):
         print("== done in %.0fs ==" % (time.time() - t0))
         return 0
     finally:
+        # The game leaves the display in a mode the capture stick cannot lock,
+        # so every cell ends blind unless the console mode is put back. Observed
+        # 2026-08-19: a post-cell read of the log returned "no picture" six
+        # times in a row against a perfectly healthy machine, because the mode
+        # was never restored. Do this BEFORE releasing anything, and do it even
+        # on the failure paths -- a cell that died is exactly when someone needs
+        # to see the screen.
+        try:
+            vc("type", "C:\\VGACAP\\MODE12", check=False)
+            vc("key", "enter", check=False)
+            time.sleep(3)
+        except Exception:
+            pass
+        drop_lock()
         release()
 
 

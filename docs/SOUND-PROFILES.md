@@ -1,3 +1,38 @@
+# Sound profiles
+
+> ## OPERATOR DECISION 2026-08-19 (late): THE VIBRA COMES OUT
+>
+> **The standing hardware configuration is PicoGUS + video card + NIC. The
+> Vibra16S is fitted only while it is actively being tested, and removed
+> afterwards.**
+>
+> Everything below was written while the Vibra was permanent, and the
+> constraints it describes are real *when the card is in*. With the Vibra out
+> they mostly evaporate, which is most of the reason for the decision:
+>
+> - **AdLib stops being blocked.** Sec. "AdLib requires REMOVING THE VIBRA"
+>   exists because a configured PnP Vibra owns 0x388 and cannot be silenced by
+>   software. With the card out, the PicoGUS OPL can sit at 0x388 and AdLib is
+>   reachable as an ordinary profile rather than a hardware operation.
+> - **The port-relocation work becomes unnecessary** for the default
+>   configuration. Keep it recorded for the periods when the Vibra is back in.
+> - **`Plug & Play O/S: Yes` is only MANDATORY while the Vibra is fitted**
+>   (g2k README, BIOS notes). With the card out that constraint is inactive --
+>   but do not change the setting, because it must be Yes again the moment the
+>   card returns and a forgotten BIOS change is a POST hang.
+>
+> **Why:** fewer cards is fewer contacts. Reseating every card on 2026-08-19
+> removed a new POST chirp that had appeared that evening, alongside an Intel
+> NIC that dropped off the PCI bus for an hour with no software cause ever
+> found. Intermittent contact explains both, and it is invisible to every
+> diagnostic this rig has -- no log, no capture and no LED channel can see a
+> card that is electrically half-present.
+>
+> **Applies to:** anything that assumes the Vibra is present. `vcctrl-cell`
+> defaults, the VIBRA boot profile, and the SOUND profile below all still work
+> when it is fitted; they are simply not the standing configuration.
+
+
 # Collapsing the sound boot profiles
 
 Written 2026-08-19, after the Vibra16S was fitted alongside the PicoGUS and
