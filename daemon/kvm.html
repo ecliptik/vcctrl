@@ -230,15 +230,12 @@
        why there was an X at all. Leave the bar reachable and the tab that
        opened it closes it, the way every other one of these now works. */
     body #body.sheet {
-      position:fixed; left:0; right:0; top:0; z-index:60;
-      bottom:calc(46px + env(safe-area-inset-bottom,0px));
+      position:fixed; left:0; right:0; z-index:60;
+      top:var(--bar-top, 0px); bottom:var(--bar-bottom, 0px);
       height:auto; max-height:none;
     }
     body #body.sheet > #sheethdr > #sheetclose { display:none; }
-    body #settings {
-      bottom:calc(46px + env(safe-area-inset-bottom,0px));
-      border-left:0; border-top:1px solid var(--rule);
-    }
+    body #settings { border-left:0; border-top:1px solid var(--rule); }
     body #setclose { display:none; }
     body #body.sheet > #sheethdr { display:flex; }
     body #body.sheet > #logh { display:none; }   /* the sheet bar names it */
@@ -558,8 +555,18 @@
      panel, which meant it overlaid the log it was sharing a column with, and
      collapsing that column took the settings with it -- the gear did nothing
      at all. A drawer belongs to the window, not to the panel beside it. */
+  /* BETWEEN THE BARS, NEVER OVER THEM. The gear moved into the top rail and
+     the drawer covered it, so the control that opened settings was underneath
+     settings and there was nothing left to tap. The rule the operator gave is
+     better than a bigger close button: the rails stay visible and live, so
+     the button that opened a thing always closes it -- and tapping through
+     the themes repaints the whole page, bars included, which is the point of
+     previewing one. Measured rather than hardcoded: these bars change height
+     with the theme's font, the safe-area inset, and whether the key rail is
+     up. */
   #settings {
-    position:fixed; top:0; right:0; bottom:0; width:min(390px, 100vw);
+    position:fixed; right:0; width:min(390px, 100vw);
+    top:var(--bar-top, 0px); bottom:var(--bar-bottom, 0px);
     z-index:70; background:var(--panel); border-left:1px solid var(--rule);
     display:flex; flex-direction:column; box-shadow:-14px 0 34px rgba(0,0,0,.34);
   }
@@ -576,7 +583,11 @@
   #setclose { min-width:38px; padding:0; font-size:15px; }
   /* Click-off. Not a dark scrim over the picture: this page exists to show
      you the picture, and dimming it to change a theme is the wrong trade. */
-  #setback { position:fixed; inset:0; z-index:69; background:transparent; }
+  /* The click-off stops at the bars too, so they stay live underneath it. */
+  #setback {
+    position:fixed; left:0; right:0; z-index:69; background:transparent;
+    top:var(--bar-top, 0px); bottom:var(--bar-bottom, 0px);
+  }
   .pop {
     position:fixed; z-index:70; background:var(--panel); padding:10px 12px;
     border:1px solid var(--rule); border-radius:9px;
@@ -1727,8 +1738,29 @@ function openPop(name) {
                   ? Math.max(8, a.top - h - 6) : a.bottom + 6) + 'px';
 }
 
+// How much of the window the two bars are using. Not hardcoded: the rails
+// change height with the theme's font size, the safe-area inset, whether the
+// key rail is open, and whether the on-screen keyboard is up.
+function measureBars() {
+  const hdr = document.querySelector('header');
+  const top = hdr ? hdr.getBoundingClientRect().bottom : 0;
+  let bot = window.innerHeight;
+  for (const id of ['cmdbar', 'capbar', 'keys', 'tabs']) {
+    const el = $(id);
+    if (!el || getComputedStyle(el).display === 'none') continue;
+    const r = el.getBoundingClientRect();
+    if (r.height > 0 && r.top < bot) bot = r.top;
+  }
+  const st = document.documentElement.style;
+  st.setProperty('--bar-top', Math.max(0, Math.round(top)) + 'px');
+  st.setProperty('--bar-bottom',
+                 Math.max(0, Math.round(window.innerHeight - bot)) + 'px');
+}
+addEventListener('resize', measureBars);
+measureBars();
+
 function showSettings(on) {
-  if (on) closePop();
+  if (on) { measureBars(); closePop(); }
   $('settings').hidden = !on;
   $('setback').hidden = !on;
   $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
@@ -2060,7 +2092,7 @@ function setTab(name) {
   else if (name === 'set')   { showSettings(true); body.classList.add('closed'); }
   else body.classList.add('closed');
   localStorage.setItem('vcctrl.tab', name);
-  setTimeout(() => applyZoom(true), 80);   // the stage just changed size
+  setTimeout(() => { measureBars(); applyZoom(true); }, 80);  // sizes changed
 }
 for (const b of document.querySelectorAll('#tabs button'))
   // Tap it again to put it away. Every one of these opens something over the
@@ -2261,6 +2293,7 @@ addEventListener('resize', () => applyZoom());
     const up = gap > 120;
     document.body.classList.toggle('kbdup', up);
     keys.style.bottom = up ? gap + 'px' : '';
+    measureBars();
     applyZoom();          // the picture just got a different amount of room
   };
   vv.addEventListener('resize', place);
@@ -2275,6 +2308,7 @@ addEventListener('resize', () => applyZoom());
     b.textContent = hide ? 'Keys \u25b4' : 'Keys \u25be';
     b.setAttribute('aria-expanded', hide ? 'false' : 'true');
     localStorage.setItem('vcctrl.keys', hide ? 'hidden' : 'shown');
+    measureBars();
     applyZoom();
   };
   set(localStorage.getItem('vcctrl.keys') === 'hidden');

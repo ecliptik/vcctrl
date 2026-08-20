@@ -984,6 +984,14 @@ HARNESS = """
   const vis = !set.hidden && r.width > 100 && r.height > 100
               && getComputedStyle(set).display !== 'none';
   out.push(`drawer ${vis ? 1 : 0} ${Math.round(r.width)}`);
+  // It must not cover the rails. The gear that opens settings lives in the
+  // top one, so a drawer at inset:0 puts the control underneath the thing it
+  // controls and leaves nothing to tap -- which is exactly what shipped.
+  const hdr = document.querySelector('header').getBoundingClientRect();
+  const strip = document.getElementById('cmdbar').getBoundingClientRect();
+  const clearTop = r.top >= hdr.bottom - 1;
+  const clearBot = r.bottom <= strip.top + 1;
+  out.push(`drawerbars ${clearTop ? 1 : 0} ${clearBot ? 1 : 0}`);
   document.getElementById('setclose').click();
   out.push(`drawerclosed ${document.getElementById('settings').hidden ? 1 : 0} 0`);
   sidebtn.click();
@@ -1155,6 +1163,10 @@ def test_zoom_layout_in_a_browser():
 
     check("settings opens with the side panel collapsed",
           got["drawer"][0] == 1.0 and got["drawer"][1] > 100, got["drawer"])
+    check("settings clears the top rail, so the gear stays tappable",
+          got["drawerbars"][0] == 1.0, got["drawerbars"])
+    check("and clears the control strip", got["drawerbars"][1] == 1.0,
+          got["drawerbars"])
     check("control: and closes again", got["drawerclosed"][0] == 1.0,
           got["drawerclosed"])
 
