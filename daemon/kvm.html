@@ -239,7 +239,6 @@
     }
     body #body.sheet > #sheethdr > #sheetclose { display:none; }
     body #settings { border-left:0; border-top:1px solid var(--rule); }
-    body #setclose { display:none; }
     body #body.sheet > #sheethdr { display:flex; }
     body #body.sheet > #logh { display:none; }   /* the sheet bar names it */
     body #body.sheet > #log { max-height:none; }
@@ -402,11 +401,16 @@
   #cmdbar button, #zoombtn { display:flex; align-items:center; gap:8px; }
   #cmdbar button > .bl, #zoombtn > .bl { flex:none; white-space:nowrap; }
   /* The split pair looks like one button and behaves like two. */
+  /* The wrapper is a button-shaped thing that is not a <button>, so none of
+     the button sizing reached it and it came out shorter than everything
+     beside it. Same minimum, same rules, stated rather than inherited. */
   .split {
     display:flex; align-items:stretch; flex:none;
     border:1px solid var(--rule); border-radius:6px;
     background:rgba(0,0,0,.22); overflow:hidden;
+    min-height:var(--tap);
   }
+  @media (pointer:fine) { .split { min-height:36px; } }
   #cmdbar .split button {
     border:0; border-radius:0; background:transparent; min-height:0;
     display:flex; align-items:center;
@@ -737,7 +741,6 @@
     font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
     text-transform:uppercase; color:var(--dim);
   }
-  #setclose { min-width:38px; padding:0; font-size:15px; }
   /* Click-off. Not a dark scrim over the picture: this page exists to show
      you the picture, and dimming it to change a theme is the wrong trade. */
   /* The click-off stops at the bars too, so they stay live underneath it. */
@@ -885,10 +888,13 @@
     <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
             title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit Screen ▾</span></button>
+    <span class="sep" aria-hidden="true">|</span>
     <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
             title="Switch between the light and dark half of this theme">☀️</button>
+    <span class="sep" aria-hidden="true">|</span>
     <button id="gbtn" class="ibtn" aria-label="settings"
             title="Open the settings panel">⚙️</button>
+    <span class="sep" aria-hidden="true">|</span>
     <!-- A drawn icon, not a glyph: every character that means "panel" either
          carries an emoji presentation or renders differently in each font,
          and the last two attempts here were a chevron pointing nowhere in
@@ -1005,10 +1011,13 @@
 
 <div id="setback" hidden></div>
 <aside id="settings" role="dialog" aria-modal="false" aria-label="Settings" hidden>
-  <div id="sethdr">
-    <span>Settings</span>
-    <button id="setclose" title="Close settings">✕</button>
-  </div>
+  <!-- No close button. The gear opens it and the gear closes it, which is
+       how every other panel on this page works and is the shape people
+       already learned from the tabs. A second control that does the same
+       thing is a second thing to find, and it was in the corner furthest
+       from the button that had just been pressed. Escape and a click outside
+       still work; they are shortcuts rather than the way. -->
+  <div id="sethdr"><span>Settings</span></div>
   <div id="setbody">
       <h2>Theme</h2>
       <div id="themes"></div>
@@ -2285,7 +2294,6 @@ function showSettings(on) {
 $('gbtn').onclick = () => showSettings($('settings').hidden);
 $('soundbtn').onclick = () => openPop('sound');
 $('powerbtn').onclick = () => openPop('power');
-$('setclose').onclick = () => showSettings(false);
 $('setback').onclick = () => { closePop(); showSettings(false); };
 addEventListener('keydown', e => {
   // Only while the target is NOT taking keys: an Escape meant for a DOS menu
@@ -3599,7 +3607,7 @@ function autoPick() {
   // window loses focus, the drawer closes under the cursor. Both put the page
   // back rather than stranding it in a preview nobody chose.
   addEventListener('blur', leave);
-  $('setclose').addEventListener('click', leave);
+  $('gbtn').addEventListener('click', leave);
   PAIRS.forEach((p, i) => {
     const b = document.createElement('button');
     b.dataset.pair = i;

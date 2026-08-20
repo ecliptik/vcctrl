@@ -1061,6 +1061,14 @@ HARNESS = r"""
     emit(`res ${before.includes('actual resolution') ? 1 : 0} ${after.includes('512×342') ? 1 : 0}`);
   }
 
+  // Every control in the strip must be the same height. The sound control is
+  // a wrapper rather than a <button>, so none of the button sizing applied to
+  // it and it rendered shorter than its neighbours.
+  {
+    const h = id => Math.round(document.getElementById(id).getBoundingClientRect().height);
+    emit(`striph ${h('soundwrap')} ${h('powerbtn')}`);
+  }
+
   // Falling back to mjpeg must not be PERMANENT. ws.onclose only reconnects
   // while the transport is not already mjpeg, so the first fallback used to
   // stick until someone found Refresh video in the Power menu.
@@ -1285,7 +1293,10 @@ HARNESS = r"""
   const clearTop = r.top >= hdr.bottom - 1;
   const clearBot = r.bottom <= strip.top + 1;
   emit(`drawerbars ${clearTop ? 1 : 0} ${clearBot ? 1 : 0}`);
-  document.getElementById('setclose').click();
+  // The gear is the only switch now, so closing is pressing it again --
+  // which is also the assertion worth making: a panel you can open and
+  // not close from the same control is the bug this replaced.
+  document.getElementById('gbtn').click();
   emit(`drawerclosed ${document.getElementById('settings').hidden ? 1 : 0} 0`);
   sidebtn.click();
   emit(`named ${document.getElementById('themename').textContent.trim()
@@ -1488,6 +1499,11 @@ def test_zoom_layout_in_a_browser():
           got["res"][0] == 1.0, got["res"])
     check("control: and a 512x342 frame reports 512x342",
           got["res"][1] == 1.0, got["res"])
+
+    check("the sound control is the same height as the buttons beside it",
+          abs(got["striph"][0] - got["striph"][1]) <= 1, got["striph"])
+    check("control: and that height is a real one, not zero",
+          got["striph"][1] >= 30, got["striph"])
 
     check("a fallback schedules a retry, backs off, and resets on success",
           got["wsretry"][0] == 1.0, got["wsretry"])
