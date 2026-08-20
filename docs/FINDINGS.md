@@ -866,3 +866,68 @@ card working earlier (sec. 21). Each time the harness had evidence that looked
 sufficient and was not, and each time the human had context the instruments
 could not hold: what the procedure normally is, what the machine normally sounds
 like, what it looked like an hour ago.
+
+
+---
+
+## 24. The harness cannot see its own cable  [measured 2026-08-19]
+
+With the USB4VC PS/2 lead **physically unplugged from the target**, the harness
+reported everything healthy:
+
+    usb4vc:  {'vcctrl virtual keyboard': True, 'vcctrl virtual mouse': True}
+    caps:    input ok, leds ok, power ok, video ok
+    leds:    {'capslock': 1, 'numlock': 0, 'scrolllock': 1}
+
+Every check green. None of them can detect that the cable is out.
+
+The reason is structural rather than a missing test. Those devices are `uinput`
+nodes **on the Pi**; they exist whether or not the STM32 is connected to
+anything, and the LED values are the last ones published, so they read plausible
+rather than absent. **The harness reports on its own side of a cable whose far
+end it cannot see.**
+
+Same family as the physical-layer limit: every instrument on this rig reports
+software state, so anything upstream of that -- a half-seated card, an unplugged
+lead, a marginal edge connector -- is invisible while all the greens stay green.
+
+**The only honest test of the input path is a round trip**: type something and
+confirm it appeared, which is what `type_command()` does (sec. 20). Anything
+that asks the Pi about the Pi will answer yes.
+
+
+---
+
+## 25. The chirp was always there  [resolved 2026-08-19]
+
+A PC-speaker chirp during POST appeared "new" tonight and looked like evidence
+of damage, arriving alongside a NIC that had dropped off the PCI bus. Chased
+properly, by the operator, with three controlled boots:
+
+    cold boot,   USB4VC connected, harness talking     no chirp
+    warm reboot, USB4VC connected, harness talking     CHIRP
+    warm reboot, USB4VC connected, harness SILENT      CHIRP
+    warm reboot, USB4VC UNPLUGGED ENTIRELY             CHIRP
+
+So: **warm reboot only, nothing to do with the harness or its PS/2 emulation.**
+The operator's own hypothesis -- that it was the harness pulsing Caps/Num/Scroll
+Lock -- was ruled out by a silence test rather than argued about, which is what
+made the result trustworthy.
+
+Conclusion: the machine has almost certainly always chirped on a warm reboot.
+It became audible because **the rig changed the workload**. Before the harness,
+warm reboots were occasional; a sweep does dozens in an evening. A rare event at
+a new rate reads as a new event.
+
+### Worth generalising
+
+**Automation changes what is normal, and the baseline nobody wrote down is the
+operator's ear.** Two symptoms tonight were reported by hearing before any
+instrument had them -- this one, and the keyboard-buffer overflow of sec. 20.
+The difference is that the buffer overflow was real and this was not, and
+neither could be told apart from the other without a controlled test.
+
+So the rule is not "trust the operator's report" or "distrust it" -- it is that
+a report from the room is a genuine independent channel, and the way to use it
+is to design the experiment that separates the cases. Both times, the
+experiment was cheap and the speculation was expensive.
