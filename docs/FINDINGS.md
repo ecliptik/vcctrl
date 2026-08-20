@@ -1503,3 +1503,45 @@ independently by the webkvm session from a separate process reading the frame
 ring. Full detail in docs/MOUSE.md, including why no DOS-based test could have
 produced it: everything that renders a cursor switches to a video mode this
 capture path cannot lock.
+
+## 30. `--out` writes on the Pi, and the error blames the VM  [measured 2026-08-20]
+
+Found while setting up the phase-6 sweep, in a path the sweep depends on.
+
+    $ vcctrl shot --out $SCRATCH/postdel.jpg
+    could not write .../postdel.jpg: [Errno 2] No such file or directory:
+      '.../postdel.jpg.part'
+
+The directory existed and was writable, and a `touch` in it succeeded a second
+later. Two rounds went into looking for a local permissions or sandbox problem
+that was not there.
+
+**`bin/vcctrl` is an ssh wrapper.** It quotes its arguments and `exec ssh`s the
+lot to the daemon host — deliberately, so the same command works unchanged if
+Claude Code ever runs on the Pi. Which means `--out PATH` is a path **on the
+Pi**, and the ENOENT was the Pi's filesystem answering truthfully about a
+directory that only exists on the VM.
+
+**The dangerous case is not the one that errored.** A path that exists on both
+machines — `/tmp/shot.jpg` is the obvious one — writes on the Pi and returns 0.
+A VM-side caller then analyses whatever `/tmp/shot.jpg` on the VM happens to
+contain: nothing, or worse, a frame from an earlier run. That is precisely the
+failure `--out`'s two-valued contract was written to prevent ("either F is this
+run's frame, or F does not exist"), reappearing one host over, where the
+contract cannot see it. The contract is sound; its scope is one machine and
+nothing said so.
+
+**From the VM, pull frames over HTTP instead.** `vcctrl-sweep`'s `grab()`
+already does this and is the model to copy:
+
+    curl -s -o out.jpg "$VCCTRL_WEB/shot.jpg?n=16"
+
+`grab()` is not doing that for speed. It is doing it because it runs on the VM
+and needs the file on the VM, which is the same reason any other VM-side caller
+has.
+
+The general shape, which is [[the-instrument-is-part-of-the-system]] rotated
+slightly: a guarantee holds inside the boundary it was written for, and a
+transport that crosses that boundary carries the words without the guarantee.
+Nothing here is broken. `shot --out` does what it says on the machine it says
+it on.
