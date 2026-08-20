@@ -73,15 +73,10 @@
      the wrong emphasis: the picture is the point, and when the video IS locked
      there is nothing to announce. The states worth noticing already take the
      whole screen with an overlay, so the rail can stay quiet. */
-  #state {
-    font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
-    color:var(--muted); flex:none; white-space:nowrap;
-    display:flex; align-items:center; gap:5px;
-  }
-  #state::before {
-    content:""; width:7px; height:7px; border-radius:50%; flex:none;
-    background:currentColor;
-  }
+  /* The state is a lamp like every other indicator in this row. It kept its
+     own font, its own colour and a dot in front of it, which is why the row
+     never lined up: one item was a sentence and six were labels. */
+  #state { flex:none; white-space:nowrap; }
   /* A HEARTBEAT, NOT A DECORATION. A DOS prompt is a still picture, so a live
      stream and a dead one look identical -- which is the exact lie this page
      exists not to tell. The dot pulses while frames are ARRIVING, driven off
@@ -91,9 +86,12 @@
     0%, 100% { opacity:1; box-shadow:0 0 0 0 currentColor; }
     50%      { opacity:.45; box-shadow:0 0 4px 1px currentColor; }
   }
-  #state.live::before { animation:beat 1.6s ease-in-out infinite; }
+  /* The heartbeat moves to the word itself, now that there is no dot to put
+     it on. Same rule: it beats only while frames are arriving, so it cannot
+     beat over a frozen picture. */
+  #state.live span { animation:beat 1.6s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) {
-    #state.live::before { animation:none; opacity:1; }
+    #state.live span { animation:none; opacity:1; }
   }
   .chip {
     font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
@@ -741,26 +739,26 @@
 <div id="app">
   <header>
     <h1>vcctrl-kvm</h1>
-    <span id="state" aria-live="polite">—</span>
+    <span class="lamp" id="state" aria-live="polite"><i></i><span>—</span></span>
     <!-- Two more lamps, beside the state word and built like CAP/NUM/SCR: the
          word carries it, colour repeats it, and the tooltip says what the
          colour means. They replace two chips that spent most of their width
          restating a label nobody needed twice. -->
     <span class="lamp" id="lamp-pwr"><i></i><span>PWR</span></span>
     <span class="lamp" id="lamp-link"><i></i><span>LINK</span></span>
+    <span class="lamp" id="lamp-audio"><i></i><span>AUDIO</span></span>
     <span class="lamp" id="lamp-kbd"><i></i><span>KBD</span></span>
-    <span id="c-board" class="chip" style="display:none"><b>—</b></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
     <!-- Shown only while the lock is HELD. Unheld is the normal case and
          "input free" is a chip reporting that nothing is happening. -->
     <span id="c-lock" class="chip" style="display:none"><span class="chiplabel">input </span><b>—</b></span>
-    <span class="grow"></span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
             title="Caps, Num and Scroll read back over PS/2 — proof a keystroke landed">
       <span class="lamp" id="lamp-caps"><i></i><span>CAP</span></span>
       <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
       <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
     </button>
+    <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
             title="How the picture is sized">Fit ▾</button>
     <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
@@ -804,12 +802,12 @@
   </div>
 
   <div id="cmdbar">
-    <input id="line" placeholder="type a command, then Send"
+    <input id="line" placeholder="type a command"
            autocapitalize="off" autocorrect="off" spellcheck="false">
     <button id="sendline" class="on" title="Type this line at the target and press Enter">Send ↵</button>
     <button id="keysbtn" aria-expanded="true"
             aria-controls="keys" title="Show or hide the key rail">Keys ▾</button>
-    <button id="grabbtn" title="Send what you type straight to the target">⌨️ Grab keyboard</button>
+    <button id="grabbtn" title="Send what you type straight to the target">⌨️ Type</button>
     <button id="soundbtn" aria-haspopup="true" aria-expanded="false"
             title="Sound and volume"><span id="soundglyph">🔇</span> Sound ▾</button>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
@@ -1391,6 +1389,9 @@ function send(o) {
   else if (o.t === 'up') post('keyup', {key:o.k});
 }
 
+const INPUT_CMDS = new Set(['key', 'type', 'hold', 'combo', 'keydown',
+                            'keyup', 'release_all', 'mouse_move',
+                            'mouse_click']);
 async function post(cmd, body) {
   try {
     const r = await fetch('/cmd', {method:'POST',
@@ -1407,7 +1408,14 @@ async function post(cmd, body) {
       note(`${cmd}: HTTP ${r.status} — ${text.slice(0, 60) || 'empty reply'}`);
       return;
     }
-    if (!j.ok) note(`${cmd}: ${j.error || 'refused'}`);
+    if (!j.ok) {
+      note(`${cmd}: ${j.error || 'refused'}`);
+      // A refusal to a thing you just did belongs where you did it, not only
+      // in a log that may be a collapsed panel away. Input is the case that
+      // matters: the lock is held by a harness run and every keystroke is
+      // silently dropped otherwise.
+      if (INPUT_CMDS.has(cmd)) hint(j.error || (cmd + ' was refused'));
+    }
     return j;
   } catch (e) { note(`${cmd}: ${e}`); }
 }
@@ -1531,9 +1539,13 @@ function setArmed(v, opts) {
     v ? 'Keys typed here go to the target — Ctrl + Alt + Shift releases'
       : 'Keys typed here stay in the browser. Click the picture, or press '
         + 'Grab keyboard, to send them to the target.');
-  $('grabbtn').textContent = v ? '⌨️ Release keyboard' : '⌨️ Grab keyboard';
+  // One word, and the lit state carries the rest -- the two-word label was
+  // the only one on the strip and read as an instruction rather than a
+  // control. "Capture" is spoken for by screenshots and recording.
+  $('grabbtn').textContent = '⌨️ Type';
   $('grabbtn').classList.toggle('on', v);
-  $('grabbtn').title = v ? 'Stop sending keys to the target (Ctrl+Alt+Shift)'
+  $('grabbtn').title = v ? 'Keys are going to the target — click, or press '
+                           + 'Ctrl+Alt+Shift, to stop'
                          : 'Send what you type straight to the target';
   if (v) {
     // Must happen synchronously inside the tap handler: iOS ignores focus()
@@ -1588,7 +1600,14 @@ function armFromStage() {
 // On a phone the tap lands on the transparent input, so its focus event is
 // the arming signal; the click handler still covers desktop.
 ghost.addEventListener('focus', () => { if (!armed) setArmed(true); });
-ghost.addEventListener('blur', () => { if (armed) setArmed(false); });
+// RELEASE ON BLUR ONLY WHERE THE GHOST IS THE AFFORDANCE. On a phone, focus
+// is the grab. On a desktop, clicking ANY control blurs it -- including the
+// release button itself, whose blur handler turned `armed` off a moment
+// before its own click handler toggled it back on. Pressing release re-grabbed
+// and looked like "something not releasing it".
+ghost.addEventListener('blur', () => {
+  if (armed && matchMedia('(max-width:640px)').matches) setArmed(false);
+});
 $('stage').addEventListener('click', armFromStage, true);
 $('stage').addEventListener('pointerup', armFromStage, true);
 
@@ -2100,11 +2119,15 @@ function pill(id, cls, text) {
     const LABEL = {LOCKED:'ACTIVE', NOSIGNAL:'NO SIGNAL', FROZEN:'NO SIGNAL'};
     const raw = String(text).replace(/^video\s*/, '').toUpperCase();
     const w = LABEL[raw] || raw;
-    $('state').textContent = w;
-    // The dot repeats what the word says rather than replacing it -- required
-    // by the monochrome themes, needed by colour-blind users.
-    $('state').style.color = cls === 'on' ? 'var(--green)'
-                           : cls === 'off' ? 'var(--red)' : 'var(--yellow)';
+    // ONE STYLE FOR THE WHOLE ROW. This was a coloured word with a dot in
+    // front of it while everything beside it was an underlined lamp, so the
+    // row read as a sentence with an indicator bolted on. It is a lamp now:
+    // same type, same weight, same underline -- colour carrying the state and
+    // the word carrying the meaning, which is what the monochrome themes and
+    // a colour-blind reader both need.
+    $('state').querySelector('span').textContent = w;
+    setLamp('state', cls === 'on' ? 'on' : cls === 'off' ? 'bad' : 'warn',
+            'Video: ' + String(text).replace(/^video\s*/, ''));
     return;
   }
   const map = {'p-lock': 'c-lock'};
@@ -2225,6 +2248,7 @@ async function pollState() {
   const held = j.lock && j.lock.owner;
   $('c-lock').style.display = held ? '' : 'none';
   if (held) pill('p-lock', 'mid', `held by ${L.owner}`);
+  setInputHeld(held);
   const A = j.audio || {};
   if (!soundOn) {
     // Even with sound off, say whether the capture path is alive. "silent" and
@@ -2426,9 +2450,47 @@ $('bufsel').onchange = async () => {
   }
 };
 
+// WHILE SOMETHING ELSE IS DRIVING, DO NOT OFFER TO DRIVE. The daemon refuses
+// input from anyone but the lock holder, which is the point of the lock -- but
+// the page went on presenting a working command line and a Send button, and
+// the refusal landed in the activity log. Typing into a box that quietly
+// discards it is worse than a disabled box that says who has it.
+let inputHeldBy = null;
+function setInputHeld(owner) {
+  if (owner === inputHeldBy) return;
+  inputHeldBy = owner;
+  const why = owner
+    ? 'The input lock is held by "' + owner + '" — keystrokes from here would '
+      + 'be refused until it is released.'
+    : '';
+  $('line').placeholder = owner ? 'input held by ' + owner : 'type a command';
+  for (const el of [$('line'), $('sendline'), $('grabbtn')]) {
+    el.disabled = !!owner;
+    if (owner) el.title = why;
+  }
+  for (const b of document.querySelectorAll('#keys button')) b.disabled = !!owner;
+  if (owner && armed) setArmed(false);
+  if (!owner) {
+    $('sendline').title = 'Type this line at the target and press Enter';
+    $('line').title = '';
+  }
+}
+
 function showAudioDevice(a) {
   a = a || {};
   const t = deviceTrouble(a);
+  // Green while the daemon is CAPTURING, red when the device is present and
+  // will not open, dashed when it is absent or unknown. It reports the
+  // capture, not whether this browser is playing it -- the speaker button
+  // says that, and conflating them would make muting look like a fault.
+  setLamp('lamp-audio',
+    a.state === 'capturing' ? 'on'
+      : a.device_present === true ? 'bad' : 'stale',
+    a.state === 'capturing'
+      ? 'Audio is being captured from ' + (a.device || 'the stick')
+        + ' — the speaker button controls whether this browser plays it'
+      : t ? t[0] + ' — ' + t[1]
+      : 'Audio ' + (a.state || 'unknown'));
   const line = a.state === 'capturing'
     ? (a.device || 'audio') + ' · capturing'
     : t ? (a.device || 'audio') + ' — ' + t[1]
@@ -2443,19 +2505,12 @@ function showAudioDevice(a) {
 }
 
 function showBoard(b) {
+  // Kept for the power confirmation, which names the board fitted beside the
+  // plug it is about to switch. The row no longer carries it: it is already
+  // seven indicators wide, the target changes about twice a day, and the
+  // answer is in Settings -> Rig, in that confirmation, and in the log when
+  // it changes -- none of which is a place you have to hunt.
   boardNow = b || {};
-  const el = $('c-board');
-  // What am I typing into. The BOARD is Apple Lisa/Mac/ADB; the TARGET is a
-  // Macintosh Plus, and the second one is the question anyone actually has.
-  const t = boardNow.target || boardNow.name;
-  el.style.display = t ? '' : 'none';
-  if (!t) return;
-  el.querySelector('b').textContent = t;
-  el.style.color = boardNow.stale ? 'var(--yellow)' : 'var(--muted)';
-  el.title = boardNow.name
-    ? boardNow.name + ' (board ' + boardNow.id + ')'
-      + (boardNow.stale ? ' — from the journal, may be a previous run' : '')
-    : 'no board reported';
 }
 applyVolume();
 setInterval(pollState, 1500);

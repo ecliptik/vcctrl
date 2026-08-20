@@ -1031,16 +1031,14 @@ HARNESS = """
     out.push(`power3 ${a === 'on' && b === 'off' && c === 'unknown' ? 1 : 0} ` +
              `${plug.includes('retro-rig-plug') && plug.includes('not answering') ? 1 : 0}`);
 
-    // The board chip answers "what am I typing into", and says nothing when
-    // it does not know.
-    const chip = document.getElementById('c-board');
+    // The board left the rail but must still reach the power confirmation,
+    // which names the board fitted beside the plug it is about to switch.
     showBoard({id: 3, name: 'Apple Lisa/Mac/ADB', target: 'Macintosh Plus',
                stale: false});
-    const shown = getComputedStyle(chip).display !== 'none'
-                  && chip.querySelector('b').textContent === 'Macintosh Plus';
+    const kept = boardNow.target === 'Macintosh Plus';
     showBoard({id: null, name: null, target: null, reason: 'usb4vc not running'});
-    const hidden = getComputedStyle(chip).display === 'none';
-    out.push(`board2 ${shown ? 1 : 0} ${hidden ? 1 : 0}`);
+    const cleared = !boardNow.target;
+    out.push(`board2 ${kept ? 1 : 0} ${cleared ? 1 : 0}`);
   }
 
   // Full screen: nothing but the picture, and the controls come back as
@@ -1310,9 +1308,9 @@ def test_zoom_layout_in_a_browser():
           got["power3"][0] == 1.0, got["power3"])
     check("control: the plug names itself and says when it stopped answering",
           got["power3"][1] == 1.0, got["power3"])
-    check("the target chip names the machine, not the board",
+    check("the board still reaches the power confirmation",
           got["board2"][0] == 1.0, got["board2"])
-    check("control: and says nothing when the board is unknown",
+    check("control: and clears when the board is unknown",
           got["board2"][1] == 1.0, got["board2"])
 
     # Full screen has to actually give the picture the room, and the bars have
