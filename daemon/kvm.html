@@ -585,17 +585,12 @@
   button.on { border-color:var(--green); color:var(--green); }
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
-  /* NO BOX AROUND AN ICON. The rail's job is to be read, and three outlined
-     squares next to it read as three more things to look at. The glyph is the
-     control; hover and press say the rest. The focus ring is untouched --
-     that one is not decoration. */
-  header .ibtn, #sidebtn {
-    border-color:transparent; background:transparent;
-  }
-  header .ibtn:hover, #sidebtn:hover {
-    border-color:transparent; background:var(--rule);
-  }
-  #sidebtn { min-width:38px; padding:0; color:var(--muted); }
+  /* These three were drawn without a box, on the argument that a glyph is
+     its own control. Beside a boxed Fit Screen -- and above a strip where
+     every control is boxed -- the exception is what stood out, so they take
+     the same ground, border, radius and height as everything else and the
+     rail reads as one set of buttons. */
+  #sidebtn { min-width:38px; padding:0; color:var(--text); }
   /* Full screen sits at the bottom of the zoom menu: everything in there
      answers "how big is the picture", and this is the largest answer. It was
      a fifth icon in a rail that had just been cut down to four. */
@@ -628,14 +623,14 @@
   #sidebtn svg { width:19px; height:19px; display:block; margin:0 auto; }
   #sidebtn .frame { fill:none; stroke:currentColor; stroke-width:1.4; }
   #sidebtn .pane  { fill:currentColor; opacity:0; transition:opacity .12s linear; }
-  /* Filled while the panel is there, empty while it is not: the icon shows
-     the state, which is how the sidebar toggles people already use behave.
+  /* Filled while the panel is GONE: the icon shows what the click will
+     produce, the way a play button shows play while paused, and it agrees
+     with the tooltip beside it -- "Show side panel" over a drawn panel.
      Driven off aria-expanded rather than a class, so the accessible state and
      the drawn state cannot disagree -- and so it does not pick up the global
      .on rule, which paints a green border and is far too loud for a layout
      preference sitting between a gear and a sun. */
-  #sidebtn[aria-expanded="true"] { color:var(--text); }
-  #sidebtn[aria-expanded="true"] .pane { opacity:.85; }
+  #sidebtn[aria-expanded="false"] .pane { opacity:.85; }
   /* Icon buttons: the glyph IS the label, so it gets the room a label would
      have had. Emoji presentation is explicit -- ☀ and ⚙ have text-default
      codepoints and rendered as flat outlines beside colour emoji elsewhere on
