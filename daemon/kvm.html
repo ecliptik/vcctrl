@@ -121,7 +121,22 @@
        reach. The tab bar already has a settings tab, and the theme toggle
        belongs with the themes -- both are duplicates here. */
     body header { overflow-x:hidden; }
-    body #dbtn, body #gbtn { display:none; }
+    /* Settings and light/dark live in the rail here too, in the same order
+       as the desktop. They were hidden and the gear was a tab, which put the
+       two page-level controls in two different places depending on the width
+       of the window. */
+    body .ibtn { font-size:15px; min-width:32px; }
+    /* Everything above has to give up a few pixels to fit them: at 390px the
+       rail was 48px over. The transport's label goes (the value carries it),
+       the gaps tighten, and the zoom control keeps only what its longest
+       option needs. */
+    body #c-xport .chiplabel { display:none; }
+    /* THE STATUS TEXT TRUNCATES, THE CONTROLS NEVER DO. "daemon unreachable"
+       is 18 characters and pushed the gear off the right edge -- and a
+       control you cannot reach is worse than a word you cannot finish
+       reading, especially when the word is also in the State panel. */
+    body #state { flex:0 1 auto; min-width:0; overflow:hidden;
+                  text-overflow:ellipsis; }
 
     /* THE TAP MUST LAND ON THE INPUT ITSELF. iOS raises the keyboard for a
        real tap on a real field; it routinely refuses a programmatic focus(),
@@ -136,7 +151,7 @@
       color:transparent; caret-color:transparent; border:0; padding:0;
       -webkit-user-select:text;
     }
-    header { gap:7px; padding:0 8px;
+    header { gap:5px; padding:0 7px;
              height:calc(38px + env(safe-area-inset-top,0px)); }
     .chip { font-size:10px; letter-spacing:.03em; }
     /* THE WORD IS THE LAMP HERE. Three unlabelled dots in a phone rail are
@@ -145,17 +160,7 @@
        the word carries it -- and because a monochrome theme and a
        colour-blind reader both need more than colour, "on" is also heavier
        and underscored, and "stale" is dashed. */
-    /* `body` in front of each: the base .lamp rules sit LATER in the file at
-       equal specificity, so without it the dot stayed and the phone got the
-       word AND the speck it was meant to replace. */
-    body .lamp i { display:none; }
-    body .lamp span { display:block; font-size:10px; color:var(--dim);
-                      border-bottom:1px solid transparent; padding-bottom:1px;
-                      letter-spacing:.04em; }
-    body .lamp.on span {
-      color:var(--green); font-weight:700; border-bottom-color:var(--green);
-    }
-    body .lamp.stale span { opacity:.55; border-bottom-style:dashed; }
+    body .lamp span { font-size:10px; }
 
     /* ── the key rail, as an accessory bar ────────────────────────────────
        Modelled on La Terminal's: one flat scrolling row above the system
@@ -173,7 +178,7 @@
     body #keys button:active { background:var(--rule); }
     body #keys button.on { color:var(--green); background:transparent; }
     body #keys button.danger { color:var(--red); }
-    #zoom { max-width:88px; font-size:10px; }
+    #zoom { max-width:66px; font-size:10px; padding:0 3px; }
     /* Room for a thumb: a 34px swatch is a comfortable target with a mouse
        and a miss on a phone. */
     #themes { grid-template-columns:repeat(auto-fill,minmax(42px,1fr)); }
@@ -194,6 +199,11 @@
     body #cmdbar.open { display:flex; }
     body #keys { display:none; }
     body #keys.open { display:flex; }
+    /* Riding on top of the on-screen keyboard, whatever tab is selected. */
+    body.kbdup #keys {
+      display:flex; position:fixed; left:0; right:0; z-index:55;
+      border-top:1px solid var(--rule); border-bottom:0;
+    }
 
     body #tabs {
       display:flex; flex:none; border-top:1px solid var(--rule);
@@ -215,10 +225,21 @@
 
     /* Long panels take the whole screen and are dismissed, rather than
        squeezing into a third of it. A log worth reading is worth reading. */
+    /* STOP ABOVE THE TAB BAR. A sheet at inset:0 covers the row of buttons
+       that opened it, so the only way out was the X in its corner -- which is
+       why there was an X at all. Leave the bar reachable and the tab that
+       opened it closes it, the way every other one of these now works. */
     body #body.sheet {
-      position:fixed; inset:0; z-index:60; height:auto; max-height:none;
-      padding-bottom:env(safe-area-inset-bottom,0px);
+      position:fixed; left:0; right:0; top:0; z-index:60;
+      bottom:calc(46px + env(safe-area-inset-bottom,0px));
+      height:auto; max-height:none;
     }
+    body #body.sheet > #sheethdr > #sheetclose { display:none; }
+    body #settings {
+      bottom:calc(46px + env(safe-area-inset-bottom,0px));
+      border-left:0; border-top:1px solid var(--rule);
+    }
+    body #setclose { display:none; }
     body #body.sheet > #sheethdr { display:flex; }
     body #body.sheet > #logh { display:none; }   /* the sheet bar names it */
     body #body.sheet > #log { max-height:none; }
@@ -259,17 +280,23 @@
            background:transparent; border:0; padding:0 2px; min-height:0;
            cursor:help; }
   @media (pointer:coarse) { #lamps { min-height:var(--tap); } }
-  .lamp { display:flex; flex-direction:column; align-items:center; gap:3px; }
-  .lamp i {
-    width:11px; height:11px; border-radius:50%; display:block;
-    border:1px solid var(--rule); background:transparent;
-    transition:background .12s linear, box-shadow .12s linear;
-  }
-  .lamp.on i { background:var(--green); box-shadow:0 0 5px var(--green); }
-  .lamp.stale i { border-style:dashed; opacity:.5; }
+  /* THE WORD IS THE LAMP. This was a dot with a label under it, and on a
+     phone the label was hidden to save width -- which left three unlabelled
+     specks, the one indicator on the page that could not be read at all.
+     Rather than keep two designs, the word does the whole job everywhere.
+     Colour is not alone in carrying it: "on" is heavier and underscored,
+     "stale" is dashed, which is what the monochrome themes and a colour-blind
+     reader both need. */
+  .lamp { display:flex; align-items:center; }
+  .lamp i { display:none; }
   .lamp span {
     font:var(--t-micro)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
+    border-bottom:1px solid transparent; padding-bottom:2px;
   }
+  .lamp.on span {
+    color:var(--green); font-weight:700; border-bottom-color:var(--green);
+  }
+  .lamp.stale span { opacity:.55; border-bottom-style:dashed; }
 
   /* ── stage ───────────────────────────────────────────────────────────────
      The well stays near-black in EVERY theme, including the light ones.
@@ -824,7 +851,6 @@
     <button data-tab="sound" title="Sound and volume">SOUND</button>
     <button data-tab="power" title="Mains power and the input link">POWER</button>
     <button data-tab="log" title="What the daemon has been doing">LOG</button>
-    <button data-tab="set" title="Settings"><span class="tabicon">⚙️</span></button>
   </div>
 
   <div id="body">
@@ -2042,7 +2068,11 @@ for (const b of document.querySelectorAll('#tabs button'))
   // opened it is the obvious thing to press to get it back.
   b.onclick = () => setTab(curTab === b.dataset.tab ? 'none' : b.dataset.tab);
 if (matchMedia('(max-width:640px)').matches)
-  setTab(localStorage.getItem('vcctrl.tab') || 'none');
+  // Only the key rail is restorable. Settings and the log are overlays, and
+  // a page that opens over its own picture because of what you did last time
+  // is a page that starts by hiding the thing you came for. Reported as
+  // "when the page loads settings is always open" -- it was, faithfully.
+  setTab(localStorage.getItem('vcctrl.tab') === 'keys' ? 'keys' : 'none');
 
 // ══════════════════════════════════════════════════════════ zoom
 // Two different things waste space here, and they need two different answers.
@@ -2212,6 +2242,30 @@ addEventListener('resize', () => applyZoom());
   };
   set(localStorage.getItem('vcctrl.panel') === 'hidden');
   b.onclick = () => set(!document.body.classList.contains('nopanel'));
+})();
+
+// ── THE ACCESSORY BAR ───────────────────────────────────────────────────
+// With the on-screen keyboard up, the key rail sits directly on top of it,
+// the way a terminal app's accessory bar does. iOS gives a web page no way to
+// attach a view to the keyboard -- but visualViewport reports exactly how
+// much of the window the keyboard is covering, which is the same number.
+//
+// 120px, because the URL bar collapsing also shrinks the visual viewport and
+// is not a keyboard. No keyboard is that short and no toolbar is that tall.
+(function accessory() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const keys = $('keys');
+  const place = () => {
+    const gap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    const up = gap > 120;
+    document.body.classList.toggle('kbdup', up);
+    keys.style.bottom = up ? gap + 'px' : '';
+    applyZoom();          // the picture just got a different amount of room
+  };
+  vv.addEventListener('resize', place);
+  vv.addEventListener('scroll', place);
+  place();
 })();
 
 (function keyrail() {
