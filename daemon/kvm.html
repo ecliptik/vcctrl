@@ -79,7 +79,10 @@
      return channel -- non-video proof a keystroke reached the machine -- and
      they were previously buried in a JSON field nobody opens.
      Lit, hollow or crossed: never colour alone. */
-  #lamps { display:flex; gap:7px; flex:none; align-items:center; }
+  #lamps { display:flex; gap:7px; flex:none; align-items:center;
+           background:transparent; border:0; padding:0 2px; min-height:0;
+           cursor:help; }
+  @media (pointer:coarse) { #lamps { min-height:var(--tap); } }
   .lamp { display:flex; flex-direction:column; align-items:center; gap:3px; }
   .lamp i {
     width:9px; height:9px; border-radius:50%; display:block;
@@ -234,11 +237,11 @@
   <header>
     <h1>vcctrl-kvm</h1>
     <span id="state" aria-live="polite">—</span>
-    <div id="lamps" title="PS/2 keyboard LEDs — the return channel from the target">
-      <div class="lamp" id="lamp-caps"><i></i><span>CAP</span></div>
-      <div class="lamp" id="lamp-num"><i></i><span>NUM</span></div>
-      <div class="lamp" id="lamp-scroll"><i></i><span>SCR</span></div>
-    </div>
+    <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove">
+      <span class="lamp" id="lamp-caps"><i></i><span>CAP</span></span>
+      <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
+      <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
+    </button>
     <span id="c-lock" class="chip">input <b>—</b></span>
     <span id="c-power" class="chip">power <b>—</b></span>
     <span id="c-xport" class="chip">link <b>—</b></span>
@@ -1189,5 +1192,32 @@ function lamps(leds, videoState) {
     el.title = (leds ? (v === 1 ? 'lit' : 'dark') : 'unknown')
              + (stale ? ' — retained, the target is not showing a picture' : '');
   }
+  $('lamps').title = LAMP_ATTESTS + (stale
+    ? '\n\nDashed: the target is not showing a picture, so these values are '
+      + 'retained from whenever it last published them.' : '');
 }
+
+// Name what the signal ATTESTS, not what it resembles. These lamps prove a
+// keystroke reached the target's KEYBOARD CONTROLLER. They do not prove DOS
+// read it: Caps Lock is serviced by the BIOS interrupt handler with DOS
+// entirely uninvolved, so the lamp toggles happily while FTP.EXE is running.
+//
+// That distinction cost the vcctrl session an hour today -- at_prompt() reads
+// exactly this channel and was trusted as "DOS is at a prompt". Putting it on
+// the control means nobody else has to learn it the same way.
+const LAMP_ATTESTS =
+  'PS/2 keyboard LEDs — the return channel from the target.\n\n'
+  + 'Lit means the keystroke reached the target\'s KEYBOARD CONTROLLER.\n'
+  + 'It does NOT mean DOS read it: Caps Lock is handled by the BIOS interrupt '
+  + 'handler, so these toggle during a file transfer too.\n\n'
+  + 'The level is retained — a powered-off host keeps publishing its last '
+  + 'value, so the lamps are dashed when the picture says nothing is running.';
+
+$('lamps').title = LAMP_ATTESTS;
+$('lamps').onclick = () => {
+  // Tooltips do not exist on a touch screen, and this is the one control whose
+  // meaning is genuinely easy to get wrong. Tapping it says so in the log.
+  for (const line of LAMP_ATTESTS.split('\n\n'))
+    addLine(new Date(), 'ps/2', line, 'k-lock');
+};
 </script>
