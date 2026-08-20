@@ -208,13 +208,112 @@ Measured against the existing page:
 | 5 | Stage: fill available space, landscape handling | medium — most user-visible |
 | 6 | Desktop column: activity gets the height | medium |
 | 7 | Collapse controls on phone | medium |
+| 8 | Theme engine: base16 token shape, nine schemes, contrast test | low — additive, and the token work in step 1 is most of it |
 
 Steps 1–3 are safe and improve the page on their own. 4–7 change how it feels
 and should land together so it does not look half-migrated.
 
 ---
 
-## 7. What this deliberately does not do
+## 7. Theme engine
+
+Requested: Tokyo Night, Tokyo Night Light, Dracula, Nord, Solarized Dark,
+Solarized Light, Green Monochrome, Amber Monochrome.
+
+### What this does to section 2, said plainly
+
+**If the palette is user-swappable, the palette cannot carry the identity.**
+The warm-graphite-and-VGA scheme stops being *the* look and becomes the default
+theme — one of nine. That is not a loss, but it does move the work: identity
+now has to live in **structure, type and the lamps**, which is where it is
+more durable anyway. A page recognisable only by its colours stops being
+recognisable the moment someone picks Nord.
+
+So section 2's palette ships as **`vga` — the house default**, and sections 3,
+4 and 5 do the identifying.
+
+### Structure: base16-shaped tokens
+
+Do not hand-author nine palettes. Adopt the **base16** token shape — eight
+greyscale steps plus eight hues — and map UI roles onto it once:
+
+    base00 chassis        base08 red      fault, refused
+    base01 housing        base09 orange   degraded
+    base02 rule           base0A yellow   frozen, held, warning
+    base03 ink-dim        base0B green    locked, captured, on
+    base04 ink-muted      base0C cyan     informational
+    base05 ink            base0D blue     accent, links
+    base06 ink-bright     base0E magenta  (unused, reserved)
+    base07 ink-inverse    base0F brown    (unused, reserved)
+
+Every theme named above already exists as a published base16 scheme, so each is
+**sixteen hex values in a table**, not a stylesheet. The engine is one
+`data-theme` attribute on `<html>` and one CSS block per scheme. It also means
+Gruvbox, Catppuccin, Rosé Pine, Everforest, One Dark, Monokai and several
+hundred others become a five-minute addition rather than a design exercise.
+
+The two monochromes are not base16 schemes and are authored by hand: a single
+hue ramp against near-black, phosphor-style. They are the honest ones for this
+rig — a P1 green or P3 amber CRT is what a machine of this vintage was actually
+watched on.
+
+### Three rules the themes must not break
+
+**1. The stage well stays constant.** The area immediately around the picture
+does not follow the theme; it stays near-black in every scheme, including the
+light ones.
+
+This is not taste, it is simultaneous contrast. A cream surround makes the
+captured screen look darker and lower-contrast than it is — and judging whether
+a DOS screen is too dark is a thing people do on this rig. **A theme must not
+be able to change how the evidence looks.** Solarized Light may colour every
+panel it likes; it may not tint the frame around the picture.
+
+**2. State is never encoded in colour alone.** Green Monochrome has one hue, so
+`locked` and `fault` cannot differ by colour there. Every state already has a
+word — the lamps and the state readout keep it — and the lamps differ in fill
+as well as colour: lit, hollow, or crossed. This is required by the monochrome
+themes and is exactly what colour-blind users need anyway, so the constraint
+pays for itself twice.
+
+**3. Contrast floor is checked, not assumed.** Some published schemes have
+comment colours around 3:1 against their own background. Any token used for
+body text must clear **4.5:1** and any used for large text or an indicator
+**3:1**, in every shipped theme. That is a script over the token table, run in
+the test suite — not a judgement made by eye in one theme and hoped for in the
+rest.
+
+### Behaviour
+
+- Picker lives in the settings panel (§ the `⚙` panel that already exists), as
+  a plain list — nine names, current one marked. No swatch grid; the themes are
+  named things people already recognise.
+- Persisted in `localStorage` alongside the existing options.
+- Default is **`auto`**: `vga` when the system reports dark, `solarized-light`
+  when it reports light, following `prefers-color-scheme`. An explicit choice
+  wins and sticks.
+- `<meta name="theme-color">` updated on change, so the iOS status bar matches
+  rather than clashing.
+- Theme switching must not disturb the stream. It is a CSS variable swap —
+  nothing re-renders, no socket reconnects.
+
+### Shipping list
+
+| theme | ground | notes |
+|---|---|---|
+| `vga` **(default)** | warm graphite | §2; the house look |
+| `tokyo-night` | dark | |
+| `tokyo-night-light` | light | stage well still dark |
+| `dracula` | dark | |
+| `nord` | dark | low contrast; check the floor carefully |
+| `solarized-dark` | dark | |
+| `solarized-light` | light | stage well still dark |
+| `green-mono` | near-black | hand-authored, P1 phosphor |
+| `amber-mono` | near-black | hand-authored, P3 phosphor |
+
+---
+
+## 8. What this deliberately does not do
 
 - **No CRT effects of any kind.** Section 1.
 - **No webfont.** Section 2.
