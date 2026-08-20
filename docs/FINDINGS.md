@@ -898,7 +898,7 @@ that asks the Pi about the Pi will answer yes.
 
 ---
 
-## 25. The POST chirp  [NOT RESOLVED -- see the correction at the end]
+## 25. The POST chirp  [RESOLVED by the operator -- see the end]
 
 A PC-speaker chirp during POST appeared "new" tonight and looked like evidence
 of damage, arriving alongside a NIC that had dropped off the PCI bus. Chased
@@ -966,3 +966,42 @@ so the new tone is adjacent to a subsystem that changed today.
 
 **The test is one variable and the card is coming out anyway** (see
 SOUND-PROFILES): remove the Vibra16S, warm-start, listen. Not yet run.
+
+
+### RESOLVED: the chirp is the PCI NIC, on any warm start
+
+The operator isolated it in one move — pull the Intel PRO/100 and warm-start:
+
+    NIC INSTALLED    Ctrl-Alt-Del  ->  CHIRP     reset button  ->  CHIRP
+    NIC REMOVED      Ctrl-Alt-Del  ->  none      reset button  ->  none
+
+One variable, both warm-start paths, both directions. **The chirp is the NIC.**
+
+And it explains the novelty completely, which my "you only just started noticing
+it" story never did: **the NIC is not normally fitted.** It goes in for transfers
+and comes out again, so there had never been a reason to hear it. The tone is
+benign — the adapter's boot-agent option ROM re-entered on a warm start, where a
+cold boot initialises it as part of the full POST sequence.
+
+### The scoreboard for this one symptom
+
+Three explanations were offered before the right one, all mine, all plausible,
+all wrong:
+
+1. the harness pulsing Caps/Num/Scroll Lock  (killed by a silence test)
+2. USB4VC's PS/2 emulation                   (killed by unplugging it)
+3. "it always did this, automation made it audible"  (killed by the reset button)
+
+Every one was proposed before anything constrained the search, and each looked
+sufficient at the time. The operator's method beat all three and it was not
+cleverer — it was **remove one thing and listen**. He also supplied the
+discriminating observation for free: *"the NIC isn't usually in the system"*,
+which is baseline knowledge no instrument on this rig holds and none of my
+reasoning could have reconstructed.
+
+### What to do with it
+
+Nothing. It is expected behaviour whenever the NIC is fitted, which under the
+new standing configuration is during transfers. **Do not investigate it again**,
+and do not read it as a symptom during a collect — that is exactly the window
+where it will be heard and exactly the window where it means nothing.
