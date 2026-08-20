@@ -233,6 +233,12 @@ def test_registry():
           resp == {"ok": False, "error": "unknown command: 'nope'"}, resp)
 
     resp = vcctrld.handle(d, reg, {"cmd": "caps"})
+    # Every capability must have a bus, whatever its constructor accepts.
+    # LedsCapability did not, and the first command that published an event
+    # raised AttributeError at the point of use rather than at start-up.
+    for name, cap in reg.caps.items():
+        check("%s has a bus" % name, hasattr(cap, "bus"))
+
     check("caps reports every capability",
           resp["ok"] and set(["input", "leds", "power", "video"]) <=
           set(resp["capabilities"]), sorted(resp.get("capabilities", {})))
@@ -479,6 +485,261 @@ def test_audio_levels():
           d["mean_db"] > -89.0, d["mean_db"])
 
 
+def test_watchdogs_survive_one_pass():
+    """Every capability's watchdog must complete a pass without raising.
+
+    This exists because one did not. A pin-expiry block intended for
+    VideoCapability landed in AudioCapability's watchdog by a text-anchored
+    edit that matched the wrong class -- both define _watchdog, and the anchor
+    happened to be unique to the wrong one. The thread died on an
+    AttributeError one second after every start, so audio ran with NO
+    SUPERVISION at all.
+
+    Nothing caught it. `caps` reported audio healthy, because caps asks whether
+    the device opened, not whether its supervisor survived -- a dead watchdog is
+    invisible to the check that would tell you the subsystem is fine.
+    """
+    print("\nwatchdogs")
+    import threading
+
+    # Build each capability through its REAL __init__, which opens no device
+    # and spawns nothing. The first version of this test filled in any missing
+    # attribute with None, which would have papered over exactly the bug it
+    # exists to catch: the point is that AudioCapability does NOT define
+    # pinned_at, so a watchdog touching it must fail here.
+    devs = make_devices()
+    for cls in vcctrld.CAPABILITIES:
+        if not hasattr(cls, "_watchdog"):
+            continue
+        try:
+            cap = cls(devs, None)
+        except TypeError:
+            cap = cls(devs)
+        cap.running = True
+        cap.spawn_t = time.time()
+        err = []
+
+        def run(c=cap, e=err):
+            try:
+                threading.Timer(0.05, lambda: setattr(c, "running", False)).start()
+                c._watchdog()
+            except Exception as exc:
+                e.append("%s: %s" % (type(exc).__name__, exc))
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join(timeout=4)
+        check("%s watchdog completes a pass" % cls.name, not err,
+              err[0] if err else "")
+
+    # Control: prove the check can actually detect the failure it claims to.
+    # A green result here otherwise says nothing about whether the test works.
+    class Broken(vcctrld.AudioCapability):
+        name = "broken"
+
+        def _watchdog(self):
+            while self.running:
+                time.sleep(0.01)
+                _ = self.pinned_at          # AudioCapability never defines this
+
+    cap = Broken(devs, None)
+    cap.running = True
+    err = []
+    try:
+        threading.Timer(0.05, lambda: setattr(cap, "running", False)).start()
+        cap._watchdog()
+    except Exception as exc:
+        err.append(type(exc).__name__)
+    check("control: the same check DOES catch a watchdog touching "
+          "an attribute its class lacks", err == ["AttributeError"], err)
+
+
+def test_theme_contrast():
+    """Every colour a theme ships must clear the WCAG floor on every surface.
+
+    Checking four schemes by eye is plausible; checking twenty-five is not, and
+    several published schemes place accents near 2:1 against their own
+    background -- fine for a syntax token inside a wall of code, not fine for
+    the only thing telling you a machine is unreachable.
+
+    tools/themes.py keeps the schemes verbatim and the generator nudges any
+    value that misses the floor, reporting what it changed. This asserts the
+    EMITTED values, which is what a browser actually renders.
+    """
+    print("\ntheme contrast")
+    import os
+    sys.path.insert(0, os.path.join(HERE, os.pardir, "tools"))
+    import themes as T
+
+    worst_text, worst_accent, checked = 99.0, 99.0, 0
+    for name in T.THEMES:
+        roles, _notes = T.fitted(name)
+        for surface in ("bg", "panel"):
+            for role in ("text", "muted"):
+                c = T.contrast(roles[role], roles[surface])
+                worst_text = min(worst_text, c)
+                checked += 1
+                if c < 4.5:
+                    check("%s: %s on %s is %.2f:1" % (name, role, surface, c),
+                          False)
+            for role in T.ACCENTS + ("dim",):
+                c = T.contrast(roles[role], roles[surface])
+                worst_accent = min(worst_accent, c)
+                checked += 1
+                if c < 3.0:
+                    check("%s: %s on %s is %.2f:1" % (name, role, surface, c),
+                          False)
+    check("%d colour pairs across %d themes clear the floor"
+          % (checked, len(T.THEMES)), True)
+    check("worst body text ratio %.2f:1 (floor 4.5)" % worst_text,
+          worst_text >= 4.5)
+    check("worst indicator ratio %.2f:1 (floor 3.0)" % worst_accent,
+          worst_accent >= 3.0)
+
+    # Control: the check must be able to fail. A floor nothing can trip is not
+    # a floor.
+    bad = T.contrast("#777777", "#808080")
+    check("control: the same measure rejects grey on grey (%.2f:1)" % bad,
+          bad < 3.0)
+
+    # Every theme names a pairing, so the light/dark button always has a target.
+    for name, (_g, _d, pair, _r) in T.THEMES.items():
+        if pair not in T.THEMES:
+            check("%s pairs with an unknown theme %r" % (name, pair), False)
+    check("every theme's light/dark pair exists", True)
+
+
+def test_uniform_frame_is_not_picture():
+    """A frame with no variance is not a picture, however unrepeated it is.
+
+    Duplicate-hash rejection asks "is this frame a repeat?", and a uniform
+    frame passes that -- the check answers a different question from the one
+    being asked. The vcctrl session found it the expensive way: two in-game
+    frames byte-identical twenty seconds apart, every pixel exactly 7, reported
+    as PICTURE mean 7.0, which turned "capture relocks during gameplay" into a
+    result that was false. This selector is the algorithm theirs was ported
+    from and had the same gap.
+
+    Measured at the 1/8 scale the selector decodes at: real captures span
+    77-226 even when almost entirely black, and the stick's no-lock constant is
+    exactly 0.
+    """
+    print("\nuniform frames")
+    import io
+    import threading
+    from PIL import Image
+
+    class Fake(vcctrld.VideoCapability):
+        def __init__(self):
+            self.lock = threading.Lock()
+
+    def const(v):
+        b = io.BytesIO()
+        Image.new("RGB", (640, 480), (v, v, v)).save(b, "JPEG", quality=90)
+        return b.getvalue()
+
+    def scene():
+        # A dark scene with a little content -- the case that must NOT be
+        # rejected, since "dark screen" and "no signal" are different facts.
+        im = Image.new("RGB", (640, 480), (2, 2, 2))
+        for x in range(40, 240):
+            for y in range(40, 60):
+                im.putpixel((x, y), (90, 90, 90))
+        b = io.BytesIO()
+        im.save(b, "JPEG", quality=90)
+        return b.getvalue()
+
+    v = Fake()
+    check("a uniform frame is not picture", not v._is_picture(const(7)))
+    check("a dark frame with content IS picture", v._is_picture(scene()))
+
+    # Distinct hashes, so duplicate rejection cannot catch these: only the
+    # variance floor can.
+    items = [(0.0, 1, const(7)), (1.0, 2, const(8)), (2.0, 3, const(9))]
+    best, _mean, reason = v._select(items)
+    check("selector rejects several DIFFERENT constants", best is None)
+    check("and says they were constants, not that they were duplicates",
+          "uniform constant" in (reason or ""), reason)
+
+    best, mean, _live = v._select(items + [(3.0, 4, scene())])
+    check("a real frame among constants still wins", best is not None)
+
+    # Control: the floor must be able to accept something, or it is not a floor
+    # but a rejection.
+    check("control: the check is not simply rejecting everything",
+          v._is_picture(scene()) and not v._is_picture(const(0)))
+
+
+def test_websocket_accept_vector():
+    """The RFC 6455 handshake, checked against the RFC's own test vector.
+
+    This existed as a transcribed constant and was wrong for hours: the final
+    group read 5AB0DC85B11D instead of C5AB0DC85B11, the same twelve characters
+    rotated by one. Every probe written to test the handshake imported the
+    constant from the module under test, so all of them computed the same wrong
+    value, agreed with the server, and reported success. Firefox has its own
+    copy and was the only party that ever disagreed -- and it said so plainly,
+    in a log nobody had thought to read.
+
+    A test that derives its expectation from the code cannot catch a wrong
+    constant. This one hard-codes the RFC's published pair.
+    """
+    print("\nwebsocket handshake")
+    import base64, hashlib, os, sys
+    sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    KEY = "dGhlIHNhbXBsZSBub25jZQ=="
+    ACCEPT = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    got = base64.b64encode(
+        hashlib.sha1((KEY + vcweb.WS_GUID).encode()).digest()).decode()
+    check("RFC 6455 vector: %s -> %s" % (KEY[:12] + "...", ACCEPT),
+          got == ACCEPT, got)
+
+    # Control: the check must reject a GUID that is wrong by one character.
+    bad = base64.b64encode(
+        hashlib.sha1((KEY + "258EAFA5-E914-47DA-95CA-5AB0DC85B11D")
+                     .encode()).digest()).decode()
+    check("control: the vector rejects the off-by-one GUID", bad != ACCEPT)
+
+
+def test_page_dom_references():
+    """Every element the page's script reaches for must exist in its markup.
+
+    Three outages tonight were one missing element or one undeclared name at
+    top level: a settings key with no checkbox, a const read before its
+    declaration, a watchdog touching an attribute its class lacks. In a script
+    that runs at top level, one throw takes every line after it -- so the whole
+    page dies and the symptom is "unresponsive", or one stuck status chip, or a
+    tab bar that does nothing. None of those name the cause.
+
+    Syntax checking does not catch it: the page parsed cleanly every time.
+    """
+    print("\npage DOM references")
+    import os
+    import re
+
+    page = os.path.join(HERE, os.pardir, "daemon", "kvm.html")
+    with open(page, encoding="utf-8") as f:
+        h = f.read()
+    ids = set(re.findall(r"\$\('([\w-]+)'\)", h))
+    present = set(re.findall(r'id="([\w-]+)"', h))
+    missing = sorted(i for i in ids if i not in present)
+    check("every $('id') in the script exists in the markup",
+          not missing, missing)
+
+    # The settings loop looks up $('opt-' + key) for every key in OPTS, so any
+    # key without a checkbox must be tolerated rather than assumed.
+    m = re.search(r"const OPTS = \{([^}]*)\}", h)
+    keys = re.findall(r"(\w+)\s*:", m.group(1)) if m else []
+    for k in keys:
+        if "opt-%s" % k not in present:
+            check("OPTS key %r has no checkbox -- loop must guard" % k,
+                  "if (!el) continue;" in h, "no guard found")
+    check("settings loop guards against a missing element",
+          "if (!el) continue;" in h)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -492,6 +753,11 @@ if __name__ == "__main__":
     test_event_bus()
     test_activity_age()
     test_audio_levels()
+    test_watchdogs_survive_one_pass()
+    test_theme_contrast()
+    test_uniform_frame_is_not_picture()
+    test_websocket_accept_vector()
+    test_page_dom_references()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)

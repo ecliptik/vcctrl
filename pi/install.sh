@@ -10,6 +10,7 @@ sudo mkdir -p "$PREFIX"
 sudo install -m 0755 "$SRC/daemon/vcctrld.py"    "$PREFIX/vcctrld.py"
 sudo install -m 0644 "$SRC/daemon/vcweb.py"      "$PREFIX/vcweb.py"
 sudo install -m 0644 "$SRC/daemon/kvm.html"      "$PREFIX/kvm.html"
+sudo install -m 0644 "$SRC/daemon/themes.css"    "$PREFIX/themes.css"
 sudo install -m 0755 "$SRC/bin/vcctrl-client"    /usr/local/bin/vcctrl
 
 sudo tee /etc/systemd/system/vcctrld.service >/dev/null <<'UNIT'
@@ -76,6 +77,14 @@ if command -v tailscale >/dev/null 2>&1; then
   if [ -n "${TS_NAME:-}" ]; then
     if sudo tailscale serve --bg --https=443 "http://127.0.0.1:8080" >/dev/null 2>&1; then
       echo "https://${TS_NAME}/  -> proxying to the daemon"
+      # And a RAW TCP forward for the daemon's own TLS listener. Raw, not
+      # --tls-terminated-tcp: if Tailscale terminated TLS here it would
+      # negotiate ALPN again and could hand back HTTP/2, which is the exact
+      # thing this port exists to avoid. Passthrough means the browser does its
+      # handshake with the daemon, which advertises http/1.1 only.
+      sudo tailscale serve --bg --tcp=8443 tcp://127.0.0.1:8443 >/dev/null 2>&1 \
+        && echo "https://${TS_NAME}:8443/  -> direct to the daemon (WebSocket works here)" \
+        || echo "note: could not configure the 8443 TCP forward"
     else
       # Not fatal. Plain http on the tailnet still works; only the
       # secure-context features are unavailable.
@@ -98,6 +107,29 @@ fi
 # silently. A timer can say After=tailscaled.service and add a settling delay.
 # It also puts the result in journald next to everything else.
 sudo mkdir -p /var/lib/vcctrl
+
+# The renewal runs from a script rather than inline in ExecStart. systemd does
+# not parse nested quoting the way a shell does -- an inline `sh -c` with a
+# quoted python -c inside it is a unit that fails at start with a message about
+# quoting, discovered at the worst possible time. A script file has no quoting
+# problem to get wrong.
+sudo tee "$PREFIX/renew-cert.sh" >/dev/null <<'RENEW'
+#!/bin/sh
+# Refresh the tailnet TLS cert. Idempotent: tailscale cert is a no-op until the
+# certificate is inside its renewal window, so running this weekly costs
+# nothing and running it on boot costs nothing.
+set -eu
+name="$(tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
+[ -n "$name" ] || { echo "no tailscale DNS name; is tailscaled up?" >&2; exit 1; }
+# Explicit output paths: tailscale cert writes into the working directory
+# otherwise, and a timer that litters the filesystem weekly is its own problem.
+exec tailscale cert \
+  --cert-file /var/lib/vcctrl/tls.crt \
+  --key-file  /var/lib/vcctrl/tls.key \
+  "$name"
+RENEW
+sudo chmod 0755 "$PREFIX/renew-cert.sh"
+
 sudo tee /etc/systemd/system/vcctrl-cert.service >/dev/null <<'UNIT'
 [Unit]
 Description=Renew the tailnet TLS certificate for the vcctrl KVM
@@ -106,9 +138,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Explicit paths: `tailscale cert` writes into the working directory otherwise,
-# and a timer that litters the filesystem weekly is its own small problem.
-ExecStart=/bin/sh -c 'n="$(tailscale status --json | python3 -c \'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))\')"; exec tailscale cert --cert-file /var/lib/vcctrl/tls.crt --key-file /var/lib/vcctrl/tls.key "$n"'
+ExecStart=/opt/vcctrl/renew-cert.sh
 User=root
 UNIT
 

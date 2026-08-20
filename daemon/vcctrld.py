@@ -527,10 +527,10 @@ class Activity(object):
         self.inflight = {}
         self.next_id = 0
 
-    def begin(self, cmd):
+    def begin(self, cmd, who=None):
         with self.lock:
             self.next_id += 1
-            self.inflight[self.next_id] = (cmd, time.time())
+            self.inflight[self.next_id] = (cmd, time.time(), who)
             return self.next_id
 
     def end(self, ident):
@@ -540,9 +540,13 @@ class Activity(object):
     def report(self):
         now = time.time()
         with self.lock:
+            # `by` is here so a caller can tell a viewer's poll from a
+            # harness command. Without it the deploy guard refused on a
+            # browser's own 1.5s status poll, which is not a run and not
+            # something worth protecting.
             return sorted(
-                ({"cmd": c, "age_s": round(now - t0, 3)}
-                 for c, t0 in self.inflight.values()),
+                ({"cmd": c, "age_s": round(now - t0, 3), "by": who}
+                 for c, t0, who in self.inflight.values()),
                 key=lambda d: -d["age_s"])
 
 
@@ -602,9 +606,19 @@ class Arbiter(object):
 
 
 class Capability(object):
-    """One device or concern. Subclasses declare a name and a command map."""
+    """One device or concern. Subclasses declare a name and a command map.
+
+    Every capability has a `bus`, set by the registry after construction. It
+    used to be passed to whichever constructors happened to accept it, with a
+    TypeError fallback for the rest -- so LedsCapability had no `bus` at all,
+    and the first line of code that touched it raised. That is the same defect
+    as the watchdog reaching for `pinned_at` on a class that never defined it:
+    an attribute that exists on some siblings and not others, with nothing
+    saying which.
+    """
 
     name = None
+    bus = None
 
     def __init__(self, devs):
         self.devs = devs
@@ -682,8 +696,56 @@ class LedsCapability(Capability):
 
     name = "leds"
 
+    # When was the input path last PROVEN, rather than assumed?
+    verified_at = None
+    verified_ok = None
+
     def commands(self):
-        return {"leds": self._leds, "ledwait": self._ledwait}
+        return {"leds": self._leds, "ledwait": self._ledwait,
+                "verify_input": self._verify_input}
+
+    def _verify_input(self, req):
+        """Prove the input path by round trip, because nothing else can.
+
+        The vcctrl session unplugged the PS/2 lead and the harness reported
+        everything healthy: usb4vc holding both devices, input ok, LEDs
+        returning plausible values. All true, and all about the Pi -- the
+        uinput nodes exist whether or not the STM32 is attached to anything.
+        Every status this daemon publishes about input is a statement about
+        its own end of the wire.
+
+        A round trip is different in kind: toggle Caps Lock and watch for the
+        LED to come back. The value returns only if the target's keyboard
+        controller received the key and published its state, which cannot
+        happen with the lead out. It proves the LINK, not that DOS read
+        anything -- Caps Lock is BIOS-serviced, and conflating those is a
+        separate mistake this rig has already paid for.
+        """
+        before = self.devs.read_leds()
+        try:
+            self.devs.key(["capslock"])
+        except Exception as exc:
+            return {"ok": False, "error": "could not send: %s" % exc}
+        changed, deadline = False, time.time() + 1.5
+        while time.time() < deadline:
+            if self.devs.read_leds() != before:
+                changed = True
+                break
+            time.sleep(0.02)
+        try:
+            self.devs.key(["capslock"])          # put it back
+        except Exception:
+            pass
+        LedsCapability.verified_at = time.time()
+        LedsCapability.verified_ok = changed
+        if self.bus:
+            self.bus.publish("input.verify", ok=changed)
+        return {"ok": True, "verified": changed, "before": before,
+                "after": self.devs.read_leds(),
+                "note": ("the target acknowledged a keystroke"
+                         if changed else
+                         "no LED change -- the PS/2 link is not carrying "
+                         "keystrokes, whatever the device status says")}
 
     def _leds(self, req):
         return {"ok": True, "leds": self.devs.read_leds()}
@@ -712,8 +774,46 @@ class PowerCapability(Capability):
 
     name = "power"
 
+    # Mains control is the most consequential thing this rig can do, and the
+    # event bus is in MEMORY. A daemon restart erases it -- and a restart is
+    # exactly the event most likely to be happening around an unexplained power
+    # change, so the record disappears precisely when it is needed.
+    #
+    # Found the hard way: the g2k was discovered powered off, and answering
+    # "did anything here turn it off" required reasoning from absence rather
+    # than reading a line. An append-only file survives restarts, reboots and
+    # the ring wrapping.
+    AUDIT = "/var/lib/vcctrl/power.log"
+
     def commands(self):
-        return {"power": self._power}
+        return {"power": self._power, "powerlog": self._powerlog}
+
+    def _audit(self, action, who, outcome):
+        line = "%s\t%s\taction=%s\tby=%s\t%s\n" % (
+            time.strftime("%Y-%m-%dT%H:%M:%S%z"), int(time.time()),
+            action, who if who else "(unidentified)", outcome)
+        try:
+            os.makedirs(os.path.dirname(self.AUDIT), exist_ok=True)
+            with open(self.AUDIT, "a") as f:
+                f.write(line)
+        except Exception as exc:
+            sys.stderr.write("power audit write failed: %s\n" % exc)
+        # journald too, so it is in the same place as everything else and
+        # survives the file being lost.
+        sys.stderr.write("POWER %s" % line)
+        sys.stderr.flush()
+
+    def _powerlog(self, req):
+        n = int(req.get("n", 50))
+        try:
+            with open(self.AUDIT) as f:
+                lines = f.read().splitlines()
+        except FileNotFoundError:
+            return {"ok": True, "entries": [], "note": "no power action has "
+                    "been recorded since the audit log was added"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "entries": lines[-n:], "total": len(lines)}
 
     def _power(self, req):
         cfg = load_config()
@@ -724,6 +824,9 @@ class PowerCapability(Capability):
         action = req.get("action", "state")
         if action == "state":
             return {"ok": True, "power": power_state(host)}
+        # Reads are not audited -- they happen on a timer from every open
+        # browser tab and would bury the two lines that matter.
+        self._audit(action, req.get("as"), "requested")
         if action == "on":
             power_set(host, True)
         elif action == "off":
@@ -737,7 +840,9 @@ class PowerCapability(Capability):
         else:
             return {"ok": False, "error": "unknown power action: %r" % action}
         time.sleep(0.5)
-        return {"ok": True, "power": power_state(host)}
+        st = power_state(host)
+        self._audit(action, req.get("as"), "done on=%s" % st.get("on"))
+        return {"ok": True, "power": st}
 
 
 class VideoCapability(Capability):
@@ -762,7 +867,24 @@ class VideoCapability(Capability):
     name = "video"
 
     DEVICE = "/dev/video0"
-    RING_BYTES = 8 * 1024 * 1024
+    # 48 MB. 30 s at 30 fps is 900 frames: 13.5 MB of text console but 63 MB of
+    # a dense screen, a 4.7x spread. A buffer sized in seconds has no fixed
+    # cost and one sized in bytes has no fixed duration, so this is capped in
+    # BYTES -- the units the resource is actually measured in -- and the span
+    # it currently buys is reported rather than promised.
+    RING_BYTES = 48 * 1024 * 1024
+    # Wall-clock span the scrub buffer tries to preserve. When bytes run out,
+    # the old end is thinned rather than dropped, so 30 s stays 30 s and only
+    # its granularity degrades.
+    TARGET_SPAN_S = 30.0
+    # Never let the ring push the Pi towards OOM. There is NO SWAP on this box:
+    # an overshoot does not slow the daemon down, it kills it, and that drops
+    # the uinput devices.
+    MEM_FLOOR_MB = 200
+    # A pin stops eviction so a frame cannot be freed while it is being looked
+    # at. It expires, because a pinned buffer stops accepting new frames and a
+    # silently stale KVM is the failure this tool exists to prevent.
+    PIN_TIMEOUT_S = 300.0
     NOSIGNAL_AFTER_S = 2.0
     # How many recent frames must be bit-identical before the stream is called
     # frozen. Eight is ~0.27 s at 30 fps -- long enough that a genuinely static
@@ -770,6 +892,22 @@ class VideoCapability(Capability):
     # measured: 90 frames, 90 distinct hashes) and short enough to notice a
     # mode change within a third of a second.
     FROZEN_RUN = 8
+    # A frame whose pixels are all the same value is not a picture, however
+    # unrepeated it is. Duplicate-hash rejection asks "is this frame a repeat?"
+    # and a uniform frame can pass that -- the check answers a different
+    # question from the one being asked.
+    #
+    # Measured at the 1/8 scale the selector decodes at: real captures range
+    # 77-226 even when almost entirely black (mean 0.10), while the stick's
+    # no-lock constant is exactly 0. Four is far below any real frame and far
+    # above a constant.
+    #
+    # The vcctrl session found this the expensive way: two in-game frames,
+    # byte-identical twenty seconds apart, every pixel exactly 7, reported as
+    # PICTURE mean 7.0 -- which turned "capture relocks during gameplay" into a
+    # result that was false. My selector is the algorithm theirs was ported
+    # from and had the same gap by construction.
+    MIN_RANGE = 4
 
     def __init__(self, devs, bus=None):
         Capability.__init__(self, devs)
@@ -789,6 +927,11 @@ class VideoCapability(Capability):
         self.spawn_t = 0.0
         self.fast_failures = 0
         self.last_good = None
+        self.seq = 0
+        self.thin_passes = 0
+        self.dropped_pinned = 0
+        self.pinned_at = None
+        self.mem_limited = False
 
     # -- device lifecycle ---------------------------------------------------
 
@@ -892,14 +1035,75 @@ class VideoCapability(Capability):
                 if len(frame) >= 128:
                     self._push(frame)
 
+    def _cap(self):
+        """Effective byte cap, lowered if the Pi is short of memory."""
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        avail_mb = int(line.split()[1]) / 1024.0
+                        break
+                else:
+                    return self.RING_BYTES
+        except Exception:
+            return self.RING_BYTES
+        headroom = (avail_mb - self.MEM_FLOOR_MB) * 1024 * 1024
+        if headroom < self.RING_BYTES:
+            self.mem_limited = True
+            return max(4 * 1024 * 1024, int(headroom))
+        self.mem_limited = False
+        return self.RING_BYTES
+
+    def _thin(self):
+        """Drop every other frame from the oldest third. Caller holds the lock.
+
+        Trades temporal resolution for wall-clock span, in the region where it
+        is needed least: recent frames stay at the full rate for frame-by-frame
+        work, and the old end degrades to 15 fps, then 7.5. Thirty seconds of
+        history survives in every case.
+
+        O(n) but infrequent -- a pass frees roughly a sixth of the ring, which
+        at 30 fps is several seconds of headroom before the next one.
+        """
+        items = list(self.ring)
+        third = max(1, len(items) // 3)
+        kept, freed = [], 0
+        for i, entry in enumerate(items):
+            if i < third and i % 2 == 1:
+                freed += len(entry[2])
+                continue
+            kept.append(entry)
+        if freed:
+            self.ring.clear()
+            self.ring.extend(kept)
+            self.ring_bytes -= freed
+            self.thin_passes += 1
+
     def _push(self, frame):
         now = time.time()
         with self.lock:
-            self.ring.append((now, frame))
+            pinned = self.pinned_at is not None
+            cap = self._cap()
+            if pinned and self.ring_bytes + len(frame) > cap:
+                # Pinned: the buffer is being examined, so drop the NEW frame
+                # rather than free one somebody may be looking at.
+                self.dropped_pinned += 1
+                self.last_frame_t = now
+                return
+            self.seq += 1
+            self.ring.append((now, self.seq, frame))
             self.ring_bytes += len(frame)
-            while self.ring_bytes > self.RING_BYTES and len(self.ring) > 1:
-                _t, old = self.ring.popleft()
-                self.ring_bytes -= len(old)
+            while self.ring_bytes > cap and len(self.ring) > 1:
+                span = now - self.ring[0][0]
+                if span > self.TARGET_SPAN_S * 1.05 or len(self.ring) < 8:
+                    _t, _s, old = self.ring.popleft()
+                    self.ring_bytes -= old and len(old)
+                else:
+                    before = self.ring_bytes
+                    self._thin()
+                    if self.ring_bytes >= before:
+                        _t, _s, old = self.ring.popleft()
+                        self.ring_bytes -= len(old)
             self.last_frame_t = now
             self.frames_total += 1
         # NOTE: this does NOT set state. A frame arriving attests that the USB
@@ -944,13 +1148,26 @@ class VideoCapability(Capability):
                 owned, proc = self.owned, self.proc
                 age = time.time() - self.last_frame_t if self.last_frame_t else None
                 state = self.state
-                recent = [f for _t, f in list(self.ring)[-self.FROZEN_RUN:]]
+                recent = [f for _t, _s, f in list(self.ring)[-self.FROZEN_RUN:]]
             # Hashing 8 frames once per half-second is ~240 KB/s of md5 --
             # nothing next to a 4 Mbit/s stream, and it stays off the per-frame
             # path where rule 1 cares.
             frozen = None
             if len(recent) >= self.FROZEN_RUN:
                 frozen = len(set(hashlib.md5(f).digest() for f in recent)) == 1
+
+            # A pin that outlives its usefulness turns the KVM stale, which is
+            # the failure this whole tool exists to prevent. Expire it.
+            with self.lock:
+                if self.pinned_at is not None and \
+                        time.time() - self.pinned_at > self.PIN_TIMEOUT_S:
+                    self.pinned_at = None
+                    expired = True
+                else:
+                    expired = False
+            if expired:
+                self._publish("video.pin", state="expired")
+
             if not owned:
                 continue
             if proc is not None and proc.poll() is not None:
@@ -1027,10 +1244,16 @@ class VideoCapability(Capability):
             # unless something kept the last live frame, and "black rectangle"
             # is indistinguishable from a powered-off machine.
             if new == "locked":
+                # Validate before storing. The watchdog used to keep the newest
+                # frame unconditionally while locked, so a uniform frame became
+                # "the last frame that was picture" -- which is exactly the
+                # black lastgood reported earlier, and it was never only a
+                # naming problem.
                 with self.lock:
-                    if self.ring:
-                        t, f = self.ring[-1]
-                        self.last_good = (t, f, None)
+                    newest = self.ring[-1] if self.ring else None
+                if newest is not None and self._is_picture(newest[2]):
+                    with self.lock:
+                        self.last_good = (newest[0], newest[2], None)
 
             if new != state:
                 with self.lock:
@@ -1048,7 +1271,82 @@ class VideoCapability(Capability):
     def commands(self):
         return {"video": self._video, "burst": self._burst,
                 "framestats": self._framestats, "shot": self._shot,
-                "lastgood": self._lastgood}
+                "lastgood": self._lastgood, "pin": self._pin,
+                "timeline": self._timeline, "frame": self._frame}
+
+    # -- scrub --------------------------------------------------------------
+
+    def _pin(self, req):
+        """Stop eviction so a frame cannot be freed while it is examined.
+
+        Without this the scrub feature is subtly broken in exactly the case it
+        exists for: the live stream keeps writing while you look at something
+        interesting, and the frame under the cursor gets evicted from under it.
+        """
+        action = req.get("action", "status")
+        with self.lock:
+            if action == "on":
+                self.pinned_at = time.time()
+            elif action == "off":
+                self.pinned_at = None
+                self.dropped_pinned = 0
+            held = (time.time() - self.pinned_at) if self.pinned_at else None
+            out = {"ok": True, "pinned": self.pinned_at is not None,
+                   "held_s": round(held, 1) if held else None,
+                   "dropped_while_pinned": self.dropped_pinned,
+                   "expires_in_s": round(self.PIN_TIMEOUT_S - held, 1)
+                   if held else None}
+        if action in ("on", "off"):
+            self._publish("video.pin", state=action)
+        return out
+
+    def _timeline(self, req):
+        """Index of what is in the buffer: one entry per frame, no pixels.
+
+        Carries the gap to the previous frame so the UI can draw where the
+        buffer has been thinned. A scrub bar that looks uniform while stepping
+        1/30 s in one place and 1/7.5 s in another is a lying interface.
+        """
+        with self.lock:
+            items = list(self.ring)
+            pinned = self.pinned_at is not None
+            span = (items[-1][0] - items[0][0]) if len(items) > 1 else 0.0
+            cap = self._cap()
+            used = self.ring_bytes
+            thins = self.thin_passes
+            memlim = self.mem_limited
+        out, prev = [], None
+        for t, sq, f in items:
+            out.append({"seq": sq, "t": round(t, 3), "bytes": len(f),
+                        "gap_ms": None if prev is None
+                        else round((t - prev) * 1000.0, 1)})
+            prev = t
+        return {"ok": True, "frames": out, "count": len(out),
+                "span_s": round(span, 2), "pinned": pinned,
+                "ring_bytes": used, "cap_bytes": cap,
+                "thin_passes": thins, "mem_limited": memlim,
+                "target_span_s": self.TARGET_SPAN_S}
+
+    def _frame(self, req):
+        """One frame by sequence number. Raw, and labelled raw.
+
+        Scrubbing wants the exact frame at a position, not a judgement about
+        it -- so unlike `shot` this does no duplicate rejection and no
+        brightness selection, and says so.
+        """
+        import base64
+        want = int(req.get("seq", 0))
+        with self.lock:
+            for t, sq, f in reversed(self.ring):
+                if sq == want:
+                    return {"ok": True, "raw": True, "seq": sq, "t": t,
+                            "age_s": round(time.time() - t, 3),
+                            "bytes": len(f),
+                            "jpeg": base64.b64encode(f).decode()}
+            oldest = self.ring[0][1] if self.ring else None
+            newest = self.ring[-1][1] if self.ring else None
+        return {"ok": False, "error": "seq %d is not in the buffer" % want,
+                "oldest": oldest, "newest": newest}
 
     # -- selection ----------------------------------------------------------
 
@@ -1074,7 +1372,7 @@ class VideoCapability(Capability):
         hashes, 0 repeated. The assumption holds at full rate.
         """
         digests = {}
-        for t, f in items:
+        for t, _sq, f in items:
             digests.setdefault(hashlib.md5(f).hexdigest(), []).append((t, f))
         live = [tf for group in digests.values() if len(group) == 1
                 for tf in group]
@@ -1084,7 +1382,7 @@ class VideoCapability(Capability):
             from PIL import Image, ImageStat
         except ImportError:
             return None, None, "PIL is not available on this host"
-        best, best_mean, errs = None, -1.0, []
+        best, best_mean, errs, flat = None, -1.0, [], 0
         for t, f in live:
             try:
                 im = Image.open(io.BytesIO(f))
@@ -1092,7 +1390,12 @@ class VideoCapability(Capability):
                 # cheaper than a full decode and preserves the mean, which is
                 # all the selection needs. Measured against full decode below.
                 im.draft("L", (im.size[0] // 8, im.size[1] // 8))
-                m = ImageStat.Stat(im.convert("L")).mean[0]
+                g = im.convert("L")
+                lo, hi = g.getextrema()
+                if hi - lo < self.MIN_RANGE:
+                    flat += 1          # a constant, not a dark picture
+                    continue
+                m = ImageStat.Stat(g).mean[0]
             except Exception as exc:
                 # Recorded rather than swallowed. The first version returned a
                 # bare None for three different causes -- no live frames, PIL
@@ -1109,9 +1412,27 @@ class VideoCapability(Capability):
             if m > best_mean:
                 best, best_mean = (t, f), m
         if best is None:
+            if flat and not errs:
+                # Say which of the two it is. "No picture" and "a constant" are
+                # different facts, and the second one names a specific hardware
+                # state worth recognising.
+                return None, None, ("all %d non-repeated frames were a uniform "
+                                    "constant -- the stick is emitting a blank, "
+                                    "not capturing a dark screen" % flat)
             return None, None, "all %d candidate decodes failed: %s" % (
                 len(live), errs[0] if errs else "unknown")
         return best, best_mean, len(live)
+
+    def _is_picture(self, frame):
+        """True if the frame has any spread at all. See MIN_RANGE."""
+        try:
+            from PIL import Image
+            im = Image.open(io.BytesIO(frame))
+            im.draft("L", (im.size[0] // 8, im.size[1] // 8))
+            lo, hi = im.convert("L").getextrema()
+            return (hi - lo) >= self.MIN_RANGE
+        except Exception:
+            return False
 
     def _shot(self, req):
         """One frame, selected -- or an explicit "no picture". The default API.
@@ -1194,6 +1515,9 @@ class VideoCapability(Capability):
                     "ring_bytes": self.ring_bytes,
                     "fast_failures": self.fast_failures,
                     "last_error": self.last_error,
+                    "pinned": self.pinned_at is not None,
+                    "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
+                    if len(self.ring) > 1 else 0.0,
                     "last_frame_age_s": round(age, 3) if age else None}
 
     def _burst(self, req):
@@ -1208,8 +1532,9 @@ class VideoCapability(Capability):
         items = self._recent(n)
         import base64
         return {"ok": True, "raw": True, "n": len(items),
-                "frames": [{"t": t, "jpeg": base64.b64encode(f).decode()}
-                           for t, f in items]}
+                "frames": [{"t": t, "seq": sq,
+                            "jpeg": base64.b64encode(f).decode()}
+                           for t, sq, f in items]}
 
     def _framestats(self, req):
         """Duplicate-hash statistics over a window. Diagnostic, not a judgement.
@@ -1221,14 +1546,14 @@ class VideoCapability(Capability):
         """
         items = self._recent(int(req.get("n", 90)))
         digests = {}
-        for _t, f in items:
+        for _t, _sq, f in items:
             digests.setdefault(hashlib.md5(f).hexdigest(), 0)
             digests[hashlib.md5(f).hexdigest()] += 1
         counts = sorted(digests.values(), reverse=True)
         return {"ok": True, "n": len(items), "distinct": len(digests),
                 "repeated": sum(1 for c in counts if c > 1),
                 "largest_group": counts[0] if counts else 0,
-                "sizes": [len(f) for _t, f in items[-8:]]}
+                "sizes": [len(f) for _t, _s, f in items[-8:]]}
 
 
 class AudioCapability(Capability):
@@ -1557,6 +1882,9 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
 # recovery path does not route through the web server.
 WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "127.0.0.1")
 WEB_PORT = int(os.environ.get("VCCTRL_WEB_PORT", "8080"))
+# HTTPS served by the daemon itself, so browsers get HTTP/1.1 and WebSocket
+# works. `tailscale serve --tcp` forwards this port as raw TCP. See TLSServer.
+WEB_TLS_PORT = int(os.environ.get("VCCTRL_WEB_TLS_PORT", "8443"))
 
 
 def _pace(req):
@@ -1580,13 +1908,13 @@ class Registry(object):
         self.routes = {}
         for cls in CAPABILITIES:
             try:
-                # Capabilities that publish take the bus; the original three
-                # do not, so the signature stays optional rather than forcing
-                # a churn through classes that have no use for it.
                 try:
                     cap = cls(devs, self.bus)
                 except TypeError:
                     cap = cls(devs)
+                # Set unconditionally, so every capability has one whether or
+                # not its constructor asked for it.
+                cap.bus = self.bus
                 cap.start()
             except Exception as exc:
                 self.failed[cls.name] = "%s: %s" % (type(exc).__name__, exc)
@@ -1614,7 +1942,7 @@ class Registry(object):
                                  by=req.get("as"))
                 return refusal
 
-        ident = self.activity.begin(cmd)
+        ident = self.activity.begin(cmd, req.get("as"))
         t0 = time.time()
         try:
             resp = fn(req)
@@ -1648,7 +1976,8 @@ class Registry(object):
         """
         try:
             import vcweb
-            web = vcweb.WebCapability(self, WEB_BIND, WEB_PORT)
+            web = vcweb.WebCapability(self, WEB_BIND, WEB_PORT,
+                                      tls_port=WEB_TLS_PORT)
             web.start()
         except Exception as exc:
             self.failed["web"] = "%s: %s" % (type(exc).__name__, exc)
@@ -1656,7 +1985,9 @@ class Registry(object):
                              % self.failed["web"])
             return None
         self.caps["web"] = web
-        sys.stderr.write("web ui on http://%s:%d/\n" % (WEB_BIND, WEB_PORT))
+        sys.stderr.write("web ui on http://%s:%d/  tls=%s\n"
+                         % (WEB_BIND, WEB_PORT,
+                            WEB_TLS_PORT if web.tls_up else "unavailable"))
         return web
 
     def report(self):

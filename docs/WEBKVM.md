@@ -386,10 +386,37 @@ still two orders of magnitude below the 40 s it replaced.
 the unix socket over ssh, so if TLS, `serve` or the cert ever fails, input and
 power still work and the machine is not stranded.
 
+### Considered and not taken: Caddy with the Tailscale plugin
+
+Proposed by the operator, on the strength of a working Caddyfile from another
+stack, for automatic certificate renewal. **Checked rather than assumed, and
+the premise does not hold here: `tailscale serve` already renews
+automatically.** `tailscaled` is itself the ACME client --
+`/var/lib/tailscale/certs/` holds `acme-account.key.pem` alongside the
+certificate, and the live cert is a 90-day Let's Encrypt one it obtained and
+will replace on its own. Caddy's Tailscale integration would obtain certs
+through the same mechanism, so it would add a layer without adding the
+property it was proposed for.
+
+Against that, one real cost: another process on a box with **680 MB free and no
+swap**, where `tailscaled` alone is already 96 MB. Nothing here needs what
+Caddy is good at -- there is one backend, the daemon serves its own content,
+and compression is pointless on JPEG and PCM.
+
+**Caddy would be the right answer the moment this Pi serves a second thing.**
+One config with several backends beats several `serve` mappings, and its access
+log would be genuinely useful (this daemon deliberately logs no requests, since
+per-request logging into journald is what took the Pi off the network for 30
+minutes -- FINDINGS 19). Revisit then; not before.
+
 **Certificate renewal runs weekly and on boot**, as a systemd timer rather than
-a cron entry. `tailscale serve` renews on its own, so this is belt and braces
--- but a cert that silently fails to renew takes the KVM offline in exactly the
-situation where you most want to look at the machine. The reason it is a timer:
+a cron entry. `tailscale serve` renews on its own, so the timer is not the
+mechanism -- but it is not merely belt and braces either. **Tailscale renews
+lazily, when something asks it to serve TLS.** A KVM that nobody opens for
+three months is exactly the case where no handshake triggers a renewal, and it
+is also exactly the case where you next open it because something has gone
+wrong. The timer's job is to guarantee a trigger that does not depend on
+someone happening to visit. The reason it is a timer:
 cron's `@reboot` fires before tailscaled has connected, so an on-boot renewal
 would run against a down control plane and fail silently. A timer can say
 `After=tailscaled.service` and settle for three minutes first, and its result
@@ -1057,6 +1084,39 @@ investigation for a while.
 > distinguish two states, say so and return "unknown" -- `grab()` returning
 > `(None, None)` rather than the least-black frame is this rule applied.
 
+**The sharper form of family 2, found across two sessions in one day: the
+problem is not that proxies are wrong, it is that they drift from the thing
+they stand for *silently, by construction*.** Four instances, four different
+proxies, none of which announced anything:
+
+| the proxy | what it was read as | what it actually attested |
+|---|---|---|
+| `/sys/class/leds` level | the machine is up | the host published a state at *some* point |
+| frames arriving | the picture is live | the USB device is producing bytes |
+| focus on a hidden input | the keyboard is captured | that element has focus |
+| Caps Lock LED toggling | DOS is at a prompt | the BIOS INT 9 handler is intact |
+
+The last is the `vcctrl` session's, and it is the most instructive because it
+had the strongest track record. `at_prompt()` toggles Caps Lock and watches the
+LED -- but **Caps Lock is serviced by the BIOS keyboard ISR, not by DOS**, so
+the LED flips whether or not `COMMAND.COM` is reading input. It appeared
+reliable for months because the one case it does catch is the game, which hooks
+INT 9. It cannot tell "at a prompt" from "`FTP.EXE` is running", which is
+exactly how 41 characters got typed into a 15-key buffer while a BAT was still
+finishing.
+
+**A proxy that is right about the case you keep testing is the most dangerous
+kind**, because the track record is real and is evidence for the wrong claim.
+
+### Consequence for this plan, section 8
+
+The file-transfer UI was specced to enable its button only "at a NET prompt",
+with `at_prompt` named as the way to know. **That gate rests on the proxy
+above and is therefore not sound as written.** It needs the DOS-level probe the
+`vcctrl` session is building -- type a sentinel, look for its echo in a
+captured frame, `Esc` it away -- which is affordable only because a grab is now
+0.2 s rather than 40 s. Section 8 should not be built until that lands.
+
 Neither rule would have been derived from the individual bugs; both were
 visible only once the bugs were lined up. **The next one will not look like
 either of these**, which is the argument for writing the families down rather
@@ -1316,6 +1376,29 @@ itself while being wrong**, which is precisely what section 11.1 family 2
 describes and precisely what this tool was built to catch in *other* software.
 An `except` that discards the reason turns a bug into a lie. 4 is a case of
 implementing the happy path of a rule the plan already stated.
+
+### What it unblocked, which is not what was planned for
+
+The plan justified this tool by *watching* -- see a sweep, see a wedge, take
+over. The first thing it actually unblocked was different, and the `vcctrl`
+session put it better than the plan does:
+
+> An interactive DOS configurator is exactly the class of tool that is unusable
+> over a blind harness and trivial over a screen. My tool's caution was correct
+> given it could not see; the answer was never a braver tool, it was a visible
+> one.
+
+`UVCONFIG.EXE` detects the card, you save, you exit. Three keystrokes into a
+full-screen menu. `vcctrl-uvconfig` was written to write the config files and
+then **refuse to press any keys**, because a harness driving a screen it cannot
+read is how you corrupt a machine -- the same rule as sec. 11.1, applied
+correctly and at cost. The consequence was a half-configured machine that stood
+for six hours while the fault was investigated rather than finished.
+
+The general form is worth keeping, because it predicts what else this unblocks:
+**wherever the harness declined to act because it could not see, the KVM
+converts a refusal into an operation.** Boot menus, configurators, anything
+modal. The blind harness was right to stop; it just had no way to look.
 
 ### Still not done
 

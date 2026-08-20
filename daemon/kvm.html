@@ -1,171 +1,490 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>g2k</title>
+<title>vcctrl-kvm</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" id="tcolor" content="#17150F">
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNSIgZmlsbD0iIzE3MTUwZiIvPjxyZWN0IHg9IjMuNSIgeT0iNSIgd2lkdGg9IjI1IiBoZWlnaHQ9IjE3LjUiIHJ4PSIyLjUiIGZpbGw9IiMzYTM1MmMiIHN0cm9rZT0iIzhhODI3NiIgc3Ryb2tlLXdpZHRoPSIxIi8+PHJlY3QgeD0iNiIgeT0iNy41IiB3aWR0aD0iMjAiIGhlaWdodD0iMTIuNSIgcng9IjEiIGZpbGw9IiMwNDEyMGEiLz48cGF0aCBkPSJNOC41IDExaDlNOC41IDE0aDEzTTguNSAxN2g2IiBzdHJva2U9IiM1NWZmNTUiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cmVjdCB4PSIxMyIgeT0iMjIuNSIgd2lkdGg9IjYiIGhlaWdodD0iMyIgZmlsbD0iIzhhODI3NiIvPjxyZWN0IHg9IjkiIHk9IjI1LjUiIHdpZHRoPSIxNCIgaGVpZ2h0PSIyLjQiIHJ4PSIxLjIiIGZpbGw9IiM4YTgyNzYiLz48L3N2Zz4=">
+<link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNSIgZmlsbD0iIzE3MTUwZiIvPjxyZWN0IHg9IjMuNSIgeT0iNSIgd2lkdGg9IjI1IiBoZWlnaHQ9IjE3LjUiIHJ4PSIyLjUiIGZpbGw9IiMzYTM1MmMiIHN0cm9rZT0iIzhhODI3NiIgc3Ryb2tlLXdpZHRoPSIxIi8+PHJlY3QgeD0iNiIgeT0iNy41IiB3aWR0aD0iMjAiIGhlaWdodD0iMTIuNSIgcng9IjEiIGZpbGw9IiMwNDEyMGEiLz48cGF0aCBkPSJNOC41IDExaDlNOC41IDE0aDEzTTguNSAxN2g2IiBzdHJva2U9IiM1NWZmNTUiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cmVjdCB4PSIxMyIgeT0iMjIuNSIgd2lkdGg9IjYiIGhlaWdodD0iMyIgZmlsbD0iIzhhODI3NiIvPjxyZWN0IHg9IjkiIHk9IjI1LjUiIHdpZHRoPSIxNCIgaGVpZ2h0PSIyLjQiIHJ4PSIxLjIiIGZpbGw9IiM4YTgyNzYiLz48L3N2Zz4=">
+<link rel="stylesheet" href="/themes.css">
 <style>
+  /* ── type ────────────────────────────────────────────────────────────────
+     Monospace is the primary voice: every value on this page is data, and a
+     fixed grid echoes the 8x16 VGA text cell without any retro pastiche.
+     system-ui is demoted to buttons and prose.
+
+     One prominent size, one dense size, one micro size. The largest text is
+     17px because the picture is the point and nothing in the chrome may be
+     visually louder than it. */
   :root {
-    --bg:#14161a; --panel:#1c1f26; --line:#2b303a; --fg:#dfe3ea;
-    --dim:#8a93a3; --ok:#5ac27a; --warn:#e0b341; --bad:#e05c5c;
-    --accent:#7aa2f7;
-    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    /* Sized up across the board on the operator's word that it was all tiny.
+       The ratios from the original scale are kept -- the problem was the
+       absolute floor, not the hierarchy. */
+    --t-micro: 11.5px;    /* units, lamp names, group labels */
+    --t-data: 13px;       /* log lines, dense readouts */
+    --t-read: 15px;       /* readout values, buttons */
+    --t-state: 20px;      /* the one prominent size */
     --safe-b: env(safe-area-inset-bottom, 0px);
+    --tap: 44px;          /* iOS/Android minimum touch target */
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; }
-  body { background:var(--bg); color:var(--fg); overflow:hidden;
-         font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;
-         -webkit-text-size-adjust:100%; }
+  body {
+    background:var(--bg); color:var(--text); overflow:hidden;
+    font:var(--t-read)/1.45 var(--sans); -webkit-text-size-adjust:100%;
+  }
+
+  /* Visible focus everywhere. The page had none at all. */
+  :focus-visible {
+    outline:2px solid var(--blue); outline-offset:2px; border-radius:3px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation:none !important; transition:none !important; }
+  }
+  @media (prefers-contrast: more) {
+    :root { --rule: var(--muted); }
+  }
 
   #app { display:flex; flex-direction:column; height:100%; }
 
-  header { display:flex; align-items:center; gap:6px; flex-wrap:wrap;
-           padding:6px 10px; padding-top:calc(6px + env(safe-area-inset-top,0px));
-           background:var(--panel); border-bottom:1px solid var(--line);
-           flex:none; }
-  h1 { font-size:13px; font-weight:600; margin:0 4px 0 0; }
-  .pill { font:11px/1 var(--mono); padding:5px 8px; border-radius:999px;
-          border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
-  .pill.on{color:var(--ok);border-color:#2c5c3c}
-  .pill.off{color:var(--bad);border-color:#5c2c2c}
-  .pill.mid{color:var(--warn);border-color:#5c4c2c}
-  .grow{flex:1}
+  /* ── status rail ─────────────────────────────────────────────────────────
+     One line. Never wraps: a status bar that reflows is one you have to read
+     rather than glance at. */
+  header {
+    flex:none; display:flex; align-items:center; gap:11px;
+    padding:0 11px; padding-top:env(safe-area-inset-top,0px);
+    height:calc(46px + env(safe-area-inset-top,0px));
+    background:var(--panel); border-bottom:1px solid var(--rule);
+    overflow-x:auto; scrollbar-width:none;
+  }
+  header::-webkit-scrollbar { display:none; }
+  h1 {
+    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:var(--dim); margin:0; flex:none;
+  }
+  .grow { flex:1 1 auto; min-width:4px; }
 
-  /* The screen. Fixed 4:3 so a phone shows the whole thing rather than a
-     letterbox of black, and it never grows past half the viewport. */
-  #stage { position:relative; background:#000; flex:none;
-           aspect-ratio:4/3; max-height:48vh; width:100%;
-           display:flex; align-items:center; justify-content:center;
-           overflow:hidden; }
-  #stage img, #stage canvas { width:100%; height:100%; object-fit:contain;
-           image-rendering:pixelated; display:block; }
-  /* The last live picture, shown behind the notice when the stream is not
-     live. Dimmed so it can never be mistaken for the current screen. */
-  #stale { position:absolute; inset:0; filter:grayscale(.6) brightness(.55); }
-  #stage.armed { outline:1px solid rgba(90,194,122,.5); outline-offset:-1px; }
-  #stage { cursor:pointer; }
-  /* The capture hint lives BELOW the picture, never over it. A bar across the
-     bottom of the stage sat exactly on the DOS prompt -- the one line you most
-     need to read on this machine. Nothing overlays the picture except the
-     no-signal notice, and that only when there is no picture to cover. */
-  #capbar { flex:none; padding:5px 10px; font:11px/1.4 var(--mono);
-            text-align:center; color:var(--dim); background:#171a21;
-            border-bottom:1px solid var(--line); transition:color .3s; }
-  #capbar.armed { color:var(--ok); }
-  #capbar.armed b { color:var(--ok); font-weight:600; }
-  #capbar.flash { color:#dfe3ea; transition:none; }
-  /* Level meter. Shown whether or not sound is enabled, because "is there
-     audio on the wire" is a different question from "can I hear it" -- and on
-     a muted phone the meter is the only answer available. */
-  #meter { flex:none; display:flex; align-items:center; gap:9px;
-           padding:6px 10px; background:#171a21;
-           border-bottom:1px solid var(--line); font:10px/1 var(--mono);
-           color:var(--dim); }
-  #meter button { padding:6px 9px; font-size:11px; }
-  #mdb { min-width:6.5ch; text-align:right; }
-  #vpct { min-width:4ch; text-align:right; }
-  #vol { flex:0 1 130px; min-width:80px; height:20px; accent-color:var(--ok);
-         background:transparent; cursor:pointer; }
-  #mbar { flex:1; height:6px; background:#0f1116; border-radius:3px;
-          overflow:hidden; position:relative; }
-  #mrms { position:absolute; left:0; top:0; bottom:0; width:0%;
-          background:var(--ok); transition:width .08s linear; }
-  #mpeak { position:absolute; top:0; bottom:0; width:2px; background:var(--warn); left:0; }
-  #veil { position:absolute; inset:0; display:none; flex-direction:column;
-          align-items:center; justify-content:center; gap:6px; padding:16px;
-          background:rgba(10,11,14,.85); text-align:center; }
+  /* The state word. Colour never carries the meaning on its own -- the word
+     is the meaning, and the lamp beside it repeats it. Required by the
+     monochrome themes, and what colour-blind users need anyway. */
+  /* Chip size, not a headline. It was the largest thing on the page, which is
+     the wrong emphasis: the picture is the point, and when the video IS locked
+     there is nothing to announce. The states worth noticing already take the
+     whole screen with an overlay, so the rail can stay quiet. */
+  #state {
+    font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
+    color:var(--muted); flex:none; white-space:nowrap;
+    display:flex; align-items:center; gap:5px;
+  }
+  #state::before {
+    content:""; width:7px; height:7px; border-radius:50%; flex:none;
+    background:currentColor;
+  }
+  .chip {
+    font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
+    text-transform:uppercase; color:var(--dim); white-space:nowrap; flex:none;
+  }
+  .chip b { color:var(--muted); font-weight:500; }
+  /* On a phone the rail scrolled sideways and cut "LINK MJP..." in half, which
+     is a status bar you have to operate rather than read. The words are for
+     desktop; the values carry the meaning on their own. */
+  /* ── phone ──────────────────────────────────────────────────────────────
+     Five stacked regions competing for 800 px is a desktop layout wearing a
+     phone. Here the picture keeps everything that is left, and exactly one
+     panel opens at a time from a tab bar -- so nothing is half-visible and
+     nothing is cut off the bottom. */
+  #tabs { display:none; }
+  @media (max-width:640px) {
+    h1 { display:none; }
+    /* These overflow the rail; the same values live in the State panel. */
+    /* Transport stays: which path is carrying the picture is worth knowing at
+       a glance, and it was the one thing the operator missed when the rail was
+       decluttered. The other three are in the State panel. */
+    #c-lock, #c-power, #c-kbd { display:none; }
+    /* The rail scrolled sideways, so the gear sat off the right edge and could
+       not be tapped. Nothing in a status bar should require scrolling to
+       reach. The tab bar already has a settings tab, and the theme toggle
+       belongs with the themes -- both are duplicates here. */
+    body header { overflow-x:hidden; }
+    body #dbtn, body #gbtn { display:none; }
+
+    /* THE TAP MUST LAND ON THE INPUT ITSELF. iOS raises the keyboard for a
+       real tap on a real field; it routinely refuses a programmatic focus(),
+       and refuses outright for an element that is off-screen or 1px -- which
+       is why "keyboard captured" appeared while no keyboard did. So on a phone
+       this input covers the picture, fully transparent: tapping the screen IS
+       tapping the field. It sits under the no-signal notice so those buttons
+       still work. */
+    body #ghost {
+      position:absolute; inset:0; left:0; top:0; width:100%; height:100%;
+      opacity:0; z-index:2; font-size:16px; background:transparent;
+      color:transparent; caret-color:transparent; border:0; padding:0;
+      -webkit-user-select:text;
+    }
+    header { gap:7px; padding:0 8px;
+             height:calc(38px + env(safe-area-inset-top,0px)); }
+    .chip { font-size:10px; letter-spacing:.03em; }
+    .lamp span { display:none; }
+    .lamp i { width:9px; height:9px; }
+    #zoom { max-width:88px; font-size:10px; }
+
+    /* The command line is a panel, not a permanent row.
+       `body` in front of each selector outranks the bare id, so these win
+       regardless of where they sit in the file. Without it the base rules
+       further down took precedence and every tab showed the key rail. */
+    body #cmdbar { display:none; }
+    body #cmdbar.open { display:flex; }
+    body #keys { display:none; }
+    body #keys.open { display:flex; }
+
+    body #tabs {
+      display:flex; flex:none; border-top:1px solid var(--rule);
+      background:var(--panel);
+      padding-bottom:env(safe-area-inset-bottom,0px);
+    }
+    #tabs button {
+      flex:1; border:0; border-radius:0; background:transparent;
+      color:var(--dim); font:var(--t-micro)/1 var(--mono);
+      letter-spacing:.06em; min-height:46px; padding:0;
+      border-top:2px solid transparent;
+    }
+    #tabs button.on { color:var(--green); border-top-color:var(--green); }
+
+    /* Long panels take the whole screen and are dismissed, rather than
+       squeezing into a third of it. A log worth reading is worth reading. */
+    body #body.sheet {
+      position:fixed; inset:0; z-index:60; height:auto; max-height:none;
+      padding-bottom:env(safe-area-inset-bottom,0px);
+    }
+    body #body.sheet > #sheethdr { display:flex; }
+    body #body.sheet > #logh { display:none; }   /* the sheet bar names it */
+    body #body.sheet > #log { max-height:none; }
+    body #sheethdr {
+      display:none; flex:none; align-items:center; justify-content:space-between;
+      gap:10px; padding:10px 12px; border-bottom:1px solid var(--rule);
+      padding-top:calc(10px + env(safe-area-inset-top,0px));
+    }
+    body #sheettitle {
+      font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+      text-transform:uppercase; color:var(--dim);
+    }
+    body #body { height:auto; max-height:46vh; }
+    body #body > * { display:none; }
+    body #body.show-log > #logh { display:block; }
+    body #body.show-log > #log { display:flex; flex-direction:column; }
+    body #body.show-panels > #panels { display:block; max-height:46vh; }
+    body #body.closed { display:none; }
+    /* Only the sections the open tab wants. */
+    #panels.only-sound > section:not(#sec-sound),
+    #panels.only-power > section:not(#sec-power),
+    #panels.only-set   > section:not(#settings) { display:none; }
+  }
+  /* The kbd chip is the affordance now that the instruction bar is gone. */
+  .chipb { background:transparent; border:0; padding:0; min-height:0;
+           cursor:pointer; font:inherit; letter-spacing:.06em; }
+  @media (pointer:coarse) { .chipb { min-height:var(--tap); } }
+
+  /* ── the lamps: this page's signature ────────────────────────────────────
+     Caps / Num / Scroll, read from /sys/class/leds. They are the real PS/2
+     return channel -- non-video proof a keystroke reached the machine -- and
+     they were previously buried in a JSON field nobody opens.
+     Lit, hollow or crossed: never colour alone. */
+  #lamps { display:flex; gap:7px; flex:none; align-items:center;
+           background:transparent; border:0; padding:0 2px; min-height:0;
+           cursor:help; }
+  @media (pointer:coarse) { #lamps { min-height:var(--tap); } }
+  .lamp { display:flex; flex-direction:column; align-items:center; gap:3px; }
+  .lamp i {
+    width:11px; height:11px; border-radius:50%; display:block;
+    border:1px solid var(--rule); background:transparent;
+    transition:background .12s linear, box-shadow .12s linear;
+  }
+  .lamp.on i { background:var(--green); box-shadow:0 0 5px var(--green); }
+  .lamp.stale i { border-style:dashed; opacity:.5; }
+  .lamp span {
+    font:var(--t-micro)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
+  }
+
+  /* ── stage ───────────────────────────────────────────────────────────────
+     The well stays near-black in EVERY theme, including the light ones.
+     Simultaneous contrast: a cream surround makes the captured screen look
+     darker than it is, and judging exactly that is a thing people do on this
+     rig. A theme may recolour every panel it likes; it may not change how the
+     evidence looks. */
+  #stage {
+    position:relative; flex:1 1 auto; min-height:0; background:#000;
+    display:flex; align-items:center; justify-content:center; overflow:hidden;
+  }
+  #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
+  #frame {
+    position:relative; width:100%; height:100%;
+    display:flex; align-items:center; justify-content:center;
+    transform-origin:center center; will-change:transform;
+  }
+  #frame.zoomed { cursor:grab; }
+  #frame.dragging { cursor:grabbing; }
+  #stage img, #stage canvas {
+    max-width:100%; max-height:100%; width:auto; height:auto;
+    object-fit:contain; image-rendering:pixelated; display:block;
+  }
+  #stage #stale { position:absolute; inset:0; }
+  #zoom { padding:0 6px; font:var(--t-micro) var(--mono); }
+  /* The last live picture, behind the notice. Dimmed so it cannot be mistaken
+     for the current screen -- but readable, because it is often the only
+     picture there is. Full brightness is one click away and is remembered. */
+  #stale { width:100%; height:100%;
+           filter:grayscale(.35) brightness(.8); }
+  #stale.full { filter:none; }
+  #veil {
+    position:absolute; inset:0; display:none; flex-direction:column;
+    align-items:center; justify-content:center; gap:6px; padding:18px;
+    background:rgba(0,0,0,.84); text-align:center;
+  }
   #veil.show { display:flex; }
-  #veil .big { font:600 14px var(--mono); color:var(--warn); }
-  #veil .sub { color:var(--dim); font-size:12px; max-width:44ch; }
+  #veil { z-index:4; }        /* above the transparent input on a phone */
+  /* Sized against the VIEWPORT, not a fixed scale. At 20px/15px on a 390px
+     phone the notice was larger than the picture it was explaining and pushed
+     its own buttons over the screen. It should be readable and then get out of
+     the way. */
+  #veil { gap:4px; padding:10px; }
+  #veil .big { font:600 clamp(12px, 3.6vw, 18px)/1.25 var(--mono);
+               color:var(--yellow); letter-spacing:.02em; }
+  /* Wider and larger. At 46ch the explanation set as a narrow column in the
+     middle of a black screen, which reads as a blob rather than as a sentence.
+     72ch is a comfortable measure and the picture behind it is 4:3 anyway. */
+  #veil .sub { color:#c8c8c2; max-width:62ch;
+               font:clamp(10px, 2.9vw, 14px)/1.45 var(--sans); }
+  #veil .age { color:#9a9a94; font:clamp(9px, 2.6vw, 12px)/1.4 var(--mono); }
+  #veil .row { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;
+               justify-content:center; }
+  #veil .row button { font:clamp(10px, 2.8vw, 13px) var(--sans);
+                      min-height:32px; padding:0 9px; }
 
-  /* Key bar: horizontally scrollable so every key stays reachable on a
-     narrow screen without wrapping into a wall of buttons. */
-  #keys { flex:none; display:flex; gap:5px; overflow-x:auto; padding:7px 8px;
-          background:var(--panel); border-bottom:1px solid var(--line);
-          scrollbar-width:none; }
+  /* ── rails ───────────────────────────────────────────────────────────── */
+  /* Full width under the picture: a command line in a 340px sidebar could not
+     show a DOS path and its arguments at once. */
+  #cmdbar {
+    flex:none; display:flex; gap:7px; padding:7px 9px; background:var(--panel);
+    border-bottom:1px solid var(--rule); align-items:center;
+  }
+  #line {
+    flex:1 1 auto; min-width:0; font:var(--t-data) var(--mono);
+    background:var(--bg); color:var(--text);
+    border:1px solid var(--rule); border-radius:6px;
+    padding:0 11px; min-height:var(--tap);
+  }
+  @media (pointer:fine) { #line { min-height:36px; } }
+  /* Hidden until capture is on. "Click the screen to capture the keyboard"
+     is a permanent instruction for a one-time action, and it cost a row of the
+     picture to say it. The kbd chip in the header carries the affordance; this
+     bar appears only when it has something worth the space -- how to get out. */
+  #stalebar {
+    flex:none; display:none; align-items:center; justify-content:center;
+    gap:10px; padding:7px 10px; background:var(--yellow); color:#141210;
+    font:600 var(--t-data)/1.3 var(--sans); text-align:center;
+  }
+  #stalebar.show { display:flex; }
+  #stalebar button { min-height:30px; padding:0 10px; background:#141210;
+                     color:var(--yellow); border-color:#141210;
+                     font:600 var(--t-data) var(--sans); }
+  #capbar {
+    flex:none; padding:0; height:0; overflow:hidden; text-align:center;
+    background:var(--panel); border-bottom:0; color:var(--green);
+    font:var(--t-micro)/1.5 var(--mono); letter-spacing:.04em;
+  }
+  #capbar.armed {
+    padding:5px 10px; height:auto; border-bottom:1px solid var(--rule);
+  }
+  #capbar.flash { color:var(--text); transition:none; }
+
+  #keys {
+    flex:none; display:flex; gap:5px; overflow-x:auto; padding:6px 8px;
+    background:var(--panel); border-bottom:1px solid var(--rule);
+    scrollbar-width:none;
+  }
   #keys::-webkit-scrollbar { display:none; }
   #keys button { flex:none; }
 
-  button { font:12px/1 system-ui,sans-serif; color:var(--fg); background:#232833;
-           border:1px solid var(--line); border-radius:7px; padding:9px 11px;
-           cursor:pointer; min-height:36px; touch-action:manipulation; }
-  button:active { background:#2d3442; }
-  button.sticky { border-color:var(--accent); color:var(--accent);
-                  background:#20283a; }
-  button.danger:active { border-color:var(--bad); color:#ffb4b4; }
-  button.primary { border-color:var(--ok); color:var(--ok); }
+  button, select {
+    font:500 var(--t-read)/1 var(--sans); color:var(--text);
+    background:var(--panel); border:1px solid var(--rule); border-radius:6px;
+    padding:0 11px; min-height:var(--tap); cursor:pointer;
+    touch-action:manipulation;
+  }
+  @media (pointer:fine) { button, select { min-height:36px; } }
+  button:hover { border-color:var(--muted); }
+  button:active { background:var(--rule); }
+  button.on { border-color:var(--green); color:var(--green); }
+  button.danger:active { border-color:var(--red); color:var(--red); }
+  header button { padding:0 9px; }
 
-  #body { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
-          padding-bottom:calc(12px + var(--safe-b)); }
+  /* Activity on top, controls pinned underneath.
+     The log was above the controls and unbounded, so a busy sweep pushed
+     Power and Sound off the bottom of the sidebar -- exactly when you are most
+     likely to want them. Now the log absorbs the leftover height and scrolls
+     inside itself, and the controls keep a fixed slice at the bottom that no
+     amount of log traffic can take. */
+  #body {
+    flex:none; height:38vh; display:flex; flex-direction:column; min-height:0;
+    background:var(--panel); border-top:1px solid var(--rule);
+  }
+  #panels {
+    flex:0 0 auto; max-height:55%; overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+    border-top:1px solid var(--rule);
+  }
+  section { padding:10px 12px; border-bottom:1px solid var(--rule); }
+  h2 {
+    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:var(--dim); margin:0 0 9px;
+    padding-bottom:6px; border-bottom:1px solid var(--rule);
+  }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .kv {
+    display:flex; justify-content:space-between; gap:10px;
+    font:var(--t-data)/1.9 var(--mono);
+  }
+  .kv span:last-child { color:var(--dim); }
+
+  #meter { display:flex; align-items:center; gap:9px; }
+  #mbar {
+    flex:1; height:5px; background:var(--bg); border:1px solid var(--rule);
+    border-radius:3px; overflow:hidden; position:relative; min-width:60px;
+  }
+  #mrms { position:absolute; inset:0 auto 0 0; width:0%; background:var(--green);
+          transition:width .08s linear; }
+  #mpeak { position:absolute; top:0; bottom:0; width:2px; background:var(--yellow); left:0; }
+  #mdb, #vpct { font:var(--t-micro)/1 var(--mono); color:var(--dim);
+                min-width:6ch; text-align:right; }
+  #vol { flex:0 1 120px; min-width:70px; accent-color:var(--green);
+         background:transparent; cursor:pointer; height:var(--tap); }
+  @media (pointer:fine) { #vol { height:24px; } }
+
+  /* Selectable: this is the one surface whose content people need to paste
+     into a bug report, and nothing about a log is worth protecting from a
+     cursor. The page sets tap-highlight to transparent globally, which is
+     right for buttons and wrong here. */
+  #log {
+    padding:6px 12px; font:var(--t-data)/1.6 var(--mono);
+    user-select:text; -webkit-user-select:text; cursor:text;
+    overflow-y:auto; -webkit-overflow-scrolling:touch;
+    flex:1 1 0; min-height:60px;
+  }
+  #log div { user-select:text; -webkit-user-select:text; }
+  #logh { flex:none; }
+  #log div { display:flex; gap:7px; padding:1px 0; }
+  #log .t { color:var(--dim); flex:none; }
+  #log .k { flex:none; width:10ch; overflow:hidden; }
+  #log .d { color:var(--muted); overflow-wrap:anywhere;
+            display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+            overflow:hidden; }
+  #log div.open .d { -webkit-line-clamp:unset; overflow:visible; }
+  .k-cmd{color:var(--blue)} .k-lock{color:var(--yellow)}
+  .k-taint{color:var(--red);font-weight:600} .k-vid{color:var(--green)}
+
+  #sheethdr { display:none; }
+  #settings { display:none; }
+  #settings.show { display:block; }
+  #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
+                    font:var(--t-read)/1.3 var(--sans); cursor:pointer; }
+  #settings input[type=checkbox] { accent-color:var(--green); width:17px;
+                                   height:17px; flex:none; }
+  .hint { color:var(--dim); font:var(--t-micro)/1.5 var(--sans);
+          margin:0 0 9px 26px; }
+  #themes { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+            gap:4px; margin-bottom:6px; }
+  #themes button { text-align:left; padding:7px 9px; font:var(--t-data)/1 var(--mono);
+                   min-height:34px; }
+  #themes button.sel { border-color:var(--green); color:var(--green); }
+  .tgroup { font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+            text-transform:uppercase; color:var(--dim); margin:10px 0 5px; }
+
+  /* Desktop keeps this out of the way: keys are captured from the window and
+     this only exists so key events have somewhere to land. */
+  #ghost { position:absolute; left:-9999px; top:0; width:1px; height:1px;
+           opacity:0; padding:0; border:0; margin:0; font-size:16px; }
+
+  /* ── desktop ─────────────────────────────────────────────────────────── */
   @media (min-width:900px) {
     #app { display:grid; grid-template-columns:minmax(0,1fr) 340px;
-           grid-template-rows:auto 1fr; height:100vh; }
+           grid-template-rows:auto 1fr auto auto; height:100vh; }
     header { grid-column:1/-1; }
-    #stage { grid-row:2; aspect-ratio:auto; max-height:none; height:100%; }
-    #keys { grid-column:1; grid-row:3; }
-    #body { grid-column:2; grid-row:2/4; border-left:1px solid var(--line);
-            background:var(--panel); }
+    #app { grid-template-rows:auto 1fr auto auto auto; }
+    #stage  { grid-column:1; grid-row:2; }
+    #cmdbar { grid-column:1; grid-row:3; }
+    #capbar { grid-column:1; grid-row:4; }
+    #keys   { grid-column:1; grid-row:5; border-bottom:0; }
+    /* Activity is the only unbounded content, so it gets the height; the
+       fixed-size controls sit above it rather than competing for scroll. */
+    #body   { grid-column:2; grid-row:2/6; height:auto; border-top:0;
+              border-left:1px solid var(--rule); }
+    #panels { max-height:none; flex:0 1 auto; }
   }
-
-  section { padding:10px 12px; border-bottom:1px solid var(--line); }
-  h2 { font:600 11px/1 system-ui; letter-spacing:.09em; text-transform:uppercase;
-       color:var(--dim); margin:0 0 8px; }
-  .row { display:flex; gap:6px; flex-wrap:wrap; }
-  .kv { display:flex; justify-content:space-between; gap:10px;
-        font:12px/1.8 var(--mono); }
-  .kv span:last-child { color:var(--dim); }
-  #log { padding:6px 12px; font:11px/1.55 var(--mono); }
-  #log div { display:flex; gap:7px; padding:1px 0; }
-  #log .t { color:#5b6373; flex:none; }
-  #log .k { flex:none; width:10ch; overflow:hidden; }
-  #log .d { color:var(--dim); word-break:break-all; }
-  .k-cmd{color:var(--accent)} .k-lock{color:var(--warn)}
-  .k-taint{color:var(--bad);font-weight:600} .k-vid{color:var(--ok)}
-
-  /* Off-screen but focusable: focusing it is what summons the iOS keyboard.
-     It must not be display:none or hidden, or the keyboard will not appear. */
-  #ghost { position:absolute; opacity:0; height:1px; width:1px;
-           padding:0; border:0; left:-9999px; top:0;
-           font-size:16px; /* <16px makes iOS zoom the page on focus */ }
+  /* Landscape phone: the screen is 4:3 and the phone is not, so give the
+     picture everything and let the panels go away. */
+  @media (max-width:899px) and (orientation:landscape) and (max-height:520px) {
+    #body { height:0; padding:0; border:0; overflow:hidden; }
+    #keys { padding:3px 8px; }
+    header { height:32px; }
+  }
 </style>
 
 <div id="app">
   <header>
-    <h1>g2k</h1>
-    <span id="p-video" class="pill">video …</span>
-    <span id="p-lock"  class="pill">lock …</span>
-    <span id="p-power" class="pill">power …</span>
-    <span id="p-xport" class="pill">…</span>
-    <span id="p-kbd" class="pill">keyboard idle</span>
-    <span id="p-audio" class="pill">sound off</span>
+    <h1>vcctrl-kvm</h1>
+    <span id="state" aria-live="polite">—</span>
+    <span id="c-lock" class="chip"><span class="chiplabel">input </span><b>—</b></span>
+    <span id="c-power" class="chip"><span class="chiplabel">power </span><b>—</b></span>
+    <span id="c-xport" class="chip"><span class="chiplabel">link </span><b>—</b></span>
+    <button id="c-kbd" class="chip chipb"><span class="chiplabel">kbd </span><b>idle</b></button>
     <span class="grow"></span>
-    <button id="kbtn" class="primary">⌨ Keyboard</button>
+    <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove">
+      <span class="lamp" id="lamp-caps"><i></i><span>CAP</span></span>
+      <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
+      <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
+    </button>
+    <select id="zoom" aria-label="zoom">
+      <option value="fit">Fit</option>
+      <option value="crop">Crop to picture</option>
+      <option value="2">2× fit</option>
+      <option value="4">4× fit</option>
+      <option value="8">8× fit</option>
+    </select>
+    <button id="dbtn" aria-label="switch between light and dark">◐</button>
+    <button id="gbtn" aria-label="settings">⚙</button>
   </header>
 
   <div id="stage">
-    <canvas id="screen" width="640" height="480"></canvas>
+   <div id="frame">
+    <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
     <img id="mjpeg" style="display:none" alt="">
     <img id="stale" style="display:none" alt="">
+   </div>
+    <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
+           autocomplete="off" enterkeyhint="enter" aria-label="type at the target">
     <div id="veil">
       <div class="big" id="veil-title">connecting…</div>
       <div class="sub" id="veil-sub"></div>
-      <div class="sub" id="veil-age"></div>
+      <div class="age" id="veil-age"></div>
+      <div class="row">
+        <button id="dimbtn">Show full brightness</button>
+        <button id="savebtn">Save this frame</button>
+      </div>
     </div>
   </div>
+
+  <div id="cmdbar">
+    <input id="line" placeholder="type a command, then Send"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button id="sendline" class="on">Send ↵</button>
+  </div>
+
+  <div id="stalebar">A newer version of this page is available — reload
+    <button id="reloadbtn">Reload now</button></div>
 
   <div id="capbar">click the screen to capture the keyboard</div>
-
-  <div id="meter">
-    <button id="sbtn">🔇 Sound</button>
-    <div id="mbar" title="relative level — a volume knob sits in the signal path">
-      <div id="mrms"></div><div id="mpeak"></div>
-    </div>
-    <span id="mdb">—</span>
-    <input id="vol" type="range" min="0" max="100" step="1" value="80"
-           aria-label="volume">
-    <span id="vpct">80%</span>
-  </div>
 
   <div id="keys">
     <button data-mod="lctrl">Ctrl</button>
@@ -187,22 +506,77 @@
     <button data-combo="ctrl,alt,delete" class="danger">C-A-Del</button>
   </div>
 
+  <div id="tabs">
+    <button data-tab="none" class="on">SCREEN</button>
+    <button data-tab="keys">KEYS</button>
+    <button data-tab="sound">SOUND</button>
+    <button data-tab="power">POWER</button>
+    <button data-tab="log">LOG</button>
+    <button data-tab="set">⚙</button>
+  </div>
+
   <div id="body">
-    <section>
-      <h2>Type</h2>
-      <div class="row">
-        <input id="line" placeholder="type a command, press send"
-               autocapitalize="off" autocorrect="off" spellcheck="false"
-               style="flex:1;min-width:140px;font:13px var(--mono);
-                      background:#12141a;color:var(--fg);
-                      border:1px solid var(--line);border-radius:7px;
-                      padding:9px 10px">
-        <button id="sendline" class="primary">Send ↵</button>
+   <div id="sheethdr">
+     <span id="sheettitle">Activity</span>
+     <button id="sheetclose">✕ Close</button>
+   </div>
+   <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
+   <div id="log"></div>
+   <div id="panels">
+    <section id="settings">
+      <h2>Theme</h2>
+      <div class="row" style="margin-bottom:8px">
+        <button id="dbtn2">◐ Switch light / dark</button>
+      </div>
+      <div id="themes"></div>
+      <label><input type="checkbox" id="opt-auto">
+        Follow the system light/dark setting</label>
+      <div class="hint">When on, the theme switches with your OS. The ◐ button
+        picks the other half of the current pair by hand.</div>
+
+      <h2 style="margin-top:14px">Activity log</h2>
+      <div class="hint" style="margin-left:0">These events still happen and the
+        daemon still records them — this only filters the view.</div>
+      <label><input type="checkbox" id="opt-ws">
+        Use WebSocket for video when it works</label>
+      <div class="hint">On by default; falls back to the mjpeg stream by itself
+        if the socket does not deliver a frame. WebSocket does not survive the
+        HTTP/2 proxy on port 443, so the page opens it against port 8443, which
+        the daemon serves directly over HTTP/1.1.</div>
+
+      <label><input type="checkbox" id="opt-probe">
+        Show LED and probe traffic</label>
+      <div class="hint">Caps Lock toggles and LED reads. The harness uses these
+        to test whether the machine is responding, so they repeat constantly.</div>
+      <label><input type="checkbox" id="opt-poll">
+        Show read-only queries</label>
+      <div class="hint">Screenshots, status and power polls — every open tab
+        makes them on a timer.</div>
+      <label><input type="checkbox" id="opt-mine">
+        Show this browser's own commands</label>
+      <div class="hint">Off by default: you know what you just did. The
+        harness's actions are the ones worth watching.</div>
+    </section>
+
+    <section id="sec-sound">
+      <h2>Sound</h2>
+      <div id="meter">
+        <button id="sbtn">🔇</button>
+        <div id="mbar" title="relative level — a volume knob sits in the signal path">
+          <div id="mrms"></div><div id="mpeak"></div>
+        </div>
+        <span id="mdb">—</span>
+        <input id="vol" type="range" min="0" max="100" step="1" value="80"
+               aria-label="volume">
+        <span id="vpct">80%</span>
       </div>
     </section>
 
-    <section>
+    <section id="sec-power">
       <h2>Power</h2>
+      <div class="row" style="margin-bottom:8px">
+        <button id="verifybtn">Verify input link</button>
+      </div>
       <div class="row">
         <button data-power="on">On</button>
         <button data-power="off" class="danger">Off</button>
@@ -211,25 +585,81 @@
       </div>
     </section>
 
-    <section>
+    <section id="sec-state">
       <h2>State</h2>
       <div class="kv"><span>running</span><span id="s-inflight">–</span></div>
       <div class="kv"><span>last event</span><span id="s-lastev">–</span></div>
       <div class="kv"><span>frames</span><span id="s-frames">–</span></div>
+      <div class="kv"><span>buffer</span><span id="s-span">–</span></div>
       <div class="kv"><span>viewers</span><span id="s-viewers">–</span></div>
       <div class="kv"><span>transport</span><span id="s-xport">–</span></div>
     </section>
 
-    <h2 style="padding:10px 12px 0">Activity</h2>
-    <div id="log"></div>
+   </div>
   </div>
 </div>
 
-<input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
-       autocomplete="off" enterkeyhint="enter">
+
 
 <script>
+// FIRST, before anything that can throw. Three outages tonight were a single
+// uncaught error at top level -- a const read before its declaration, a
+// settings key with no checkbox, an attribute a class did not define. Each
+// stopped every later line, and each presented as something else: "one chip
+// stuck on connecting", "the whole UI is unresponsive", "Send does nothing".
+// None named the cause, and there is no console on a phone.
+addEventListener('error', e => {
+  const box = document.getElementById('bootfail') || (() => {
+    const d = document.createElement('div');
+    d.id = 'bootfail';
+    d.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;'
+      + 'background:#7a1c1c;color:#fff;font:12px/1.4 ui-monospace,monospace;'
+      + 'padding:8px 10px;white-space:pre-wrap;max-height:45vh;overflow:auto';
+    (document.body || document.documentElement).appendChild(d);
+    return d;
+  })();
+  box.textContent = 'PAGE SCRIPT ERROR - everything after this line stopped\n'
+    + (e.message || e.error) + '\n' + (e.filename || '') + ':'
+    + (e.lineno || '?') + ':' + (e.colno || '?');
+});
+addEventListener('unhandledrejection', e =>
+  dispatchEvent(new ErrorEvent('error',
+                {message: 'unhandled promise: ' + e.reason})));
+
 const $ = id => document.getElementById(id);
+// Substituted by the daemon when it serves this file. A tab that has not been
+// reloaded keeps running old code forever, which looks exactly like a change
+// that failed to deploy -- so the page checks whether it is stale rather than
+// leaving that to be guessed.
+const BUILD = '__BUILD__';
+
+// Declared FIRST because the transport code reads it during start-up. It used
+// to sit with the settings UI further down, which put it in the temporal dead
+// zone: connect() threw a ReferenceError before any video started, and because
+// that runs at top level, every line after it -- themes, polling, input --
+// never executed either. The visible symptom was one status chip stuck on
+// "connecting", which is a very small window onto a script that had stopped.
+// ws defaults ON now that a transport exists which actually carries it. It was
+// off while the only path was the HTTP/2 proxy, where it could not work -- but
+// a setting the operator has to find and tick, on an origin whose localStorage
+// is separate from the one where they ticked it last time, is a trap. The page
+// falls back to mjpeg by itself if the socket does not deliver, so defaulting
+// on costs nothing when it cannot work and saves a support round when it can.
+const OPTS = {probe:false, poll:false, mine:false, ws:true};
+// Settings are versioned. `ws` defaulted to false while the WebSocket could
+// not work, and browsers that saved settings in that period keep the false
+// forever -- a stored preference from an era whose reasoning no longer holds,
+// which the operator has now been bitten by twice (once per-origin, once
+// per-era). Bumping the version drops keys whose default has changed.
+const OPTS_V = 2;
+try {
+  const saved = JSON.parse(localStorage.getItem('vcctrl.opts') || '{}');
+  if (saved.v !== OPTS_V) delete saved.ws;
+  delete saved.v;
+  Object.assign(OPTS, saved);
+} catch (e) {}
+OPTS.v = OPTS_V;
+localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
 const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
 const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 
@@ -241,17 +671,29 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // a few seconds, an <img> pointed at multipart/x-mixed-replace takes over --
 // no JS decoding, no canvas, the browser does all of it.
 let ws, wsAlive = false, xport = 'connecting', frames = 0, fpsWin = [];
-let firstFrameTimer = null, lastFrameAt = 0, wsTried = 0;
+// lastFrameAt starts at NOW, not 0. At 0 the staleness watchdog computes
+// Date.now() - 0, which is always greater than eight seconds, so the first
+// tick after load tore down a socket that was merely still connecting. A
+// watchdog whose initial state means "already failed" fires against healthy
+// start-ups and looks exactly like the fault it is watching for.
+let firstFrameTimer = null, lastFrameAt = Date.now(), wsTried = 0;
 
 function setXport(x) {
   xport = x;
-  const label = {ws:'websocket', mjpeg:'mjpeg fallback',
-                 connecting:'connecting…', down:'no video'}[x] || x;
+  // Not "fallback" any more. On this deployment the HTTPS proxy speaks HTTP/2
+  // and WebSocket does not survive it, so the mjpeg stream IS the transport --
+  // calling it a fallback reads as a degraded state when nothing is wrong.
+  const narrow = matchMedia('(max-width:640px)').matches;
+  const label = (narrow
+    ? {ws:'WS', mjpeg:'MJPEG', connecting:'…', down:'NONE'}
+    : {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
+  )[x] || x;
   $('s-xport').textContent = label;
   pill('p-xport', x === 'ws' ? 'on' : x === 'mjpeg' ? 'mid' : 'off', label);
 }
 
 function gotFrame() {
+  if (!frames) setTimeout(applyZoom, 60);   // first frame: sizes are known now
   frames++;
   const now = performance.now();
   lastFrameAt = Date.now();
@@ -263,7 +705,8 @@ function gotFrame() {
 function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
-  addLine(new Date(), 'transport', 'websocket ' + why + ' — using mjpeg', 'k-lock');
+  addLine(new Date(), 'transport',
+          'websocket ' + why + ' (' + lastWsURL + ') — using mjpeg', 'k-lock');
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
@@ -276,11 +719,77 @@ function useMjpeg(why) {
   img.onerror = () => { addLine(new Date(),'transport','stream dropped — restarting','k-lock'); restart(); };
 }
 
+// MJPEG is the PRIMARY transport, not a fallback. `tailscale serve` negotiates
+// HTTP/2 with browsers and HTTP/1.1 with anything that does not ask for h2 --
+// verified against the live proxy. WebSocket over h2 needs RFC 8441 Extended
+// CONNECT, and the observed behaviour matches a proxy that accepts the upgrade
+// and does not relay the frames: the daemon counts the socket opened, writes
+// with zero drops and sees no error, while the browser receives nothing. Two
+// browsers, same symptom, and a raw HTTP/1.1 probe over the same TLS gets
+// 8.5 Mbit/s.
+//
+// So on this deployment the socket is not a faster path, it is a broken one.
+// multipart/x-mixed-replace is protocol-agnostic, streams fine over h2, and an
+// <img> decodes it without any JavaScript. Input goes over ordinary POSTs,
+// which is one code path instead of two.
+//
+// The socket is kept behind a setting for a direct-to-daemon deployment where
+// no proxy is in the way, and it must still prove itself by delivering a frame.
+let tlsPort = 0;      // filled from /state.json; 0 means none available
+
+function wsURL() {
+  // Prefer the daemon's own TLS port. The 443 path goes through a proxy that
+  // negotiates HTTP/2, and WebSocket does not survive it -- measured, five
+  // frames written and the connection errored. This port advertises http/1.1
+  // only, which is the configuration that carried 2 MB intact.
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  if (tlsPort && location.protocol === 'https:'
+      && String(location.port || 443) !== String(tlsPort))
+    return `wss://${location.hostname}:${tlsPort}/ws`;
+  return `${proto}://${location.host}/ws`;
+}
+
+let lastWsURL = '(none)';
+
+// Can this DEVICE reach the socket's port at all? A page loaded from :443 can
+// be perfectly healthy while :8443 is unreachable from the phone it is running
+// on -- and both produce close code 1006 with zero frames, which is what made
+// this ambiguous for four rounds. Ask before assuming the socket is at fault.
+let portOK = null;
+async function checkPort() {
+  const u = wsURL();
+  if (!u.includes(':' + tlsPort + '/')) { portOK = true; return true; }
+  try {
+    const r = await fetch(`https://${location.hostname}:${tlsPort}/state.json`,
+                          {cache:'no-store'});
+    portOK = r.ok;
+  } catch (e) {
+    portOK = false;
+  }
+  if (!portOK)
+    addLine(new Date(), 'transport',
+            `port ${tlsPort} is not reachable from this device — `
+            + 'staying on the mjpeg stream', 'k-lock');
+  return portOK;
+}
+
 function connect() {
+  if (!OPTS.ws) {
+    // Log this unconditionally. It used to be suppressed when the socket was
+    // disabled, so a browser with the setting off produced NO transport lines
+    // at all -- and "no logs about the websocket" is indistinguishable from
+    // "the page never tried", which is exactly what it was.
+    addLine(new Date(), 'transport',
+            'websocket disabled in settings — using the mjpeg stream', 'k-lock');
+    useMjpeg('disabled in settings');
+    return;
+  }
+  addLine(new Date(), 'transport', 'opening ' + wsURL(), 'k-cmd');
+  if (portOK === false) { useMjpeg('port ' + tlsPort + ' unreachable'); return; }
   let sock;
   try {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    sock = new WebSocket(`${proto}://${location.host}/ws`);
+    lastWsURL = wsURL();
+    sock = new WebSocket(lastWsURL);
   } catch (e) { useMjpeg('threw: ' + e); return; }
   ws = sock;
   ws.binaryType = 'arraybuffer';
@@ -291,6 +800,8 @@ function connect() {
 
   ws.onopen = () => {
     wsAlive = true;
+    addLine(new Date(), 'transport', 'websocket connected (' + lastWsURL + ')',
+            'k-vid');
     // Ask for a rate suited to the device. A phone on cellular does not want
     // 30 fps of a 70 KB screen, and the server drops rather than queues
     // anyway -- asking for less simply wastes less.
@@ -298,8 +809,16 @@ function connect() {
     ws.send(JSON.stringify({t:'rate', fps: small ? 12 : 25}));
   };
   ws.onerror = () => { useMjpeg('errored'); };
-  ws.onclose = () => {
+  ws.onclose = e => {
     wsAlive = false;
+    // The close CODE is the one datum that names the reason, and it was being
+    // thrown away: 1006 is an abnormal drop with no close frame, 1002 a
+    // protocol error, 1009 a message the client judged too large. Without it
+    // every failure looks the same from here.
+    const why = `code=${e.code}${e.reason ? ' ' + e.reason : ''}`
+              + ` clean=${e.wasClean} after ${frames} frame(s)`;
+    addLine(new Date(), 'transport', `websocket closed ${why} (${lastWsURL})`,
+            'k-lock');
     if (xport !== 'mjpeg') setTimeout(connect, 1500);
   };
   ws.onmessage = ev => {
@@ -316,7 +835,16 @@ function connect() {
   };
 }
 setXport('connecting');
-connect();
+// Learn the port BEFORE the first attempt. Connecting immediately meant the
+// first socket always went to :443, which cannot carry it -- one guaranteed
+// failure and one alarming log line on every single page load, before the
+// real attempt had even been made.
+fetch('/state.json', {cache:'no-store'})
+  .then(r => r.json())
+  .then(j => { if (j && j.tls_port) tlsPort = j.tls_port; })
+  .catch(() => {})
+  .then(() => checkPort())
+  .then(() => connect());
 
 // Tear everything down and start again from the preferred transport. Called
 // on resume, on a broken stream, and by the button. It retries the WEBSOCKET
@@ -355,6 +883,8 @@ addEventListener('online', restart);
 setInterval(() => {
   if (document.visibilityState !== 'visible') return;
   if (xport === 'connecting') return;
+  if (!frames) return;          // nothing has ever arrived: the connect path
+                                // owns that case, with its own 4s timer
   if (Date.now() - lastFrameAt > 8000) {
     addLine(new Date(), 'transport', 'no frames for 8s — restarting', 'k-lock');
     restart();
@@ -363,7 +893,7 @@ setInterval(() => {
 
 // ------------------------------------------------------------------ input
 function send(o) {
-  if (wsAlive && xport === 'ws') { ws.send(JSON.stringify(o)); return; }
+  if (wsAlive && xport === 'ws' && OPTS.ws) { ws.send(JSON.stringify(o)); return; }
   // The mjpeg path carries no input, so fall back to the HTTP command
   // endpoint. Slower per keystroke, but it means input never depends on
   // which video transport happened to win.
@@ -376,10 +906,20 @@ async function post(cmd, body) {
     const r = await fetch('/cmd', {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(Object.assign({cmd}, body))});
-    const j = await r.json();
-    if (!j.ok) note(j.error || 'refused');
+    const text = await r.text();
+    let j;
+    try { j = JSON.parse(text); }
+    catch (e) {
+      // A daemon restart makes the proxy answer with an HTML error page, and
+      // JSON.parse on that produced "SyntaxError: The string did not match the
+      // expected pattern" in the log -- a message about parsing, with no hint
+      // that a request had failed or which one. Say what actually happened.
+      note(`${cmd}: HTTP ${r.status} — ${text.slice(0, 60) || 'empty reply'}`);
+      return;
+    }
+    if (!j.ok) note(`${cmd}: ${j.error || 'refused'}`);
     return j;
-  } catch (e) { note(String(e)); }
+  } catch (e) { note(`${cmd}: ${e}`); }
 }
 
 // Sticky modifiers. Tap Ctrl, then a key: the pair goes as one chord. This is
@@ -406,7 +946,18 @@ document.querySelectorAll('[data-combo]').forEach(b => b.onclick = () =>
   post('combo', {keys:b.dataset.combo.split(',')}));
 document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   const a = b.dataset.power;
-  if (a !== 'on' && !confirm(`Power ${a} the g2k?\n\nIf a sweep is running this will destroy it.`)) return;
+  // ON confirms too, which is not the obvious choice -- switching a machine on
+  // is not destructive to data. It is confirmed because of what this
+  // particular machine is: the operator has had the case open repeatedly to
+  // swap video cards, and energising a board somebody's hands are inside is a
+  // worse outcome than any lost sweep. The wording says so rather than
+  // reciting a generic warning.
+  const WARN = {
+    on:    'Switch the vcctrl-kvm target ON?\n\nMake sure the case is closed and nobody is working inside it.',
+    off:   'Power OFF the vcctrl-kvm target?\n\nIf a sweep is running this will destroy it.',
+    cycle: 'Power CYCLE the vcctrl-kvm target?\n\nRails drop for 15s and it takes ~90s to reach a prompt. If a sweep is running this will destroy it.',
+  };
+  if (!confirm(WARN[a] || `Power ${a}?`)) return;
   post('power', {action:a});
 });
 
@@ -467,13 +1018,14 @@ function setArmed(v, opts) {
   if (armed === v) return;
   armed = v;
   $('stage').classList.toggle('armed', v);
-  $('kbtn').classList.toggle('sticky', v);
-  $('kbtn').textContent = v ? '⌨ capturing' : '⌨ Keyboard';
+  pill('p-kbd', v ? 'on' : '', v ? 'captured' : 'idle');
   if (v) {
-    // Focusing the off-screen input is what summons the on-screen keyboard on
-    // a touch device. On desktop it is harmless and keeps key events flowing
-    // to one place.
-    ghost.focus({preventScroll:true});
+    // Must happen synchronously inside the tap handler: iOS ignores focus()
+    // called from a timer or after an await.
+    try { ghost.focus({preventScroll:true}); } catch (e) {}
+    addLine(new Date(), 'ui', 'keyboard captured'
+            + (document.activeElement === ghost ? '' : ' — focus refused'),
+            'k-lock');
     pill('p-kbd', 'on', 'keyboard captured');
     $('capbar').classList.add('armed');
     $('capbar').innerHTML = 'keyboard captured — press <b>Ctrl + Alt + Shift</b> to release';
@@ -483,7 +1035,7 @@ function setArmed(v, opts) {
   } else {
     pill('p-kbd', '', 'keyboard idle');
     $('capbar').classList.remove('armed');
-    $('capbar').textContent = 'click the screen to capture the keyboard';
+    $('capbar').textContent = '';
     ghost.blur();
     // Anything still held goes up, on this side and at the g2k. Releasing
     // capture with a key down would leave it down at a DOS prompt, typing
@@ -498,6 +1050,20 @@ function setArmed(v, opts) {
 // Capture-phase, so nothing layered over the video can swallow the click, and
 // pointerup as well as click because a touch that moves slightly may not
 // produce a click at all.
+$('sheetclose').onclick = () => setTab('none');
+$('reloadbtn').onclick = () => location.reload(true);
+// Sends a Caps Lock and watches for the LED to come back. The only check that
+// says anything about the wire rather than about this end of it.
+$('verifybtn').onclick = async () => {
+  addLine(new Date(), 'verify', 'sending a keystroke and watching for the LED…', 'k-lock');
+  const j = await post('verify_input', {});
+  if (j) addLine(new Date(), 'verify',
+                 j.verified ? 'link proven — the target answered'
+                            : 'NO ANSWER — keystrokes are not arriving',
+                 j.verified ? 'k-vid' : 'k-taint');
+};
+$('c-kbd').onclick = () => setArmed(!armed);
+
 function armFromStage() {
   if (armed) {
     // Already captured. Do not silently do nothing -- the previous build's
@@ -509,9 +1075,12 @@ function armFromStage() {
   }
   setArmed(true);
 }
+// On a phone the tap lands on the transparent input, so its focus event is
+// the arming signal; the click handler still covers desktop.
+ghost.addEventListener('focus', () => { if (!armed) setArmed(true); });
+ghost.addEventListener('blur', () => { if (armed) setArmed(false); });
 $('stage').addEventListener('click', armFromStage, true);
 $('stage').addEventListener('pointerup', armFromStage, true);
-$('kbtn').onclick = () => setArmed(!armed);
 
 // Text from a virtual keyboard, dictation or autocorrect.
 ghost.addEventListener('input', () => {
@@ -549,6 +1118,16 @@ addEventListener('keydown', e => {
 
 addEventListener('keydown', e => {
   if (!armed || typingHere(e.target)) return;
+  // Copy must always work. Capture forwards Ctrl-C to the target, which is
+  // right -- it is how you break a DOS program -- but not when there is a
+  // selection on this page, because then the operator is copying a log line
+  // and silently sending a break to a 1995 PC instead would be an unpleasant
+  // surprise.
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')
+      && !getSelection().isCollapsed) return;
+  // Cmd/Meta chords are the browser's on macOS and never reach the target
+  // anyway; letting them through keeps copy, paste and find working.
+  if (e.metaKey) return;
   const k = CODE[e.code];
   if (!k) return;
   e.preventDefault();
@@ -605,7 +1184,13 @@ const MAX_AHEAD = 0.45;   // beyond this we are accumulating delay, not bufferin
 // Perceived loudness is roughly the square of the amplitude ratio, so a linear
 // slider on raw gain spends most of its travel in the top few dB and feels
 // broken at the quiet end.
-const gainFor = pct => (pct / 100) ** 2;
+// The signal path is speakers -> headphone-out -> capture stick, through a
+// physical volume knob, and it arrives quiet: measured -71 dB mean, -53 dB
+// peak on real game audio. A gain that tops out at unity cannot fix that, so
+// the slider runs to 4x. Squared keeps the low end usable rather than spending
+// all its travel in the top few dB.
+const MAX_GAIN = 4;
+const gainFor = pct => ((pct / 100) ** 2) * MAX_GAIN;
 
 function applyVolume() {
   $('vol').value = volume;
@@ -626,9 +1211,8 @@ $('vol').addEventListener('input', () => {
 
 function setSound(on) {
   soundOn = on;
-  $('sbtn').textContent = on ? '🔊 Sound' : '🔇 Sound';
-  $('sbtn').classList.toggle('primary', on);
-  pill('p-audio', on ? 'on' : '', on ? 'sound on' : 'sound off');
+  $('sbtn').textContent = on ? '🔊' : '🔇';
+  $('sbtn').classList.toggle('on', on);
   applyVolume();
   // Off stops the STREAM, not just the output: silence still costs 1.5 Mbit/s,
   // and there is no reason to carry it to a viewer who is not listening. The
@@ -645,7 +1229,17 @@ $('sbtn').onclick = () => {
     catch (e) { ac = new AudioContext(); }
     gain = ac.createGain();
     gain.gain.value = gainFor(volume);
-    gain.connect(ac.destination);
+    // Boosting a quiet source by 4x will clip on any loud passage. A limiter
+    // between gain and output turns that from a harsh crackle into
+    // compression, which is the right trade for monitoring.
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -6;
+    comp.knee.value = 6;
+    comp.ratio.value = 12;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.12;
+    gain.connect(comp);
+    comp.connect(ac.destination);
   }
   if (ac && ac.state === 'suspended') ac.resume();
   setSound(!soundOn);
@@ -718,20 +1312,93 @@ function meter(pcm) {
   $('mdb').textContent = rdb <= -90 ? 'silent' : rdb.toFixed(0) + 'dB';
 }
 
+// ------------------------------------------------------------------ settings
+for (const k of Object.keys(OPTS)) {
+  const el = $('opt-' + k);
+  // Not every key is a checkbox -- `v` is the settings version. Without this
+  // guard the loop threw on the first non-toggle key, and because that runs at
+  // top level it took every line after it with it: themes, tabs, polling,
+  // input. The whole page went unresponsive from one missing element.
+  if (!el) continue;
+  el.checked = !!OPTS[k];
+  el.onchange = () => {
+    OPTS[k] = el.checked;
+    localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
+    if (k === 'ws') restart();   // changing transport needs a reconnect
+    else renderLog();     // re-render rather than filter-on-arrival, so a
+  };                      // toggle shows history you had hidden
+}
+$('gbtn').onclick = () => $('settings').classList.toggle('show');
+
+// Traffic the harness generates to ASK QUESTIONS rather than to do anything.
+// at_prompt() toggles Caps Lock and reads the LED back, so a readiness check
+// shows up as a keystroke plus two LED reads, several times a minute -- which
+// buries the one line that says what the harness actually typed.
+const PROBE_CMDS = new Set(['leds', 'ledwait', 'level']);
+const POLL_CMDS  = new Set(['shot', 'lastgood', 'framestats', 'timeline',
+                            'frame', 'activity', 'events', 'status', 'caps',
+                            'powerlog']);
+function isProbe(e) {
+  if (e.kind !== 'cmd') return false;
+  if (PROBE_CMDS.has(e.cmd)) return true;
+  // A Caps Lock keystroke is a readiness probe on this rig, not typing.
+  return /^(key|keydown|keyup|combo)$/.test(e.cmd) && /caps/i.test(e.detail || '');
+}
+function isPoll(e) {
+  if (e.kind !== 'cmd') return false;
+  if (POLL_CMDS.has(e.cmd)) return true;
+  // Read-only forms of otherwise consequential commands.
+  return (e.cmd === 'power' || e.cmd === 'video' || e.cmd === 'pin')
+         && e.detail === 'state';
+}
+function visible(e) {
+  if (!OPTS.probe && isProbe(e)) return false;
+  if (!OPTS.poll && isPoll(e)) return false;
+  if (!OPTS.mine && e.kind === 'cmd' && e.by === 'browser') return false;
+  return true;
+}
+
 // ------------------------------------------------------------------ log
 let seq = 0;
 const logEl = $('log');
+const LOGBUF = [];        // kept so a settings change can re-render history
 const CLS = k => k.startsWith('lock.broken') ? 'k-taint'
   : (k.startsWith('lock') || k === 'input.refused') ? 'k-lock'
   : k.startsWith('video') ? 'k-vid' : 'k-cmd';
-function note(t) { addLine(new Date(), 'ui', t, 'k-lock'); }
+function note(t) { push({kind:'ui', t:Date.now()/1000, detail:t, _cls:'k-lock'}); }
 function addLine(d, kind, detail, cls) {
+  push({kind, t:d.getTime()/1000, detail, _cls:cls});
+}
+function push(e) {
+  LOGBUF.push(e);
+  while (LOGBUF.length > 400) LOGBUF.shift();
+  if (visible(e)) renderOne(e, true);
+}
+function renderOne(e, prepend) {
+  const d = new Date(e.t * 1000);
   const row = document.createElement('div');
   row.innerHTML = `<span class="t">${d.toTimeString().slice(0,8)}</span>`
-    + `<span class="k ${cls||CLS(kind)}">${kind}</span><span class="d"></span>`;
-  row.lastChild.textContent = detail || '';
-  logEl.insertBefore(row, logEl.firstChild);
+    + `<span class="k ${e._cls || CLS(e.kind)}">${e.kind}</span>`
+    + `<span class="d"></span>`;
+  row.lastChild.textContent = e._text !== undefined ? e._text : (e.detail || '');
+  // Two lines, tap to expand. A wrapped websocket URL was taking four lines of
+  // a narrow column and pushing everything else off the screen.
+  row.onclick = () => row.classList.toggle('open');
+  if (prepend) logEl.insertBefore(row, logEl.firstChild);
+  else logEl.appendChild(row);
   while (logEl.children.length > 250) logEl.removeChild(logEl.lastChild);
+}
+function renderLog() {
+  logEl.textContent = '';
+  const shown = LOGBUF.filter(visible).slice(-250).reverse();
+  for (const e of shown) renderOne(e, false);
+  const hidden = LOGBUF.length - LOGBUF.filter(visible).length;
+  if (hidden > 0) {
+    const row = document.createElement('div');
+    row.innerHTML = '<span class="t"></span><span class="k" style="color:#5b6373">filtered</span>'
+      + `<span class="d">${hidden} event${hidden===1?'':'s'} hidden by settings</span>`;
+    logEl.appendChild(row);
+  }
 }
 async function pollEvents() {
   try {
@@ -739,10 +1406,11 @@ async function pollEvents() {
     if (j.missed) note('— gap in log, some events were not seen —');
     for (const e of (j.events||[])) {
       seq = Math.max(seq, e.seq);
-      let d = e.kind === 'cmd' ? `${e.cmd} ${e.detail||''}`.trim() + (e.by?`  ←${e.by}`:'')
-            : Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
-                .map(([k,v])=>`${k}=${v}`).join(' ');
-      addLine(new Date(e.t*1000), e.kind, d);
+      e._text = e.kind === 'cmd'
+        ? `${e.cmd} ${e.detail||''}`.trim() + (e.by ? `  ←${e.by}` : '')
+        : Object.entries(e).filter(([k])=>!['seq','t','kind'].includes(k))
+            .map(([k,v])=>`${k}=${v}`).join(' ');
+      push(e);
     }
   } catch (e) {}
 }
@@ -753,6 +1421,39 @@ async function pollEvents() {
 // most useful thing on screen, especially with the Mach64 fitted, where a
 // whole game run never locks and the prompts either side are all there is.
 let staleAt = 0;
+let staleFull = localStorage.getItem('vcctrl.stalefull') === '1';
+let staleBlob = null, staleAge = null;
+
+function applyStale() {
+  $('stale').classList.toggle('full', staleFull);
+  $('dimbtn').textContent = staleFull ? 'Dim it' : 'Show full brightness';
+}
+$('dimbtn').onclick = () => {
+  staleFull = !staleFull;
+  localStorage.setItem('vcctrl.stalefull', staleFull ? '1' : '0');
+  applyStale();
+};
+// Save works on whatever is on screen: the last live frame while the stream is
+// frozen, the current one otherwise. Saving the dimmed version would be saving
+// the presentation rather than the evidence, so this always writes the
+// original bytes the capture stick produced.
+$('savebtn').onclick = async () => {
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    let blob = staleBlob, label = 'lastframe';
+    if (!blob) {
+      const r = await fetch('/shot.jpg');
+      if (!r.ok) { note('no picture to save'); return; }
+      blob = await r.blob(); label = 'screen';
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `vcctrl-${label}-${stamp}.jpg`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    addLine(new Date(), 'saved', a.download, 'k-vid');
+  } catch (e) { note('save failed: ' + e); }
+};
 async function showStale() {
   const el = $('stale');
   if (Date.now() - staleAt > 5000) {
@@ -761,27 +1462,58 @@ async function showStale() {
       const r = await fetch('/lastgood.jpg?t=' + staleAt);
       if (r.ok) {
         const age = Number(r.headers.get('X-Frame-Age'));
-        el.src = URL.createObjectURL(await r.blob());
+        staleBlob = await r.blob();
+        staleAge = age;
+        el.src = URL.createObjectURL(staleBlob);
         el.style.display = '';
-        $('veil-age').textContent = 'showing the last live picture, '
-          + fmtAge(age) + ' old';
+        applyStale();
+        $('veil-age').textContent = 'last live picture · ' + fmtAge(age) + ' old';
         return;
       }
     } catch (e) {}
     el.style.display = 'none';
+    staleBlob = null;
     $('veil-age').textContent = 'no live picture has been seen yet';
   }
 }
 function hideStale() {
   $('stale').style.display = 'none';
   staleAt = 0;
+  staleBlob = null;      // saving now takes the live frame instead
 }
 
 // ------------------------------------------------------------------ status
 const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
   : s < 5400 ? (s/60).toFixed(1)+'m' : (s/3600).toFixed(1)+'h';
+// The old API set six coloured pills. The rail now has one state WORD plus
+// small labelled chips: colour never carries meaning alone, which the
+// monochrome themes force and colour-blind users need anyway.
 function pill(id, cls, text) {
-  const el = $(id); el.className = 'pill ' + cls; el.textContent = text;
+  if (id === 'p-video') {
+    // Display label only. The daemon's wire value stays `locked` -- the
+    // harness branches on it and it is in the API, the tests and the docs.
+    // Changing what a reader sees is a presentation decision; changing what a
+    // caller receives is a contract change, and these are not the same edit.
+    const LABEL = {LOCKED:'ACTIVE', NOSIGNAL:'NO SIGNAL'};
+    const raw = String(text).replace(/^video\s*/, '').toUpperCase();
+    const w = LABEL[raw] || raw;
+    $('state').textContent = w;
+    // The dot repeats what the word says rather than replacing it -- required
+    // by the monochrome themes, needed by colour-blind users.
+    $('state').style.color = cls === 'on' ? 'var(--green)'
+                           : cls === 'off' ? 'var(--red)' : 'var(--yellow)';
+    return;
+  }
+  const map = {'p-lock':'c-lock', 'p-power':'c-power',
+               'p-xport':'c-xport', 'p-kbd':'c-kbd'};
+  const el = $(map[id] || id);
+  if (!el) return;
+  const b = el.querySelector('b');
+  const val = String(text).replace(/^(input|power|keyboard|link)\s*/, '');
+  if (b) b.textContent = val; else el.textContent = val;
+  el.style.color = cls === 'on' ? 'var(--green)'
+                 : cls === 'off' ? 'var(--red)'
+                 : cls === 'mid' ? 'var(--yellow)' : 'var(--dim)';
 }
 async function pollState() {
   let j;
@@ -797,41 +1529,382 @@ async function pollState() {
     const T = {nosignal:'no signal', frozen:'frozen — not live',
                starting:'waiting for first frame'};
     $('veil-title').textContent = T[v.state] || v.state || '—';
+    // One sentence. The detail lives in the docs; a screen you are looking at
+    // because something is wrong is the wrong place to read four lines.
+    // One short line. The full explanation was four lines of prose in the
+    // middle of a black screen, which is a document, not a status.
     $('veil-sub').textContent = v.state === 'frozen'
-      ? 'Frames are still arriving but every one is byte-identical, so the '
-      + 'capture stick is repeating rather than drawing. DOS text mode 03h '
-      + 'does this, and what it repeats is a flat black frame — not the last '
-      + 'real screen.'
-      : v.state === 'nosignal'
-      ? 'No frames are arriving. On this rig that is often correct: with the '
-      + 'Mach64 fitted, a game run at 512x384 is outside the capture stick.'
-      : '';
+      ? 'Every frame is identical — the stick is repeating a blank.'
+      : v.state === 'nosignal' ? 'No frames arriving.' : '';
     showStale();
     veil.classList.add('show');
   }
   const L = j.lock || {};
-  pill('p-lock', L.owner ? 'mid' : 'on',
-       L.owner ? `held by ${L.owner}` : 'input free');
   const inf = j.inflight || [];
   $('s-inflight').textContent = inf.length ? `${inf[0].cmd} · ${fmtAge(inf[0].age_s)}` : 'idle';
   $('s-lastev').textContent = fmtAge(j.last_event_age_s);
   $('s-frames').textContent = v.frames ?? '–';
   $('s-viewers').textContent = j.viewers ?? '–';
+  if (j.tls_port !== undefined && j.tls_port !== tlsPort) {
+    tlsPort = j.tls_port;
+    // Check reachability before retrying, so an unreachable port is reported
+    // as an unreachable port rather than as a websocket that keeps failing.
+    if (OPTS.ws && tlsPort && xport === 'mjpeg')
+      checkPort().then(ok => { if (ok) restart(); });
+  }
+  if (j.build && BUILD !== '__' + 'BUILD__' && j.build !== BUILD)
+    $('stalebar').classList.add('show');
+  $('s-span').textContent = v.span_s != null ? v.span_s.toFixed(1) + 's' : '–';
+  lamps(j.leds, v.state, j.input_verified);
+  const iv = j.input_verified;
+  pill('p-lock', L.owner ? 'mid' : (iv && iv.ok ? 'on' : ''),
+       L.owner ? `held by ${L.owner}`
+               : (iv && iv.ok ? 'free · link ok' : 'free · link unproven'));
   const A = j.audio || {};
   if (!soundOn) {
     // Even with sound off, say whether the capture path is alive. "silent" and
     // "the ALSA device died" look identical otherwise.
-    pill('p-audio', A.state === 'capturing' ? '' : 'mid',
-         A.state === 'capturing' ? 'sound off' : 'audio ' + (A.state || '?'));
+    $('sbtn').title = A.state === 'capturing'
+      ? 'sound off — capture path is alive'
+      : 'audio ' + (A.state || 'unavailable');
   }
 }
+let powerFails = 0;
 async function pollPower() {
+  // Back off when the plug is unreachable. The same EHOSTUNREACH every 20 s
+  // filled the log with identical lines and buried everything else: a fault
+  // worth reporting once is not worth reporting thirty times.
+  if (powerFails > 2 && powerFails % 15 !== 0) { powerFails++; return; }
   const j = await post('power', {action:'state'});
-  if (j && j.ok) pill('p-power', j.power.on?'on':'off', 'power ' + (j.power.on?'on':'off'));
+  if (j && j.ok) {
+    powerFails = 0;
+    pill('p-power', j.power.on ? 'on' : 'off', 'power ' + (j.power.on ? 'on' : 'off'));
+  } else {
+    powerFails++;
+    pill('p-power', 'off', 'power unreachable');
+  }
 }
 applyVolume();
 setInterval(pollState, 1500);
 setInterval(pollEvents, 1500);
 setInterval(pollPower, 20000);
 pollState(); pollEvents(); pollPower();
+
+// ══════════════════════════════════════════════════════════ tabs (phone)
+// Exactly one panel at a time, and SCREEN means none -- the picture is the
+// point, so the default state gives it everything.
+function setTab(name) {
+  const body = $('body'), panels = $('panels');
+  // The long panels open as a full-screen sheet; the short ones stay a strip
+  // at the bottom. Reading a log through a 150px window is not reading.
+  const asSheet = (name === 'log' || name === 'set');
+  for (const b of document.querySelectorAll('#tabs button'))
+    b.classList.toggle('on', b.dataset.tab === name);
+  $('cmdbar').classList.toggle('open', name === 'keys');
+  $('keys').classList.toggle('open', name === 'keys');
+  body.className = '';
+  panels.className = '';
+  if (asSheet) body.classList.add('sheet');
+  if (asSheet) {
+    body.classList.add('sheet');
+    $('sheettitle').textContent = name === 'log' ? 'Activity' : 'Settings';
+  }
+  if (name === 'log') body.classList.add('show-log');
+  else if (name === 'sound') { body.classList.add('show-panels'); panels.classList.add('only-sound'); }
+  else if (name === 'power') { body.classList.add('show-panels'); panels.classList.add('only-power'); }
+  else if (name === 'set')   { body.classList.add('show-panels'); panels.classList.add('only-set');
+                               $('settings').classList.add('show'); }
+  else body.classList.add('closed');
+  localStorage.setItem('vcctrl.tab', name);
+  setTimeout(applyZoom, 80);        // the stage just changed size
+}
+for (const b of document.querySelectorAll('#tabs button'))
+  b.onclick = () => setTab(b.dataset.tab);
+if (matchMedia('(max-width:640px)').matches)
+  setTab(localStorage.getItem('vcctrl.tab') || 'none');
+
+// ══════════════════════════════════════════════════════════ zoom
+// The game draws 320x240 or 512x384 CENTRED inside a 640x480 capture, so most
+// of the frame is dead margin and the picture ends up tiny. "Crop to picture"
+// finds the actual drawn region and scales that to fill the stage, which is
+// what you want almost every time; the fixed factors are there for looking
+// closely at one part of a screen.
+let zoomMode = localStorage.getItem('vcctrl.zoom') || 'fit';
+let panX = 0, panY = 0, crop = null;
+
+function mediaEl() {
+  return $('mjpeg').style.display === 'none' ? $('screen') : $('mjpeg');
+}
+
+// Measure the drawn region by finding the bounding box of non-black pixels.
+// Run on demand rather than per frame: the letterbox only changes when the
+// target changes video mode, which is rare and visible.
+function measureCrop() {
+  const el = mediaEl();
+  const w = el.naturalWidth || el.width, h = el.naturalHeight || el.height;
+  if (!w || !h) return null;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d', {willReadFrequently:true});
+  try { x.drawImage(el, 0, 0, w, h); } catch (e) { return null; }
+  let d;
+  try { d = x.getImageData(0, 0, w, h).data; } catch (e) { return null; }
+  // 24 on a 0-255 scale: above the stick's black floor (7) and below anything
+  // a real screen draws, so a dark game scene still counts as picture.
+  const T = 24;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let yy = 0; yy < h; yy += 2) {
+    for (let xx = 0; xx < w; xx += 2) {
+      const i = (yy * w + xx) * 4;
+      if (d[i] > T || d[i+1] > T || d[i+2] > T) {
+        if (xx < x0) x0 = xx; if (xx > x1) x1 = xx;
+        if (yy < y0) y0 = yy; if (yy > y1) y1 = yy;
+      }
+    }
+  }
+  if (x1 < 0) return null;                 // nothing above the floor
+  const pad = 4;
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+  x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  if (bw < 32 || bh < 32) return null;     // implausibly small: ignore
+  if (bw > w * 0.94 && bh > h * 0.94) return null;  // no letterbox to crop
+  return {x0, y0, bw, bh, w, h};
+}
+
+function applyZoom() {
+  const st = $('stage'), fr = $('frame');
+  const el = mediaEl();
+  const nw = el.naturalWidth || el.width || 640;
+  const nh = el.naturalHeight || el.height || 480;
+  const W = st.clientWidth, H = st.clientHeight;
+  if (!W || !H) return;
+  const s0 = Math.min(W / nw, H / nh);     // scale object-fit:contain applied
+  let k = 1, tx = panX, ty = panY;
+
+  if (zoomMode === 'crop') {
+    if (!crop) crop = measureCrop();
+    if (crop) {
+      k = Math.min(W / crop.bw, H / crop.bh) / s0;
+      // Move the crop's centre to the stage centre, in post-scale pixels.
+      tx += -((crop.x0 + crop.bw / 2) - nw / 2) * s0 * k;
+      ty += -((crop.y0 + crop.bh / 2) - nh / 2) * s0 * k;
+    }
+  } else if (zoomMode !== 'fit') {
+    // Multiples of FIT, not of capture pixels. The old scale meant "one
+    // capture pixel per CSS pixel", so on a phone where fit is already about
+    // 0.5, the option labelled 100% rendered at roughly twice fit and every
+    // number was wrong by a device-dependent factor. Nobody reading "200%"
+    // means "relative to the source resolution of a 1995 VGA card".
+    k = Number(zoomMode);
+  }
+  // Fit is the identity, stated rather than computed, so a leftover pan or a
+  // rounding error cannot leave it slightly zoomed.
+  if (zoomMode === 'fit') { tx = ty = 0; k = 1; }
+  fr.style.transform = (k === 1 && !tx && !ty)
+    ? 'none' : `translate(${tx}px, ${ty}px) scale(${k})`;
+  fr.classList.toggle('zoomed', k > 1.01);
+  if (k <= 1.01) { panX = panY = 0; }
+}
+
+$('zoom').value = zoomMode;
+$('zoom').onchange = () => {
+  zoomMode = $('zoom').value;
+  localStorage.setItem('vcctrl.zoom', zoomMode);
+  panX = panY = 0;
+  crop = null;                             // re-measure on the next frame
+  applyZoom();
+};
+addEventListener('resize', applyZoom);
+// Re-measure periodically: a mode change moves the letterbox, and the whole
+// point is that it follows the target rather than needing to be told.
+setInterval(() => { if (zoomMode === 'crop') { crop = null; applyZoom(); } }, 5000);
+
+// Drag to pan when the picture is larger than the stage.
+(function pan() {
+  let down = false, sx = 0, sy = 0;
+  const fr = $('frame');
+  const start = e => {
+    if (!fr.classList.contains('zoomed')) return;
+    down = true; fr.classList.add('dragging');
+    const p = e.touches ? e.touches[0] : e;
+    sx = p.clientX - panX; sy = p.clientY - panY;
+  };
+  const move = e => {
+    if (!down) return;
+    const p = e.touches ? e.touches[0] : e;
+    panX = p.clientX - sx; panY = p.clientY - sy;
+    applyZoom();
+    if (e.cancelable) e.preventDefault();
+  };
+  const end = () => { down = false; fr.classList.remove('dragging'); };
+  $('stage').addEventListener('pointerdown', start);
+  addEventListener('pointermove', move, {passive:false});
+  addEventListener('pointerup', end);
+  addEventListener('pointercancel', end);
+})();
+
+// ══════════════════════════════════════════════════════════ theme engine
+// Palettes live in /themes.css, generated from tools/themes.py. Switching is a
+// CSS variable swap on <html>: nothing re-renders, no socket reconnects, the
+// stream is undisturbed.
+const THEMES = [
+  ['House', [['vga', 'VGA (default)']]],
+  ['Editor', [
+    ['tokyo-night','Tokyo Night'], ['tokyo-night-light','Tokyo Night Light'],
+    ['dracula','Dracula'], ['nord','Nord'],
+    ['solarized-dark','Solarized Dark'], ['solarized-light','Solarized Light'],
+    ['catppuccin-mocha','Catppuccin Mocha'], ['catppuccin-macchiato','Catppuccin Macchiato'],
+    ['catppuccin-frappe','Catppuccin Frappé'], ['catppuccin-latte','Catppuccin Latte'],
+    ['gruvbox-dark','Gruvbox Dark'], ['gruvbox-light','Gruvbox Light'],
+    ['rose-pine','Rosé Pine'], ['rose-pine-moon','Rosé Pine Moon'],
+    ['rose-pine-dawn','Rosé Pine Dawn'],
+    ['everforest-dark','Everforest Dark'], ['everforest-light','Everforest Light'],
+    ['kanagawa-wave','Kanagawa Wave'], ['kanagawa-dragon','Kanagawa Dragon'],
+    ['kanagawa-lotus','Kanagawa Lotus'],
+  ]],
+  ['Phosphor', [
+    ['apple-ii-green','Apple II Green (P1)'], ['ibm-5151','IBM 5151 (P39)'],
+    ['dec-amber','DEC Amber (P3)'], ['vt220-white','VT220 White (P4)'],
+  ]],
+];
+const DARK = new Set(['vga','tokyo-night','dracula','nord','solarized-dark',
+  'catppuccin-mocha','catppuccin-macchiato','catppuccin-frappe','gruvbox-dark',
+  'rose-pine','rose-pine-moon','everforest-dark','kanagawa-wave',
+  'kanagawa-dragon','apple-ii-green','ibm-5151','dec-amber','vt220-white']);
+
+let theme = localStorage.getItem('vcctrl.theme') || 'vga';
+let autoTheme = localStorage.getItem('vcctrl.autotheme') !== '0';
+
+function pairOf(name) {
+  // Each theme names its opposite in --pair, emitted by the generator, so the
+  // light/dark button always has somewhere to go.
+  const v = getComputedStyle(document.documentElement)
+              .getPropertyValue('--pair').trim().replace(/^"|"$/g, '');
+  return v || name;
+}
+function applyTheme(name, remember) {
+  theme = name;
+  document.documentElement.setAttribute('data-theme', name);
+  if (remember) localStorage.setItem('vcctrl.theme', name);
+  // Match the iOS status bar to the page rather than letting it clash.
+  requestAnimationFrame(() => {
+    const bg = getComputedStyle(document.documentElement)
+                 .getPropertyValue('--bg').trim();
+    if (bg) $('tcolor').setAttribute('content', bg);
+  });
+  for (const b of document.querySelectorAll('#themes button'))
+    b.classList.toggle('sel', b.dataset.theme === name);
+  $('dbtn').textContent = DARK.has(name) ? '☀' : '☾';
+  $('dbtn').title = DARK.has(name) ? 'switch to the light pairing'
+                                   : 'switch to the dark pairing';
+}
+function systemPrefersDark() {
+  return !matchMedia('(prefers-color-scheme: light)').matches;
+}
+function autoPick() {
+  // Follow the OS, but stay within the pair the operator last chose: if they
+  // picked Gruvbox, dark mode should be Gruvbox Dark, not the house theme.
+  const want = systemPrefersDark();
+  if (DARK.has(theme) === want) return;
+  applyTheme(pairOf(theme), false);
+}
+
+(function buildPicker() {
+  const host = $('themes');
+  for (const [group, list] of THEMES) {
+    const h = document.createElement('div');
+    h.className = 'tgroup'; h.textContent = group;
+    h.style.gridColumn = '1/-1';
+    host.appendChild(h);
+    for (const [id, label] of list) {
+      const b = document.createElement('button');
+      b.dataset.theme = id; b.textContent = label;
+      b.onclick = () => { autoTheme = false;
+        localStorage.setItem('vcctrl.autotheme','0');
+        $('opt-auto').checked = false; applyTheme(id, true); };
+      host.appendChild(b);
+    }
+  }
+})();
+
+$('dbtn2').onclick = () => $('dbtn').onclick();
+$('dbtn').onclick = () => {
+  // Manual flip picks the other half of the current pair and stops auto,
+  // because an automatic switch would immediately undo it.
+  autoTheme = false;
+  localStorage.setItem('vcctrl.autotheme','0');
+  $('opt-auto').checked = false;
+  applyTheme(pairOf(theme), true);
+};
+$('opt-auto').checked = autoTheme;
+$('opt-auto').onchange = () => {
+  autoTheme = $('opt-auto').checked;
+  localStorage.setItem('vcctrl.autotheme', autoTheme ? '1' : '0');
+  if (autoTheme) autoPick();
+};
+matchMedia('(prefers-color-scheme: light)')
+  .addEventListener('change', () => { if (autoTheme) autoPick(); });
+
+applyTheme(theme, false);
+if (autoTheme) autoPick();
+
+// ══════════════════════════════════════════════════════════ the lamps
+// Caps / Num / Scroll straight off /sys/class/leds. Lit, hollow, or dashed:
+// the LED level is a RETAINED state, so a powered-off host publishes nothing
+// and the last value stands. Drawn dashed when the picture says the machine is
+// not showing anything, because a lamp that looks live on a dead machine is
+// the same lie in miniature that cost a wrong readiness report.
+function lamps(leds, videoState, verified) {
+  // Unverified is the default, and it is drawn as such. With the PS/2 lead
+  // physically unplugged the daemon still reports both devices held, input ok,
+  // and plausible LED values -- all true, and all about the Pi's end of the
+  // wire. Lit lamps on an unverified link are a reassuring lie.
+  const unproven = !verified || verified.ok !== true || verified.age_s > 900;
+  const stale = videoState === 'nosignal' || videoState === 'unavailable'
+                || unproven;
+  for (const [key, id] of [['capslock','lamp-caps'], ['numlock','lamp-num'],
+                           ['scrolllock','lamp-scroll']]) {
+    const el = $(id);
+    if (!el) continue;
+    const v = leds && leds[key];
+    el.classList.toggle('on', v === 1);
+    el.classList.toggle('stale', stale);
+    el.title = (leds ? (v === 1 ? 'lit' : 'dark') : 'unknown')
+             + (stale ? ' — retained, the target is not showing a picture' : '');
+  }
+  $('lamps').title = LAMP_ATTESTS
+    + (verified
+       ? `\n\nLink last proven by round trip ${fmtAge(verified.age_s)} ago: `
+         + (verified.ok ? 'the target answered.' : 'NO ANSWER — keystrokes are not arriving.')
+       : '\n\nThe link has not been proven this session. Tap VERIFY to send a '
+         + 'key and watch for the LED to come back.')
+    + (stale
+    ? '\n\nDashed: the target is not showing a picture, so these values are '
+      + 'retained from whenever it last published them.' : '');
+}
+
+// Name what the signal ATTESTS, not what it resembles. These lamps prove a
+// keystroke reached the target's KEYBOARD CONTROLLER. They do not prove DOS
+// read it: Caps Lock is serviced by the BIOS interrupt handler with DOS
+// entirely uninvolved, so the lamp toggles happily while FTP.EXE is running.
+//
+// That distinction cost the vcctrl session an hour today -- at_prompt() reads
+// exactly this channel and was trusted as "DOS is at a prompt". Putting it on
+// the control means nobody else has to learn it the same way.
+const LAMP_ATTESTS =
+  'PS/2 keyboard LEDs — the return channel from the target.\n\n'
+  + 'Lit means the keystroke reached the target\'s KEYBOARD CONTROLLER.\n'
+  + 'It does NOT mean DOS read it: Caps Lock is handled by the BIOS interrupt '
+  + 'handler, so these toggle during a file transfer too.\n\n'
+  + 'The level is retained — a powered-off host keeps publishing its last '
+  + 'value, so the lamps are dashed when the picture says nothing is running.';
+
+$('lamps').title = LAMP_ATTESTS;
+$('lamps').onclick = () => {
+  // Tooltips do not exist on a touch screen, and this is the one control whose
+  // meaning is genuinely easy to get wrong. Tapping it says so in the log.
+  for (const line of LAMP_ATTESTS.split('\n\n'))
+    addLine(new Date(), 'ps/2', line, 'k-lock');
+};
 </script>
