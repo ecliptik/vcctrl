@@ -431,9 +431,9 @@
     <select id="zoom" aria-label="zoom">
       <option value="fit">Fit</option>
       <option value="crop">Crop to picture</option>
-      <option value="1">100%</option>
-      <option value="2">200%</option>
-      <option value="4">400%</option>
+      <option value="2">2× fit</option>
+      <option value="4">4× fit</option>
+      <option value="8">8× fit</option>
     </select>
     <button id="dbtn" aria-label="switch between light and dark">◐</button>
     <button id="gbtn" aria-label="settings">⚙</button>
@@ -1136,7 +1136,13 @@ const MAX_AHEAD = 0.45;   // beyond this we are accumulating delay, not bufferin
 // Perceived loudness is roughly the square of the amplitude ratio, so a linear
 // slider on raw gain spends most of its travel in the top few dB and feels
 // broken at the quiet end.
-const gainFor = pct => (pct / 100) ** 2;
+// The signal path is speakers -> headphone-out -> capture stick, through a
+// physical volume knob, and it arrives quiet: measured -71 dB mean, -53 dB
+// peak on real game audio. A gain that tops out at unity cannot fix that, so
+// the slider runs to 4x. Squared keeps the low end usable rather than spending
+// all its travel in the top few dB.
+const MAX_GAIN = 4;
+const gainFor = pct => ((pct / 100) ** 2) * MAX_GAIN;
 
 function applyVolume() {
   $('vol').value = volume;
@@ -1175,7 +1181,17 @@ $('sbtn').onclick = () => {
     catch (e) { ac = new AudioContext(); }
     gain = ac.createGain();
     gain.gain.value = gainFor(volume);
-    gain.connect(ac.destination);
+    // Boosting a quiet source by 4x will clip on any loud passage. A limiter
+    // between gain and output turns that from a harsh crackle into
+    // compression, which is the right trade for monitoring.
+    const comp = ac.createDynamicsCompressor();
+    comp.threshold.value = -6;
+    comp.knee.value = 6;
+    comp.ratio.value = 12;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.12;
+    gain.connect(comp);
+    comp.connect(ac.destination);
   }
   if (ac && ac.state === 'suspended') ac.resume();
   setSound(!soundOn);
@@ -1627,9 +1643,18 @@ function applyZoom() {
       ty += -((crop.y0 + crop.bh / 2) - nh / 2) * s0 * k;
     }
   } else if (zoomMode !== 'fit') {
-    k = Number(zoomMode) / s0;             // 1 = one capture pixel per CSS px
+    // Multiples of FIT, not of capture pixels. The old scale meant "one
+    // capture pixel per CSS pixel", so on a phone where fit is already about
+    // 0.5, the option labelled 100% rendered at roughly twice fit and every
+    // number was wrong by a device-dependent factor. Nobody reading "200%"
+    // means "relative to the source resolution of a 1995 VGA card".
+    k = Number(zoomMode);
   }
-  fr.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+  // Fit is the identity, stated rather than computed, so a leftover pan or a
+  // rounding error cannot leave it slightly zoomed.
+  if (zoomMode === 'fit') { tx = ty = 0; k = 1; }
+  fr.style.transform = (k === 1 && !tx && !ty)
+    ? 'none' : `translate(${tx}px, ${ty}px) scale(${k})`;
   fr.classList.toggle('zoomed', k > 1.01);
   if (k <= 1.01) { panX = panY = 0; }
 }
