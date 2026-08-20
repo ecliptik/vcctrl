@@ -2325,8 +2325,34 @@ for (const k of Object.keys(OPTS)) {
 const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn',
              keys: 'keysbtn'};
 let openPopName = null;
+
+// THE CARET SAYS WHERE THE MENU WILL GO. Keys, Sound and Power live in the
+// bottom strip and open upward, so closed they point up and open they point
+// down -- the arrow is what the click does, not which way is down. The zoom
+// menu is in the header and opens downward, so it does the same thing with
+// the opposite glyphs. One rule, and it reads correctly in both places.
+function caretLabel(name) {
+  if (name === 'zoom') return $('zoomlabel');
+  const b = $(POP[name]);
+  // Sound's button IS the label -- querySelector only searches descendants.
+  return b ? (b.querySelector('.bl') || b) : null;
+}
+function setCaret(name, open) {
+  const b = $(POP[name]), lab = caretLabel(name);
+  if (!b || !lab) return;
+  // MEASURED while open, not assumed: openPop flips a menu to the other side
+  // of its anchor when there is no room below, and a caret that did not
+  // follow would be pointing away from the menu it belongs to.
+  const up = open
+    ? $('pop-' + name).getBoundingClientRect().top < b.getBoundingClientRect().top
+    : !!b.closest('#cmdbar');
+  lab.textContent = lab.textContent.replace(/[\u25b4\u25be]\s*$/, '').trim()
+                  + ' ' + ((open ? !up : up) ? '\u25b4' : '\u25be');
+}
+
 function closePop() {
   if (!openPopName) return;
+  setCaret(openPopName, false);
   $('pop-' + openPopName).hidden = true;
   const a = $(POP[openPopName]);
   if (a) a.setAttribute('aria-expanded', 'false');
@@ -2350,6 +2376,7 @@ function openPop(name) {
     el.style.left = Math.max(8, (window.innerWidth - w) / 2) + 'px';
     el.style.top = '';
     el.style.bottom = 'calc(58px + env(safe-area-inset-bottom, 0px))';
+    setCaret(name, true);
     return;
   }
   el.style.bottom = '';
@@ -2370,6 +2397,7 @@ function openPop(name) {
   const br = bar ? bar.getBoundingClientRect() : a;
   el.style.top = (br.bottom + 6 + h > window.innerHeight - 8
                   ? Math.max(8, br.top - h - 6) : br.bottom + 6) + 'px';
+  setCaret(name, true);        // after placing it: the caret follows the menu
 }
 
 // How much of the window the two bars are using. Not hardcoded: the rails
@@ -3451,7 +3479,8 @@ const ZOOMLABEL = {fit: 'Fit Screen', '1': 'Original',
 function setZoom(m) {
   zoomMode = m;
   localStorage.setItem('vcctrl.zoom2', m);
-  $('zoomlabel').textContent = (ZOOMLABEL[m] || m) + ' ▾';
+  $('zoomlabel').textContent = ZOOMLABEL[m] || m;
+  setCaret('zoom', openPopName === 'zoom');
   for (const b of document.querySelectorAll('#pop-zoom button'))
     b.classList.toggle('sel', b.dataset.zoom === m);
   crop = null;                             // re-measure on the next frame
@@ -3578,6 +3607,7 @@ function showPanel(which) {
 // not move while you look at it.
 
 $('keysbtn').onclick = () => openPop('keys');
+for (const n of Object.keys(POP)) setCaret(n, false);
 
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.

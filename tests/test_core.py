@@ -1356,6 +1356,19 @@ HARNESS = r"""
   document.getElementById('keysbtn').click();
   emit(`keysshut ${pk.hidden ? 1 : 0} 0`);
 
+  // The caret points where the menu WILL GO, so the strip menus and the
+  // header menu must disagree about which glyph means closed. 1 = up.
+  const tipUp = n => { const t = caretLabel(n).textContent.trim();
+                       return t.charCodeAt(t.length - 1) === 0x25b4 ? 1 : 0; };
+  closePop();
+  emit(`caretshut ${tipUp('keys')} ${tipUp('zoom')}`);
+  document.getElementById('keysbtn').click();
+  emit(`caretopen ${tipUp('keys')} 0`);
+  closePop();
+  document.getElementById('zoombtn').click();
+  emit(`caretzoom ${tipUp('zoom')} 0`);
+  closePop();
+
   // A FIT THAT SCROLLS IS NOT A FIT. The scale is a float, so nh*scale lands
   // a millionth of a pixel over the box on some window heights and the
   // browser rounds that up into a real scrollbar that scrolls one pixel.
@@ -1672,6 +1685,17 @@ def test_zoom_layout_in_a_browser():
           got["keysbars"][1] == 1.0, got["keysbars"])
     check("and the same button closes it",
           got["keysshut"][0] == 1.0, got["keysshut"])
+    # The rule is "point where the menu will go", NOT "point down when
+    # closed" -- so the two bars must disagree, and a change that made them
+    # agree would mean the rule had been replaced by a constant.
+    check("a closed strip menu points up, toward where it opens",
+          got["caretshut"][0] == 1.0, got["caretshut"])
+    check("a closed header menu points down, for the same reason",
+          got["caretshut"][1] == 0.0, got["caretshut"])
+    check("opening a strip menu flips its caret down",
+          got["caretopen"][0] == 0.0, got["caretopen"])
+    check("opening the header menu flips its caret up",
+          got["caretzoom"][0] == 1.0, got["caretzoom"])
     check("a fitted picture does not overflow vertically",
           got["fitscroll"][0] <= 0, got["fitscroll"])
     check("nor horizontally", got["fitscroll"][1] <= 0, got["fitscroll"])
