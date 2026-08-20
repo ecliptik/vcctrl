@@ -13,8 +13,10 @@ is wrong by roughly a factor of three. Never sleep-then-read; wait for the
 state you want and let the call cost be the poll interval.
 """
 
+import difflib
 import json
 import os
+import re
 import subprocess
 import time
 
@@ -91,7 +93,26 @@ def wait_led(name, want, timeout):
 
 
 def at_prompt():
-    """Is DOS at a prompt and accepting input?
+    """Is the BIOS keyboard handler alive? NOT "is DOS at a prompt".
+
+    READ THIS BEFORE TRUSTING IT. The name is aspirational and the docstring
+    used to match the name, which is how it cost a transfer on 2026-08-19.
+
+    Caps Lock is serviced by the BIOS INT 09h handler and updates the keyboard
+    controller's LED directly. **DOS is not involved.** So this flips whenever
+    the ISR is intact -- including while an ordinary program is running and not
+    reading input at all. It returns True during an FTP transfer.
+
+    What it genuinely detects is a program that HOOKS INT 09h, which is why it
+    correctly reports the game as not-at-a-prompt: SDL3's DOS backend owns the
+    vector. That is a real and useful signal, and it is the only one here.
+
+    The failure it produced: wait_for_prompt returned as soon as FTP.EXE was
+    still finishing its BAT, a 41-character command was typed into a machine
+    that was not reading, fifteen characters fit in the BIOS buffer, the rest
+    beeped audibly across the room, and the truncated remains executed --
+    "COPY C:\\DOSKUTSy". Use type_command() for anything long enough to
+    overflow; it confirms from the screen instead of from the ISR.
 
     Uses the LED channel rather than the screen, so it works when capture is
     unavailable. Safe ONLY when no sweep is running.
@@ -268,6 +289,123 @@ def flush_input_line():
     vc("key", "escape", check=False)
     vc("key", "enter", check=False)
     return wait_for_prompt(30)
+
+
+# A command can only be corrupted by a full keyboard buffer if it is long
+# enough to fill one. Anything at or under this fits whole, so it is typed
+# without the cost of a verification round-trip.
+SHORT_CMD_CHARS = 12
+
+# How long the mode 12h console needs to render a typed line before it can be
+# read back. Measured generously: the cost of waiting too long is latency, the
+# cost of waiting too little is discarding a command that arrived fine.
+ECHO_DRAW_S = 1.5
+
+
+def _screen_text():
+    """OCR of the current screen, or None if there is no picture.
+
+    grab() lives in vcctrl-sweep and is loaded lazily here rather than
+    imported, because vcctrl-sweep imports this module. Since the KVM daemon
+    took ownership of the capture device this is a read of its frame ring, so
+    it costs about 0.2 s -- which is the only reason verifying every long
+    command is affordable at all.
+    """
+    try:
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+        from PIL import Image
+        import pytesseract
+        spec = importlib.util.spec_from_loader(
+            "vcsweep", SourceFileLoader("vcsweep",
+                                        os.path.join(HERE, "vcctrl-sweep")))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        shot, _ = mod.grab("cmdcheck")
+        if shot is None:
+            return None
+        return pytesseract.image_to_string(Image.open(shot))
+    except Exception:
+        return None
+
+
+def _ocr_norm(s):
+    """Project text onto the alphabet OCR gets right on this console font.
+
+    The folds are measured, not guessed: this font's OCR reads UNIVBE as
+    UNIUBE and DOSKUTSU as DOSKUISU, so V/U and T/I are folded together along
+    with the usual 0/O, 1/I, 5/S, 8/B. Punctuation is dropped entirely --
+    backslashes and colons are where OCR is least reliable and they carry no
+    information a command echo needs.
+    """
+    s = re.sub(r"[^A-Z0-9]", "", s.upper())
+    for a, b in (("V", "U"), ("0", "O"), ("1", "I"), ("5", "S"),
+                 ("8", "B"), ("T", "I")):
+        s = s.replace(a, b)
+    return s
+
+
+def command_echoed(screen, cmd, tail=16, threshold=0.80):
+    """Did DOS echo this command back?
+
+    An echo is proof COMMAND.COM READ the command, which is the thing
+    at_prompt cannot establish. Compares the TAIL, because a truncated command
+    shares its head with the intended one and differs only at the end -- the
+    exact failure this exists to catch.
+    """
+    want = _ocr_norm(cmd)[-tail:]
+    hay = _ocr_norm(screen or "")
+    if not want or not hay:
+        return False
+    if want in hay:
+        return True
+    best = 0.0
+    for i in range(0, max(1, len(hay) - len(want) + 1)):
+        best = max(best, difflib.SequenceMatcher(
+            None, want, hay[i:i + len(want)]).ratio())
+    return best >= threshold
+
+
+def type_command(cmd, retries=3, settle=4.0, press_enter=True):
+    """Type a command and confirm it arrived intact before committing it.
+
+    THE POINT: Enter is only pressed once the command is visible on screen. A
+    command that overflowed the BIOS buffer is never executed in its truncated
+    form, which is what turned a working FTP transfer into
+    "COPY C:\\DOSKUTSy -- File not found" and beeped twenty-odd times doing it.
+
+    Short commands skip the check: they cannot overflow, and a verification
+    round-trip on every SET would double the cost of a cell for nothing.
+
+    Returns True if the command was typed and committed, False if it could not
+    be got onto the line intact -- which means the machine is busy, not that
+    the command failed.
+    """
+    if len(cmd) <= SHORT_CMD_CHARS:
+        vc("type", cmd)
+        if press_enter:
+            vc("key", "enter")
+        return True
+
+    for attempt in range(retries):
+        flush_input_line()
+        vc("type", cmd)
+        # Let the console actually DRAW it before looking. Mode 12h text is
+        # planar read-modify-write and visibly crawls -- reading the screen the
+        # instant the keys are sent checks whether the echo has happened yet,
+        # not whether DOS accepted it, and rejected three perfectly good
+        # commands in a row the first time this ran.
+        time.sleep(ECHO_DRAW_S)
+        if command_echoed(_screen_text(), cmd):
+            if press_enter:
+                vc("key", "enter")
+            return True
+        # Not echoed: DOS was not reading, so some of it is in the buffer and
+        # the rest beeped. Clear the line and let the machine finish whatever
+        # it is doing rather than typing over it again.
+        vc("key", "escape", check=False)
+        time.sleep(settle)
+    return False
 
 
 def ensure_powered(allow_power_on):
