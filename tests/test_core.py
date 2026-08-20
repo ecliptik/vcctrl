@@ -399,6 +399,86 @@ def test_activity_age():
           after["last_event_age_s"] is not None)
 
 
+def test_audio_levels():
+    """The level scale is a compatibility contract, not an internal detail.
+
+    Every reference figure in FINDINGS -- the -30.8 dB working level, the
+    -65.6 dB floor -- was read off `ffmpeg -af volumedetect`, and vcctrl-audio's
+    verdicts are tuned to those numbers. A shifted scale would invalidate all
+    of it silently, so this checks the arithmetic against known signals rather
+    than against itself.
+    """
+    print("\naudio levels")
+    import array, collections, math, struct, threading
+
+    RATE = 48000
+
+    class Fake(vcctrld.AudioCapability):
+        def __init__(self, frag):
+            self.lock = threading.Lock()
+            self.ring = collections.deque([(0.0, 1, frag)])
+            self.state = "capturing"
+
+    def sine(dbfs, secs=1.0, f=440.0):
+        amp = int(32767 * (10 ** (dbfs / 20.0)))
+        out = bytearray()
+        for i in range(int(RATE * secs)):
+            v = int(amp * math.sin(2 * math.pi * f * i / RATE))
+            out += struct.pack("<hh", v, v)
+        return bytes(out)
+
+    # Assert against the amplitude the generator actually produced, not the one
+    # it was asked for. At -60 dBFS the sample amplitude quantises to integer
+    # 32, which genuinely is -60.21 dB -- ffmpeg reports the same figure. A
+    # test written against the requested level fails here and blames the
+    # measurement for the generator's rounding.
+    for target in (-20.0, -40.0, -60.0):
+        amp = int(32767 * (10 ** (target / 20.0)))
+        want_peak = 20 * math.log10(amp / 32768.0)
+        lv = Fake(sine(target))._levels(ms=1000)
+        check("sine at %.0f dBFS -> peak matches its quantised amplitude"
+              % target, abs(lv["peak_db"] - want_peak) < 0.05,
+              "%.2f vs %.2f" % (lv["peak_db"], want_peak))
+        # RMS is compared against the EXACT rms of the samples that were
+        # generated, computed over every one of them, rather than against the
+        # continuous-sine identity peak-3.01dB. At -60 dBFS the amplitude is
+        # 32 integer steps, so quantisation moves the real RMS 0.19 dB off that
+        # identity -- and ffmpeg agrees with the measurement, not the identity.
+        # Asserting the ideal here tests the generator's arithmetic and blames
+        # the measurement.
+        raw = sine(target)
+        a16 = array.array("h")
+        a16.frombytes(raw)
+        exact = 20 * math.log10(
+            (sum(float(v) * v for v in a16) / len(a16)) ** 0.5 / 32768.0)
+        check("sine at %.0f dBFS -> mean matches the exact rms of the samples"
+              % target, abs(lv["mean_db"] - exact) < 0.1,
+              "%.2f vs %.2f" % (lv["mean_db"], exact))
+
+    silent = Fake(b"\x00\x00" * (RATE * 2))._levels(ms=1000)
+    check("digital silence reads -91 flat",
+          silent["mean_db"] == -91.0 and silent["peak_db"] == -91.0, silent)
+    # vcctrl-audio calls NO SIGNAL when mean == peak at the floor. That
+    # equality is what distinguishes a dead path from a quiet one, so it has to
+    # survive exactly rather than approximately.
+    check("silence has mean == peak, which is what NO SIGNAL keys on",
+          silent["mean_db"] == silent["peak_db"])
+
+    # A dither-level signal must NOT read as flat: that is the "connected but
+    # silent" case, and integer RMS used to collapse it onto the floor.
+    import random
+    random.seed(3)
+    out = bytearray()
+    for _ in range(RATE):
+        v = random.randint(-2, 2)
+        out += struct.pack("<hh", v, v)
+    d = Fake(bytes(out))._levels(ms=1000)
+    check("dither floor is distinguishable from digital silence",
+          d["mean_db"] != d["peak_db"] and d["mean_db"] > -91.0, d)
+    check("dither RMS is not integer-truncated (would read ~-90.3)",
+          d["mean_db"] > -89.0, d["mean_db"])
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -411,6 +491,7 @@ if __name__ == "__main__":
     test_lock_gating()
     test_event_bus()
     test_activity_age()
+    test_audio_levels()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)

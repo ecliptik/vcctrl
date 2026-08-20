@@ -174,6 +174,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._mjpeg()
             if path == "/ws":
                 return self._websocket()
+            if path == "/wsaudio":
+                return self._websocket(kind="audio")
             return self._json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -256,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- websocket ----------------------------------------------------------
 
-    def _websocket(self):
+    def _websocket(self, kind="video"):
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
             return self._json({"error": "not a websocket request"}, 400)
@@ -275,6 +277,8 @@ class Handler(BaseHTTPRequestHandler):
                         fps = max(1.0, min(30.0, float(part[4:])))
                     except ValueError:
                         pass
+        if kind == "audio":
+            return self.cap.serve_ws_audio(self.connection)
         self.cap.serve_ws(self.connection,
                           agent=self.headers.get("User-Agent"), fps=fps)
 
@@ -317,6 +321,7 @@ class WebCapability(object):
         self.ws_last_error = None
         self.ws_last_agent = None
         self.ws_dropped = 0
+        self.listeners = 0
         self.lock = threading.Lock()
 
     def start(self):
@@ -342,6 +347,9 @@ class WebCapability(object):
     def video(self):
         return self.registry.caps.get("video")
 
+    def audio(self):
+        return self.registry.caps.get("audio")
+
     def snapshot(self):
         """Everything the page needs to answer "is it stuck", in one request."""
         vid = self.video()
@@ -352,6 +360,9 @@ class WebCapability(object):
                 "last_event_age_s": act.get("last_event_age_s"),
                 "seq": act.get("seq"),
                 "viewers": self.clients,
+                "listeners": self.listeners,
+                "audio": (self.audio()._state() if self.audio()
+                          else {"state": "unavailable"}),
                 "ws": {"opened": self.ws_opened, "closed": self.ws_closed,
                        "dropped": self.ws_dropped,
                        "last_error": self.ws_last_error,
@@ -445,6 +456,62 @@ class WebCapability(object):
                 except Exception:
                     return
             time.sleep(1.0 / max(1.0, rate[0]))
+
+    def serve_ws_audio(self, sock):
+        """Raw PCM out, on its own socket.
+
+        A separate socket rather than a channel on the video one: adding a type
+        prefix to every video frame would touch the working path to add an
+        optional feature, and this way "only stream when someone is listening"
+        falls out of the connection lifecycle instead of needing a flag.
+
+        The stream sends nothing until a client connects, which is the point --
+        silence still costs 1.5 Mbit/s.
+        """
+        aud = self.audio()
+        if aud is None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            return
+        with self.lock:
+            self.listeners += 1
+        last_seq = 0
+        try:
+            # Start from the live edge, not the ring's tail: a listener joining
+            # should hear now, not a burst of the last twenty seconds.
+            with aud.lock:
+                last_seq = aud.seq
+            while True:
+                with aud.lock:
+                    pending = [(sq, c) for _t, sq, c in aud.ring if sq > last_seq]
+                if pending:
+                    # Audio drops differently from video. A dropped frame is
+                    # invisible; a dropped chunk is an audible click. But an
+                    # unbounded queue is worse -- it turns into ever-growing
+                    # delay, and late audio is worth nothing for monitoring.
+                    # So: skip ahead if a client has fallen badly behind,
+                    # rather than trying to deliver everything.
+                    if len(pending) > 40:          # ~0.8 s behind
+                        pending = pending[-10:]
+                    try:
+                        if not select.select([], [sock], [], 0.2)[1]:
+                            continue
+                        for sq, chunk in pending:
+                            sock.sendall(ws_frame(chunk, opcode=0x2))
+                            last_seq = sq
+                    except Exception:
+                        return
+                else:
+                    time.sleep(0.005)
+        finally:
+            with self.lock:
+                self.listeners -= 1
+            try:
+                sock.close()
+            except Exception:
+                pass
 
     def _ws_input(self, sock, stop, held, rate=None):
         while not stop.is_set():

@@ -55,6 +55,18 @@
   #capbar.armed { color:var(--ok); }
   #capbar.armed b { color:var(--ok); font-weight:600; }
   #capbar.flash { color:#dfe3ea; transition:none; }
+  /* Level meter. Shown whether or not sound is enabled, because "is there
+     audio on the wire" is a different question from "can I hear it" -- and on
+     a muted phone the meter is the only answer available. */
+  #meter { flex:none; display:flex; align-items:center; gap:8px;
+           padding:5px 10px; background:#171a21;
+           border-bottom:1px solid var(--line); font:10px/1 var(--mono);
+           color:var(--dim); }
+  #mbar { flex:1; height:6px; background:#0f1116; border-radius:3px;
+          overflow:hidden; position:relative; }
+  #mrms { position:absolute; left:0; top:0; bottom:0; width:0%;
+          background:var(--ok); transition:width .08s linear; }
+  #mpeak { position:absolute; top:0; bottom:0; width:2px; background:var(--warn); left:0; }
   #veil { position:absolute; inset:0; display:none; flex-direction:column;
           align-items:center; justify-content:center; gap:6px; padding:16px;
           background:rgba(10,11,14,.85); text-align:center; }
@@ -121,7 +133,9 @@
     <span id="p-power" class="pill">power …</span>
     <span id="p-xport" class="pill">…</span>
     <span id="p-kbd" class="pill">keyboard idle</span>
+    <span id="p-audio" class="pill">sound off</span>
     <span class="grow"></span>
+    <button id="sbtn">🔇 Sound</button>
     <button id="kbtn" class="primary">⌨ Keyboard</button>
   </header>
 
@@ -137,6 +151,12 @@
   </div>
 
   <div id="capbar">click the screen to capture the keyboard</div>
+
+  <div id="meter">
+    <span id="mlabel">audio —</span>
+    <div id="mbar"><div id="mrms"></div><div id="mpeak"></div></div>
+    <span id="mdb">— dBFS</span>
+  </div>
 
   <div id="keys">
     <button data-mod="lctrl">Ctrl</button>
@@ -311,7 +331,10 @@ $('refresh').onclick = restart;
 // picture without a manual reload -- a KVM you have to reload is one you
 // cannot trust to be showing now.
 addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') restart();
+  if (document.visibilityState !== 'visible') return;
+  restart();
+  // The audio context suspends with the tab and does not resume itself.
+  if (soundOn) { if (ac && ac.state === 'suspended') ac.resume(); if (!aws) startAudio(); }
 });
 addEventListener('pageshow', e => { if (e.persisted) restart(); });
 addEventListener('online', restart);
@@ -550,6 +573,105 @@ addEventListener('blur', () => {
   pressed.clear();
 });
 
+// ------------------------------------------------------------------ audio
+// Raw S16LE at 48 kHz on its own socket. No decode: the capture hardware does
+// 48 kHz and nothing else, which is exactly what an AudioContext wants, so
+// nothing resamples anywhere.
+//
+// Playback schedules AudioBuffers at a running cursor rather than using an
+// AudioWorklet, because AudioWorklet is a SECURE-CONTEXT api and this page is
+// served over plain http. That is not a Safari bug and no amount of debugging
+// the audio graph will find it -- see docs/WEBKVM-AUDIO.md sec. 5.
+let ac = null, aws = null, gain = null, cursor = 0, soundOn = false;
+const LEAD = 0.12;        // jitter buffer, seconds
+const MAX_AHEAD = 0.45;   // beyond this we are accumulating delay, not buffering
+
+function setSound(on) {
+  soundOn = on;
+  $('sbtn').textContent = on ? '🔊 Sound' : '🔇 Sound';
+  $('sbtn').classList.toggle('primary', on);
+  pill('p-audio', on ? 'on' : '', on ? 'sound on' : 'sound off');
+  if (on) startAudio(); else stopAudio();
+}
+
+$('sbtn').onclick = () => {
+  // resume() must happen inside the gesture handler, not after an await, or
+  // both target browsers leave the context suspended.
+  if (!soundOn && !ac) {
+    try { ac = new AudioContext({sampleRate: 48000}); }
+    catch (e) { ac = new AudioContext(); }
+    gain = ac.createGain();
+    gain.gain.value = 1.0;
+    gain.connect(ac.destination);
+  }
+  if (ac && ac.state === 'suspended') ac.resume();
+  setSound(!soundOn);
+};
+
+function stopAudio() {
+  if (aws) { try { aws.onclose = null; aws.close(); } catch (e) {} aws = null; }
+  cursor = 0;
+}
+
+function startAudio() {
+  if (aws) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  aws = new WebSocket(`${proto}://${location.host}/wsaudio`);
+  aws.binaryType = 'arraybuffer';
+  aws.onclose = () => { aws = null; if (soundOn) setTimeout(startAudio, 1200); };
+  aws.onerror = () => { try { aws.close(); } catch (e) {} };
+  aws.onmessage = ev => {
+    const pcm = new Int16Array(ev.data);
+    meter(pcm);
+    if (!soundOn || !ac) return;
+    const frames = pcm.length >> 1;
+    if (!frames) return;
+    // 48000 explicitly, not ac.sampleRate: if the context ended up at 44100
+    // (iOS has historically done this) the browser resamples on playback,
+    // which is correct and free. Using ac.sampleRate here would play it at
+    // the wrong pitch instead.
+    const buf = ac.createBuffer(2, frames, 48000);
+    const L = buf.getChannelData(0), R = buf.getChannelData(1);
+    for (let i = 0; i < frames; i++) {
+      L[i] = pcm[2 * i] / 32768;
+      R[i] = pcm[2 * i + 1] / 32768;
+    }
+    const now = ac.currentTime;
+    if (cursor < now + 0.005) cursor = now + LEAD;   // underran: resync
+    else if (cursor > now + MAX_AHEAD) return;       // too far ahead: drop
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    src.connect(gain);
+    src.start(cursor);
+    cursor += buf.duration;
+  };
+}
+
+// The meter runs off the same samples, so it costs one pass and no requests.
+// It reports RELATIVE level only: a physical volume knob sits in the signal
+// path (FINDINGS 11), so absolute dB is not comparable between sessions and
+// must never be fed into a comparison.
+let mSmooth = -91;
+function meter(pcm) {
+  let peak = 0, sum = 0;
+  const step = Math.max(1, pcm.length / 2048 | 0);
+  let n = 0;
+  for (let i = 0; i < pcm.length; i += step) {
+    const v = pcm[i]; const a = v < 0 ? -v : v;
+    if (a > peak) peak = a;
+    sum += v * v; n++;
+  }
+  const rms = Math.sqrt(sum / Math.max(1, n));
+  const db = v => v > 0 ? 20 * Math.log10(v / 32768) : -91;
+  const rdb = db(rms), pdb = db(peak);
+  mSmooth = Math.max(rdb, mSmooth - 3);
+  const pct = v => Math.max(0, Math.min(100, (v + 70) / 70 * 100));
+  $('mrms').style.width = pct(mSmooth) + '%';
+  $('mpeak').style.left = pct(pdb) + '%';
+  $('mdb').textContent = rdb <= -90 ? 'silent' : rdb.toFixed(0) + ' dBFS';
+  $('mlabel').textContent = 'audio';
+}
+
 // ------------------------------------------------------------------ log
 let seq = 0;
 const logEl = $('log');
@@ -649,6 +771,13 @@ async function pollState() {
   $('s-lastev').textContent = fmtAge(j.last_event_age_s);
   $('s-frames').textContent = v.frames ?? '–';
   $('s-viewers').textContent = j.viewers ?? '–';
+  const A = j.audio || {};
+  if (!soundOn) {
+    // Even with sound off, say whether the capture path is alive. "silent" and
+    // "the ALSA device died" look identical otherwise.
+    pill('p-audio', A.state === 'capturing' ? '' : 'mid',
+         A.state === 'capturing' ? 'sound off' : 'audio ' + (A.state || '?'));
+  }
 }
 async function pollPower() {
   const j = await post('power', {action:'state'});

@@ -34,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 HOST = os.environ.get("VCCTRL_HOST", "usb4vc")
 DEV = os.environ.get("VCCTRL_ALSA", "hw:1,0")
@@ -44,7 +45,74 @@ DEV = os.environ.get("VCCTRL_ALSA", "hw:1,0")
 FLOOR_DB = -80.0
 
 
+# The daemon owns hw:1,0 for its lifetime now, so this tool cannot open the
+# device itself -- it would get EBUSY. It reads the daemon's rolling PCM ring
+# instead, which is both faster and, more importantly, keeps this tool's
+# defining property intact: it still touches neither the keyboard nor
+# /dev/video0, and now it touches no hardware at all, so it remains the one
+# check that is safe to run DURING a measured cell.
+VCCTRL_WEB = os.environ.get("VCCTRL_WEB", "http://100.64.0.1:8080")
+
+
+def _daemon_alive(timeout=2.0):
+    try:
+        import urllib.request
+        with urllib.request.urlopen("%s/state.json" % VCCTRL_WEB, timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
 def measure(seconds):
+    """Returns (mean_db, peak_db, histogram, raw_text).
+
+    Numbers come from the daemon and are the same scale as before: validated
+    against `ffmpeg -af volumedetect` on synthetic signals at -20, -40 and
+    -60 dBFS, matching mean and peak to within 0.07 dB and reproducing
+    ffmpeg's bucket count exactly. That matters because every reference level
+    in FINDINGS -- the -30.8 dB working figure, the -65.6 dB floor -- was read
+    off volumedetect, and a shifted scale would silently invalidate all of it.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+    url = "%s/cmd" % VCCTRL_WEB
+    body = json.dumps({"cmd": "level", "ms": int(seconds * 1000)}).encode()
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"})
+    last = None
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                d = json.loads(r.read())
+            if not d.get("ok") or d.get("mean_db") is None:
+                return None, None, {}, ("daemon returned no level: %s"
+                                        % d.get("reason", d))
+            hist = {int(k): v for k, v in (d.get("hist") or {}).items()}
+            return (d["mean_db"], d["peak_db"], hist,
+                    "from daemon ring, %s ms, state=%s, buckets=%d"
+                    % (d.get("window_ms"), d.get("state"), d.get("buckets", 0)))
+        except Exception as exc:
+            last = exc
+            if attempt == 1:
+                time.sleep(0.4)
+
+    # Same rule as grab(): do not fall back into a capture that cannot work.
+    # The daemon holds hw:1,0, so a direct ffmpeg would hit EBUSY and report
+    # "no signal" -- a false reading, not a failure to read.
+    if _daemon_alive():
+        return None, None, {}, (
+            "daemon is up but served no level (%s). NOT falling back to a "
+            "direct capture -- it holds hw:1,0, so ffmpeg would get EBUSY and "
+            "report a false NO SIGNAL." % last)
+
+    sys.stderr.write("vcctrl-audio: daemon unreachable (%s), sampling the "
+                     "device directly\n" % last)
+    return _measure_ffmpeg(seconds)
+
+
+def _measure_ffmpeg(seconds):
+    """The original path, kept for a daemon that is down."""
     r = subprocess.run(
         ["ssh", HOST,
          "ffmpeg -hide_banner -f alsa -i %s -t %d -af volumedetect -f null - 2>&1"
@@ -74,7 +142,7 @@ def main(argv):
 
     mean, peak, hist, raw = measure(seconds)
     if mean is None:
-        print("REFUSED: could not read a level from ffmpeg. Device %s on %s."
+        print("REFUSED: could not read a level. Device %s on %s."
               % (DEV, HOST))
         print(raw.strip()[-400:])
         return 2

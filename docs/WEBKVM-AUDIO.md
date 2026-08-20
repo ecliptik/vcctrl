@@ -230,3 +230,66 @@ property that makes `vcctrl-audio` special in the first place.
 4. **What is the ring worth in seconds?** 1.5 Mbit/s means 10 s costs ~1.9 MB.
    Cheap, and it makes step 8 nearly free -- but it is byte-capped like the
    frame ring, for the reason rule 3 does not cover memory.
+
+---
+
+## 9. Built, not yet deployed  **[2026-08-19]**
+
+Everything below is written and unit-tested against synthetic signals. It has
+**not** run against the rig: taking `hw:1,0` needs a daemon restart, and that
+drops the uinput devices for USB4VC's 0.75 s rescan, so it waits for a window.
+
+- `AudioCapability` — owns `hw:1,0`, byte-capped PCM ring, liveness watchdog
+  with the fast-failure backoff, `audio state|acquire|release`, `level`.
+- `bin/vcctrl-audio` shimmed onto the daemon, with the same
+  fallback-only-if-the-daemon-is-actually-down rule that `grab()` ended up
+  with.
+- `/wsaudio` fan-out, subscriber-gated, starting at the live edge.
+- Page: Sound button, scheduled `AudioBufferSourceNode` playback, level meter.
+
+### The scale had to be proved, not assumed
+
+Every reference level in FINDINGS -- the -30.8 dB working figure, the -65.6 dB
+floor -- was read off `ffmpeg -af volumedetect`, and `vcctrl-audio`'s verdicts
+are tuned to those numbers. Computing levels a different way and calling them
+dB would have invalidated all of it silently. So the implementation was
+measured against ffmpeg on the same synthetic signals:
+
+| signal | ffmpeg mean/peak/buckets | this |
+|---|---|---|
+| sine -20 dBFS | -23.0 / -20.0 / 1 | -23.01 / -20.00 / 1 |
+| sine -40 dBFS | -43.0 / -40.0 / 1 | -43.05 / -40.02 / 1 |
+| sine -60 dBFS | -63.4 / -60.2 / 1 | -63.41 / -60.21 / 1 |
+| digital silence | -91.0 / -91.0 / 1 | -91.00 / -91.00 / 1 |
+| dither floor | -87.3 / -84.3 / 1 | -87.28 / -84.29 / 1 |
+
+Worst deviation **0.05 dB**. Two things had to be fixed to get there, and both
+are the kind of error that would have shifted a scale quietly:
+
+**`audioop.rms` returns an integer.** At the noise floor an RMS of 1.41
+truncates to 1, which reads -90.3 dB instead of -87.3 -- a 3 dB error sitting
+exactly where "connected but silent" is told apart from "nothing on the wire",
+which is the one judgement this tool makes that nothing else can. RMS is
+computed in floating point over a strided subsample instead, which is also
+immune to `audioop`'s removal in Python 3.13.
+
+**ffmpeg does not print every non-empty histogram bucket.** It walks down from
+the loudest and stops once the printed buckets cover 0.1% of samples, so the
+count means "how many dB of headroom hold the loudest 0.1%" -- a crest-factor
+measure. A naive distinct-count gave 36 where ffmpeg gave 1. `vcctrl-audio`
+prints `len(hist)`, so the daemon returns the truncated histogram rather than
+the full one.
+
+### And the tests were wrong twice before the code was right once
+
+The first version asserted a -60 dBFS sine should read -60.00. It reads -60.21,
+because the amplitude quantises to integer 32 -- and ffmpeg says -60.2 too. The
+second asserted RMS should sit 3.01 dB below peak, which is the identity for a
+*continuous* sine; at 32 integer steps the real RMS is 0.19 dB off it, and
+again ffmpeg agreed with the measurement rather than the identity.
+
+Both failures blamed the measurement for the generator's rounding. The tests
+now compare against the exact RMS of the samples that were actually generated.
+**A test asserting an ideal is testing arithmetic, not code**, and when it
+disagrees with an independent implementation it is the more likely one to be
+wrong.
