@@ -1311,6 +1311,177 @@ def test_shot_out_contract():
           "got %r" % rc)
 
 
+def _unbound_names(src, path="<src>"):
+    """Names loaded but bound nowhere in the file, and not a builtin.
+
+    Deliberately over-permissive about SCOPE: a name bound anywhere in the
+    file counts as bound everywhere. That misses using a local from another
+    function, and it costs nothing in false alarms -- which matters, because a
+    check people switch off catches less than no check at all.
+    """
+    import ast
+    import builtins as B
+
+    tree = ast.parse(src, path)
+    bound, loaded = set(), {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                bound.add(a.asname or a.name)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(n.name)
+        elif isinstance(n, ast.arg):
+            bound.add(n.arg)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            bound.add(n.name)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            bound.update(n.names)
+        elif isinstance(n, ast.Name):
+            if isinstance(n.ctx, ast.Load):
+                loaded.setdefault(n.id, n.lineno)
+            else:
+                bound.add(n.id)
+    ok = set(dir(B)) | {"__name__", "__file__", "__doc__", "__package__"}
+    return sorted((k, v) for k, v in loaded.items()
+                  if k not in bound and k not in ok)
+
+
+def test_no_unbound_names():
+    """No module uses a name it never imported or defined.
+
+    Found on the live rig 2026-08-20, on the Pi 5's first boot: vcweb called
+    sys.stderr.write() and never imported sys. The line was the FALLBACK -- it
+    runs when the direct TLS listener cannot start, to say so and carry on
+    serving plain HTTP. So the code whose entire job was to degrade gracefully
+    was itself a NameError, and the result was not "no WebSocket transport",
+    it was the whole web capability dead and no KVM at all.
+
+    It never fired on the old machine for the reason these never fire: the
+    cert was already there, so the listener always started and that line was
+    never executed in the life of that Pi. It took a fresh install on a
+    machine without a cert to run one line of error handling for the first
+    time.
+
+    Every test in this file exercises code by running it. This is the one
+    class that cannot be reached that way -- an error path that only executes
+    on a machine that does not exist yet -- so it is read instead.
+    """
+    print("\nunbound names")
+    import os
+
+    root = os.path.join(HERE, os.pardir)
+    files = []
+    for d in ("daemon", "tools"):
+        p = os.path.join(root, d)
+        if os.path.isdir(p):
+            files += [os.path.join(p, f) for f in sorted(os.listdir(p))
+                      if f.endswith(".py")]
+    for f in sorted(os.listdir(os.path.join(root, "bin"))):
+        path = os.path.join(root, "bin", f)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            if fh.readline().startswith("#!/usr/bin/env python"):
+                files.append(path)
+
+    bad = []
+    for path in files:
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        for name, line in _unbound_names(src, path):
+            bad.append("%s:%d %s" % (os.path.basename(path), line, name))
+    check("%d modules use only names they have" % len(files), not bad, bad)
+    check("control: there were modules to read", len(files) >= 4, len(files))
+
+    # The control that matters: this check has to be able to FAIL. Take the
+    # import back out of the module it actually happened in and confirm the
+    # reader notices -- otherwise the test above passes for the wrong reason
+    # on the day someone breaks the reader.
+    web = os.path.join(root, "daemon", "vcweb.py")
+    with open(web, encoding="utf-8") as fh:
+        src = fh.read()
+    assert "\nimport sys\n" in src, "vcweb.py no longer imports sys"
+    hurt = src.replace("\nimport sys\n", "\n", 1)
+    found = [n for n, _ in _unbound_names(hurt, web)]
+    check("control: removing an import makes it fail", "sys" in found, found)
+
+
+def test_ffmpeg_stderr_is_kept():
+    """A device that will not open must say why.
+
+    Both capture spawns used stderr=DEVNULL. Measured on the Pi 5 with no
+    capture stick attached: video and audio both `unavailable`, nine
+    fast_failures each, and `last_error: null` -- while ffmpeg was, on the
+    other side of a pipe pointed at /dev/null, saying exactly what was wrong.
+
+    That is the wrong thing to discard on a rig that addresses its devices by
+    INDEX. "hw:1,0" is not a stick, it is a guess about enumeration order, and
+    the Pi 5 enumerates differently from the Pi 3 it replaced. When the guess
+    is wrong, the difference between "cannot open audio device hw:1,0" and
+    "Device or resource busy" is the difference between one environment
+    variable and an afternoon.
+
+    Run against the real ffmpeg rather than a fake, because the thing being
+    tested is whether ffmpeg's words survive the plumbing.
+    """
+    print("\nffmpeg stderr")
+    import shutil
+    import subprocess
+    import types
+
+    if not shutil.which("ffmpeg"):
+        print("  SKIP  no ffmpeg on this host")
+        return
+
+    proc = subprocess.Popen(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-f", "v4l2", "-i", "/dev/video-does-not-exist",
+         "-c:v", "copy", "-f", "mjpeg", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    cap = types.SimpleNamespace(lock=threading.Lock(), last_error=None)
+    t = threading.Thread(target=vcctrld._keep_stderr, args=(cap, proc),
+                         daemon=True)
+    t.start()
+    try:
+        proc.wait(timeout=15)
+    except Exception:
+        proc.kill()
+    t.join(timeout=5)
+    try:
+        proc.stdout.close()
+    except Exception:
+        pass
+
+    got = cap.last_error or ""
+    print("  ffmpeg said: %s" % (got or "<nothing>"))
+    check("the reason reaches last_error", bool(got), got)
+    check("and it names the device", "video-does-not-exist" in got, got)
+    check("control: it is bounded, not the whole log", len(got) <= 240,
+          len(got))
+
+    # The control that matters: DEVNULL is what shipped, and it must be able
+    # to show as the absence it is.
+    quiet = subprocess.Popen(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error",
+         "-f", "v4l2", "-i", "/dev/video-does-not-exist",
+         "-c:v", "copy", "-f", "mjpeg", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+    cap2 = types.SimpleNamespace(lock=threading.Lock(), last_error=None)
+    try:
+        quiet.wait(timeout=15)
+    except Exception:
+        quiet.kill()
+    try:
+        quiet.stdout.close()
+    except Exception:
+        pass
+    check("control: with DEVNULL there is nothing to report",
+          cap2.last_error is None, cap2.last_error)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -1329,6 +1500,8 @@ if __name__ == "__main__":
     test_uniform_frame_is_not_picture()
     test_websocket_accept_vector()
     test_page_dom_references()
+    test_no_unbound_names()
+    test_ffmpeg_stderr_is_kept()
     test_zoom_modes()
     test_zoom_layout_in_a_browser()
     test_favicon_single_source()

@@ -845,6 +845,50 @@ class PowerCapability(Capability):
         return {"ok": True, "power": st}
 
 
+def _keep_stderr(cap, proc):
+    """Keep ffmpeg's own explanation instead of throwing it away.
+
+    Both spawns used stderr=DEVNULL, so a device that would not open produced
+    `fast_failures` climbing and NOTHING ELSE -- state.json carried
+    last_error: null while ffmpeg was, on the other side of the pipe, saying
+    exactly what was wrong. Verified on the Pi 5 with no stick attached:
+    video and audio both unavailable, nine failures each, no reason given.
+
+    That is the wrong thing to discard on a rig whose devices are addressed by
+    INDEX. "hw:1,0" is not a stick, it is a guess about enumeration order, and
+    when the guess is wrong the difference between "cannot open audio device
+    hw:1,0" and "cannot open ... hw:2,0 (Device or resource busy)" is the
+    difference between one environment variable and an afternoon.
+
+    Drained in a thread because a PIPE nobody reads eventually fills and stops
+    the process it was meant to be watching. At -loglevel error the volume is
+    a line or two per failed spawn.
+    """
+    # The FIRST lines, not the last. ffmpeg names the specific fault first and
+    # then summarises: "Cannot open video device /dev/videoX: No such file or
+    # directory" followed by "Error opening input files: No such file or
+    # directory". Keeping the most recent line kept the second one, which is
+    # true, useless, and identical for every device that will not open --
+    # caught by the test asserting the device name survives.
+    kept = []
+    try:
+        for raw in iter(proc.stderr.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            if not line or line in kept:
+                continue
+            if len(kept) < 3:
+                kept.append(line)
+                with cap.lock:
+                    cap.last_error = " | ".join(kept)[:240]
+    except Exception:
+        pass
+    finally:
+        try:
+            proc.stderr.close()
+        except Exception:
+            pass
+
+
 class VideoCapability(Capability):
     """Owns /dev/video0 for the life of the daemon and fans frames out.
 
@@ -963,7 +1007,7 @@ class VideoCapability(Capability):
                      "-video_size", "640x480", "-framerate", "30",
                      "-i", self.DEVICE,
                      "-c:v", "copy", "-f", "mjpeg", "-"],
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     bufsize=0)
             except Exception as exc:
                 self.last_error = "%s: %s" % (type(exc).__name__, exc)
@@ -972,6 +1016,11 @@ class VideoCapability(Capability):
             self.spawns += 1
             self.spawn_t = time.time()
             self.state = "starting"
+            # Cleared per attempt, so the field means "what went wrong with
+            # THIS spawn" rather than accumulating the history of a machine.
+            self.last_error = None
+            threading.Thread(target=_keep_stderr, args=(self, self.proc),
+                             daemon=True).start()
             self.reader = threading.Thread(target=self._read_frames,
                                            args=(self.proc,), daemon=True)
             self.reader.start()
@@ -1635,7 +1684,7 @@ class AudioCapability(Capability):
                      "-f", "alsa", "-ar", str(self.RATE),
                      "-ac", str(self.CHANNELS), "-i", self.DEVICE,
                      "-acodec", "pcm_s16le", "-f", "s16le", "-"],
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     bufsize=0)
             except Exception as exc:
                 self.last_error = "%s: %s" % (type(exc).__name__, exc)
@@ -1644,6 +1693,11 @@ class AudioCapability(Capability):
             self.spawns += 1
             self.spawn_t = time.time()
             self.state = "starting"
+            # Cleared per attempt, so the field means "what went wrong with
+            # THIS spawn" rather than accumulating the history of a machine.
+            self.last_error = None
+            threading.Thread(target=_keep_stderr, args=(self, self.proc),
+                             daemon=True).start()
             threading.Thread(target=self._read_pcm, args=(self.proc,),
                              daemon=True).start()
         self._publish("audio.acquired", spawns=self.spawns)
