@@ -1040,16 +1040,41 @@ a 640-wide framebuffer. The *comparisons below survive this*, because all four
 cells carry the identical defect. The *absolute figures do not*. Nothing here
 may be banked as "doskutsu at 640x480".
 
-### `per_loop_fps` is not the frame rate
+### `per_loop_fps` is not the frame rate -- but it is not corrupt either
 
-`GR3` reports `per_loop_fps=114.9`, with `overhead_s=484` of `dur=590s`. Its
-own per-stage table reads 21.6-32.3. The aggregate is an artifact of what the
-loop counter excludes; the per-stage table is the measurement. A cell whose
-overhead dominates its duration will report a spectacular aggregate and it
-means nothing.
+`GR3` reports `per_loop_fps=114.9`, with `overhead_s=484` of `dur=590s`, while
+its own per-stage table reads 21.6-32.3.
 
-Two stages report exactly `50.0` in every cell. That is the TAS 50 Hz ceiling,
-not a result. Both are dropped below.
+I first wrote this up as an artifact that "means nothing". **The benchmarking
+session corrected that and the correction is the useful part.** `per_loop_fps`
+is approximately `flips / (dur - overhead_s)` -- the rate *as if overhead were
+free*. It answers a hypothetical, and it answers it correctly:
+
+    cell  flips   dur  ovh  loop  fps_mean  per_loop  factor
+    GR4    2853   131   24   107      22.6      27.7    1.23
+    GR4B   2857   130   24   106      22.6      27.7    1.23
+    GR5    3134   122   16   106      26.5      30.4    1.15
+    GR3   11816   590  484   106      20.1     114.9    5.72
+
+`per_loop / fps_mean` tracks `dur / (dur - ovh)` to within 3% in every cell,
+and GR3 hit the same `auto-exit at tick 5140` as the others. The reel
+completed. Flips accrue *during* overhead while overhead is subtracted from
+the denominator, so a cell that spends 82% of its wall-clock loading reports a
+spectacular number by construction.
+
+And the table carries a signal I had missed entirely: **the loop denominator
+is ~106 s in all four cells.** GR3 is not a broken cell, it is the same 106 s
+of work with 484 s of loading in front of it.
+
+Two different errors, worth keeping apart. Mine was calling arithmetic corrupt
+because its output was implausible -- discarding a cell rather than
+understanding a field. The one that was actually available to be made is
+quoting 114.9 as a frame rate. Rules recorded downstream: cross-check the
+ratio against `dur/(dur-ovh)`; treat per-loop as inadmissible above ~25%
+overhead; never quote a per-loop figure without its overhead beside it.
+
+Two stages report exactly `50.0` in every cell -- the TAS 50 Hz ceiling, not a
+result. Both are dropped from the comparisons below.
 
 ### The repeat pair is the useful part
 
@@ -1091,3 +1116,297 @@ wrong measurement, which is what makes it so easy to publish.
 The zero-byte guard added to `inspect_logs()` at the same time is still
 correct and stays -- `GC0B` and `GP1` really are 0 bytes, and an empty file
 passes a `[critical]`-line scan precisely because it has no lines.
+
+### The last hardcoded lie in the chain
+
+`RB.BAT` printed `video_declared=S3 ViRGE` unconditionally, and kept printing
+it after a Mach64 went in. Both peer sessions flagged it independently as the
+thing to fix before anyone reads these numbers cold.
+
+The irony is in the file. Eight lines above the offending `ECHO`, a comment
+explains that `config=%config%` proves provenance *precisely because it is
+chosen at the boot menu rather than asserted* -- "a log PROVES its own
+provenance rather than attesting to the absence of something". Then the next
+line but one asserts the video card.
+
+It now reads `%QAVID%`, defaulting to `UNDECLARED`. An honest gap sends the
+reader to `vcctrl-cardid`; a confident wrong string sends them nowhere,
+because it does not look like a question.
+
+Patched in `~/doskutsu-netiter/stage/RB.BAT`. **Not yet deployed to the CF
+card** -- that needs the target, which is powered down. The four logs already
+collected still carry the false declaration, and §26 above is the record that
+they do.
+
+### Two copies of the same fix, and neither of us was holding the other's
+
+The benchmarking session reported that `RB.BAT` emitted `video_declared=`
+twice -- an empty parameterised line and the hardcoded ViRGE one -- and that
+the four Mach64 logs therefore carry the field twice with contradictory
+values. Generously, that "you quoted the second" was a reasonable read.
+
+Checked against the artifact rather than accepted:
+
+    incoming/GRB.NFO          video_declared lines: 1
+    stage/RB.BAT (pre-patch)  video_declared lines: 1
+
+`GRB.NFO` is what the g2k itself wrote and FTP'd back. **One line.** The
+collected logs are not ambiguous; they are simply wrong, and the value I
+quoted was the only one present. Worth declining the absolution, because
+"the artifact was ambiguous" and "the artifact was wrong" are different facts
+about the same four logs.
+
+What it actually shows is that the commit adding the parameterised line never
+reached this staging tree or the CF card -- and, in the other direction, that
+their resync never reached `~/doskutsu-netiter/stage/RB.BAT`, which still
+holds the patch written here at 22:15. **Two divergent copies of one file,
+each of us reasoning confidently about the one we held.**
+
+Which is [[a-config-file-is-not-the-configuration]] arrived at from the
+opposite side. That note was written after verifying a configuration from a
+file's size instead of from the running system's mode list. Here the file was
+read correctly and the error was assuming it was the only file. Same root:
+the artifact on disk in front of you is evidence about that artifact, and
+about nothing else, until something ties it to what actually ran.
+
+Nothing deploys to the CF card until the trees are reconciled. Deployment is
+the step where one copy silently wins.
+
+---
+
+## 27. Two rules that came out of one bad line
+
+`MTCP/CHK.BAT` line 16 read `ECHO CHK done: %1 -^> incoming\%2`. Fixed in
+`g2k@9d001c5`. Both rules below are general and neither is about DOS.
+
+### Documenting a bug can reproduce it
+
+There is no escape character in MS-DOS 6.22 -- the caret is a caret and the
+`>` redirects. That was established by hardware test in the morning and
+reasserted by me the same evening as settled background, in a sentence that
+was not the topic of the message.
+
+The consequence: the line printed truncated and tried to CREATE
+`incoming\<name>` under the cwd. From `C:\DOSKUTSU` there is no `incoming\`,
+which is a file creation error -- the one the operator had reported and I had
+written off as unanswerable while the capture path was dark. It was answerable
+from a file already on this disk.
+
+Then the fix reproduced the defect. `REM` is an internal command and
+COMMAND.COM parses redirection **before** dispatch, so a `>` inside a comment
+is live. The first patch quoted the broken line in a `REM` to explain it, which
+would have created the files the patch existed to stop creating.
+
+**The safest-feeling action carried the defect.** Writing a comment to warn the
+next person is what a careful author does. Nothing in "redirection is parsed
+inside REM" makes that consequence visible until you have walked into it, and
+it was caught on re-read rather than by reasoning -- which means the defence is
+the re-read, not the understanding.
+
+### A check that can fabricate an answer is worse than no check
+
+`CHK done`, `PUT done` and `GET done` were all echoed after `FTP.EXE` returned
+and conditioned on nothing, so they announced success on transfers that moved
+nothing. The obvious repair is `IF ERRORLEVEL 1`.
+
+It was declined. It is unverified whether mTCP's `FTP.EXE` sets an errorlevel,
+and **if it does not, `IF ERRORLEVEL 1` reads the previous command's value**.
+That is not a check that fails; it is a check that reports confidently on a
+different operation while wearing the right label. Strictly worse than the
+unconditional message it replaces, because it looks like rigour.
+
+All three now state the attempt and name the witness -- the file arriving on
+the server. A sentence that cannot be false beats a status whose provenance is
+unverified.
+
+### The scoreboard on this one
+
+The four files carrying the caret were reported *only* because their divergence
+had the wrong shape. The content assessment attached to that report -- "cosmetic,
+nothing to fix" -- was wrong. Had reporting been conditional on my judgement of
+importance, four sweeps would have deployed broken, because the judgement was
+the part that failed.
+
+And the divergence itself recurred within twenty minutes of my diagnosing it: I
+patched `~/doskutsu-netiter/stage` without checking that `ecliptik/g2k` tracks
+those files. Naming a failure shape does not confer immunity to it. What caught
+it was checking rather than assuming, which is a habit -- and habits work when
+understanding does not.
+
+---
+
+## 28. The control path vanished and every instrument said healthy  [measured 2026-08-20; MECHANISM CORRECTED, see the end]
+
+Mid-session, `ssh <rig>` stopped answering for about three minutes. Not slow
+-- a bare TCP connect to port 22 completed and then sat there with no banner.
+Ping was fine. `https://vcctrl-pi.example.ts.net/state.json` was fine, and
+reported video capturing at 1.08M frames with a 26 ms frame age, audio
+capturing, no errors, lock free. Every reading available said the rig was
+healthy, and the rig *was* healthy. What had gone was the path used to drive
+it.
+
+### The mechanism
+
+`systemd-journald` had been SIGABRTed on `Watchdog timeout (limit 3min)!`
+**122 times in 34 hours** -- roughly one every three to six minutes. While it
+is wedged, anything that logs blocks, and sshd logs every connection before it
+gets as far as a banner. The kernel completes the handshake into the accept
+queue on sshd's behalf, so the client sees a connection that opens and then
+nothing. `vcctrld` was untouched because it was not logging: a quiet process
+is immune, a chatty one is not.
+
+### It feeds itself
+
+A journald killed uncleanly leaves its open file behind renamed `*.journal~`.
+At 122 kills the directory held **101 files, 824 MB**, most of them those
+corpses. More files to scan is more startup work is more chance of missing the
+next three-minute deadline. The kills manufacture the condition that causes the
+kills.
+
+It was not disk space -- `/` had 21 GB free. It was not memory either: 371 MB
+used of 920 with 549 MB available, and the first hypothesis in the room
+(memory pressure, from misreading `free` as `available`) was wrong and was
+contradicted by the very next measurement. The cost is CPU and deadline, on a
+1.2 GHz A53 already at load 3.5 from continuous USB video and audio capture on
+a Pi 3's single shared USB 2.0 bus.
+
+Capped at `SystemMaxUse=100M`, `SystemMaxFileSize=16M`, `SystemMaxFiles=12`
+and vacuumed: 824M -> 96M, 101 files -> 12.
+
+### Why this one is worth a section
+
+Every existing check in this harness answers a question about the *target*.
+None of them answers "can I still drive it?", and the failure was invisible to
+all of them precisely because the daemon and the web path were unaffected. The
+KVM in a browser looked perfect throughout.
+
+**The dangerous version of this is not the three minutes of no ssh.** It is a
+150 s measurement cell, which is not resumable, driven entirely over the CLI
+path, silently losing that path partway through while the web view keeps
+showing a live picture. `pi/deploy.sh` already refuses to deploy into a running
+cell because a restart destroys it; this is the same destruction arriving with
+no actor to refuse.
+
+### The generalisable part
+
+An instrument that reports on the target cannot report on itself. Three
+observations agreed the system was fine -- ping, `/state.json`, the live MJPEG
+stream -- and all three were true and all three were about something other
+than the thing that had broken. The reading that mattered was the one nobody
+was taking, and the only reason it got taken is that a command hung rather
+than returning a wrong answer.
+
+Related: sec. 24, the harness cannot see its own cable.
+
+### CORRECTION, two hours later: the mechanism above is WRONG
+
+Everything in this section about *what journald was doing* is retracted. The
+symptom, the blast radius and the generalisable part all stand. The cause does
+not.
+
+The claim was that 824 MB across 101 files made journald too slow to meet its
+deadline. **One number in the kill line refutes it:**
+
+    systemd-journald.service: Consumed 2.704s CPU time.
+
+2.7 seconds across a 45-minute lifetime. Something grinding through a file
+pile burns CPU. This was **blocked, not busy**, and the file-pile story never
+explained that -- it was assembled from a plausible-looking correlation (a big
+journal was present, and a big journal is a known problem) and never tested
+against the one figure that was sitting in the same log line.
+
+Capping the journal to 100M/12 files was real disk hygiene and changed nothing:
+the kills continued at the same ~3 minute cadence, which is the watchdog limit
+itself, because a restarted instance immediately re-enters the stall and dies
+at its first deadline.
+
+**Second wrong mechanism.** The next candidate was ssh session churn -- which
+is documented in the header of `bin/vcctrl` as the cause of the 2026-08-19
+outage, and is correct *for that outage*: every plain ssh spawns a full systemd
+user session, ~20 journal lines per call, 676 entries in ten minutes. It does
+not describe this one. Measured with the churn eliminated: **zero new login
+sessions in 15 minutes, 23 journal entries in 5 minutes, kills continuing.**
+
+Worth recording that the harness was never the churner. `bin/vcctrl` has passed
+ControlMaster since that fix. What churned was ad-hoc `ssh <rig>` from outside
+the wrapper -- including a monitoring loop I had armed to watch for this exact
+fault, polling with plain ssh, i.e. reproducing the fault it was watching for.
+There was no `~/.ssh/config` on the VM at all, so nothing outside the wrapper
+multiplexed. Fixed by configuring it at the host level, sharing the wrapper's
+ControlPath: three consecutive plain `ssh <rig>` calls now leave the session
+counter unchanged where they previously created three sessions.
+
+### What it actually was, measured rather than reconstructed
+
+A probe sampling `/proc` every 2 s from tmpfs -- so it neither wrote to SD nor
+entered the journal, and could not perturb what it measured:
+
+    wchan=file_tty_write  nr=146 (writev)  fd=41  target=/dev/console
+    ttyfds: 41=>/dev/console          <- the only tty fd journald held
+
+Blocked in a `writev()` to `/dev/console`, continuously, 31 of 31 samples
+through a stall, while PID 1 stayed healthy.
+
+**Why a console write never returns here, and this is the rig-specific part.**
+The kernel console is `console=tty1`, a physical VT on a headless Pi, with
+`ixon` enabled. The vcctrl virtual keyboard is a keyboard to the **Pi** as well
+as to the DOS target -- which is already why `pi/install.sh` masks
+`ctrl-alt-del.target`. A `Ctrl-S` aimed at the g2k is XOFF on tty1: output
+suspends, the next console write blocks forever, journald stops draining its
+sockets, and sshd, PAM, logind and sudo all block behind it. **Same class of
+bug as the ctrl-alt-del one, on a different chord**, and the existing mask is
+the proof that this class was already known.
+
+Corroboration arrived by accident: `stty -F /dev/tty1 -ixon` also hangs, because
+`n_tty_write()` holds `termios_rwsem` while blocked and setting termios needs
+the write lock. The command that would clear the condition queues behind it.
+
+### The fix, and what it does not fix
+
+    ForwardToConsole=no    MaxLevelConsole=emerg
+    ForwardToWall=no       MaxLevelWall=emerg
+
+`ForwardToConsole` was already off by default with no drop-ins, so the write was
+the wall path. All four are set explicitly, because the point is that journald
+must never touch a tty a stray keystroke can stop.
+
+The evidence this worked is **structural, not statistical** -- which matters,
+because the two wrong mechanisms above were each declared fixed on an absence
+of events during what turned out to be a normal quiet gap:
+
+    10:04:14  jd=9918   file_tty_write  fd=41 -> /dev/console  ttyfds: 41=>...
+    10:04:16  jd=14545  do_epoll_wait   fd=32 -> eventpoll     ttyfds:
+
+journald now holds **no tty fd at all**. Blocking on a console write is not
+merely unobserved, it is unavailable.
+
+**The root cause is untouched.** tty1 is still flow-stopped; a Ctrl-S can still
+freeze it; anything else writing to `/dev/console` still hangs forever. This
+removes journald from the blast radius, which is what was taking sshd down.
+A real fix is boot-time: clear `ixon` on tty1 before anything writes, or take
+the console off tty1 entirely.
+
+### What this cost, and the part worth keeping
+
+Three times in one investigation the instrument damaged the thing it measured:
+a monitor polling with plain ssh reproduced the churn fault; a `pkill -f
+journald-probe.sh` matched its own ssh command line and killed the shell
+running it, silently, three times; and retried `stty -F /dev/tty1` calls each
+spun a full core for their whole timeout window -- nine at once, on a machine
+at 3.6% idle, while the operator was watching the video stream stutter. One of
+those is still spinning: it survives SIGKILL because it is stuck in a kernel
+path that does not process signals, and it will clear on reboot.
+
+Two tooling failures were silent rather than loud. `strtonum()` is a gawk
+extension and Debian ships mawk, so the field that resolved the fd came back
+empty and read as "no fd" rather than "parser broken" -- the decisive fact was
+lost for a round to a function that does not exist. And a monitor comparing
+`NRestarts` with `!=` instead of `>` reported an explicit restart's counter
+reset as a fresh kill.
+
+**The rule that would have shortened all of this:** when a process is failing a
+deadline, establish *blocked or busy* before proposing any mechanism. It is one
+number, it is printed in the kill line itself, and it eliminates entire
+families of explanation before they are written down. Both wrong mechanisms
+here were stories about journald having too much work, and the CPU figure had
+already ruled that out before either was proposed.

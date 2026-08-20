@@ -288,6 +288,27 @@ def main(argv):
     collect = "--collect" in argv
     allow_power_on = "--power-on" in argv
 
+    # Declared hardware (doskutsu harness profile sec. 3.6). QA.BAT takes it
+    # as optional positional args and rides it into every sweep manifest in
+    # the boot. Without it the manifest field reads UNDECLARED, which is
+    # honest but makes every cell provisional at L3. Absent flags are left
+    # empty on purpose -- "nobody said" is a real state and must not be
+    # defaulted into a claim.
+    def _opt(flag):
+        # Two ways this goes wrong, both resolving to "" because an empty
+        # declared field is honest and a forged one is not. IndexError when the
+        # flag is the final argument; and `--video --sound PICOGUS` silently
+        # taking "--sound" as the video name, which would declare a lie.
+        if flag not in argv:
+            return ""
+        i = argv.index(flag) + 1
+        if i >= len(argv):
+            return ""
+        v = argv[i]
+        return "" if v.startswith("--") else v
+    declare = " ".join(x for x in (_opt("--video"), _opt("--sound"),
+                                   _opt("--irq")) if x)
+
     spec, mach = preflight(conf, sweep, machine, allow_power_on)
     budget = spec["timeout_min"] * 60
     print("  sweep %s: %d cells, budget %d min, machine %s (%s)" %
@@ -310,7 +331,9 @@ def main(argv):
 
     print("\n== launch ==")
     vc("type", "CD \\DOSKUTSU"); vc("key", "enter"); time.sleep(1)
-    vc("type", "QA %s" % machine); vc("key", "enter"); time.sleep(3)
+    qa_line = ("QA %s %s" % (machine, declare)).rstrip()
+    print("  declaring: %s" % (declare or "(nothing -- manifest will say UNDECLARED)"))
+    vc("type", qa_line); vc("key", "enter"); time.sleep(3)
     vc("type", "SET DKTCAP=1"); vc("key", "enter"); time.sleep(2)
     vc("type", "%s %s" % (sweep, machine)); vc("key", "enter")
     time.sleep(10)
