@@ -41,6 +41,13 @@ USAGE = """usage: vcctrl <command> [args]
   powerlog [n]              append-only record of every mains action taken
   shot [--out F] [n]        one selected frame, or an explicit "no picture"
   lastgood [--out F]        the last frame that was positively picture, aged
+                            --out is two-valued ON PURPOSE: either F is this
+                            run's frame and the status is 0, or F does not
+                            exist and the status is 1. On "no picture" an
+                            existing F is REMOVED rather than left, so that
+                            `vcctrl shot --out f.jpg; analyse f.jpg` cannot
+                            analyse the previous run's frame believing it is
+                            current.
   events [since]            activity log since a sequence number
   activity                  what is running, for how long, and who holds input
   lock [status|acquire|release|break] --as NAME
@@ -74,9 +81,54 @@ def call(req):
     return json.loads(buf.decode("utf-8"))
 
 
+def write_frame(resp, path):
+    """Write the frame to `path`, or guarantee nothing stale is sitting there.
+
+    Both halves matter. Writing through a temp file and renaming means a
+    reader never sees a half-written JPEG; removing `path` on "no picture"
+    means a reader never sees the LAST run's frame and takes it for this
+    one. The second is the failure this repo keeps rediscovering under
+    different names -- a sample that is real but no longer current -- and
+    leaving the old file in place on a failed shot builds a trap for it.
+    """
+    import base64
+    import os
+
+    if not resp.get("picture"):
+        note = ""
+        try:
+            os.unlink(path)
+            note = "; removed the stale %s" % path
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            sys.stderr.write("could not remove %s: %s\n" % (path, exc))
+            return 1
+        sys.stderr.write("no picture: %s%s\n" % (
+            resp.get("reason", "reason not given"), note))
+        return 1
+
+    tmp = path + ".part"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(base64.b64decode(resp["jpeg"]))
+        os.replace(tmp, path)
+    except OSError as exc:
+        sys.stderr.write("could not write %s: %s\n" % (path, exc))
+        return 1
+
+    # The base64 is now in the file; echoing it too would bury the metadata
+    # that says whether the frame is any good.
+    meta = {k: v for k, v in resp.items() if k != "jpeg"}
+    meta["out"] = path
+    sys.stdout.write(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
 def main(argv):
     pace = None
     who = None
+    out = None
     args = []
     i = 0
     while i < len(argv):
@@ -88,6 +140,10 @@ def main(argv):
             who = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--out":
+            out = argv[i + 1]
+            i += 2
+            continue
         args.append(argv[i])
         i += 1
 
@@ -96,6 +152,9 @@ def main(argv):
         return 0
 
     cmd, rest = args[0], args[1:]
+    if out is not None and cmd not in ("shot", "lastgood"):
+        sys.stderr.write("--out applies to shot and lastgood, not %r\n" % cmd)
+        return 2
     if cmd == "status":
         req = {"cmd": "status"}
     elif cmd == "key":
@@ -175,6 +234,8 @@ def main(argv):
     if not resp.get("ok"):
         sys.stderr.write("error: %s\n" % resp.get("error"))
         return 1
+    if out is not None:
+        return write_frame(resp, out)
     if len(resp) > 1:
         sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
     return 0

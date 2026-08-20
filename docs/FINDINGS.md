@@ -1232,3 +1232,68 @@ patched `~/doskutsu-netiter/stage` without checking that `ecliptik/g2k` tracks
 those files. Naming a failure shape does not confer immunity to it. What caught
 it was checking rather than assuming, which is a habit -- and habits work when
 understanding does not.
+
+---
+
+## 28. The control path vanished and every instrument said healthy  [measured 2026-08-20]
+
+Mid-session, `ssh <rig>` stopped answering for about three minutes. Not slow
+-- a bare TCP connect to port 22 completed and then sat there with no banner.
+Ping was fine. `https://vcctrl-pi.example.ts.net/state.json` was fine, and
+reported video capturing at 1.08M frames with a 26 ms frame age, audio
+capturing, no errors, lock free. Every reading available said the rig was
+healthy, and the rig *was* healthy. What had gone was the path used to drive
+it.
+
+### The mechanism
+
+`systemd-journald` had been SIGABRTed on `Watchdog timeout (limit 3min)!`
+**122 times in 34 hours** -- roughly one every three to six minutes. While it
+is wedged, anything that logs blocks, and sshd logs every connection before it
+gets as far as a banner. The kernel completes the handshake into the accept
+queue on sshd's behalf, so the client sees a connection that opens and then
+nothing. `vcctrld` was untouched because it was not logging: a quiet process
+is immune, a chatty one is not.
+
+### It feeds itself
+
+A journald killed uncleanly leaves its open file behind renamed `*.journal~`.
+At 122 kills the directory held **101 files, 824 MB**, most of them those
+corpses. More files to scan is more startup work is more chance of missing the
+next three-minute deadline. The kills manufacture the condition that causes the
+kills.
+
+It was not disk space -- `/` had 21 GB free. It was not memory either: 371 MB
+used of 920 with 549 MB available, and the first hypothesis in the room
+(memory pressure, from misreading `free` as `available`) was wrong and was
+contradicted by the very next measurement. The cost is CPU and deadline, on a
+1.2 GHz A53 already at load 3.5 from continuous USB video and audio capture on
+a Pi 3's single shared USB 2.0 bus.
+
+Capped at `SystemMaxUse=100M`, `SystemMaxFileSize=16M`, `SystemMaxFiles=12`
+and vacuumed: 824M -> 96M, 101 files -> 12.
+
+### Why this one is worth a section
+
+Every existing check in this harness answers a question about the *target*.
+None of them answers "can I still drive it?", and the failure was invisible to
+all of them precisely because the daemon and the web path were unaffected. The
+KVM in a browser looked perfect throughout.
+
+**The dangerous version of this is not the three minutes of no ssh.** It is a
+150 s measurement cell, which is not resumable, driven entirely over the CLI
+path, silently losing that path partway through while the web view keeps
+showing a live picture. `pi/deploy.sh` already refuses to deploy into a running
+cell because a restart destroys it; this is the same destruction arriving with
+no actor to refuse.
+
+### The generalisable part
+
+An instrument that reports on the target cannot report on itself. Three
+observations agreed the system was fine -- ping, `/state.json`, the live MJPEG
+stream -- and all three were true and all three were about something other
+than the thing that had broken. The reading that mattered was the one nobody
+was taking, and the only reason it got taken is that a command hung rather
+than returning a wrong answer.
+
+Related: sec. 24, the harness cannot see its own cable.

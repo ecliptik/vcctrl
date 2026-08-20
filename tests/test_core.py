@@ -740,6 +740,80 @@ def test_page_dom_references():
           "if (!el) continue;" in h)
 
 
+def test_favicon_single_source():
+    """daemon/favicon.svg and the icon inlined in kvm.html must not drift.
+
+    The page inlines the icon as a data: URI, which is the right call -- it
+    costs no request and survives any change to routing. But it means the
+    bytes exist twice, and base64 is not something anyone edits by hand, so
+    the .svg is the copy a person would change and the inlined one is the
+    copy that actually runs. That is the shape of every duplicated-asset bug
+    in this repo: the edit lands on the copy nobody serves. This check is
+    what makes the .svg a source rather than an orphan.
+    """
+    import base64
+    import re
+
+    root = os.path.join(HERE, os.pardir)
+    with open(os.path.join(root, "daemon", "favicon.svg"), "rb") as fh:
+        svg = fh.read()
+    with open(os.path.join(root, "daemon", "kvm.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    uris = re.findall(r'href="data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)"',
+                      html)
+    check("kvm.html inlines at least one svg icon", len(uris) >= 1,
+          "found %d" % len(uris))
+    for i, uri in enumerate(uris):
+        check("inlined icon %d matches daemon/favicon.svg" % i,
+              base64.b64decode(uri) == svg,
+              "the .svg was edited without re-inlining, or vice versa")
+
+
+def test_shot_out_contract():
+    """`shot --out F` is two-valued: F is this run's frame, or F is absent.
+
+    The half-measure -- write on success, leave whatever is there on failure
+    -- is worse than not implementing --out at all, because the caller's
+    next line reads F and gets the PREVIOUS run's picture with nothing
+    marking it stale. That is a sample that is real and no longer current,
+    which is the failure this repo has hit under several different names.
+    """
+    import tempfile
+
+    client_path = os.path.join(HERE, os.pardir, "bin", "vcctrl-client")
+    loader = SourceFileLoader("vcctrl_client", client_path)
+    spec = importlib.util.spec_from_loader("vcctrl_client", loader)
+    client = importlib.util.module_from_spec(spec)
+    loader.exec_module(client)
+
+    import base64
+    payload = b"\xff\xd8\xff not really a jpeg but bytes are bytes"
+    good = {"ok": True, "picture": True,
+            "jpeg": base64.b64encode(payload).decode()}
+    bad = {"ok": True, "picture": False, "reason": "every frame a duplicate"}
+
+    d = tempfile.mkdtemp()
+    target = os.path.join(d, "frame.jpg")
+
+    rc = client.write_frame(good, target)
+    check("write_frame returns 0 on a picture", rc == 0, "got %r" % rc)
+    check("write_frame wrote the frame bytes",
+          os.path.exists(target) and open(target, "rb").read() == payload)
+    check("write_frame left no .part behind",
+          not os.path.exists(target + ".part"))
+
+    rc = client.write_frame(bad, target)
+    check("write_frame returns 1 on no picture", rc == 1, "got %r" % rc)
+    check("write_frame REMOVED the stale frame rather than leaving it",
+          not os.path.exists(target),
+          "a caller reading this path would get the previous run's picture")
+
+    rc = client.write_frame(bad, os.path.join(d, "never-existed.jpg"))
+    check("no picture with no pre-existing file is still status 1", rc == 1,
+          "got %r" % rc)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -758,6 +832,8 @@ if __name__ == "__main__":
     test_uniform_frame_is_not_picture()
     test_websocket_accept_vector()
     test_page_dom_references()
+    test_favicon_single_source()
+    test_shot_out_contract()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
