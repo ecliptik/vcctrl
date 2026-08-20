@@ -162,11 +162,10 @@
        and underscored, and "stale" is dashed. */
     body .lamp span { font-size:10px; }
 
-    /* ── the key rail, as an accessory bar ────────────────────────────────
-       Modelled on La Terminal's: one flat scrolling row above the system
-       keyboard, no boxes, generous targets. Bordered buttons at phone size
-       spend most of their width on the border and read as a form; these are
-       keys, and a key you are about to hit wants the space instead. */
+    /* ── the key rail ─────────────────────────────────────────────────────
+       One flat scrolling row, no boxes, generous targets. Bordered buttons at
+       phone size spend most of their width on the border and read as a form;
+       these are keys, and a key you are about to hit wants the space. */
     body #keys {
       gap:0; padding:0 2px; background:var(--panel);
       border-top:1px solid var(--rule); border-bottom:0;
@@ -199,11 +198,6 @@
     body #cmdbar.open { display:flex; }
     body #keys { display:none; }
     body #keys.open { display:flex; }
-    /* Riding on top of the on-screen keyboard, whatever tab is selected. */
-    body.kbdup #keys {
-      display:flex; position:fixed; left:0; right:0; z-index:55;
-      border-top:1px solid var(--rule); border-bottom:0;
-    }
 
     body #tabs {
       display:flex; flex:none; border-top:1px solid var(--rule);
@@ -2400,30 +2394,14 @@ $('stage').addEventListener('pointerdown', e => {
   b.onclick = () => set(!document.body.classList.contains('nopanel'));
 })();
 
-// ── THE ACCESSORY BAR ───────────────────────────────────────────────────
-// With the on-screen keyboard up, the key rail sits directly on top of it,
-// the way a terminal app's accessory bar does. iOS gives a web page no way to
-// attach a view to the keyboard -- but visualViewport reports exactly how
-// much of the window the keyboard is covering, which is the same number.
-//
-// 120px, because the URL bar collapsing also shrinks the visual viewport and
-// is not a keyboard. No keyboard is that short and no toolbar is that tall.
-(function accessory() {
-  const vv = window.visualViewport;
-  if (!vv) return;
-  const keys = $('keys');
-  const place = () => {
-    const gap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-    const up = gap > 120;
-    document.body.classList.toggle('kbdup', up);
-    keys.style.bottom = up ? gap + 'px' : '';
-    measureBars();
-    applyZoom();          // the picture just got a different amount of room
-  };
-  vv.addEventListener('resize', place);
-  vv.addEventListener('scroll', place);
-  place();
-})();
+// NO ACCESSORY BAR. The key rail used to pin itself above the on-screen
+// keyboard by tracking visualViewport, the way a terminal app's does. It
+// worked and it looked bad: iOS reports the geometry in steps during the
+// keyboard's slide, so the rail arrived in jumps behind it and the picture
+// re-fitted underneath each one. A terminal app gets one layout pass from
+// the system; a web page gets a stream of intermediate numbers and has to
+// draw every one. The rail is still a tap away on the KEYS tab, which does
+// not move while you look at it.
 
 (function keyrail() {
   const b = $('keysbtn');
