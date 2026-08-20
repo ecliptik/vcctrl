@@ -17,10 +17,13 @@
   :root {
     --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
     --sans: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    --t-micro: 10px;      /* units, lamp names, group labels */
-    --t-data: 11.5px;     /* log lines, dense readouts */
-    --t-read: 13px;       /* readout values, buttons */
-    --t-state: 17px;      /* the one prominent size */
+    /* Sized up across the board on the operator's word that it was all tiny.
+       The ratios from the original scale are kept -- the problem was the
+       absolute floor, not the hierarchy. */
+    --t-micro: 11.5px;    /* units, lamp names, group labels */
+    --t-data: 13px;       /* log lines, dense readouts */
+    --t-read: 15px;       /* readout values, buttons */
+    --t-state: 20px;      /* the one prominent size */
     --safe-b: env(safe-area-inset-bottom, 0px);
     --tap: 44px;          /* iOS/Android minimum touch target */
   }
@@ -48,9 +51,9 @@
      One line. Never wraps: a status bar that reflows is one you have to read
      rather than glance at. */
   header {
-    flex:none; display:flex; align-items:center; gap:10px;
-    padding:0 10px; padding-top:env(safe-area-inset-top,0px);
-    height:calc(38px + env(safe-area-inset-top,0px));
+    flex:none; display:flex; align-items:center; gap:11px;
+    padding:0 11px; padding-top:env(safe-area-inset-top,0px);
+    height:calc(46px + env(safe-area-inset-top,0px));
     background:var(--panel); border-bottom:1px solid var(--rule);
     overflow-x:auto; scrollbar-width:none;
   }
@@ -85,7 +88,7 @@
   @media (pointer:coarse) { #lamps { min-height:var(--tap); } }
   .lamp { display:flex; flex-direction:column; align-items:center; gap:3px; }
   .lamp i {
-    width:9px; height:9px; border-radius:50%; display:block;
+    width:11px; height:11px; border-radius:50%; display:block;
     border:1px solid var(--rule); background:transparent;
     transition:background .12s linear, box-shadow .12s linear;
   }
@@ -122,6 +125,19 @@
   #veil .sub { color:#9a9a94; font:var(--t-data)/1.5 var(--sans); max-width:46ch; }
 
   /* ── rails ───────────────────────────────────────────────────────────── */
+  /* Full width under the picture: a command line in a 340px sidebar could not
+     show a DOS path and its arguments at once. */
+  #cmdbar {
+    flex:none; display:flex; gap:7px; padding:7px 9px; background:var(--panel);
+    border-bottom:1px solid var(--rule); align-items:center;
+  }
+  #line {
+    flex:1 1 auto; min-width:0; font:var(--t-data) var(--mono);
+    background:var(--bg); color:var(--text);
+    border:1px solid var(--rule); border-radius:6px;
+    padding:0 11px; min-height:var(--tap);
+  }
+  @media (pointer:fine) { #line { min-height:36px; } }
   #capbar {
     flex:none; padding:5px 10px; text-align:center; background:var(--panel);
     border-bottom:1px solid var(--rule); color:var(--dim);
@@ -145,17 +161,22 @@
     padding:0 11px; min-height:var(--tap); cursor:pointer;
     touch-action:manipulation;
   }
-  @media (pointer:fine) { button, select { min-height:32px; } }
+  @media (pointer:fine) { button, select { min-height:36px; } }
   button:hover { border-color:var(--muted); }
   button:active { background:var(--rule); }
   button.on { border-color:var(--green); color:var(--green); }
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
 
+  /* The panel is a column: controls keep their size, the log takes the rest
+     and scrolls by itself. Scrolling the log used to drag the whole sidebar. */
   #body {
-    flex:none; max-height:42vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    flex:none; height:38vh; display:flex; flex-direction:column; min-height:0;
     background:var(--panel); border-top:1px solid var(--rule);
-    padding-bottom:calc(10px + var(--safe-b));
+  }
+  #panels {
+    flex:none; max-height:60%; overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
   }
   section { padding:10px 12px; border-bottom:1px solid var(--rule); }
   h2 {
@@ -184,7 +205,18 @@
          background:transparent; cursor:pointer; height:var(--tap); }
   @media (pointer:fine) { #vol { height:24px; } }
 
-  #log { padding:6px 12px; font:var(--t-data)/1.55 var(--mono); }
+  /* Selectable: this is the one surface whose content people need to paste
+     into a bug report, and nothing about a log is worth protecting from a
+     cursor. The page sets tap-highlight to transparent globally, which is
+     right for buttons and wrong here. */
+  #log {
+    padding:6px 12px; font:var(--t-data)/1.6 var(--mono);
+    user-select:text; -webkit-user-select:text; cursor:text;
+    overflow-y:auto; -webkit-overflow-scrolling:touch;
+    flex:1 1 auto; min-height:120px;
+  }
+  #log div { user-select:text; -webkit-user-select:text; }
+  #logh { flex:none; }
   #log div { display:flex; gap:7px; padding:1px 0; }
   #log .t { color:var(--dim); flex:none; }
   #log .k { flex:none; width:10ch; overflow:hidden; }
@@ -216,18 +248,21 @@
     #app { display:grid; grid-template-columns:minmax(0,1fr) 340px;
            grid-template-rows:auto 1fr auto auto; height:100vh; }
     header { grid-column:1/-1; }
+    #app { grid-template-rows:auto 1fr auto auto auto; }
     #stage  { grid-column:1; grid-row:2; }
-    #capbar { grid-column:1; grid-row:3; }
-    #keys   { grid-column:1; grid-row:4; border-bottom:0; }
+    #cmdbar { grid-column:1; grid-row:3; }
+    #capbar { grid-column:1; grid-row:4; }
+    #keys   { grid-column:1; grid-row:5; border-bottom:0; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
-    #body   { grid-column:2; grid-row:2/5; max-height:none; overflow-y:auto;
-              border-top:0; border-left:1px solid var(--rule); }
+    #body   { grid-column:2; grid-row:2/6; height:auto; border-top:0;
+              border-left:1px solid var(--rule); }
+    #panels { max-height:none; flex:0 1 auto; }
   }
   /* Landscape phone: the screen is 4:3 and the phone is not, so give the
      picture everything and let the panels go away. */
   @media (max-width:899px) and (orientation:landscape) and (max-height:520px) {
-    #body { max-height:0; padding:0; border:0; overflow:hidden; }
+    #body { height:0; padding:0; border:0; overflow:hidden; }
     #keys { padding:3px 8px; }
     header { height:32px; }
   }
@@ -262,6 +297,12 @@
     </div>
   </div>
 
+  <div id="cmdbar">
+    <input id="line" placeholder="type a command, then Send"
+           autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button id="sendline" class="on">Send ↵</button>
+  </div>
+
   <div id="capbar">click the screen to capture the keyboard</div>
 
   <div id="keys">
@@ -285,6 +326,7 @@
   </div>
 
   <div id="body">
+   <div id="panels">
     <section id="settings">
       <h2>Theme</h2>
       <div id="themes"></div>
@@ -296,6 +338,13 @@
       <h2 style="margin-top:14px">Activity log</h2>
       <div class="hint" style="margin-left:0">These events still happen and the
         daemon still records them — this only filters the view.</div>
+      <label><input type="checkbox" id="opt-ws">
+        Try WebSocket for video before falling back</label>
+      <div class="hint">Off by default. The HTTPS proxy in front of this daemon
+        speaks HTTP/2, and WebSocket over HTTP/2 does not survive it — the
+        socket opens and no frames arrive. Useful only when reaching the daemon
+        directly with no proxy.</div>
+
       <label><input type="checkbox" id="opt-probe">
         Show LED and probe traffic</label>
       <div class="hint">Caps Lock toggles and LED reads. The harness uses these
@@ -308,19 +357,6 @@
         Show this browser's own commands</label>
       <div class="hint">Off by default: you know what you just did. The
         harness's actions are the ones worth watching.</div>
-    </section>
-
-    <section>
-      <h2>Type</h2>
-      <div class="row">
-        <input id="line" placeholder="type a command, then Send"
-               autocapitalize="off" autocorrect="off" spellcheck="false"
-               style="flex:1;min-width:130px;font:var(--t-data) var(--mono);
-                      background:var(--bg);color:var(--text);
-                      border:1px solid var(--rule);border-radius:6px;
-                      padding:0 10px;min-height:var(--tap)">
-        <button id="sendline" class="on">Send ↵</button>
-      </div>
     </section>
 
     <section>
@@ -357,8 +393,9 @@
       <div class="kv"><span>transport</span><span id="s-xport">–</span></div>
     </section>
 
-    <h2 style="padding:10px 12px 0;border:0">Activity</h2>
-    <div id="log"></div>
+   </div>
+   <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
+   <div id="log"></div>
   </div>
 </div>
 
@@ -400,7 +437,7 @@ function gotFrame() {
 function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
-  addLine(new Date(), 'transport', 'websocket ' + why + ' — using mjpeg', 'k-lock');
+  if (OPTS.ws) addLine(new Date(), 'transport', 'websocket ' + why + ' — using mjpeg', 'k-lock');
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
@@ -413,7 +450,24 @@ function useMjpeg(why) {
   img.onerror = () => { addLine(new Date(),'transport','stream dropped — restarting','k-lock'); restart(); };
 }
 
+// MJPEG is the PRIMARY transport, not a fallback. `tailscale serve` negotiates
+// HTTP/2 with browsers and HTTP/1.1 with anything that does not ask for h2 --
+// verified against the live proxy. WebSocket over h2 needs RFC 8441 Extended
+// CONNECT, and the observed behaviour matches a proxy that accepts the upgrade
+// and does not relay the frames: the daemon counts the socket opened, writes
+// with zero drops and sees no error, while the browser receives nothing. Two
+// browsers, same symptom, and a raw HTTP/1.1 probe over the same TLS gets
+// 8.5 Mbit/s.
+//
+// So on this deployment the socket is not a faster path, it is a broken one.
+// multipart/x-mixed-replace is protocol-agnostic, streams fine over h2, and an
+// <img> decodes it without any JavaScript. Input goes over ordinary POSTs,
+// which is one code path instead of two.
+//
+// The socket is kept behind a setting for a direct-to-daemon deployment where
+// no proxy is in the way, and it must still prove itself by delivering a frame.
 function connect() {
+  if (!OPTS.ws) { useMjpeg('websocket disabled — see settings'); return; }
   let sock;
   try {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -500,7 +554,7 @@ setInterval(() => {
 
 // ------------------------------------------------------------------ input
 function send(o) {
-  if (wsAlive && xport === 'ws') { ws.send(JSON.stringify(o)); return; }
+  if (wsAlive && xport === 'ws' && OPTS.ws) { ws.send(JSON.stringify(o)); return; }
   // The mjpeg path carries no input, so fall back to the HTTP command
   // endpoint. Slower per keystroke, but it means input never depends on
   // which video transport happened to win.
@@ -695,6 +749,16 @@ addEventListener('keydown', e => {
 
 addEventListener('keydown', e => {
   if (!armed || typingHere(e.target)) return;
+  // Copy must always work. Capture forwards Ctrl-C to the target, which is
+  // right -- it is how you break a DOS program -- but not when there is a
+  // selection on this page, because then the operator is copying a log line
+  // and silently sending a break to a 1995 PC instead would be an unpleasant
+  // surprise.
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')
+      && !getSelection().isCollapsed) return;
+  // Cmd/Meta chords are the browser's on macOS and never reach the target
+  // anyway; letting them through keeps copy, paste and find working.
+  if (e.metaKey) return;
   const k = CODE[e.code];
   if (!k) return;
   e.preventDefault();
@@ -864,7 +928,7 @@ function meter(pcm) {
 }
 
 // ------------------------------------------------------------------ settings
-const OPTS = {probe:false, poll:false, mine:false};
+const OPTS = {probe:false, poll:false, mine:false, ws:false};
 try { Object.assign(OPTS, JSON.parse(localStorage.getItem('vcctrl.opts') || '{}')); }
 catch (e) {}
 for (const k of Object.keys(OPTS)) {
@@ -873,7 +937,8 @@ for (const k of Object.keys(OPTS)) {
   el.onchange = () => {
     OPTS[k] = el.checked;
     localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
-    renderLog();          // re-render rather than filter-on-arrival, so a
+    if (k === 'ws') restart();   // changing transport needs a reconnect
+    else renderLog();     // re-render rather than filter-on-arrival, so a
   };                      // toggle shows history you had hidden
 }
 $('gbtn').onclick = () => $('settings').classList.toggle('show');
