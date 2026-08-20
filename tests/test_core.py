@@ -1295,8 +1295,26 @@ HARNESS = r"""
   // Settings must work with the side panel collapsed. It used to live INSIDE
   // that panel, so collapsing the column took the settings with it and the
   // gear did nothing at all -- silently, since the click handler ran fine.
-  const sidebtn = document.getElementById('sidebtn');
-  if (!document.body.classList.contains('nopanel')) sidebtn.click();
+  const actbtn = document.getElementById('actbtn');
+  const statbtn = document.getElementById('statbtn');
+  // The column holds ONE panel, and the button that opened it closes it.
+  // Assert the whole cycle, because every part of it has been wrong at least
+  // once: a collapse that left the grid track sized, a readout that rendered
+  // into a hidden div, a pair of toggles that could both read "open".
+  actbtn.click();                       // whatever it was, the log is showing
+  if (document.body.classList.contains('nopanel')) actbtn.click();
+  const logH = document.getElementById('log').clientHeight;
+  statbtn.click();
+  const statH = document.getElementById('stats').clientHeight;
+  const logGone = document.getElementById('log').clientHeight;
+  emit(`panelswap ${logH > 40 && statH > 40 && logGone === 0 ? 1 : 0} `
+     + `${statbtn.getAttribute('aria-expanded') === 'true'
+          && actbtn.getAttribute('aria-expanded') === 'false' ? 1 : 0}`);
+  const wide = document.getElementById('stage').getBoundingClientRect().width;
+  statbtn.click();                      // press the lit one: column goes away
+  const wider = document.getElementById('stage').getBoundingClientRect().width;
+  emit(`panelshut ${document.body.classList.contains('nopanel') ? 1 : 0} `
+     + `${Math.round(wider - wide)}`);
   document.getElementById('gbtn').click();
   const set = document.getElementById('settings');
   const r = set.getBoundingClientRect();
@@ -1316,7 +1334,7 @@ HARNESS = r"""
   // not close from the same control is the bug this replaced.
   document.getElementById('gbtn').click();
   emit(`drawerclosed ${document.getElementById('settings').hidden ? 1 : 0} 0`);
-  sidebtn.click();
+  actbtn.click();
   emit(`named ${document.getElementById('themename').textContent.trim()
                      .replace(/\s+/g, '_')} 0`);
 
@@ -1606,6 +1624,16 @@ def test_zoom_layout_in_a_browser():
           got["drawerbars"])
     check("control: and closes again", got["drawerclosed"][0] == 1.0,
           got["drawerclosed"])
+    check("Status replaces Activity in the column, not joins it",
+          got["panelswap"][0] == 1.0, got["panelswap"])
+    check("and exactly one button reads as open",
+          got["panelswap"][1] == 1.0, got["panelswap"])
+    check("pressing the lit panel button collapses the column",
+          got["panelshut"][0] == 1.0, got["panelshut"])
+    # The bug this replaced: display:none on the panel while the grid track
+    # kept its 340px, so the picture did not move and nothing looked collapsed.
+    check("and the picture actually takes the width back",
+          got["panelshut"][1] > 100, got["panelshut"])
 
     check("control: the name line shows a label, not a raw id",
           "_" in str(got.get("named_label", "")) or

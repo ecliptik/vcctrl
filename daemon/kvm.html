@@ -192,7 +192,7 @@
     /* The tab bar already opens and closes the rail here. */
     body #keysbtn { display:none; }
     /* The tab bar is the panel here; there is no column to collapse. */
-    body #sidebtn { display:none; }
+    body #actbtn, body #statbtn { display:none; }
     /* The tab bar carries sound and power here, and a tap on the picture
        captures the keyboard, so these three are duplicates on a phone. */
     /* The clip stays on a phone: it is inside the field, costs no row, and
@@ -240,7 +240,7 @@
     body #body.sheet > #sheethdr > #sheetclose { display:none; }
     body #settings { border-left:0; border-top:1px solid var(--rule); }
     body #body.sheet > #sheethdr { display:flex; }
-    body #body.sheet > #logh { display:none; }   /* the sheet bar names it */
+    body #body.sheet > #panelh { display:none; } /* the sheet bar names it */
     body #body.sheet > #log { max-height:none; }
     body #sheethdr {
       display:none; flex:none; align-items:center; justify-content:space-between;
@@ -253,8 +253,10 @@
     }
     body #body { height:auto; max-height:46vh; }
     body #body > * { display:none; }
-    body #body.show-log > #logh { display:block; }
+    body #body.show-log > #panelh { display:block; }
     body #body.show-log > #log { display:flex; flex-direction:column; }
+    body #body.show-stats > #panelh { display:block; }
+    body #body.show-stats > #stats { display:block; }
     body #body.show-panels > #panels { display:block; max-height:46vh; }
     body #body.closed { display:none; }
     /* Only the sections the open tab wants. */
@@ -395,11 +397,20 @@
   /* The divider, and the spacing that makes it read as one. Same shape as the
      command field: an emoji cell, a rule, then the label. */
   .bi { flex:none; font-size:14px; line-height:1; }
-  #cmdbar button > .bi, #zoombtn > .bi {
+  #cmdbar button > .bi, #zoombtn > .bi, .lbtn > .bi {
     border-right:1px solid var(--rule); padding-right:8px; margin-right:0;
   }
-  #cmdbar button, #zoombtn { display:flex; align-items:center; gap:8px; }
-  #cmdbar button > .bl, #zoombtn > .bl { flex:none; white-space:nowrap; }
+  #cmdbar button, #zoombtn, .lbtn { display:flex; align-items:center; gap:8px; }
+  #cmdbar button > .bl, #zoombtn > .bl, .lbtn > .bl {
+    flex:none; white-space:nowrap;
+  }
+  /* Lit while its panel is the one showing. NOT the global .on rule, which
+     paints a green border -- green on this page means a thing is working, and
+     which panel you are looking at is not a health reading. A filled ground
+     is what a pressed button looks like everywhere else. */
+  .pbtn[aria-expanded="true"] {
+    background:var(--rule); border-color:var(--muted); color:var(--text);
+  }
   /* The split pair looks like one button and behaves like two. */
   /* The wrapper is a button-shaped thing that is not a <button>, so none of
      the button sizing reached it and it came out shorter than everything
@@ -590,7 +601,7 @@
      every control is boxed -- the exception is what stood out, so they take
      the same ground, border, radius and height as everything else and the
      rail reads as one set of buttons. */
-  #sidebtn { min-width:38px; padding:0; color:var(--text); }
+
   /* Full screen sits at the bottom of the zoom menu: everything in there
      answers "how big is the picture", and this is the largest answer. It was
      a fifth icon in a rail that had just been cut down to four. */
@@ -620,17 +631,6 @@
     bottom:0; border-bottom:0; border-top:1px solid var(--rule);
     padding-bottom:calc(7px + env(safe-area-inset-bottom,0px));
   }
-  #sidebtn svg { width:19px; height:19px; display:block; margin:0 auto; }
-  #sidebtn .frame { fill:none; stroke:currentColor; stroke-width:1.4; }
-  #sidebtn .pane  { fill:currentColor; opacity:0; transition:opacity .12s linear; }
-  /* Filled while the panel is GONE: the icon shows what the click will
-     produce, the way a play button shows play while paused, and it agrees
-     with the tooltip beside it -- "Show side panel" over a drawn panel.
-     Driven off aria-expanded rather than a class, so the accessible state and
-     the drawn state cannot disagree -- and so it does not pick up the global
-     .on rule, which paints a green border and is far too loud for a layout
-     preference sitting between a gear and a sun. */
-  #sidebtn[aria-expanded="false"] .pane { opacity:.85; }
   /* Icon buttons: the glyph IS the label, so it gets the room a label would
      have had. Emoji presentation is explicit -- ☀ and ⚙ have text-default
      codepoints and rendered as flat outlines beside colour emoji elsewhere on
@@ -701,7 +701,7 @@
     flex:1 1 0; min-height:60px;
   }
   #log div { user-select:text; -webkit-user-select:text; }
-  #logh { flex:none; }
+  #panelh { flex:none; }
   #log div { display:flex; gap:7px; padding:1px 0; }
   #log .t { color:var(--dim); flex:none; }
   #log .k { flex:none; width:10ch; overflow:hidden; }
@@ -800,9 +800,13 @@
      the last character of each was hidden by it. */
   /* Its own scroll INSIDE the drawer's, so the settings above it stay put
      while a long readout is being read. */
-  #stats { overflow-y:auto; -webkit-overflow-scrolling:touch; max-height:46vh;
-           padding-right:9px; border-top:1px solid var(--rule);
-           padding-top:6px; }
+  /* In the column it takes the leftover height and scrolls inside itself,
+     exactly as the log does -- they are the same kind of thing and one of
+     them being a fixed slice would make the other look like the real panel. */
+  #stats { display:none; overflow-y:auto; -webkit-overflow-scrolling:touch;
+           flex:1 1 0; min-height:60px; padding:2px 12px 8px;
+           padding-right:9px; }
+
   #stats .kv span:first-child { flex:none; white-space:nowrap; }
   #stats .kv span:last-child { text-align:right; overflow-wrap:anywhere; }
   #stats .rgroup {
@@ -828,6 +832,10 @@
            opacity:0; padding:0; border:0; margin:0; font-size:16px; }
 
   /* ── desktop ─────────────────────────────────────────────────────────── */
+  @media (min-width:641px) {
+    body.panel-stats #stats { display:block; }
+    body.panel-stats #log { display:none; }
+  }
   @media (min-width:900px) {
     #app { display:grid; grid-template-columns:minmax(0,1fr) 340px;
            grid-template-rows:auto 1fr auto auto; height:100vh; }
@@ -893,25 +901,23 @@
     <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
             title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit Screen ▾</span></button>
+    <!-- The two column panels, and they behave like the tabs on a phone:
+         each opens its own thing, and pressing the lit one puts the column
+         away. The drawn pane icon that used to collapse the column is gone --
+         it was a third control for a job these two already do, and it could
+         disagree with them about whether anything was showing. -->
+    <button id="actbtn" class="lbtn pbtn" aria-expanded="true" aria-controls="body"
+            title="What the daemon has been doing"><span class="bi">📋</span><span class="bl">Activity</span></button>
+    <button id="statbtn" class="lbtn pbtn" aria-expanded="false" aria-controls="body"
+            title="Measured state of the rig"><span class="bi">📊</span><span class="bl">Status</span></button>
+    <button id="gbtn" class="lbtn" aria-label="settings"
+            title="Themes, video, input and the rest"><span class="bi">⚙️</span><span class="bl">Settings</span></button>
+    <!-- The one bare glyph left, and the only separator. It is not a panel --
+         it changes the page under you rather than opening something over it --
+         so it sits apart from the three that are. -->
     <span class="sep" aria-hidden="true">|</span>
     <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
             title="Switch between the light and dark half of this theme">☀️</button>
-    <span class="sep" aria-hidden="true">|</span>
-    <button id="gbtn" class="ibtn" aria-label="settings"
-            title="Open the settings panel">⚙️</button>
-    <span class="sep" aria-hidden="true">|</span>
-    <!-- A drawn icon, not a glyph: every character that means "panel" either
-         carries an emoji presentation or renders differently in each font,
-         and the last two attempts here were a chevron pointing nowhere in
-         particular and a large orange play button. This is the editor
-         convention -- a pane on the right, filled while it is there. -->
-    <button id="sidebtn" aria-expanded="true" aria-controls="body"
-            title="Hide side panel">
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <rect class="frame" x="2" y="3.6" width="16" height="12.8" rx="2.4"/>
-        <rect class="pane" x="12.1" y="4.9" width="4.6" height="10.2" rx="1.2"/>
-      </svg>
-    </button>
   </header>
 
   <div id="stage">
@@ -1075,12 +1081,6 @@
         This browser&rsquo;s own commands</label>
       <div class="hint">Off by default: you know what you just did.</div>
 
-      <!-- SETTINGS FIRST, STATUS AFTER. Everything above changes something;
-           everything below only reports. They were two readouts in two places
-           describing one machine, which meant deciding where to look before
-           you could look. -->
-      <h2 style="margin-top:16px">Status</h2>
-      <div id="stats"></div>
   </div>
 </aside>
 
@@ -1136,6 +1136,7 @@
     <button data-tab="sound" title="Sound and volume">SOUND</button>
     <button data-tab="power" title="Mains power and the input link">POWER</button>
     <button data-tab="log" title="What the daemon has been doing">LOG</button>
+    <button data-tab="stats" title="Measured state of the rig">STATUS</button>
   </div>
 
   <div id="body">
@@ -1143,12 +1144,14 @@
      <span id="sheettitle">Activity</span>
      <button id="sheetclose" title="Close this panel">✕ Close</button>
    </div>
-   <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
+   <h2 id="panelh" style="padding:10px 12px 6px;margin:0">Activity</h2>
    <div id="log"></div>
-   <!-- THE SIDEBAR IS THE LOG. Everything else that lived here -- sound,
-        power, and finally the status readout -- moved to the control it
-        belongs to or into Settings. A column carrying one thing does not need
-        to be a column of sections. -->
+   <!-- Status came back out of Settings. It is a READOUT -- something you
+        watch while working, the way you watch the log -- and Settings is a
+        place you go to change something and leave. Putting it at the foot of
+        a drawer meant opening the drawer over the picture to read numbers
+        about the picture. -->
+   <div id="stats"></div>
    <div id="panels"></div>
   </div>
 </div>
@@ -1465,6 +1468,11 @@ function useMjpeg(why) {
   setXport('mjpeg');
   addLine(new Date(), 'transport',
           'websocket ' + why + ' (' + lastWsURL + ') — using mjpeg', 'k-note');
+  // onmessage discards everything once xport is 'mjpeg', so leaving the
+  // socket open buys nothing and costs a second full-rate stream through the
+  // tunnel -- on a link whose capacity is the whole reason this rate control
+  // exists.
+  dropSocket();
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
@@ -1546,12 +1554,17 @@ function connect() {
   addLine(new Date(), 'transport', 'opening ' + wsURL(), 'k-cmd');
   if (portOK === false) { useMjpeg('port ' + tlsPort + ' unreachable'); return; }
   let sock;
+  dropSocket();                 // never run two at once
   try {
     lastWsURL = wsURL();
     sock = new WebSocket(lastWsURL);
   } catch (e) { useMjpeg('threw: ' + e); return; }
   ws = sock;
   ws.binaryType = 'arraybuffer';
+  // Every handler below is guarded on `ws === sock`. A socket that has been
+  // superseded still fires -- close and error arrive AFTER we have moved on --
+  // and its handlers were speaking for the page as though they were current.
+  const mine = () => ws === sock;
 
   // If the socket opens but never delivers, that is still a failure. Judge on
   // frames, not on the connection state -- the difference matters here.
@@ -1567,6 +1580,7 @@ function connect() {
   firstFrameTimer = setTimeout(judgeFirstFrame, 4000);
 
   ws.onopen = () => {
+    if (!mine()) { try { sock.close(); } catch (e) {} return; }
     wsAlive = true;
     addLine(new Date(), 'transport', 'websocket connected (' + lastWsURL + ')',
             'k-vid');
@@ -1576,8 +1590,9 @@ function connect() {
     fpsWant = 0; fpsGoodRuns = 0;
     requestRate(smallScreen() ? 8 : 14);
   };
-  ws.onerror = () => { useMjpeg('errored'); };
+  ws.onerror = () => { if (mine()) useMjpeg('errored'); };
   ws.onclose = e => {
+    if (!mine()) return;
     wsAlive = false;
     // The close CODE is the one datum that names the reason, and it was being
     // thrown away: 1006 is an abnormal drop with no close frame, 1002 a
@@ -1590,6 +1605,7 @@ function connect() {
     if (xport !== 'mjpeg') setTimeout(connect, 1500);
   };
   ws.onmessage = ev => {
+    if (!mine()) return;
     if (typeof ev.data === 'string') return;
     if (!wsAlive) return;
     if (xport === 'mjpeg') return;
@@ -1619,9 +1635,27 @@ fetch('/state.json', {cache:'no-store'})
 // on resume, on a broken stream, and by the button. It retries the WEBSOCKET
 // each time rather than staying on the fallback forever: falling back is a
 // judgement about one moment, and the moment passes.
+// DETACH BEFORE CLOSING. `ws.close()` alone left the handlers attached, so a
+// socket we had deliberately finished with went on speaking for the page: its
+// onclose scheduled a SECOND connect 1.5s after restart() had already made
+// one, and its onerror called useMjpeg(). That is the fallback the picture
+// kept dropping into while the daemon showed a healthy socket open and
+// sending -- 1221 frames and 108 MB delivered to a page that was discarding
+// every one of them, because onmessage returns early once xport is 'mjpeg'.
+// Two sockets' worth of tunnel for one picture, and the slower picture.
+function dropSocket() {
+  if (!ws) return;
+  try {
+    ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
+    ws.close();
+  } catch (e) {}
+  ws = null;
+  wsAlive = false;
+}
+
 function restart() {
   if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
-  try { wsAlive = false; ws && ws.close(); } catch (e) {}
+  dropSocket();
   img.onerror = null;
   img.src = '';
   img.style.display = 'none';
@@ -2323,7 +2357,7 @@ addEventListener('resize', measureBars);
 measureBars();
 
 function showSettings(on) {
-  if (on) { measureBars(); closePop(); if (lastState) $('stats').innerHTML = statsRows(lastState); }
+  if (on) { measureBars(); closePop(); }
   $('settings').hidden = !on;
   $('setback').hidden = !on;
   $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
@@ -2715,7 +2749,6 @@ async function pollState() {
   }
   const L = j.lock || {};
   const inf = j.inflight || [];
-  $('stats').innerHTML = statsRows(j);
   showPower(j.power);
   showBoard(j.board);
   showAudioDevice(j.audio);
@@ -2725,7 +2758,7 @@ async function pollState() {
   lastState = j;
   // Only while it is on screen: this rebuilds a dozen rows and nobody is
   // reading them behind a closed drawer.
-  if (!$('settings').hidden) $('stats').innerHTML = statsRows(j);
+  if ($('stats').clientHeight) $('stats').innerHTML = statsRows(j);
   // What this tab is actually pulling. Two tabs open is two of these, and on
   // this rig that is the difference between a smooth picture and a stuttering
   // one -- worth being able to see rather than guess at.
@@ -3131,7 +3164,7 @@ function setTab(name) {
   // The long panels open as a full-screen sheet; the short ones stay a strip
   // at the bottom. Reading a log through a 150px window is not reading.
   // Settings is a drawer of its own now, not one of these panels.
-  const asSheet = (name === 'log');
+  const asSheet = (name === 'log' || name === 'stats');
   for (const b of document.querySelectorAll('#tabs button'))
     b.classList.toggle('on', b.dataset.tab === name);
   $('cmdbar').classList.toggle('open', name === 'keys');
@@ -3141,9 +3174,13 @@ function setTab(name) {
   if (asSheet) body.classList.add('sheet');
   if (asSheet) {
     body.classList.add('sheet');
-    $('sheettitle').textContent = 'Activity';
+    $('sheettitle').textContent = name === 'stats' ? 'Status' : 'Activity';
   }
   if (name === 'log') body.classList.add('show-log');
+  else if (name === 'stats') {
+    body.classList.add('show-stats');
+    if (lastState) $('stats').innerHTML = statsRows(lastState);
+  }
   // Sound and power are popovers in the rail now, not panels down here. The
   // tab still opens them; it just opens the same thing the header does,
   // rather than a second copy that can disagree with it.
@@ -3322,7 +3359,7 @@ function showCapture() {
   const b = document.querySelector('#pop-zoom [data-zoom="1"]');
   if (b) b.textContent = capSize() ? 'Original — ' + capSize()
                                    : 'Original — actual resolution';
-  if (!$('settings').hidden && lastState) $('stats').innerHTML = statsRows(lastState);
+  if ($('stats').clientHeight && lastState) $('stats').innerHTML = statsRows(lastState);
 }
 const ZOOMLABEL = {fit: 'Fit Screen', '1': 'Original',
                    '2': '200%', '4': '400%'};
@@ -3412,17 +3449,38 @@ $('stage').addEventListener('pointerdown', e => {
   document.body.classList.toggle('peek');
 }, true);
 
+// THE COLUMN HOLDS ONE PANEL. Activity and Status are both readouts you
+// watch while working, they both want the full height of the column, and
+// neither is worth reading through half of one. So the two buttons behave
+// like the phone's tabs: each opens its own, and pressing the lit one puts
+// the column away.
+let sidePanel = 'log';
+function showPanel(which) {
+  sidePanel = which;                       // 'log' | 'stats' | ''
+  const body = document.body;
+  body.classList.toggle('nopanel', !which);
+  body.classList.toggle('panel-stats', which === 'stats');
+  $('panelh').textContent = which === 'stats' ? 'Status' : 'Activity';
+  for (const [name, id] of [['log','actbtn'], ['stats','statbtn']])
+    $(id).setAttribute('aria-expanded', which === name ? 'true' : 'false');
+  // Fill it on the way in rather than waiting for the next poll: opening a
+  // readout onto the previous minute's numbers, or onto nothing at all on a
+  // fresh load, is the failure this page keeps having to design against.
+  if (which === 'stats' && lastState) $('stats').innerHTML = statsRows(lastState);
+  localStorage.setItem('vcctrl.panel', which);
+  applyZoom();
+}
 (function sidepanel() {
-  const b = $('sidebtn');
-  const set = hide => {
-    document.body.classList.toggle('nopanel', hide);
-    b.title = hide ? 'Show side panel' : 'Hide side panel';
-    b.setAttribute('aria-expanded', hide ? 'false' : 'true');
-    localStorage.setItem('vcctrl.panel', hide ? 'hidden' : 'shown');
-    applyZoom();
-  };
-  set(localStorage.getItem('vcctrl.panel') === 'hidden');
-  b.onclick = () => set(!document.body.classList.contains('nopanel'));
+  // 'hidden' and 'shown' are what the old collapse toggle wrote. Migrate
+  // rather than ignore: a stored value this code does not recognise would
+  // otherwise silently reset everyone's column on the first load.
+  const saved = localStorage.getItem('vcctrl.panel');
+  const start = saved === 'stats' ? 'stats'
+              : (saved === 'hidden' || saved === '') ? ''
+              : 'log';
+  showPanel(start);
+  $('actbtn').onclick  = () => showPanel(sidePanel === 'log'   ? '' : 'log');
+  $('statbtn').onclick = () => showPanel(sidePanel === 'stats' ? '' : 'stats');
 })();
 
 // NO ACCESSORY BAR. The key rail used to pin itself above the on-screen
