@@ -934,6 +934,22 @@ HARNESS = """
     out.push(`selkept ${selNow && selNow.dataset.theme === before ? 1 : 0} 0`);
   }
 
+  // The rail popovers must land under the thing that opened them, and must
+  // survive their anchor being hidden -- which is what happens on a phone,
+  // where the tab bar opens the same menu the header chip does.
+  for (const [nm, anchor] of [['sound', 'soundbtn'], ['power', 'c-power']]) {
+    openPop(nm);
+    const pr = document.getElementById('pop-' + nm).getBoundingClientRect();
+    const ar = document.getElementById(anchor).getBoundingClientRect();
+    const onscreen = pr.width > 60 && pr.left >= 0
+                     && pr.right <= window.innerWidth + 1;
+    const under = pr.top >= ar.bottom - 1;
+    out.push(`pop-${nm} ${onscreen ? 1 : 0} ${under ? 1 : 0}`);
+    closePop();
+  }
+  out.push(`popclosed ${document.getElementById('pop-sound').hidden
+                       && document.getElementById('pop-power').hidden ? 1 : 0} 0`);
+
   // Settings must work with the side panel collapsed. It used to live INSIDE
   // that panel, so collapsing the column took the settings with it and the
   // gear did nothing at all -- silently, since the click handler ran fine.
@@ -1095,6 +1111,14 @@ def test_zoom_layout_in_a_browser():
           got["preview"])
     check("control: a preview does not change the selection",
           got["selkept"][0] == 1.0, got["selkept"])
+
+    for nm in ("sound", "power"):
+        check("the %s menu opens on screen" % nm,
+              got["pop-" + nm][0] == 1.0, got["pop-" + nm])
+        check("control: and below the control that opened it",
+              got["pop-" + nm][1] == 1.0, got["pop-" + nm])
+    check("control: the menus close again", got["popclosed"][0] == 1.0,
+          got["popclosed"])
 
     check("settings opens with the side panel collapsed",
           got["drawer"][0] == 1.0 and got["drawer"][1] > 100, got["drawer"])

@@ -198,8 +198,6 @@
     body #body.show-panels > #panels { display:block; max-height:46vh; }
     body #body.closed { display:none; }
     /* Only the sections the open tab wants. */
-    #panels.only-sound > section:not(#sec-sound),
-    #panels.only-power > section:not(#sec-power),
 
   }
   /* The kbd chip is the affordance now that the instruction bar is gone. */
@@ -508,6 +506,14 @@
   /* Click-off. Not a dark scrim over the picture: this page exists to show
      you the picture, and dimming it to change a theme is the wrong trade. */
   #setback { position:fixed; inset:0; z-index:69; background:transparent; }
+  .pop {
+    position:fixed; z-index:70; background:var(--panel); padding:10px 12px;
+    border:1px solid var(--rule); border-radius:9px;
+    box-shadow:0 12px 30px rgba(0,0,0,.36); max-width:calc(100vw - 16px);
+  }
+  .pop[hidden] { display:none; }
+  #pop-sound { width:min(320px, calc(100vw - 16px)); }
+  .poprow { display:flex; gap:6px; flex-wrap:wrap; }
   #setback[hidden] { display:none; }
   #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
                     font:var(--t-read)/1.3 var(--sans); cursor:pointer; }
@@ -589,7 +595,8 @@
     <h1>vcctrl-kvm</h1>
     <span id="state" aria-live="polite">—</span>
     <span id="c-lock" class="chip"><span class="chiplabel">input </span><b>—</b></span>
-    <span id="c-power" class="chip"><span class="chiplabel">power </span><b>—</b></span>
+    <button id="c-power" class="chip chipb" aria-haspopup="true" aria-expanded="false"
+            title="Mains power — on, off, cycle"><span class="chiplabel">power </span><b>—</b></button>
     <span id="c-xport" class="chip"><span class="chiplabel">link </span><b>—</b></span>
     <button id="c-kbd" class="chip chipb" title="Capture the keyboard so keys go to the target"><span class="chiplabel">kbd </span><b>idle</b></button>
     <span class="grow"></span>
@@ -605,6 +612,8 @@
       <option value="2">2× original</option>
       <option value="4">4× original</option>
     </select>
+    <button id="soundbtn" class="ibtn" aria-haspopup="true" aria-expanded="false"
+            title="Sound and volume">🔇</button>
     <button id="dbtn" class="ibtn" aria-label="switch between light and dark"
             title="Switch between the light and dark half of this theme">☀️</button>
     <button id="gbtn" class="ibtn" aria-label="settings"
@@ -695,6 +704,15 @@
       <label><input type="checkbox" id="opt-auto">
         Follow the system light/dark setting</label>
 
+      <h2 style="margin-top:14px">Input</h2>
+      <div class="row" style="margin-bottom:6px">
+        <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
+      </div>
+      <div class="hint" style="margin-left:0">Toggles Caps Lock and waits for
+        the PS/2 LED to come back — proof a keystroke reached the machine that
+        does not depend on reading the screen. Worth running when the target
+        stops responding and you need to know which half is at fault.</div>
+
       <h2 style="margin-top:14px">Video</h2>
       <label><input type="checkbox" id="opt-ws">
         Use WebSocket when it works</label>
@@ -719,6 +737,36 @@
   </div>
 </aside>
 
+<div id="pop-sound" class="pop" role="dialog" aria-label="Sound" hidden>
+  <div id="meter">
+    <div id="mbar" title="Level arriving from the capture stick">
+      <div id="mrms"></div><div id="mpeak"></div>
+    </div>
+    <span id="mdb">—</span>
+  </div>
+  <div id="volrow">
+    <button id="sbtn" class="ibtn" title="Turn the sound on">🔇</button>
+    <button id="voldn" title="Volume down 5%">−</button>
+    <input id="vol" type="range" min="0" max="100" step="1" value="80"
+           aria-label="volume">
+    <button id="volup" title="Volume up 5%">+</button>
+    <span id="vpct">80%</span>
+  </div>
+</div>
+
+<div id="pop-power" class="pop" role="dialog" aria-label="Power" hidden>
+  <div class="poprow">
+    <button data-power="on" title="Switch the mains plug on">On</button>
+    <button data-power="off" class="danger" title="Cut mains power — the target does not shut down first">Off</button>
+    <button data-power="cycle" class="danger" title="Cut mains power, wait, and switch it back on">Cycle</button>
+  </div>
+  <div class="hint" style="margin:8px 0 0">Off and Cycle cut the mains: the
+    target does not shut down first.</div>
+  <div class="poprow" style="margin-top:9px">
+    <button id="refresh" title="Restart the capture if the picture is stuck">Refresh video</button>
+  </div>
+</div>
+
   <div id="tabs">
     <button data-tab="none" class="on" title="Just the picture">SCREEN</button>
     <button data-tab="keys" title="The key rail and the command line">KEYS</button>
@@ -736,37 +784,6 @@
    <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
    <div id="log"></div>
    <div id="panels">
-    <section id="sec-sound">
-      <h2>Sound</h2>
-      <div id="meter">
-        <div id="mbar" title="Level arriving from the capture stick">
-          <div id="mrms"></div><div id="mpeak"></div>
-        </div>
-        <span id="mdb">—</span>
-      </div>
-      <div id="volrow">
-        <button id="sbtn" class="ibtn" title="Turn the sound on">🔇</button>
-        <button id="voldn" title="Volume down 5%">−</button>
-        <input id="vol" type="range" min="0" max="100" step="1" value="80"
-               aria-label="volume">
-        <button id="volup" title="Volume up 5%">+</button>
-        <span id="vpct">80%</span>
-      </div>
-    </section>
-
-    <section id="sec-power">
-      <h2>Power</h2>
-      <div class="row" style="margin-bottom:8px">
-        <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
-      </div>
-      <div class="row">
-        <button data-power="on" title="Switch the mains plug on">On</button>
-        <button data-power="off" class="danger" title="Cut mains power — the target does not shut down first">Off</button>
-        <button data-power="cycle" class="danger" title="Cut mains power, wait, and switch it back on">Cycle</button>
-        <button id="refresh" title="Restart the capture if the picture is stuck">Refresh video</button>
-      </div>
-    </section>
-
     <section id="sec-state">
       <h2>State</h2>
       <div class="kv"><span>running</span><span id="s-inflight">–</span></div>
@@ -1413,6 +1430,7 @@ function setSound(on) {
   soundOn = on;
   $('sbtn').textContent = on ? '🔊' : '🔇';
   $('sbtn').title = on ? 'Mute the sound' : 'Turn the sound on';
+  $('soundbtn').textContent = on ? '🔊' : '🔇';
   $('sbtn').classList.toggle('on', on);
   applyVolume();
   // Off stops the STREAM, not just the output: silence still costs 1.5 Mbit/s,
@@ -1529,18 +1547,62 @@ for (const k of Object.keys(OPTS)) {
     else renderLog();     // re-render rather than filter-on-arrival, so a
   };                      // toggle shows history you had hidden
 }
+// Popovers in the rail. One at a time, anchored under whatever opened them,
+// and clamped to the window -- a menu that opens off the right edge of a
+// phone is a menu you cannot use.
+const POP = {sound: 'soundbtn', power: 'c-power'};
+let openPopName = null;
+function closePop() {
+  if (!openPopName) return;
+  $('pop-' + openPopName).hidden = true;
+  const a = $(POP[openPopName]);
+  if (a) a.setAttribute('aria-expanded', 'false');
+  openPopName = null;
+  if ($('settings').hidden) $('setback').hidden = true;
+}
+function openPop(name) {
+  if (openPopName === name) { closePop(); return; }
+  closePop();
+  const el = $('pop-' + name), anchor = $(POP[name]);
+  el.hidden = false;
+  $('setback').hidden = false;
+  anchor.setAttribute('aria-expanded', 'true');
+  openPopName = name;
+  // Measure after it is visible: a hidden element has no width to place.
+  const a = anchor.getBoundingClientRect(), w = el.offsetWidth;
+  if (!a.width) {
+    // The anchor is not on screen -- on a phone the power chip is hidden and
+    // the tab bar opens this instead. Anchored to a zero-size rect it would
+    // land in the top-left corner, over the picture, pointing at nothing.
+    el.style.left = Math.max(8, (window.innerWidth - w) / 2) + 'px';
+    el.style.top = '';
+    el.style.bottom = 'calc(58px + env(safe-area-inset-bottom, 0px))';
+    return;
+  }
+  el.style.bottom = '';
+  const left = Math.max(8, Math.min(window.innerWidth - w - 8,
+                                    a.left + a.width / 2 - w / 2));
+  el.style.left = left + 'px';
+  el.style.top = (a.bottom + 6) + 'px';
+}
+
 function showSettings(on) {
+  if (on) closePop();
   $('settings').hidden = !on;
   $('setback').hidden = !on;
   $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
 }
 $('gbtn').onclick = () => showSettings($('settings').hidden);
+$('soundbtn').onclick = () => openPop('sound');
+$('c-power').onclick = () => openPop('power');
 $('setclose').onclick = () => showSettings(false);
-$('setback').onclick = () => showSettings(false);
+$('setback').onclick = () => { closePop(); showSettings(false); };
 addEventListener('keydown', e => {
   // Only while the target is NOT taking keys: an Escape meant for a DOS menu
   // must not be eaten by a panel that happens to be open behind it.
-  if (e.key === 'Escape' && !armed && !$('settings').hidden) showSettings(false);
+  if (e.key !== 'Escape' || armed) return;
+  if (openPopName) closePop();
+  else if (!$('settings').hidden) showSettings(false);
 });
 
 // Traffic the harness generates to ASK QUESTIONS rather than to do anything.
@@ -1707,7 +1769,7 @@ function pill(id, cls, text) {
     // harness branches on it and it is in the API, the tests and the docs.
     // Changing what a reader sees is a presentation decision; changing what a
     // caller receives is a contract change, and these are not the same edit.
-    const LABEL = {LOCKED:'ACTIVE', NOSIGNAL:'NO SIGNAL'};
+    const LABEL = {LOCKED:'ACTIVE', NOSIGNAL:'NO SIGNAL', FROZEN:'NO SIGNAL'};
     const raw = String(text).replace(/^video\s*/, '').toUpperCase();
     const w = LABEL[raw] || raw;
     $('state').textContent = w;
@@ -1739,16 +1801,23 @@ async function pollState() {
     hideStale();
   } else {
     pill('p-video','mid','video ' + (v.state||'?'));
-    const T = {nosignal:'no signal', frozen:'frozen — not live',
-               starting:'waiting for first frame'};
+    // FROZEN READS AS NO SIGNAL, and that is not a euphemism. Live analog
+    // capture never repeats a frame: sampling noise makes every frame differ,
+    // measured at a mean absolute difference of about 1 with peaks near 40 on
+    // a still DOS prompt. So byte-identical frames are not "a screen that is
+    // not changing" -- they are the stick emitting a held buffer with nothing
+    // coming in. The distinction that remains is HOW it is absent, and that
+    // belongs in the line underneath, not in the headline.
+    const T = {nosignal:'No signal', frozen:'No signal',
+               starting:'Waiting for the first frame'};
     $('veil-title').textContent = T[v.state] || v.state || '—';
     // One sentence. The detail lives in the docs; a screen you are looking at
     // because something is wrong is the wrong place to read four lines.
     // One short line. The full explanation was four lines of prose in the
     // middle of a black screen, which is a document, not a status.
     $('veil-sub').textContent = v.state === 'frozen'
-      ? 'Every frame is identical — the stick is repeating a blank.'
-      : v.state === 'nosignal' ? 'No frames arriving.' : '';
+      ? 'Frames are arriving and every one is identical — the stick is holding a dead buffer.'
+      : v.state === 'nosignal' ? 'No frames are arriving at all.' : '';
     showStale();
     veil.classList.add('show');
   }
@@ -1826,8 +1895,11 @@ function setTab(name) {
     $('sheettitle').textContent = 'Activity';
   }
   if (name === 'log') body.classList.add('show-log');
-  else if (name === 'sound') { body.classList.add('show-panels'); panels.classList.add('only-sound'); }
-  else if (name === 'power') { body.classList.add('show-panels'); panels.classList.add('only-power'); }
+  // Sound and power are popovers in the rail now, not panels down here. The
+  // tab still opens them; it just opens the same thing the header does,
+  // rather than a second copy that can disagree with it.
+  else if (name === 'sound') { openPop('sound'); body.classList.add('closed'); }
+  else if (name === 'power') { openPop('power'); body.classList.add('closed'); }
   else if (name === 'set')   { showSettings(true); body.classList.add('closed'); }
   else body.classList.add('closed');
   localStorage.setItem('vcctrl.tab', name);
