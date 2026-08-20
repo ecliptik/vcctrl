@@ -647,7 +647,15 @@ sec. 19.
 
 ---
 
-## 21. An offered framebuffer the engine declines  [measured 2026-08-19]
+## 21. An offered framebuffer the engine declines  [RETRACTED -- see sec. 23]
+
+**The central claim of this section is wrong.** There was no engine defect. A
+half-written UniVBE configuration advertised a mode the card cannot produce, and
+everything below is the engine faithfully using it. Kept unedited because the
+reasoning is a worked example of how far a wrong root cause can be carried on
+correct-looking evidence; the correction is sec. 23.
+
+## 21 (as originally written). An offered framebuffer the engine declines
 
 The Mach64 at 640x480 rendered **nothing** -- the DOS console stayed on screen,
 untouched, for a whole 158 s cell, with three captures 45 s apart byte-identical.
@@ -771,3 +779,90 @@ both. The distinguishing evidence has to come from the boot profile or a
 **This retracted a result already passed to another session**, who were about
 to special-case a "brief gap at cell launch" in the KVM overlay -- writing a
 real fault out of the interface on the strength of a false frame.
+
+
+---
+
+## 23. The configurator that was never finished  [measured 2026-08-19]
+
+Six hours of investigation, three retracted theories, two falsely reported
+engine defects, and a rig left unusable. One cause, and it printed itself on
+the screen the moment the procedure was run properly:
+
+> **Note that the ATI Mach64-CT and Mach64-ET based boards do not support
+> double scanning, so all 320x200 and 320x240 resolution modes are not
+> available.**  -- SciTech UniVBE 6.70, on this card
+
+### What happened
+
+`vcctrl-uvconfig` ran `UVCONFIG.EXE` at 14:47, then declined to press keys into
+a screen it could not read. Refusing to drive blind was correct. **Writing
+first and refusing second was not.** `UVCONFIG` writes `UNIVBE.DRV` and
+`UVCONFIG.DAT` as it runs, so the files had already changed by the time
+anything could decide to stop.
+
+The result advertised `0x01F8` 320x240 on a board that physically cannot
+double-scan. The game asks for 320x240, closest-match returned the mode that
+did not exist, and from there:
+
+    mode-set #1 -> 0x01F8 320x240 (impossible)   src_pitch latched at 320
+    mode-set #3 -> 0x0101 640x480                vram_pitch 640
+    pitches_match=0, LFB declined, nothing drawn
+
+Every one of those is correct behaviour given a false mode table.
+
+### Three checks that agreed, and were all wrong
+
+- `at_prompt()` said the configurator had finished. It is a BIOS Caps Lock
+  probe and returns True while a program sits waiting (sec. 20). The check that
+  cannot see DOS was used to certify a DOS program had completed.
+- File size and timestamp on `UNIVBE.DRV` looked correct throughout, before and
+  after a rollback. **A config file is not the configuration.** The mode list
+  the running system offers is, and it is only visible in a cell log.
+- The cell reported success, the environment verified, capture locked, the log
+  recorded both mode-sets. None of them asks whether anything was drawn.
+
+### The unfixable part
+
+`UVCONFIG` writes to the text buffer at `0xB800`. In mode 12h -- the mode the
+capture stick requires -- those writes land in memory that is not displayed, so
+the menus are invisible to the harness **and** to anyone at the monitor. In text
+mode 03h they are visible on the monitor but the stick cannot lock 70Hz.
+
+**There is no video mode in which the harness and the configurator can both see
+the screen.** So the answer was never a braver tool. Interactive configurators
+are operator work on this rig, permanently.
+
+### The rule
+
+**Refuse to write anything unless the whole procedure can complete.** Not "be
+more cautious" -- the tool was already cautious, in the wrong half. A machine
+left neither configured nor untouched is worse than one left alone, and the
+guard belongs before the first write rather than before the first keystroke.
+
+### What was measured once it was configured properly
+
+    per_loop_fps  28.3
+    oem_string    'Universal VESA VBE 6.70'
+    0x01F8        no matches            (the card cannot double-scan)
+    LFB-decision  use_lfb=1             taken unaided, no FORCE_LFB needed
+    FB-INIT       pitches_match=0  src_pitch=512  vram_pitch=640
+
+So **defect 1 is retracted and defect 2 is real.** `src_pitch` is genuinely not
+re-derived when a later mode-set changes VRAM dimensions -- mode-set #1 lands on
+512x384 and #3 moves to 640x480, and the engine keeps composing 512 wide. That
+is why 28.3 matches the 512x384 control pair exactly: it is a 512x384 workload
+with a 640x480 presentation, and it is **not** a 640x480 measurement.
+
+### What actually resolved it
+
+Not the harness. The operator: *"I don't get why you couldn't just do the 'we
+know there was a video card swap, so we'll run uvconfig, reboot, and things are
+all good' like we've done dozens of times before."*
+
+That is the third time in one session the decisive input came from the person in
+the room -- after eight beeps heard across a room (sec. 20) and a memory of the
+card working earlier (sec. 21). Each time the harness had evidence that looked
+sufficient and was not, and each time the human had context the instruments
+could not hold: what the procedure normally is, what the machine normally sounds
+like, what it looked like an hour ago.
