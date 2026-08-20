@@ -24,6 +24,7 @@ import glob
 import hashlib
 import io
 import json
+import math
 import os
 import socket
 import struct
@@ -1230,16 +1231,331 @@ class VideoCapability(Capability):
                 "sizes": [len(f) for _t, f in items[-8:]]}
 
 
+class AudioCapability(Capability):
+    """Owns the capture stick's ALSA device and keeps a rolling PCM ring.
+
+    Same shape as video and for the same reason: the device is exclusive, and a
+    persistent owner turns every level query from a 3-second capture into a
+    read. But the stakes are different here, and worth stating.
+
+    `bin/vcctrl-audio` is, by its own docstring, the harness's ONLY observation
+    channel that is safe to run during a measured cell -- it touches neither
+    the keyboard nor /dev/video0. Taking this device without shimming that tool
+    would remove the one check that can watch a sweep without perturbing it. So
+    the shim lands with this class, not after it.
+
+    The format is fixed by the hardware and happens to be exactly what a
+    browser wants: S16_LE, 2ch, 48000 Hz and nothing else. No resampling
+    anywhere, on either side. Do not "improve" the capture settings.
+    """
+
+    name = "audio"
+
+    DEVICE = os.environ.get("VCCTRL_ALSA", "hw:1,0")
+    RATE = 48000
+    CHANNELS = 2
+    SAMPLE_BYTES = 2
+    # 4 MB is ~21 s of 48k stereo S16. Capped in BYTES, like the frame ring and
+    # for the same reason: rule 3 does not cover memory (sec. 2).
+    RING_BYTES = 4 * 1024 * 1024
+    # ~20 ms per chunk. Small enough for a responsive jitter buffer, large
+    # enough that the per-chunk overhead is irrelevant.
+    CHUNK = 3840
+    STALLED_AFTER_S = 2.0
+
+    def __init__(self, devs, bus=None):
+        Capability.__init__(self, devs)
+        self.bus = bus
+        self.lock = threading.Lock()
+        self.ring = collections.deque()
+        self.ring_bytes = 0
+        self.proc = None
+        self.owned = False
+        self.running = False
+        self.last_chunk_t = 0.0
+        self.bytes_total = 0
+        self.state = "starting"
+        self.spawns = 0
+        self.spawn_t = 0.0
+        self.fast_failures = 0
+        self.last_error = None
+        self.seq = 0
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def start(self):
+        self.running = True
+        self._acquire()
+        threading.Thread(target=self._watchdog, daemon=True).start()
+
+    def stop(self):
+        self.running = False
+        self._release()
+
+    def _acquire(self):
+        with self.lock:
+            if self.owned:
+                return True
+            try:
+                self.proc = subprocess.Popen(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                     "-f", "alsa", "-ar", str(self.RATE),
+                     "-ac", str(self.CHANNELS), "-i", self.DEVICE,
+                     "-acodec", "pcm_s16le", "-f", "s16le", "-"],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    bufsize=0)
+            except Exception as exc:
+                self.last_error = "%s: %s" % (type(exc).__name__, exc)
+                return False
+            self.owned = True
+            self.spawns += 1
+            self.spawn_t = time.time()
+            self.state = "starting"
+            threading.Thread(target=self._read_pcm, args=(self.proc,),
+                             daemon=True).start()
+        self._publish("audio.acquired", spawns=self.spawns)
+        return True
+
+    def _release(self):
+        with self.lock:
+            proc, self.proc, self.owned = self.proc, None, False
+        if proc is not None:
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+        self._publish("audio.released")
+
+    def _publish(self, kind, **kw):
+        if self.bus is not None:
+            self.bus.publish(kind, **kw)
+
+    # -- the per-chunk path -------------------------------------------------
+
+    def _read_pcm(self, proc):
+        """Raw interleaved S16LE off ffmpeg's stdout. No decode, no analysis.
+
+        Deliberately does no level computation: that would put a per-chunk cost
+        on the streaming path for a number almost nobody is asking for. Levels
+        are computed on demand from the ring, which is the same discipline that
+        keeps the video path from decoding frames it is only passing through.
+        """
+        fd = proc.stdout.fileno()
+        buf = b""
+        while self.running and proc.poll() is None:
+            try:
+                data = os.read(fd, 16384)
+            except Exception as exc:
+                self.last_error = "reader: %s: %s" % (type(exc).__name__, exc)
+                self._publish("audio.reader_error", error=self.last_error)
+                break
+            if not data:
+                break
+            buf += data
+            while len(buf) >= self.CHUNK:
+                self._push(buf[:self.CHUNK])
+                buf = buf[self.CHUNK:]
+
+    def _push(self, chunk):
+        now = time.time()
+        with self.lock:
+            self.seq += 1
+            self.ring.append((now, self.seq, chunk))
+            self.ring_bytes += len(chunk)
+            while self.ring_bytes > self.RING_BYTES and len(self.ring) > 1:
+                _t, _s, old = self.ring.popleft()
+                self.ring_bytes -= len(old)
+            self.last_chunk_t = now
+            self.bytes_total += len(chunk)
+
+    def _watchdog(self):
+        """Liveness, not a clock -- same rule as video (sec. 4.5).
+
+        One difference worth noting: for audio, "no data" really is a fault.
+        A capture device that is open delivers samples whether or not anything
+        is playing, because silence is still samples. So unlike video, where a
+        stopped stream is often correct, a stalled audio stream means the path
+        broke.
+        """
+        while self.running:
+            time.sleep(0.5)
+            with self.lock:
+                owned, proc = self.owned, self.proc
+                age = (time.time() - self.last_chunk_t) if self.last_chunk_t \
+                    else (time.time() - self.spawn_t if self.spawn_t else None)
+                state = self.state
+            if not owned:
+                continue
+            if proc is not None and proc.poll() is not None:
+                lifetime = time.time() - self.spawn_t
+                with self.lock:
+                    self.fast_failures = (self.fast_failures + 1
+                                          if lifetime < 5.0 else 0)
+                    fails = self.fast_failures
+                self._publish("audio.wedged", rc=proc.returncode,
+                              fast_failures=fails)
+                self._release()
+                if fails:
+                    with self.lock:
+                        self.state = "unavailable"
+                    time.sleep(min(30.0, 2.0 ** min(fails, 5)))
+                if self.running:
+                    self._acquire()
+                continue
+            new = "stalled" if (age is not None
+                                and age > self.STALLED_AFTER_S) else "capturing"
+            if new != state:
+                with self.lock:
+                    self.state = new
+                self._publish("audio.%s" % new)
+
+    # -- levels, computed on demand -----------------------------------------
+
+    def _levels(self, ms=3000):
+        """RMS and peak in dBFS over the last `ms`, plus a bucket histogram.
+
+        Matches what `ffmpeg -af volumedetect` reports, because
+        `bin/vcctrl-audio` reads mean_volume, max_volume and the histogram
+        bucket count, and its verdicts are tuned to those numbers. Changing the
+        scale would silently invalidate every reference level in FINDINGS.
+        """
+        want = int(self.RATE * self.CHANNELS * self.SAMPLE_BYTES * ms / 1000.0)
+        with self.lock:
+            chunks, got = [], 0
+            for _t, _s, c in reversed(self.ring):
+                chunks.append(c)
+                got += len(c)
+                if got >= want:
+                    break
+        if not chunks:
+            return None
+        frag = b"".join(reversed(chunks))
+
+        full = 32768.0
+        import array as _array
+        a = _array.array("h")
+        a.frombytes(frag[:len(frag) // 2 * 2])
+        if sys.byteorder == "big":
+            a.byteswap()
+        if not len(a):
+            return None
+
+        peak = max(max(a), -min(a))
+
+        # RMS in FLOATING POINT, from a strided subsample.
+        #
+        # Not audioop.rms, which returns an INTEGER: at the noise floor an RMS
+        # of 1.41 truncates to 1, which is -90.3 dB instead of -87.3 -- a 3 dB
+        # error precisely where "connected but silent" is distinguished from
+        # "nothing on the wire". Measured against ffmpeg on a dither-level
+        # signal, which is what an idle but connected path actually looks like.
+        #
+        # Striding to ~20k samples keeps this a few milliseconds and is well
+        # inside 0.1 dB for any signal; a level meter does not need every
+        # sample, but it does need the arithmetic done in floats. Dropping
+        # audioop also outlives its removal in Python 3.13.
+        step = max(1, len(a) // 20000)
+        sub = a[::step]
+        rms = (sum(float(v) * v for v in sub) / len(sub)) ** 0.5
+
+        def db(v):
+            return 20.0 * math.log10(v / full) if v > 0 else -91.0
+
+        # Histogram of per-sample levels, bucketed to the dB like volumedetect,
+        # over the same subsample as the RMS.
+        hist = {}
+        for v in sub:
+            av = abs(v)
+            # Digital zero is not "no reading" -- it is full attenuation, and
+            # ffmpeg counts it in the bottom bucket. Skipping it made an
+            # all-silent fragment report zero buckets where ffmpeg reports one.
+            b = 91 if av == 0 else int(round(-20.0 * math.log10(av / full)))
+            hist[b] = hist.get(b, 0) + 1
+        # ffmpeg does NOT print every non-empty bucket, and `vcctrl-audio`
+        # displays the count it prints. Measured against ffmpeg: a pure sine
+        # gives 1 bucket where a naive distinct-count gives 36. volumedetect
+        # walks down from the loudest bucket and stops once the buckets it has
+        # printed cover 0.1% of samples, so the number is really "how many dB
+        # of headroom hold the loudest 0.1%" -- a crest-factor measure, not a
+        # count of distinct levels. Replicated here so the figure keeps meaning
+        # what every reading in FINDINGS meant.
+        total = sum(hist.values())
+        shown, acc = {}, 0
+        for k in sorted(hist):
+            if acc >= total / 1000.0:
+                break
+            acc += hist[k]
+            shown[k] = hist[k]
+        # Return the TRUNCATED histogram, not the full one. `vcctrl-audio`
+        # prints len(hist) as the bucket count, so the dict it receives has to
+        # be the set ffmpeg would have printed -- returning all 36 non-empty
+        # buckets would keep the number honest-looking and wrong.
+        return {"mean_db": round(db(rms), 2), "peak_db": round(db(peak), 2),
+                "hist": shown, "buckets": len(shown),
+                "window_ms": round(len(frag) * 1000.0
+                                   / (self.RATE * self.CHANNELS
+                                      * self.SAMPLE_BYTES), 1)}
+
+    # -- commands -----------------------------------------------------------
+
+    def commands(self):
+        return {"audio": self._audio, "level": self._level}
+
+    def _state(self):
+        with self.lock:
+            age = (time.time() - self.last_chunk_t) if self.last_chunk_t else None
+            return {"state": self.state, "owned": self.owned,
+                    "rate": self.RATE, "channels": self.CHANNELS,
+                    "bytes": self.bytes_total, "spawns": self.spawns,
+                    "ring_chunks": len(self.ring), "ring_bytes": self.ring_bytes,
+                    "last_chunk_age_s": round(age, 3) if age else None,
+                    "fast_failures": self.fast_failures,
+                    "last_error": self.last_error}
+
+    def _audio(self, req):
+        action = req.get("action", "state")
+        if action == "state":
+            return dict({"ok": True}, **self._state())
+        if action == "release":
+            self._release()
+            return dict({"ok": True}, **self._state())
+        if action == "acquire":
+            ok = self._acquire()
+            return dict({"ok": ok, "error": None if ok else self.last_error},
+                        **self._state())
+        return {"ok": False, "error": "unknown audio action: %r" % action}
+
+    def _level(self, req):
+        lv = self._levels(int(req.get("ms", 3000)))
+        if lv is None:
+            return {"ok": True, "level": None, "state": self.state,
+                    "reason": "no audio in the ring"}
+        return dict({"ok": True, "state": self.state}, **lv)
+
+
 # The registry. A table in the source, in load order. Video, web, audio, reset
 # and files join this list; each is one entry and touches nothing above it.
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
-                VideoCapability]
+                VideoCapability, AudioCapability]
 
-# Bind address for the web UI. Tailnet only, per the operator: Tailscale is the
-# authentication boundary and there is no password. Binding to the tailscale
-# address rather than 0.0.0.0 means the LAN cannot reach it at all, which is a
-# stronger statement than a firewall rule.
-WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "100.64.0.1")
+# Bind address for the web UI: LOOPBACK ONLY.
+#
+# Nothing listens on the tailnet directly. `tailscale serve` terminates TLS for
+# vcctrl-pi.example.ts.net and proxies here, so the only way in is over HTTPS,
+# and that is the operator's decision -- plain http is not merely discouraged,
+# it is unreachable.
+#
+# This is a stronger guarantee than binding to the tailscale address was. That
+# still answered unencrypted requests from anything on the tailnet; this
+# answers nothing that has not come through the proxy.
+#
+# Consequence, and it is the whole reason this is one line with a long comment:
+# every tool that talks to the daemon over HTTP must use the HTTPS name.
+# bin/vcctrl-sweep and bin/vcctrl-audio were updated with it. If the KVM
+# becomes unreachable, `vcctrl` over the unix socket still works -- the
+# recovery path does not route through the web server.
+WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "127.0.0.1")
 WEB_PORT = int(os.environ.get("VCCTRL_WEB_PORT", "8080"))
 
 

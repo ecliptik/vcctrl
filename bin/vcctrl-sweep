@@ -61,7 +61,8 @@ POLL_SECONDS = 15
 # a caller cannot open the device itself -- it would get EBUSY. It also means a
 # frame is already captured before anyone asks for one, which is why this went
 # from ~40 s to well under a second.
-VCCTRL_WEB = os.environ.get("VCCTRL_WEB", "http://100.64.0.1:8080")
+VCCTRL_WEB = os.environ.get(
+    "VCCTRL_WEB", "https://vcctrl-pi.example.ts.net")
 
 
 def _daemon_alive(timeout=2.0):

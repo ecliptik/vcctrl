@@ -362,6 +362,44 @@ Bind to the tailnet only. Two ways, and the second is recommended:
   `usb4vc.<tailnet>.ts.net`. Recommended, for a reason that is not about
   security:
 
+**DONE 2026-08-19. `https://vcctrl-pi.example.ts.net/` is live**, via
+`tailscale serve --bg --https=443`, proxying to the daemon on the tailnet
+address. Verified: TLS 1.3, cert verified by a default trust store, and the
+WebSocket upgrade works through the proxy at 8.5 Mbit/s. The page already
+chooses `wss` from `location.protocol`, so it needed no change. Set up in
+`pi/install.sh`, idempotently, and the config lives in tailscaled's state so it
+survives reboots.
+
+**Plain HTTP is off, by the operator's decision.** The daemon binds `127.0.0.1`
+only, so nothing answers on the tailnet address at all and the sole route in is
+through the TLS proxy. That is a stronger guarantee than binding to the
+tailscale address was -- that still served unencrypted requests to anything on
+the tailnet.
+
+The cost is that every tool talking to the daemon over HTTP had to move to the
+HTTPS name: `bin/vcctrl-sweep` and `bin/vcctrl-audio` both did. Measured from
+the VM, `urllib` over TLS costs about a quarter second per call more than plain
+http with no connection reuse -- 0.55 s against 0.29 s for a frame, which is
+still two orders of magnitude below the 40 s it replaced.
+
+**The recovery path does not route through the web server.** `vcctrl` speaks to
+the unix socket over ssh, so if TLS, `serve` or the cert ever fails, input and
+power still work and the machine is not stranded.
+
+**Certificate renewal runs weekly and on boot**, as a systemd timer rather than
+a cron entry. `tailscale serve` renews on its own, so this is belt and braces
+-- but a cert that silently fails to renew takes the KVM offline in exactly the
+situation where you most want to look at the machine. The reason it is a timer:
+cron's `@reboot` fires before tailscaled has connected, so an on-boot renewal
+would run against a down control plane and fail silently. A timer can say
+`After=tailscaled.service` and settle for three minutes first, and its result
+lands in journald with everything else.
+
+One consequence worth stating rather than burying: a publicly-trusted
+certificate means the machine's MagicDNS name appears in public Certificate
+Transparency logs. That is inherent to the cert, not to this design, and the
+operator approved it.
+
 **A raw-IP `http://` origin is not a secure context.** Pointer Lock still works
 there, but `RTCPeerConnection` and the async clipboard API do not, in both
 Firefox and Safari. The WebRTC option the operator wants held open (6.3) and
