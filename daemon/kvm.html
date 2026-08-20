@@ -135,6 +135,23 @@
     }
     #tabs button.on { color:var(--green); border-top-color:var(--green); }
 
+    /* Long panels take the whole screen and are dismissed, rather than
+       squeezing into a third of it. A log worth reading is worth reading. */
+    body #body.sheet {
+      position:fixed; inset:0; z-index:60; height:auto; max-height:none;
+      padding-bottom:env(safe-area-inset-bottom,0px);
+    }
+    body #body.sheet > #sheethdr { display:flex; }
+    body #body.sheet > #log { max-height:none; }
+    body #sheethdr {
+      display:none; flex:none; align-items:center; justify-content:space-between;
+      gap:10px; padding:10px 12px; border-bottom:1px solid var(--rule);
+      padding-top:calc(10px + env(safe-area-inset-top,0px));
+    }
+    body #sheettitle {
+      font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+      text-transform:uppercase; color:var(--dim);
+    }
     body #body { height:auto; max-height:46vh; }
     body #body > * { display:none; }
     body #body.show-log > #logh { display:block; }
@@ -348,6 +365,7 @@
   .k-cmd{color:var(--blue)} .k-lock{color:var(--yellow)}
   .k-taint{color:var(--red);font-weight:600} .k-vid{color:var(--green)}
 
+  #sheethdr { display:none; }
   #settings { display:none; }
   #settings.show { display:block; }
   #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
@@ -475,6 +493,10 @@
   </div>
 
   <div id="body">
+   <div id="sheethdr">
+     <span id="sheettitle">Activity</span>
+     <button id="sheetclose">✕ Close</button>
+   </div>
    <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
    <div id="log"></div>
    <div id="panels">
@@ -977,6 +999,7 @@ function setArmed(v, opts) {
 // Capture-phase, so nothing layered over the video can swallow the click, and
 // pointerup as well as click because a touch that moves slightly may not
 // produce a click at all.
+$('sheetclose').onclick = () => setTab('none');
 $('reloadbtn').onclick = () => location.reload(true);
 // Sends a Caps Lock and watches for the LED to come back. The only check that
 // says anything about the wire rather than about this end of it.
@@ -1496,12 +1519,20 @@ pollState(); pollEvents(); pollPower();
 // point, so the default state gives it everything.
 function setTab(name) {
   const body = $('body'), panels = $('panels');
+  // The long panels open as a full-screen sheet; the short ones stay a strip
+  // at the bottom. Reading a log through a 150px window is not reading.
+  const asSheet = (name === 'log' || name === 'set');
   for (const b of document.querySelectorAll('#tabs button'))
     b.classList.toggle('on', b.dataset.tab === name);
   $('cmdbar').classList.toggle('open', name === 'keys');
   $('keys').classList.toggle('open', name === 'keys');
   body.className = '';
   panels.className = '';
+  if (asSheet) body.classList.add('sheet');
+  if (asSheet) {
+    body.classList.add('sheet');
+    $('sheettitle').textContent = name === 'log' ? 'Activity' : 'Settings';
+  }
   if (name === 'log') body.classList.add('show-log');
   else if (name === 'sound') { body.classList.add('show-panels'); panels.classList.add('only-sound'); }
   else if (name === 'power') { body.classList.add('show-panels'); panels.classList.add('only-power'); }
