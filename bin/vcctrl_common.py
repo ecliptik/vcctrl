@@ -100,7 +100,21 @@ def vc_json(*args):
 
 
 def leds():
+    """The LED object: {"available": bool, "why": ..., + values when available}.
+
+    Values stay FLAT inside this object, so `leds().get("capslock")` keeps
+    working exactly as it did. When `available` is false the value keys are
+    absent rather than zero, deliberately -- see the daemon's
+    LedsCapability.snapshot(). Callers that need a value must therefore treat
+    a missing key as "could not look", never as "off".
+    """
     return vc_json("leds").get("leds", {})
+
+
+def leds_available():
+    """(available, why, reason). `why` is one of unsupported/error/unknown."""
+    st = leds()
+    return (bool(st.get("available")), st.get("why"), st.get("reason"))
 
 
 def power_on():
@@ -127,7 +141,13 @@ def wait_led(name, want, timeout):
     want = bool(want)
     t0 = time.time()
     while time.time() - t0 < timeout:
-        if bool(leds().get(name)) is want:
+        st = leds()
+        if not st.get("available"):
+            # Return immediately rather than spend the full timeout waiting
+            # for a value that cannot arrive. Both answers are None, but one
+            # of them takes 240 s during a boot wait and looks like a hang.
+            return None
+        if bool(st.get(name)) is want:
             return time.time() - t0
         time.sleep(LED_POLL_S)
     return None
@@ -151,7 +171,15 @@ def stable_led(name, tries=6):
     """
     last = None
     for _ in range(tries):
-        now = bool(leds().get(name))
+        st = leds()
+        if not st.get("available"):
+            # NOT False. An LED that cannot be read at all is "could not
+            # look", and on ADB it is not even a fault -- the board has no
+            # return channel. Returning False here would make at_prompt()
+            # report "something is still running" on a healthy Macintosh, and
+            # the caller would decline to type at a machine that was fine.
+            return None
+        now = bool(st.get(name))
         if last is not None and now == last:
             return now
         last = now
@@ -238,6 +266,10 @@ def arm_leds():
     Either one armed the wrong way makes its transition invisible, and the
     harness then waits for an event that has already happened.
     """
+    ok, why, reason = leds_available()
+    if not ok:
+        print("  cannot arm the LEDs: %s (%s)" % (reason, why))
+        return False
     for name, want in (("capslock", True), ("scrolllock", False)):
         if bool(leds().get(name)) is want:
             continue

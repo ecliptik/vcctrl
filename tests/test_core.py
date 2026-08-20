@@ -2138,3 +2138,154 @@ if __name__ == "__main__":
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
+
+
+def test_leds_three_states_by_board():
+    """A Macintosh must not render like a Gateway with a dead PS/2 lead.
+
+    Before this, `leds` was a flat dict of three values and `input_verified`
+    was ok/not-ok. On the ADB board that produced the same output as a broken
+    PS/2 link: no LED values, a round trip that times out, a red lamp. One is
+    working hardware and the other is a fault, and the page could not tell
+    them apart because the daemon could not either.
+
+    The property under test is that `why` is a CLOSED SET distinguishing
+    unsupported from error, and that VALUE KEYS ARE ABSENT when unavailable --
+    not zero. A plausible set of zeroes is worse than no data: a consumer that
+    forgets to check `available` reads it as "all three LEDs are off" and is
+    confidently wrong, where a missing key gives undefined and shows a dash.
+    """
+    class Devs(object):
+        def __init__(self, values=None, boom=False):
+            self.values = values
+            self.boom = boom
+
+        def read_leds(self):
+            if self.boom:
+                raise OSError("no such file")
+            return dict(self.values or {})
+
+    good = {"capslock": 0, "numlock": 1, "scrolllock": 1}
+
+    def cap(board, devs):
+        c = vcctrld.LedsCapability(devs)
+        c.support = lambda: (
+            (True, None) if board == 1 else
+            (False, "board %s has no PS/2 LED return channel" % board)
+            if board is not None else
+            (None, "board unknown"))
+        return c
+
+    # 1. IBM PC, readable -> available, values FLAT and present
+    s = cap(1, Devs(good)).snapshot()
+    check("ibmpc reports available", s["available"] is True)
+    check("ibmpc why is null", s["why"] is None)
+    check("ibmpc values are flat and present",
+          s.get("capslock") == 0 and s.get("numlock") == 1
+          and s.get("scrolllock") == 1, s)
+
+    # 2. ADB -> unsupported, and NO value keys at all
+    s = cap(3, Devs(good)).snapshot()
+    check("adb reports unavailable", s["available"] is False)
+    check("adb why is 'unsupported'", s["why"] == "unsupported", s.get("why"))
+    check("adb gives a reason", bool(s.get("reason")))
+    check("ADB OMITS the value keys rather than zeroing them",
+          not any(k in s for k in good), s)
+
+    # 3. IBM PC, read raises -> error, distinguishable from unsupported
+    s = cap(1, Devs(boom=True)).snapshot()
+    check("read failure reports unavailable", s["available"] is False)
+    check("read failure why is 'error', NOT 'unsupported'",
+          s["why"] == "error", s.get("why"))
+    check("error omits the value keys too", not any(k in s for k in good), s)
+
+    # 4. board unknown -> its own state, not folded into either neighbour
+    s = cap(None, Devs(good)).snapshot()
+    check("unknown board why is 'unknown'", s["why"] == "unknown", s.get("why"))
+
+    # The whole point: these three must not be confusable.
+    whys = {cap(1, Devs(boom=True)).snapshot()["why"],
+            cap(3, Devs(good)).snapshot()["why"],
+            cap(None, Devs(good)).snapshot()["why"]}
+    check("unsupported / error / unknown are three distinct values",
+          whys == {"error", "unsupported", "unknown"}, whys)
+
+    # verify_input must REFUSE on ADB rather than run and latch a false red.
+    c = cap(3, Devs(good))
+    before_at, before_ok = c.verified_at, c.verified_ok
+    out = c._verify_input({})
+    check("verify_input on ADB does not claim a failure",
+          out.get("verified") is None and out.get("why") == "unsupported", out)
+    check("verify_input on ADB LEAVES verified_* alone",
+          c.verified_at is before_at and c.verified_ok is before_ok,
+          (c.verified_at, c.verified_ok))
+
+
+def test_leds_flat_shape_survives_for_the_harness():
+    """bin/vcctrl_common.leds() callers must keep working, or sweeps stall.
+
+    Every LED caller does `.get("capslock")` on the dict this returns.
+    Nesting the values would make stable_led(), wait_led(), arm_leds() and
+    at_prompt() all read None -> False on a healthy machine. That is the worst
+    failure direction the harness has: at_prompt() returning False reads as
+    "something is still running", so an unattended sweep declines to type and
+    stalls looking exactly like a wedge.
+    """
+    class Devs(object):
+        def read_leds(self):
+            return {"capslock": 1, "numlock": 0, "scrolllock": 0}
+
+    c = vcctrld.LedsCapability(Devs())
+    c.support = lambda: (True, None)
+    out = c._leds({})
+    check("_leds still returns an 'leds' key", "leds" in out, out)
+    leds = out["leds"]
+    check("values remain reachable as leds['capslock']",
+          leds.get("capslock") == 1, leds)
+    check("values remain reachable as leds['scrolllock']",
+          leds.get("scrolllock") == 0, leds)
+    check("the availability flag rides alongside, not around",
+          leds.get("available") is True, leds)
+
+
+def test_installed_board_id_never_guesses():
+    """Unknown must not default to IBM PC.
+
+    BOARD-IDENTITY sec. 2: config.json read {"3"} for the whole time the Pi 3
+    was driving the Gateway, so a plausible source returned the wrong machine
+    with total confidence. This reader consults only the tmpfs status file and
+    answers None for everything else -- a confident wrong answer here would
+    mark a real LED fault as "no channel on this board" and hide it.
+    """
+    import json as _json
+    import tempfile
+    d = tempfile.mkdtemp(prefix="boardid")
+    orig = vcctrld.BoardCapability.FILE
+    try:
+        p = os.path.join(d, "board.json")
+        vcctrld.BoardCapability.FILE = p
+
+        vcctrld.BoardCapability.FILE = os.path.join(d, "absent.json")
+        check("missing file -> None, not 1",
+              vcctrld.installed_board_id() is None)
+
+        vcctrld.BoardCapability.FILE = p
+        with open(p, "w") as f:
+            f.write("{ this is not json")
+        check("corrupt file -> None, not 1",
+              vcctrld.installed_board_id() is None)
+
+        with open(p, "w") as f:
+            _json.dump({"name": "IBM PC Compatible"}, f)   # no id
+        check("file without an id -> None, not 1",
+              vcctrld.installed_board_id() is None)
+
+        with open(p, "w") as f:
+            _json.dump({"id": 3}, f)
+        check("reads a real id", vcctrld.installed_board_id() == 3)
+
+        with open(p, "w") as f:
+            _json.dump({"id": 1}, f)
+        check("reads the IBM PC id", vcctrld.installed_board_id() == 1)
+    finally:
+        vcctrld.BoardCapability.FILE = orig

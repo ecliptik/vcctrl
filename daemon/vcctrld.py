@@ -704,6 +704,39 @@ class InputCapability(Capability):
         return {"ok": True}
 
 
+# Boards that have a PS/2 LED return channel. PBID 1 is the IBM PC board; 2
+# and 3 are ADB, which has no equivalent -- there is no protocol message in
+# which a Macintosh reports its lock-key state back to a keyboard.
+LED_BOARDS = (1,)
+
+
+def installed_board_id():
+    """The installed board's id from the primary source, or None.
+
+    Deliberately reads ONLY /run/usb4vc/board.json and deliberately does NOT
+    fall back to the journal the way BoardCapability does. This is used to
+    decide whether a capability is MEANINGFUL, and for that question a
+    confident wrong answer is far worse than an admitted unknown -- so the
+    cheap, unambiguous source is the only one consulted and everything else is
+    None.
+
+    It duplicates a file read and NOT a policy. The thing that must not be
+    duplicated is "which sources to trust in what order", which lives in
+    BoardCapability and stays there; if this grew a second source the two would
+    drift and the rig would have two answers to one question.
+
+    Capabilities do not call into each other here (see InputCapability's rule
+    1), which is why this is a module function rather than a reach across the
+    registry.
+    """
+    try:
+        with open(BoardCapability.FILE) as f:
+            bid = json.load(f).get("id")
+        return int(bid) if bid is not None else None
+    except Exception:
+        return None
+
+
 class LedsCapability(Capability):
     """The PS/2 LED return channel -- non-video proof a keystroke landed.
 
@@ -720,6 +753,71 @@ class LedsCapability(Capability):
     def commands(self):
         return {"leds": self._leds, "ledwait": self._ledwait,
                 "verify_input": self._verify_input}
+
+    def support(self):
+        """Is an LED return channel MEANINGFUL on the installed board?
+
+        Three values, and the third is the point. `True` for the IBM PC board,
+        `False` for ADB -- a Macintosh has no protocol message in which it
+        reports lock-key state back to a keyboard, so there is nothing to read
+        and never will be. `None` when the board is unknown, because
+        "this board has none" and "I do not know which board" are different
+        facts and a consumer acts differently on each.
+
+        Without this, a Mac session was indistinguishable from a broken PS/2
+        session: the same absent LEDs, the same failed round trip, the same
+        red indicator. One is working hardware and the other is a fault.
+        """
+        bid = installed_board_id()
+        if bid is None:
+            return None, "board unknown, so it is not known whether LEDs apply"
+        if bid in LED_BOARDS:
+            return True, None
+        return False, ("board %d has no PS/2 LED return channel (ADB does not "
+                       "report lock-key state back to the keyboard)" % bid)
+
+    def snapshot(self):
+        """The LED object as it appears to consumers. Three states, named.
+
+            {"available": true,  "why": null,          "capslock": 0, ...}
+            {"available": false, "why": "unsupported", "reason": "..."}
+            {"available": false, "why": "error",       "reason": "..."}
+            {"available": false, "why": "unknown",     "reason": "..."}
+
+        `why` is a CLOSED SET and not two falsy values wearing one flag.
+        `unsupported` is a Macintosh, which is working hardware. `error` is a
+        Gateway whose PS/2 lead is dead, which is a fault. Collapsing them
+        makes those two render identically, which is the entire reason this
+        change exists. `unknown` is "not checked yet" and must not fall into
+        either neighbour.
+
+        WHEN available IS FALSE THE VALUE KEYS ARE ABSENT, NEVER ZERO. A
+        plausible set of zeroes is worse than no data: a consumer that forgets
+        to check `available` reads it as "all three LEDs are off" and is
+        confidently wrong, where a missing key gives it undefined and it shows
+        a dash. Half a schema is worse than none, and this is the half that
+        usually gets skipped.
+        """
+        supported, reason = self.support()
+        if supported is False:
+            return {"available": False, "why": "unsupported", "reason": reason}
+        try:
+            values = self.devs.read_leds()
+        except Exception as exc:
+            return {"available": False, "why": "error",
+                    "reason": errstr(exc, "could not read the LED nodes: ")}
+        if not values:
+            return {"available": False, "why": "error",
+                    "reason": "no LED nodes are mapped for our keyboard"}
+        if supported is None:
+            # Readable, but we cannot say the reading MEANS anything, because
+            # we do not know which board is in. Values are withheld rather
+            # than published with a caveat -- a caveat next to a number gets
+            # dropped and the number does not.
+            return {"available": False, "why": "unknown", "reason": reason}
+        out = {"available": True, "why": None, "reason": None}
+        out.update(values)
+        return out
 
     def _verify_input(self, req):
         """Prove the input path by round trip, because nothing else can.
@@ -738,6 +836,24 @@ class LedsCapability(Capability):
         anything -- Caps Lock is BIOS-serviced, and conflating those is a
         separate mistake this rig has already paid for.
         """
+        # REFUSE rather than run on a board with no return channel. On ADB
+        # this would toggle Caps Lock, wait 1.5 s for an LED that cannot
+        # arrive, and then report "the PS/2 link is not carrying keystrokes"
+        # -- a false alarm about working hardware, latched into verified_ok
+        # where the page renders it red. Not looking is not a finding, so the
+        # verified_* fields are deliberately LEFT ALONE here: a stale honest
+        # result from the Gateway is better than a fresh dishonest one from
+        # a machine this test cannot address.
+        supported, why = self.support()
+        if supported is not True:
+            return {"ok": True, "verified": None,
+                    "available": False,
+                    "why": "unsupported" if supported is False else "unknown",
+                    "reason": why,
+                    "note": ("not attempted -- this test can only prove a "
+                             "PS/2 link, and the LED round trip it depends "
+                             "on does not exist here")}
+
         before = self.devs.read_leds()
         try:
             self.devs.key(["capslock"])
@@ -765,7 +881,17 @@ class LedsCapability(Capability):
                          "keystrokes, whatever the device status says")}
 
     def _leds(self, req):
-        return {"ok": True, "leds": self.devs.read_leds()}
+        """`leds` stays a FLAT dict of values, and that is load-bearing.
+
+        bin/vcctrl_common.leds() returns this key and every caller does
+        .get("capslock"). Nesting it would make stable_led(), wait_led(),
+        arm_leds() and at_prompt() all read None -> False on a perfectly
+        healthy machine, which is the worst failure direction this harness
+        has: at_prompt() returning False reads as "something is still
+        running", so an unattended sweep stalls looking exactly like a wedge.
+        The new information is therefore ADDED alongside, never folded in.
+        """
+        return {"ok": True, "leds": self.snapshot()}
 
     def _ledwait(self, req):
         # Blocks for up to `timeout`. Safe to block only because serve() is

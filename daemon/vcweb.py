@@ -555,19 +555,47 @@ class WebCapability(object):
         # The PS/2 LEDs are the page's signature indicator and its only
         # non-video evidence that a keystroke reached the target, so they ride
         # in the same poll as everything else rather than needing a second one.
-        try:
-            leds = self.registry.devs.read_leds()
-        except Exception:
-            leds = None
         leds_cap = self.registry.caps.get("leds")
+        if leds_cap is None:
+            leds = {"available": False, "why": "error",
+                    "reason": "leds capability failed to start"}
+        else:
+            try:
+                leds = leds_cap.snapshot()
+            except Exception as exc:
+                # Bounded inline rather than via vcctrld.errstr: this module
+                # does not import that one, and reaching for a name that is
+                # not there would raise a NameError on the ERROR PATH -- the
+                # one place nothing else is going right either. Same shape as
+                # the missing `import sys` that took out the TLS fallback in
+                # this file earlier today.
+                r = "leds snapshot raised: %s: %s" % (type(exc).__name__, exc)
+                leds = {"available": False, "why": "error",
+                        "reason": r if len(r) <= 240 else r[:239] + "\u2026"}
+
+        # input_verified carries the SAME three-state shape, for the same
+        # reason. On ADB the round trip is not a failed check, it is a check
+        # that does not apply -- and a Macintosh must not render like a
+        # Gateway with a dead PS/2 lead.
+        if leds_cap is None:
+            verified = {"available": False, "why": "error",
+                        "reason": "leds capability failed to start"}
+        elif leds.get("why") == "unsupported":
+            verified = {"available": False, "why": "unsupported",
+                        "reason": leds.get("reason")}
+        elif leds_cap.verified_at is None:
+            verified = {"available": False, "why": "unknown",
+                        "reason": "the input path has not been verified yet"}
+        else:
+            verified = {"available": True, "why": None, "reason": None,
+                        "ok": leds_cap.verified_ok,
+                        "age_s": round(time.time() - leds_cap.verified_at, 1)}
+
         return {"video": vid._state() if vid else {"state": "unavailable"},
                 "leds": leds,
                 # Every other input status describes the Pi's own end of the
                 # wire. This is the only field that means the target answered.
-                "input_verified": (
-                    None if not leds_cap or leds_cap.verified_at is None
-                    else {"ok": leds_cap.verified_ok,
-                          "age_s": round(time.time() - leds_cap.verified_at, 1)}),
+                "input_verified": verified,
                 "inflight": act.get("inflight"),
                 "lock": act.get("lock"),
                 "last_event_age_s": act.get("last_event_age_s"),
