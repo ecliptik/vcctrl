@@ -217,7 +217,12 @@ property that makes `vcctrl-audio` special in the first place.
    open for days" are different claims, and the benchmarking session owns that
    judgement, not this document.
 2. **Does holding both the video and audio interfaces of the same USB device
-   change either?** They are separate interfaces on one stick sharing one USB
+   change either?** Watch the **distinct-hash count**, not the frame count --
+   the `vcctrl` session's sharpening, and it is the right one. The frame count
+   is exactly what fooled both of us over text mode 03h: frames kept arriving
+   at 30 fps and the stream was dead. That stick has now surprised us twice, in
+   the same direction each time, by continuing to do something when we
+   predicted it would stop. They are separate interfaces on one stick sharing one USB
    bus. Video peaks around 2 MB/s and audio adds 192 KB/s against a bus with
    far more headroom, so this should be nothing -- but "should be nothing" is
    what was said about the frame rate before it turned out the stick repeats
