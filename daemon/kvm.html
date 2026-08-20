@@ -43,7 +43,8 @@
   /* The last live picture, shown behind the notice when the stream is not
      live. Dimmed so it can never be mistaken for the current screen. */
   #stale { position:absolute; inset:0; filter:grayscale(.6) brightness(.55); }
-  #stage.armed { outline:2px solid var(--ok); outline-offset:-2px; }
+  #stage.armed { outline:3px solid var(--ok); outline-offset:-3px;
+                 box-shadow:inset 0 0 26px rgba(90,194,122,.28); }
   #stage { cursor:pointer; }
   #hint { position:absolute; left:0; right:0; bottom:0; padding:5px 8px;
           font:11px/1.3 var(--mono); text-align:center; color:#0e1116;
@@ -119,6 +120,7 @@
     <span id="p-lock"  class="pill">lock …</span>
     <span id="p-power" class="pill">power …</span>
     <span id="p-xport" class="pill">…</span>
+    <span id="p-kbd" class="pill">keyboard idle</span>
     <span class="grow"></span>
     <button id="kbtn" class="primary">⌨ Keyboard</button>
   </header>
@@ -440,7 +442,12 @@ function setArmed(v, opts) {
     // a touch device. On desktop it is harmless and keeps key events flowing
     // to one place.
     ghost.focus({preventScroll:true});
+    pill('p-kbd', 'on', 'keyboard CAPTURED');
+    if (!opts || !opts.quiet)
+      addLine(new Date(), 'ui', 'keyboard captured — Ctrl+Alt+Shift releases',
+              'k-lock');
   } else {
+    pill('p-kbd', '', 'keyboard idle');
     ghost.blur();
     // Anything still held goes up, on this side and at the g2k. Releasing
     // capture with a key down would leave it down at a DOS prompt, typing
@@ -452,7 +459,22 @@ function setArmed(v, opts) {
       addLine(new Date(), 'ui', 'keyboard released', 'k-lock');
   }
 }
-$('stage').addEventListener('click', () => setArmed(true));
+// Capture-phase, so nothing layered over the video can swallow the click, and
+// pointerup as well as click because a touch that moves slightly may not
+// produce a click at all.
+function armFromStage() {
+  if (armed) {
+    // Already captured. Do not silently do nothing -- the previous build's
+    // real bug was invisible state, so say what is true.
+    const h = $('hint');
+    h.style.transition = 'none'; h.style.background = '#fff';
+    setTimeout(() => { h.style.transition = 'background .4s'; h.style.background = ''; }, 60);
+    return;
+  }
+  setArmed(true);
+}
+$('stage').addEventListener('click', armFromStage, true);
+$('stage').addEventListener('pointerup', armFromStage, true);
 $('kbtn').onclick = () => setArmed(!armed);
 
 // Text from a virtual keyboard, dictation or autocorrect.
