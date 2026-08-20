@@ -1044,7 +1044,7 @@
     <button data-key="numlock">Num</button>
     <button data-key="scrolllock">Scroll</button>
     <button data-combo="ctrl,alt,delete" class="danger"
-            title="Send Ctrl+Alt+Delete — reboots the target">C-A-Del</button>
+            title="Send Ctrl+Alt+Delete — reboots the target">Ctrl-Alt-Del</button>
   </div>
 
 <div id="setback" hidden></div>
@@ -3475,7 +3475,7 @@ addEventListener('resize', () => applyZoom());
   const NAME = {esc:'Esc', tab:'Tab', enter:'Enter', backspace:'Backspace',
                 up:'Up', down:'Down', left:'Left', right:'Right'};
   for (const b of document.querySelectorAll('#pop-keys button')) {
-    if (b.title) continue;                       // C-A-Del says more than this
+    if (b.title) continue;                       // Ctrl-Alt-Del says more
     const k = b.dataset.key, m = b.dataset.mod;
     if (k) b.title = 'Send ' + (NAME[k] || k.toUpperCase()) + ' to the target';
     else if (m) b.title = 'Hold ' + b.textContent
