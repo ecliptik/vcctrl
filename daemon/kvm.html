@@ -124,14 +124,23 @@
     display:flex; align-items:center; justify-content:center; overflow:hidden;
   }
   #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
+  #frame {
+    position:relative; width:100%; height:100%;
+    display:flex; align-items:center; justify-content:center;
+    transform-origin:center center; will-change:transform;
+  }
+  #frame.zoomed { cursor:grab; }
+  #frame.dragging { cursor:grabbing; }
   #stage img, #stage canvas {
     max-width:100%; max-height:100%; width:auto; height:auto;
     object-fit:contain; image-rendering:pixelated; display:block;
   }
+  #stage #stale { position:absolute; inset:0; }
+  #zoom { padding:0 6px; font:var(--t-micro) var(--mono); }
   /* The last live picture, behind the notice. Dimmed so it cannot be mistaken
      for the current screen -- but readable, because it is often the only
      picture there is. Full brightness is one click away and is remembered. */
-  #stale { position:absolute; inset:0; width:100%; height:100%;
+  #stale { width:100%; height:100%;
            filter:grayscale(.35) brightness(.8); }
   #stale.full { filter:none; }
   #veil {
@@ -199,15 +208,20 @@
   button.danger:active { border-color:var(--red); color:var(--red); }
   header button { padding:0 9px; }
 
-  /* The panel is a column: controls keep their size, the log takes the rest
-     and scrolls by itself. Scrolling the log used to drag the whole sidebar. */
+  /* Activity on top, controls pinned underneath.
+     The log was above the controls and unbounded, so a busy sweep pushed
+     Power and Sound off the bottom of the sidebar -- exactly when you are most
+     likely to want them. Now the log absorbs the leftover height and scrolls
+     inside itself, and the controls keep a fixed slice at the bottom that no
+     amount of log traffic can take. */
   #body {
     flex:none; height:38vh; display:flex; flex-direction:column; min-height:0;
     background:var(--panel); border-top:1px solid var(--rule);
   }
   #panels {
-    flex:none; max-height:60%; overflow-y:auto;
+    flex:0 0 auto; max-height:55%; overflow-y:auto;
     -webkit-overflow-scrolling:touch;
+    border-top:1px solid var(--rule);
   }
   section { padding:10px 12px; border-bottom:1px solid var(--rule); }
   h2 {
@@ -244,7 +258,7 @@
     padding:6px 12px; font:var(--t-data)/1.6 var(--mono);
     user-select:text; -webkit-user-select:text; cursor:text;
     overflow-y:auto; -webkit-overflow-scrolling:touch;
-    flex:1 1 auto; min-height:120px;
+    flex:1 1 0; min-height:60px;
   }
   #log div { user-select:text; -webkit-user-select:text; }
   #logh { flex:none; }
@@ -313,14 +327,23 @@
       <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
       <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
     </button>
+    <select id="zoom" aria-label="zoom">
+      <option value="fit">Fit</option>
+      <option value="crop">Crop to picture</option>
+      <option value="1">100%</option>
+      <option value="2">200%</option>
+      <option value="4">400%</option>
+    </select>
     <button id="dbtn" aria-label="switch between light and dark">◐</button>
     <button id="gbtn" aria-label="settings">⚙</button>
   </header>
 
   <div id="stage">
+   <div id="frame">
     <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
     <img id="mjpeg" style="display:none" alt="">
     <img id="stale" style="display:none" alt="">
+   </div>
     <div id="veil">
       <div class="big" id="veil-title">connecting…</div>
       <div class="sub" id="veil-sub"></div>
@@ -361,6 +384,8 @@
   </div>
 
   <div id="body">
+   <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
+   <div id="log"></div>
    <div id="panels">
     <section id="settings">
       <h2>Theme</h2>
@@ -429,8 +454,6 @@
     </section>
 
    </div>
-   <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
-   <div id="log"></div>
   </div>
 </div>
 
@@ -474,6 +497,7 @@ function setXport(x) {
 }
 
 function gotFrame() {
+  if (!frames) setTimeout(applyZoom, 60);   // first frame: sizes are known now
   frames++;
   const now = performance.now();
   lastFrameAt = Date.now();
@@ -1226,6 +1250,118 @@ setInterval(pollState, 1500);
 setInterval(pollEvents, 1500);
 setInterval(pollPower, 20000);
 pollState(); pollEvents(); pollPower();
+
+// ══════════════════════════════════════════════════════════ zoom
+// The game draws 320x240 or 512x384 CENTRED inside a 640x480 capture, so most
+// of the frame is dead margin and the picture ends up tiny. "Crop to picture"
+// finds the actual drawn region and scales that to fill the stage, which is
+// what you want almost every time; the fixed factors are there for looking
+// closely at one part of a screen.
+let zoomMode = localStorage.getItem('vcctrl.zoom') || 'fit';
+let panX = 0, panY = 0, crop = null;
+
+function mediaEl() {
+  return $('mjpeg').style.display === 'none' ? $('screen') : $('mjpeg');
+}
+
+// Measure the drawn region by finding the bounding box of non-black pixels.
+// Run on demand rather than per frame: the letterbox only changes when the
+// target changes video mode, which is rare and visible.
+function measureCrop() {
+  const el = mediaEl();
+  const w = el.naturalWidth || el.width, h = el.naturalHeight || el.height;
+  if (!w || !h) return null;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d', {willReadFrequently:true});
+  try { x.drawImage(el, 0, 0, w, h); } catch (e) { return null; }
+  let d;
+  try { d = x.getImageData(0, 0, w, h).data; } catch (e) { return null; }
+  // 24 on a 0-255 scale: above the stick's black floor (7) and below anything
+  // a real screen draws, so a dark game scene still counts as picture.
+  const T = 24;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let yy = 0; yy < h; yy += 2) {
+    for (let xx = 0; xx < w; xx += 2) {
+      const i = (yy * w + xx) * 4;
+      if (d[i] > T || d[i+1] > T || d[i+2] > T) {
+        if (xx < x0) x0 = xx; if (xx > x1) x1 = xx;
+        if (yy < y0) y0 = yy; if (yy > y1) y1 = yy;
+      }
+    }
+  }
+  if (x1 < 0) return null;                 // nothing above the floor
+  const pad = 4;
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad);
+  x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  if (bw < 32 || bh < 32) return null;     // implausibly small: ignore
+  if (bw > w * 0.94 && bh > h * 0.94) return null;  // no letterbox to crop
+  return {x0, y0, bw, bh, w, h};
+}
+
+function applyZoom() {
+  const st = $('stage'), fr = $('frame');
+  const el = mediaEl();
+  const nw = el.naturalWidth || el.width || 640;
+  const nh = el.naturalHeight || el.height || 480;
+  const W = st.clientWidth, H = st.clientHeight;
+  if (!W || !H) return;
+  const s0 = Math.min(W / nw, H / nh);     // scale object-fit:contain applied
+  let k = 1, tx = panX, ty = panY;
+
+  if (zoomMode === 'crop') {
+    if (!crop) crop = measureCrop();
+    if (crop) {
+      k = Math.min(W / crop.bw, H / crop.bh) / s0;
+      // Move the crop's centre to the stage centre, in post-scale pixels.
+      tx += -((crop.x0 + crop.bw / 2) - nw / 2) * s0 * k;
+      ty += -((crop.y0 + crop.bh / 2) - nh / 2) * s0 * k;
+    }
+  } else if (zoomMode !== 'fit') {
+    k = Number(zoomMode) / s0;             // 1 = one capture pixel per CSS px
+  }
+  fr.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+  fr.classList.toggle('zoomed', k > 1.01);
+  if (k <= 1.01) { panX = panY = 0; }
+}
+
+$('zoom').value = zoomMode;
+$('zoom').onchange = () => {
+  zoomMode = $('zoom').value;
+  localStorage.setItem('vcctrl.zoom', zoomMode);
+  panX = panY = 0;
+  crop = null;                             // re-measure on the next frame
+  applyZoom();
+};
+addEventListener('resize', applyZoom);
+// Re-measure periodically: a mode change moves the letterbox, and the whole
+// point is that it follows the target rather than needing to be told.
+setInterval(() => { if (zoomMode === 'crop') { crop = null; applyZoom(); } }, 5000);
+
+// Drag to pan when the picture is larger than the stage.
+(function pan() {
+  let down = false, sx = 0, sy = 0;
+  const fr = $('frame');
+  const start = e => {
+    if (!fr.classList.contains('zoomed')) return;
+    down = true; fr.classList.add('dragging');
+    const p = e.touches ? e.touches[0] : e;
+    sx = p.clientX - panX; sy = p.clientY - panY;
+  };
+  const move = e => {
+    if (!down) return;
+    const p = e.touches ? e.touches[0] : e;
+    panX = p.clientX - sx; panY = p.clientY - sy;
+    applyZoom();
+    if (e.cancelable) e.preventDefault();
+  };
+  const end = () => { down = false; fr.classList.remove('dragging'); };
+  $('stage').addEventListener('pointerdown', start);
+  addEventListener('pointermove', move, {passive:false});
+  addEventListener('pointerup', end);
+  addEventListener('pointercancel', end);
+})();
 
 // ══════════════════════════════════════════════════════════ theme engine
 // Palettes live in /themes.css, generated from tools/themes.py. Switching is a
