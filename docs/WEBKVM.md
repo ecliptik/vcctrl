@@ -370,10 +370,30 @@ chooses `wss` from `location.protocol`, so it needed no change. Set up in
 `pi/install.sh`, idempotently, and the config lives in tailscaled's state so it
 survives reboots.
 
-Plain `http://100.64.0.1:8080/` still answers, deliberately: `grab()` and
-`vcctrl-audio` reach the daemon that way and machine-to-machine calls gain
-nothing from TLS on a network that is already authenticated. Browsers should
-use the HTTPS name; tools need not.
+**Plain HTTP is off, by the operator's decision.** The daemon binds `127.0.0.1`
+only, so nothing answers on the tailnet address at all and the sole route in is
+through the TLS proxy. That is a stronger guarantee than binding to the
+tailscale address was -- that still served unencrypted requests to anything on
+the tailnet.
+
+The cost is that every tool talking to the daemon over HTTP had to move to the
+HTTPS name: `bin/vcctrl-sweep` and `bin/vcctrl-audio` both did. Measured from
+the VM, `urllib` over TLS costs about a quarter second per call more than plain
+http with no connection reuse -- 0.55 s against 0.29 s for a frame, which is
+still two orders of magnitude below the 40 s it replaced.
+
+**The recovery path does not route through the web server.** `vcctrl` speaks to
+the unix socket over ssh, so if TLS, `serve` or the cert ever fails, input and
+power still work and the machine is not stranded.
+
+**Certificate renewal runs weekly and on boot**, as a systemd timer rather than
+a cron entry. `tailscale serve` renews on its own, so this is belt and braces
+-- but a cert that silently fails to renew takes the KVM offline in exactly the
+situation where you most want to look at the machine. The reason it is a timer:
+cron's `@reboot` fires before tailscaled has connected, so an on-boot renewal
+would run against a down control plane and fail silently. A timer can say
+`After=tailscaled.service` and settle for three minutes first, and its result
+lands in journald with everything else.
 
 One consequence worth stating rather than burying: a publicly-trusted
 certificate means the machine's MagicDNS name appears in public Certificate

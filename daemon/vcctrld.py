@@ -1539,11 +1539,23 @@ class AudioCapability(Capability):
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 VideoCapability, AudioCapability]
 
-# Bind address for the web UI. Tailnet only, per the operator: Tailscale is the
-# authentication boundary and there is no password. Binding to the tailscale
-# address rather than 0.0.0.0 means the LAN cannot reach it at all, which is a
-# stronger statement than a firewall rule.
-WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "100.64.0.1")
+# Bind address for the web UI: LOOPBACK ONLY.
+#
+# Nothing listens on the tailnet directly. `tailscale serve` terminates TLS for
+# vcctrl-pi.example.ts.net and proxies here, so the only way in is over HTTPS,
+# and that is the operator's decision -- plain http is not merely discouraged,
+# it is unreachable.
+#
+# This is a stronger guarantee than binding to the tailscale address was. That
+# still answered unencrypted requests from anything on the tailnet; this
+# answers nothing that has not come through the proxy.
+#
+# Consequence, and it is the whole reason this is one line with a long comment:
+# every tool that talks to the daemon over HTTP must use the HTTPS name.
+# bin/vcctrl-sweep and bin/vcctrl-audio were updated with it. If the KVM
+# becomes unreachable, `vcctrl` over the unix socket still works -- the
+# recovery path does not route through the web server.
+WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "127.0.0.1")
 WEB_PORT = int(os.environ.get("VCCTRL_WEB_PORT", "8080"))
 
 

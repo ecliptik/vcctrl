@@ -51,7 +51,8 @@ FLOOR_DB = -80.0
 # defining property intact: it still touches neither the keyboard nor
 # /dev/video0, and now it touches no hardware at all, so it remains the one
 # check that is safe to run DURING a measured cell.
-VCCTRL_WEB = os.environ.get("VCCTRL_WEB", "http://100.64.0.1:8080")
+VCCTRL_WEB = os.environ.get(
+    "VCCTRL_WEB", "https://vcctrl-pi.example.ts.net")
 
 
 def _daemon_alive(timeout=2.0):

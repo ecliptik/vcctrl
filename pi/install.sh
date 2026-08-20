@@ -74,7 +74,7 @@ if command -v tailscale >/dev/null 2>&1; then
   TS_NAME="$(tailscale status --json 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
   if [ -n "${TS_NAME:-}" ]; then
-    if sudo tailscale serve --bg --https=443 "http://${WEB_BIND:-100.64.0.1}:8080" >/dev/null 2>&1; then
+    if sudo tailscale serve --bg --https=443 "http://127.0.0.1:8080" >/dev/null 2>&1; then
       echo "https://${TS_NAME}/  -> proxying to the daemon"
     else
       # Not fatal. Plain http on the tailnet still works; only the
@@ -83,6 +83,52 @@ if command -v tailscale >/dev/null 2>&1; then
     fi
   fi
 fi
+
+# Certificate renewal: weekly, and on boot.
+#
+# `tailscale serve` does renew on its own, so this is belt and braces rather
+# than the primary mechanism -- but a cert that silently fails to renew takes
+# the KVM offline in exactly the situation where you most want to look at the
+# machine, and `tailscale cert` is idempotent: it is a no-op until the cert is
+# inside its renewal window.
+#
+# A systemd timer rather than a cron entry, for one load-bearing reason beyond
+# tidiness: at boot, cron's @reboot fires before tailscaled has finished
+# connecting, so the renewal would run against a down control plane and fail
+# silently. A timer can say After=tailscaled.service and add a settling delay.
+# It also puts the result in journald next to everything else.
+sudo mkdir -p /var/lib/vcctrl
+sudo tee /etc/systemd/system/vcctrl-cert.service >/dev/null <<'UNIT'
+[Unit]
+Description=Renew the tailnet TLS certificate for the vcctrl KVM
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Explicit paths: `tailscale cert` writes into the working directory otherwise,
+# and a timer that litters the filesystem weekly is its own small problem.
+ExecStart=/bin/sh -c 'n="$(tailscale status --json | python3 -c \'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))\')"; exec tailscale cert --cert-file /var/lib/vcctrl/tls.crt --key-file /var/lib/vcctrl/tls.key "$n"'
+User=root
+UNIT
+
+sudo tee /etc/systemd/system/vcctrl-cert.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Weekly and on-boot renewal of the vcctrl KVM certificate
+
+[Timer]
+# Three minutes after boot, so tailscaled has connected and DNS resolves.
+OnBootSec=3min
+OnUnitActiveSec=1w
+# If the Pi was off when a run was due, catch up rather than skipping a week.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now vcctrl-cert.timer >/dev/null 2>&1 || true
 
 sudo systemctl daemon-reload
 sudo systemctl enable vcctrld
