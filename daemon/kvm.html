@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>g2k</title>
+<title>vcctrl-kvm</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -132,7 +132,7 @@
 
 <div id="app">
   <header>
-    <h1>g2k</h1>
+    <h1>vcctrl-kvm</h1>
     <span id="p-video" class="pill">video …</span>
     <span id="p-lock"  class="pill">lock …</span>
     <span id="p-power" class="pill">power …</span>
@@ -406,7 +406,7 @@ document.querySelectorAll('[data-combo]').forEach(b => b.onclick = () =>
   post('combo', {keys:b.dataset.combo.split(',')}));
 document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   const a = b.dataset.power;
-  if (a !== 'on' && !confirm(`Power ${a} the g2k?\n\nIf a sweep is running this will destroy it.`)) return;
+  if (a !== 'on' && !confirm(`Power ${a} the vcctrl-kvm target?\n\nIf a sweep is running this will destroy it.`)) return;
   post('power', {action:a});
 });
 
