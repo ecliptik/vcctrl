@@ -31,7 +31,13 @@ WHAT WENT WRONG, AND WHAT EACH GUARD ANSWERS
 
 Usage:
   vcctrl-cell <TAG> --card mach64|virge|cirrus [--set VAR=VAL]...
-                    [--ticks N] [--cfg NAME] [--shot-at S]
+                    [--ticks N] [--cfg NAME] [--shot-at S] [--hw LIST]
+
+  --hw   what is PHYSICALLY FITTED, as an operator declaration. Written to
+         <TAG>.HW beside the collected logs and labelled `declared`, because
+         the harness cannot see its own slots. Defaults to the standing
+         configuration (picogus,video,nic) -- pass it when that is not true,
+         most importantly when the Vibra16S is back in for an audio test.
 
 PER-CARD DEFAULTS, because a decision that has to be remembered gets forgotten.
 
@@ -125,6 +131,60 @@ def read_env_text():
         return shot, None
 
 
+# WHAT IS FITTED, AS A DECLARATION -- NEVER AS A READING.
+#
+# vcctrl-cardid identifies the VIDEO card from the log, because the card's
+# behaviour survives UniVBE's shim. Nothing equivalent exists for the rest of
+# the slots: no artifact this harness produces says whether the Vibra16S was
+# in the machine. The benchmarking session asked for this because the window
+# during which the Vibra WAS fitted is currently bounded by prose in a chat
+# log, which is not a provenance record.
+#
+# So this is the same class of statement as QAVID: what someone believes is
+# fitted. It is written into the record as `hw_set=` and labelled `declared`,
+# and it must never be presented as evidence. The interesting case is when it
+# disagrees with cardid, and that case only exists if the two are kept
+# distinguishable.
+#
+# Default is the standing configuration agreed 2026-08-19: the Vibra comes out
+# unless something is actively testing it. Defaulting rather than requiring is
+# deliberate -- a mandatory flag on every cell gets satisfied by habit, and a
+# declaration made by reflex is worth less than a default someone can correct.
+STANDING_HW = "picogus,video,nic"
+
+
+def write_hw_record(tag, hw, card, incoming=None):
+    """Drop <TAG>.HW next to the collected logs.
+
+    A sidecar rather than a line in the LOG, because the LOG belongs to
+    doskutsu and it does not dump the environment -- it logs only the hints it
+    consults by name, so an invented DOSKUTSU_HW_SET would be set on the target
+    and silently never appear anywhere. Checked against GP2.LOG before writing
+    this rather than assumed.
+
+    Machine-readable, one key per line, and every value tagged with how it was
+    come by.
+    """
+    if incoming is None:
+        incoming = os.path.expanduser("~/doskutsu-netiter/incoming")
+    if not os.path.isdir(incoming):
+        return None
+    path = os.path.join(incoming, "%s.HW" % tag)
+    body = [
+        "tag=%s" % tag,
+        "hw_set=%s" % hw,
+        "hw_set_source=declared",
+        "video_card_declared=%s" % (card or "unknown"),
+        "video_card_attested=see vcctrl-cardid %sSDL.LOG" % tag,
+        "note=hw_set is an operator declaration, not a probe. The harness",
+        "note=cannot see which cards are fitted. Only the video card is",
+        "note=independently attestable, and only from the SDL log.",
+    ]
+    with open(path, "w") as f:
+        f.write("\n".join(body) + "\n")
+    return path
+
+
 LOCK_AS = "vcctrl-cell"
 
 
@@ -175,10 +235,13 @@ def main(argv):
         return 2
     tag = argv[0].upper()
     sets, ticks, cfg, shot_at, card = [], "30000", "OPL3.CFG", 45, None
+    hw = STANDING_HW
     i = 1
     while i < len(argv):
         if argv[i] == "--card":
             card = argv[i + 1].lower(); i += 2
+        elif argv[i] == "--hw":
+            hw = argv[i + 1]; i += 2
         elif argv[i] == "--set":
             sets.append(argv[i + 1]); i += 2
         elif argv[i] == "--ticks":
@@ -194,6 +257,13 @@ def main(argv):
         return 2
     try:
         print("== cell %s ==" % tag)
+        rec = write_hw_record(tag, hw, card)
+        print("   hw_set=%s (DECLARED, not probed%s)"
+              % (hw, "" if rec else "; no incoming dir, not recorded"))
+        if hw != STANDING_HW:
+            print("   ** NOT the standing configuration (%s) **" % STANDING_HW)
+        if rec:
+            print("   recorded: %s" % rec)
         if take_lock(tag):
             print("   input lock held -- deploys refuse while this runs")
         if wait_for_prompt(60) is None:
