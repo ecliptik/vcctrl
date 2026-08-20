@@ -58,10 +58,15 @@
   /* Level meter. Shown whether or not sound is enabled, because "is there
      audio on the wire" is a different question from "can I hear it" -- and on
      a muted phone the meter is the only answer available. */
-  #meter { flex:none; display:flex; align-items:center; gap:8px;
-           padding:5px 10px; background:#171a21;
+  #meter { flex:none; display:flex; align-items:center; gap:9px;
+           padding:6px 10px; background:#171a21;
            border-bottom:1px solid var(--line); font:10px/1 var(--mono);
            color:var(--dim); }
+  #meter button { padding:6px 9px; font-size:11px; }
+  #mdb { min-width:6.5ch; text-align:right; }
+  #vpct { min-width:4ch; text-align:right; }
+  #vol { flex:0 1 130px; min-width:80px; height:20px; accent-color:var(--ok);
+         background:transparent; cursor:pointer; }
   #mbar { flex:1; height:6px; background:#0f1116; border-radius:3px;
           overflow:hidden; position:relative; }
   #mrms { position:absolute; left:0; top:0; bottom:0; width:0%;
@@ -135,7 +140,6 @@
     <span id="p-kbd" class="pill">keyboard idle</span>
     <span id="p-audio" class="pill">sound off</span>
     <span class="grow"></span>
-    <button id="sbtn">🔇 Sound</button>
     <button id="kbtn" class="primary">⌨ Keyboard</button>
   </header>
 
@@ -153,9 +157,14 @@
   <div id="capbar">click the screen to capture the keyboard</div>
 
   <div id="meter">
-    <span id="mlabel">audio —</span>
-    <div id="mbar"><div id="mrms"></div><div id="mpeak"></div></div>
-    <span id="mdb">— dBFS</span>
+    <button id="sbtn">🔇 Sound</button>
+    <div id="mbar" title="relative level — a volume knob sits in the signal path">
+      <div id="mrms"></div><div id="mpeak"></div>
+    </div>
+    <span id="mdb">—</span>
+    <input id="vol" type="range" min="0" max="100" step="1" value="80"
+           aria-label="volume">
+    <span id="vpct">80%</span>
   </div>
 
   <div id="keys">
@@ -583,14 +592,48 @@ addEventListener('blur', () => {
 // served over plain http. That is not a Safari bug and no amount of debugging
 // the audio graph will find it -- see docs/WEBKVM-AUDIO.md sec. 5.
 let ac = null, aws = null, gain = null, cursor = 0, soundOn = false;
+// Volume is remembered across reloads. Losing it every time the tab is
+// refreshed would be its own small annoyance, and this page gets reloaded a
+// lot while a machine is being watched.
+let volume = (() => {
+  const v = parseInt(localStorage.getItem('vcctrl.vol'), 10);
+  return isNaN(v) ? 80 : Math.max(0, Math.min(100, v));
+})();
 const LEAD = 0.12;        // jitter buffer, seconds
 const MAX_AHEAD = 0.45;   // beyond this we are accumulating delay, not buffering
+
+// Perceived loudness is roughly the square of the amplitude ratio, so a linear
+// slider on raw gain spends most of its travel in the top few dB and feels
+// broken at the quiet end.
+const gainFor = pct => (pct / 100) ** 2;
+
+function applyVolume() {
+  $('vol').value = volume;
+  $('vpct').textContent = volume + '%';
+  localStorage.setItem('vcctrl.vol', String(volume));
+  // setTargetAtTime rather than assigning .value: a step change in gain is an
+  // audible click, which is exactly what you do not want while listening for
+  // whether a sound effect fired.
+  if (gain && ac) {
+    try { gain.gain.setTargetAtTime(gainFor(volume), ac.currentTime, 0.015); }
+    catch (e) { gain.gain.value = gainFor(volume); }
+  }
+}
+$('vol').addEventListener('input', () => {
+  volume = parseInt($('vol').value, 10) || 0;
+  applyVolume();
+});
 
 function setSound(on) {
   soundOn = on;
   $('sbtn').textContent = on ? '🔊 Sound' : '🔇 Sound';
   $('sbtn').classList.toggle('primary', on);
   pill('p-audio', on ? 'on' : '', on ? 'sound on' : 'sound off');
+  applyVolume();
+  // Off stops the STREAM, not just the output: silence still costs 1.5 Mbit/s,
+  // and there is no reason to carry it to a viewer who is not listening. The
+  // consequence is that the meter goes quiet too, which is why the daemon's
+  // own audio state is still reported in the header pill while sound is off.
   if (on) startAudio(); else stopAudio();
 }
 
@@ -601,7 +644,7 @@ $('sbtn').onclick = () => {
     try { ac = new AudioContext({sampleRate: 48000}); }
     catch (e) { ac = new AudioContext(); }
     gain = ac.createGain();
-    gain.gain.value = 1.0;
+    gain.gain.value = gainFor(volume);
     gain.connect(ac.destination);
   }
   if (ac && ac.state === 'suspended') ac.resume();
@@ -611,6 +654,10 @@ $('sbtn').onclick = () => {
 function stopAudio() {
   if (aws) { try { aws.onclose = null; aws.close(); } catch (e) {} aws = null; }
   cursor = 0;
+  mSmooth = -91;
+  $('mrms').style.width = '0%';
+  $('mpeak').style.left = '0%';
+  $('mdb').textContent = '—';
 }
 
 function startAudio() {
@@ -668,8 +715,7 @@ function meter(pcm) {
   const pct = v => Math.max(0, Math.min(100, (v + 70) / 70 * 100));
   $('mrms').style.width = pct(mSmooth) + '%';
   $('mpeak').style.left = pct(pdb) + '%';
-  $('mdb').textContent = rdb <= -90 ? 'silent' : rdb.toFixed(0) + ' dBFS';
-  $('mlabel').textContent = 'audio';
+  $('mdb').textContent = rdb <= -90 ? 'silent' : rdb.toFixed(0) + 'dB';
 }
 
 // ------------------------------------------------------------------ log
@@ -783,6 +829,7 @@ async function pollPower() {
   const j = await post('power', {action:'state'});
   if (j && j.ok) pill('p-power', j.power.on?'on':'off', 'power ' + (j.power.on?'on':'off'));
 }
+applyVolume();
 setInterval(pollState, 1500);
 setInterval(pollEvents, 1500);
 setInterval(pollPower, 20000);
