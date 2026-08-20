@@ -1,6 +1,35 @@
 # Knowing which protocol board is installed
 
-Written 2026-08-20. Plan — not yet implemented.
+Written 2026-08-20. **Implemented the same day** — this now describes what the
+daemon does, except sec. 6 (mouse) and sec. 5's `leds` item, which are still
+open.
+
+    $ vcctrl board
+    {"id": 3, "name": "Apple Lisa/Mac/ADB", "target": "Macintosh Plus",
+     "source": "status-file", "stale": false, "reason": null}
+
+Shipped in `4169ad6`: `BoardCapability` in the daemon, `board` in
+`/state.json`, `vcctrl board` in the CLI, a `board.changed` event on the bus,
+and `tools/patch-usb4vc-board.py` as the local rpi_app patch with a `--check`
+mode that `pi/install.sh` runs so an upstream update cannot drop it silently.
+
+**Sec. 5's `power` design was wrong and is corrected below.** The rig has ONE
+Kasa plug with one machine connected at a time, so there is no board→plug table
+to build and nothing to refuse against. What remains is unobservable rather
+than enforceable: vcctrl can know which BOARD is installed and cannot know
+which MACHINE is on the socket. The honest answer is to display the board
+beside the power control so a mismatch is visible — a refusal keyed to a table
+would have been a check that fabricates its answer, which is the failure this
+whole document exists to avoid. The operator also asked for a confirmation on
+Off and Cycle in the KVM, which asserts nothing about the machine and only
+states what the action does.
+
+Two contract details settled with the webkvm session and worth keeping:
+`on` is **tri-state** — null when the plug stops answering, because "the
+machine is off" and "I cannot reach the plug" are opposite facts that must not
+share a JSON value — and the cache has a 60 s heartbeat, because without one
+`stale` latches true after the first idle hour and a permanently-set flag
+carries no information.
 
 The rig now has two targets: the Gateway 2000 over a USB4VC **IBM PC** board,
 and a Macintosh Plus over a USB4VC **Lisa/Mac/ADB** board. One USB4VC, boards

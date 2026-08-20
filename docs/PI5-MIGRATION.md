@@ -1,7 +1,39 @@
 # Migrating usb4vc from the Pi 3B to a Pi 5
 
-Written 2026-08-20, revised the same day once the hardware was in hand.
-Plan only — nothing here has been executed.
+Written 2026-08-20, revised the same day once the hardware was in hand, and
+updated again once it was executed.
+
+## STATUS: phases 0-2 and 5 done. Phases 3, 4 and 6 wait on the hardware swap.
+
+| Phase | State |
+|---|---|
+| 0. Device-name fixes on the old Pi | **Superseded.** `VCCTRL_VIDEO` landed on the new machine instead (the webkvm session added it); the Pi 3 was already down. Cost: the change ships untested against a real device, mitigated by the default being byte-identical to the old behaviour |
+| 1. Base system | **Done.** Trixie arm64, apt-only (no pip, so PEP 668 never applies), SPI+I2C enabled, console hardened at build time, tuning applied |
+| 2. USB4VC on the bench | **Done.** Board answers over SPI through rpi-lgpio, OLED live, `PB INFO` frame read, PBID 3 |
+| 3. Move the Gateway | **Pending** — the commitment point |
+| 4. Peripherals + vcctrl | **Partly done.** vcctrl installed and all seven capabilities up; video/audio report `unavailable` because the sticks are not attached yet |
+| 5. Rename | **Done.** Pi 3 is `usb4vc-old` and powered down; the Pi 5 holds `usb4vc`, cert reissued, `tailscale serve` re-pointed |
+| 6. A real sweep | **Pending** — and see the revised comparability rule below |
+
+**Two things went differently from the plan.**
+
+The first SD card was **failing, not just unexpanded**: `mmc0: Card stuck being
+busy` four times and two read errors on first boot, which killed the firstboot
+resize partway and left the filesystem `clean with errors`. Replaced rather
+than repaired — this rig's output is measurements, and an hour saved is not
+worth building them on storage already known to drop writes.
+
+**The RPi.GPIO blocker never existed.** `python3-rpi-lgpio` was already
+installed on the Pi 3 and `python3-rpi.gpio` was not, so USB4VC had been running
+through the lgpio shim in production all along. Two sessions reported that
+blocker to the operator from the package list rather than from the machine.
+
+**Phase 6 no longer compares absolute fps.** The benchmarking session measured
+the same configuration one day apart at 30.4 and 29.6 — 0.85 across sessions
+against a 0.2 within-session band — so nothing the Pi 5 plausibly does could be
+resolved that way. Compare the **control-pair spread** and the **PUMP arm delta
+(+1.30)** instead: both are within-session differences and therefore measured
+against the tight band.
 
 ## 0. What the operator settled, and what it changes
 
