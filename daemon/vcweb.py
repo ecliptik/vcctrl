@@ -25,6 +25,7 @@ import select
 import socket
 import ssl
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -664,6 +665,23 @@ class WebCapability(object):
                 tot = int(mem["MemTotal"]) // 1024
                 avail = int(mem["MemAvailable"]) // 1024
                 facts["mem_total_mb"], facts["mem_used_mb"] = tot, tot - avail
+            # The firmware's own bitfield, not a derived guess. 0x0 is clean;
+            # bit 0 is under-voltage now, bit 2 currently throttled, bit 16 an
+            # under-voltage that HAS occurred since boot. That last one is the
+            # useful one on a rig where the stream stutters intermittently and
+            # nobody was watching at the time.
+            #
+            # A subprocess, so it rides the same 5 s cache as everything else
+            # here -- roughly one vcgencmd per five seconds regardless of how
+            # many tabs are open, which is the cost that mattered.
+            try:
+                out = subprocess.run(["vcgencmd", "get_throttled"],
+                                     capture_output=True, text=True,
+                                     timeout=2).stdout.strip()
+                if "=" in out:
+                    facts["throttled"] = out.split("=", 1)[1]
+            except Exception:
+                pass       # non-Pi host, or vcgencmd absent: stays null
             st = os.statvfs("/")
             facts["disk_total_gb"] = round(st.f_blocks * st.f_frsize / 1e9, 1)
             facts["disk_used_gb"] = round(
