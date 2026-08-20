@@ -620,6 +620,51 @@ The scorer now diffs the manifests itself and reports declared-field
 differences without failing on them, so the next one is caught by the tool
 rather than by eye.
 
+### 6e. The confirmation run: the doubling was noise, and "reproduces exactly" was too strong
+
+Run 2 on the Pi 5, 15:11-15:18, manifest **identical to round P in every
+declared field** (`--irq NONE` passed this time):
+
+    run             GPU0   GPUA  GPU0B  GPUAB   c-decl  a-decl   delta   slope fps/s
+    Pi 3   09:43    29.6   30.9   29.5   30.8     -0.1    -0.1   +1.30   -3.810e-4
+    Pi 5#1 14:41    29.8   31.1   29.6   30.9     -0.2    -0.2   +1.30   -7.491e-4
+    Pi 5#2 15:11    29.7   30.9   29.6   30.8     -0.1    -0.1   +1.20   -3.738e-4
+
+**The pre-registered criterion resolves to "noise".** Within-pair decline came
+back at 0.1 on both pairs, not 0.2, so by the rule fixed before the data the
+doubling was not real and the note stands. Recorded as the answer it gave, not
+the answer either session expected.
+
+**Drift is not a stable property of a machine.** The slope varied by a factor
+of two between two runs on identical hardware thirty minutes apart, and Pi 5
+run 2 lands on the Pi 3's value (-3.74e-4 against -3.81e-4). **Run 1 was the
+outlier, not the Pi 5.** A single run cannot characterise drift, which is worth
+knowing before anyone fits a correction from one sweep and trusts it.
+
+Note this does not fit a simple thermal-equilibrium story either: run 1 sat 85
+minutes past power-on and round P about 90, so the two runs at comparable warm-
+up produced slopes differing by 2x, while the run furthest from power-on (115
+min) matched the earliest. Whatever drives the slope, elapsed-since-power-on
+does not predict it.
+
+**CORRECTION to sec. 6c: "the arm delta reproduces exactly" is too strong.**
+It was true of run 1 and it is not a property of the quantity. Across three
+runs the delta reads +1.30, +1.30, +1.20 — **the two Pi 5 runs differ from each
+other by 0.10, as much as either differs from the Pi 3**, and the Pi 3 value
+sits inside the Pi 5's own run-to-run range. That is exactly the behaviour
+`SD(delta) = sigma = 0.10` predicts, so nothing is wrong; what was wrong was
+reading one agreement as reproducibility. The honest claim is the weaker and
+still sufficient one:
+
+> Across three runs the delta is stable to within its own predicted band, and
+> the Pi 3 result is not distinguishable from the two Pi 5 results.
+
+**The phase-6 PASS is unaffected** — both Pi 5 runs pass on both criteria, and
+run 2 passes with a manifest byte-identical to the baseline's. But the margin
+is thinner than one run made it look, and anyone who later wants to resolve a
+delta difference of 0.1 should know that two runs of the same configuration
+already differ by that much.
+
 **Phase 6 is complete, and with it the migration.**
 
 ## 7. Rollback
