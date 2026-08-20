@@ -75,6 +75,16 @@ USAGE = """usage: vcctrl <command> [args]
                               2  could not look      (no LED channel on this
                                                       board, or unreadable)
                               3  the tool itself failed
+  record --out F.avi [a] [b]
+                            the scrub buffer as an AVI, optionally from seq a
+                            to seq b. Takes the pin for the copy and releases
+                            it. Two-valued: either F is this run's buffer or F
+                            does not exist -- a truncated AVI still plays and
+                            would be read as evidence of what the screen did.
+                            Reports `written` (frames in the file) separately
+                            from `frames` (frames the ring held); the muxer
+                            repeats a frame across a gap to preserve timing,
+                            so they differ by exactly the stalls.
   events [since]            activity log since a sequence number
   activity                  what is running, for how long, and who holds input
   lock [status|acquire|release|break] --as NAME
@@ -241,6 +251,91 @@ def verify_input_exit(resp):
     return 2
 
 
+
+def write_avi(url_bytes, meta, path):
+    """The buffer as an AVI, two-valued like every other --out here.
+
+    Either `path` is this run's buffer and the status is 0, or `path` does not
+    exist. Never a partial AVI: a truncated file still opens, still plays, and
+    still looks like a recording -- so a caller would take a copy that lost
+    half its frames as evidence of what the screen did.
+
+    written != frames, and both are reported. The muxer preserves timing by
+    REPEATING a frame across a gap where the ring was thinned, so the file
+    holds more frames than the ring did. Reporting `written` as "frames
+    captured" would overstate what was actually observed, and the difference
+    is exactly the stalls -- which is the thing a crash investigation cares
+    about most.
+    """
+    import os
+
+    if not url_bytes:
+        try:
+            os.unlink(path)
+        except (FileNotFoundError, OSError):
+            pass
+        sys.stderr.write("no buffer to record: %s\n"
+                         % (meta.get("error") or "the ring is empty"))
+        return 1
+
+    tmp = path + ".part"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(url_bytes)
+        os.replace(tmp, path)
+    except OSError as exc:
+        for p in (tmp, path):
+            try:
+                os.unlink(p)
+            except (FileNotFoundError, OSError):
+                pass
+        sys.stderr.write("could not write %s: %s\n" % (path, exc))
+        return 1
+
+    out = dict(meta)
+    out["out"] = path
+    out["note"] = ("written=%s frames in the file, from frames=%s in the ring; "
+                   "the difference is %s repeated to preserve timing across "
+                   "gaps, NOT frames captured"
+                   % (meta.get("written"), meta.get("frames"),
+                      meta.get("repeated")))
+    sys.stdout.write(json.dumps(out, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+def fetch_avi(first, last):
+    """Pull /buffer.avi over HTTPS. Returns (bytes|None, meta).
+
+    Over HTTP rather than the unix socket because the AVI is tens of
+    megabytes and the socket protocol here is line-delimited JSON -- base64ing
+    60 MB through it would work and would be a poor idea.
+    """
+    import os
+    import urllib.error
+    import urllib.request
+
+    base = os.environ.get("VCCTRL_WEB", "https://vcctrl-pi.example.ts.net")
+    q = []
+    if first is not None:
+        q.append("from=%d" % first)
+    if last is not None:
+        q.append("to=%d" % last)
+    url = "%s/buffer.avi%s" % (base, ("?" + "&".join(q)) if q else "")
+    try:
+        with urllib.request.urlopen(url, timeout=120) as r:
+            data = r.read()
+            raw = r.headers.get("X-Buffer-Meta") or "{}"
+    except urllib.error.HTTPError as exc:
+        return None, {"error": "HTTP %s from %s" % (exc.code, url)}
+    except Exception as exc:
+        return None, {"error": "%s: %s" % (type(exc).__name__, exc)}
+    try:
+        meta = json.loads(raw)
+    except ValueError:
+        meta = {}
+    return data, meta
+
+
 def main(argv):
     pace = None
     who = None
@@ -277,13 +372,32 @@ def main(argv):
     # verify-input, and a flag misapplied to a command is a tool misuse, not a
     # reading. Keeping them apart matters more than matching the old number,
     # which nothing branches on.
-    if out is not None and cmd not in ("shot", "lastgood", "frame"):
-        sys.stderr.write("--out applies to shot, lastgood and frame, "
+    if out is not None and cmd not in ("shot", "lastgood", "frame", "record"):
+        sys.stderr.write("--out applies to shot, lastgood, frame and record, "
                          "not %r\n" % cmd)
         return 3
     if out_dir is not None and cmd != "burst":
         sys.stderr.write("--out-dir applies to burst, not %r\n" % cmd)
         return 3
+    if cmd == "record":
+        if out is None:
+            sys.stderr.write("record needs --out FILE\n")
+            return 3
+        first = int(rest[0]) if len(rest) > 0 else None
+        last = int(rest[1]) if len(rest) > 1 else None
+        # Take the pin for the duration. The muxer snapshots the ring under
+        # the lock in one list(), so the pin is belt on top of braces rather
+        # than the load-bearing part -- but it costs nothing, it makes the
+        # two-valued contract easy to reason about, and the daemon expires it
+        # by itself after 300 s if this process dies holding it.
+        pinned = call({"cmd": "pin", "action": "on"}) or {}
+        try:
+            data, meta = fetch_avi(first, last)
+            return write_avi(data, meta, out)
+        finally:
+            if pinned.get("ok"):
+                call({"cmd": "pin", "action": "off"})
+
     if cmd == "status":
         req = {"cmd": "status"}
     elif cmd == "key":

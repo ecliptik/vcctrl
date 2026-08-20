@@ -92,20 +92,55 @@ Proven against the live rig: `timeline` (622 frames, 31.9 s span), `buffer`,
 `burst 5 --out-dir` writing five, and **`verify-input` returning 0 against the
 Gateway** — the input path proven from a script for the first time.
 
-## 5. Phase B, still open
+## 5. Phase B: done
 
-`vcctrl record --out f.avi [--since S] [--until S]`, waiting on the webkvm
-session's `avi_mjpeg()` muxer. Two requirements agreed in advance:
+`vcctrl record --out F.avi [from_seq] [to_seq]`, on the webkvm session's
+`avi_mjpeg()` muxer. Proven against the live rig:
 
-- **It takes the pin itself.** The ring keeps rolling while you copy it, and
-  the page's version was broken in exactly that way: the save path walked the
-  ring frame by frame without ever pinning, so when the signal came back
-  eviction destroyed frames mid-copy and the download silently produced almost
-  nothing.
-- **Two-valued, like everything else here.** Either the file is this run's
-  buffer and the status is 0, or the file does not exist. Never a partial AVI
-  left on disk from a copy that lost its frames halfway.
+    frames 692 in the ring, written 1032, repeated 340, span 34.37 s
+    71,833,864 bytes landed on the CALLER's disk
+    ffprobe: mjpeg 640x480, nb_frames 1032, duration 34.40
 
-Task-shaped verbs come after, built on the thin ones — `save-around <seq>
---seconds 10` is the shape the harness will actually reach for. Deliberately
-not invented ahead of seeing which ones get used.
+**`written` and `frames` are reported separately, and the note spells out
+why.** The muxer preserves timing by repeating a frame across a gap where the
+ring was thinned, so the file holds more frames than the ring did. Reporting
+`written` as "frames captured" would overstate what was observed — and the
+difference is *exactly the stalls*, which is the thing a crash investigation
+cares about most. 340 repeats here means about a third of the file is the
+screen not changing.
+
+It takes the pin for the copy and releases it in a `finally`. The muxer
+snapshots the ring under the lock in one `list()`, so the pin is belt on top
+of braces rather than the load-bearing part — but it costs nothing, and the
+daemon expires it after 300 s if the process dies holding it.
+
+Two-valued, verified: an impossible range returns 503, exits 1, and **removes
+a stale file that was there before**. A truncated AVI still opens, still
+plays, and still looks like a recording, so a half-written one is worse than
+none — the caller would read a copy that lost half its frames as evidence of
+what the screen did.
+
+It goes over HTTPS rather than the unix socket: the socket protocol is
+line-delimited JSON, and base64-ing 70 MB through it would work and would be
+a poor idea.
+
+## 6. Still open
+
+Task-shaped verbs, built on the thin ones — `save-around <seq> --seconds 10`
+is the shape the harness will actually reach for. Deliberately not invented
+ahead of seeing which ones get used.
+
+**And one audit worth doing cold rather than at the end of a long day:**
+sweep both sides for places where a key's ABSENCE is read as a value. Two
+turned up today within an hour of each other. The webkvm session's ring pin
+was correct code wired to nothing, so the save path walked the ring without
+holding it and eviction destroyed frames mid-copy. `write_frame` judged raw
+responses by `resp["picture"]`, which is *absent* on that path rather than
+false — so every frame fetched by sequence number would have reported "no
+picture", and the two-valued contract would then have deleted the caller's
+file.
+
+Neither is a bug in the function that failed. Both are bugs in the seam: a
+new caller arrived at an old contract carrying a premise nobody had written
+down. The second is the worse kind, because it fails by destroying the thing
+it was asked to produce rather than by doing nothing.
