@@ -969,7 +969,7 @@ HARNESS = r"""
   // text.
   {
     const host = document.createElement('div');
-    host.innerHTML = rigRows({
+    host.innerHTML = statsRows({
       board: {id: null, reason: 'usb4vc not running'},
       video: {state: 'unavailable', device: '<img src=x onerror=alert(1)>',
               device_present: null},
@@ -978,7 +978,7 @@ HARNESS = r"""
               stale: true},
       viewers: 1, listeners: 0, lock: {owner: null}});
     const txt = host.textContent;
-    const groups = ['TARGET','CAPTURE','POWER','SESSIONS']
+    const groups = ['TARGET','PICTURE','POWER','DEVICES']
       .filter(g => txt.toUpperCase().includes(g)).length;
     emit(`rig ${groups} ${host.querySelectorAll('img,script').length}`);
     // A null must read as "could not tell", never as "no". Three bugs on this
@@ -1067,6 +1067,24 @@ HARNESS = r"""
   {
     const h = id => Math.round(document.getElementById(id).getBoundingClientRect().height);
     emit(`striph ${h('soundwrap')} ${h('powerbtn')}`);
+  }
+
+  // A DARK TARGET IS NOT A BROKEN TRANSPORT. Both are silence from here, and
+  // the page used to treat the second as the first -- so a Gateway reboot
+  // downgraded the session to a slower path that had the same nothing to
+  // deliver.
+  {
+    const keep = lastState;
+    lastState = {video: {state: 'locked'}};
+    const blamesUs = sourceIsLive();
+    lastState = {video: {state: 'nosignal'}};
+    const blamesTarget = !sourceIsLive();
+    lastState = {video: {state: 'frozen'}};
+    const blamesTarget2 = !sourceIsLive();
+    lastState = null;
+    const noInfo = sourceIsLive();      // no information: assume it is us
+    lastState = keep;
+    emit(`sourcelive ${blamesUs && blamesTarget && blamesTarget2 ? 1 : 0} ${noInfo ? 1 : 0}`);
   }
 
   // Falling back to mjpeg must not be PERMANENT. ws.onclose only reconnects
@@ -1465,7 +1483,7 @@ def test_zoom_layout_in_a_browser():
     check("control: a preview does not change the selection",
           got["selkept"][0] == 1.0, got["selkept"])
 
-    check("the rig table renders every group", got["rig"][0] == 4.0,
+    check("the status readout renders every group", got["rig"][0] == 4.0,
           got["rig"])
     check("control: and injects nothing from a device name",
           got["rig"][1] == 0.0, got["rig"])
@@ -1499,6 +1517,11 @@ def test_zoom_layout_in_a_browser():
           got["res"][0] == 1.0, got["res"])
     check("control: and a 512x342 frame reports 512x342",
           got["res"][1] == 1.0, got["res"])
+
+    check("a dark target is not blamed on the transport",
+          got["sourcelive"][0] == 1.0, got["sourcelive"])
+    check("control: with no information the transport is still suspected",
+          got["sourcelive"][1] == 1.0, got["sourcelive"])
 
     check("the sound control is the same height as the buttons beside it",
           abs(got["striph"][0] - got["striph"][1]) <= 1, got["striph"])

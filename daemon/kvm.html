@@ -415,7 +415,13 @@
     border:0; border-radius:0; background:transparent; min-height:0;
     display:flex; align-items:center;
   }
-  #cmdbar .split button:hover { background:var(--rule); }
+  /* The two halves are different KINDS of control and should feel different.
+     The speaker acts on the spot, so it takes the ground under the pointer --
+     that is the feedback saying it will do something. The word opens a menu,
+     like Keys and Power, so it does what they do: the outline brightens and
+     nothing fills. Same hover, same meaning, across the whole strip. */
+  #cmdbar .split #mutebtn:hover { background:var(--rule); }
+  .split:has(#soundbtn:hover) { border-color:var(--muted); }
   #cmdbar .split #mutebtn {
     border-right:1px solid var(--rule); font-size:14px; padding:0 9px;
   }
@@ -567,6 +573,13 @@
     touch-action:manipulation;
   }
   @media (pointer:fine) { button, select { min-height:36px; } }
+  /* A control that cannot act must not look like one that can. The lock
+     disables Grab, Send, the key rail and the file clip, and until now the
+     only sign was that pressing them did nothing. */
+  button:disabled, .split:has(button:disabled) {
+    opacity:.45; cursor:not-allowed;
+  }
+  button:disabled:hover { border-color:var(--rule); background:rgba(0,0,0,.22); }
   button:hover { border-color:var(--muted); }
   button:active { background:var(--rule); }
   button.on { border-color:var(--green); color:var(--green); }
@@ -788,30 +801,27 @@
      one line doing the work the twenty-five labels were doing. */
   /* Its own scroll, so a long readout cannot push the panels below it off
      the sidebar -- the same reason the activity log has one. */
-  #sec-state { display:flex; flex-direction:column; min-height:0; }
   /* Room for its own scrollbar: without it every value sat under the bar and
      the last character of each was hidden by it. */
-  #stats { overflow-y:auto; -webkit-overflow-scrolling:touch; max-height:38vh;
-           padding-right:9px; }
+  /* Its own scroll INSIDE the drawer's, so the settings above it stay put
+     while a long readout is being read. */
+  #stats { overflow-y:auto; -webkit-overflow-scrolling:touch; max-height:46vh;
+           padding-right:9px; border-top:1px solid var(--rule);
+           padding-top:6px; }
   #stats .kv span:first-child { flex:none; white-space:nowrap; }
   #stats .kv span:last-child { text-align:right; overflow-wrap:anywhere; }
-  #stats .rgroup, #rig .rgroup {
+  #stats .rgroup {
     font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
     text-transform:uppercase; color:var(--dim); margin:11px 0 4px;
   }
-  #stats .rgroup:first-child, #rig .rgroup:first-child { margin-top:2px; }
+  #stats .rgroup:first-child { margin-top:2px; }
   #stats .warn span:last-child { color:var(--yellow); }
   #stats .bad  span:last-child { color:var(--red); }
   #stats .unk  span:last-child { color:var(--dim); font-style:italic; }
   /* The KEY never wraps and the VALUE always may: "video error" broke across
      two lines and read as two rows, one of them labelled "error" with nothing
      beside it. A label that wraps stops being a label. */
-  #rig .kv { align-items:baseline; }
-  #rig .kv span:first-child { flex:none; white-space:nowrap; }
-  #rig .kv span:last-child { text-align:right; overflow-wrap:anywhere; }
-  #rig .warn span:last-child { color:var(--yellow); }
-  #rig .bad  span:last-child { color:var(--red); }
-  #rig .unk  span:last-child { color:var(--dim); font-style:italic; }
+  #stats .kv { align-items:baseline; }
   #themename { font:var(--t-data)/1 var(--mono); color:var(--muted);
                flex:1 1 auto; min-width:0; }
   .tgroup { font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
@@ -1028,9 +1038,6 @@
       <label><input type="checkbox" id="opt-auto">
         Follow the system light/dark setting</label>
 
-      <h2 style="margin-top:14px">Rig</h2>
-      <div id="rig"></div>
-
       <h2 style="margin-top:14px">Input</h2>
       <div class="row" style="margin-bottom:6px">
         <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
@@ -1072,6 +1079,13 @@
       <label><input type="checkbox" id="opt-mine">
         This browser&rsquo;s own commands</label>
       <div class="hint">Off by default: you know what you just did.</div>
+
+      <!-- SETTINGS FIRST, STATUS AFTER. Everything above changes something;
+           everything below only reports. They were two readouts in two places
+           describing one machine, which meant deciding where to look before
+           you could look. -->
+      <h2 style="margin-top:16px">Status</h2>
+      <div id="stats"></div>
   </div>
 </aside>
 
@@ -1136,13 +1150,11 @@
    </div>
    <h2 id="logh" style="padding:10px 12px 6px;margin:0">Activity</h2>
    <div id="log"></div>
-   <div id="panels">
-    <section id="sec-state">
-      <h2>Status</h2>
-      <div id="stats"></div>
-    </section>
-
-   </div>
+   <!-- THE SIDEBAR IS THE LOG. Everything else that lived here -- sound,
+        power, and finally the status readout -- moved to the control it
+        belongs to or into Settings. A column carrying one thing does not need
+        to be a column of sections. -->
+   <div id="panels"></div>
   </div>
 </div>
 
@@ -1305,6 +1317,21 @@ function setXport(x) {
                     + 'through any proxy. Click to try the websocket now'
     : x === 'connecting' ? 'Connecting…'
     : 'Disconnected — no picture is arriving');
+}
+
+// IS THE SOURCE PRODUCING ANYTHING? A transport carrying no frames and a
+// target with no picture look identical from here -- both are silence -- and
+// the page has been treating the second as the first. When the Gateway
+// reboots, or a sweep blanks the screen, the daemon has nothing to send; the
+// client waited 8 s, concluded the WEBSOCKET was broken and fell back to the
+// slower path, which had exactly the same nothing to deliver.
+//
+// The daemon already says which it is, in the poll this page makes anyway.
+// So: only blame the transport when the source is actually producing.
+function sourceIsLive() {
+  const v = lastState && lastState.video;
+  if (!v) return true;                    // no information: assume it is us
+  return v.state === 'locked';
 }
 
 function gotFrame() {
@@ -1533,7 +1560,16 @@ function connect() {
 
   // If the socket opens but never delivers, that is still a failure. Judge on
   // frames, not on the connection state -- the difference matters here.
-  firstFrameTimer = setTimeout(() => useMjpeg('delivered no frame in 4s'), 4000);
+  const judgeFirstFrame = () => {
+    if (!sourceIsLive()) {
+      // The socket is fine; the machine has no picture. Wait rather than
+      // downgrading to a path that will deliver the same nothing more slowly.
+      firstFrameTimer = setTimeout(judgeFirstFrame, 4000);
+      return;
+    }
+    useMjpeg('delivered no frame in 4s');
+  };
+  firstFrameTimer = setTimeout(judgeFirstFrame, 4000);
 
   ws.onopen = () => {
     wsAlive = true;
@@ -1624,6 +1660,12 @@ setInterval(() => {
   if (!frames) return;          // nothing has ever arrived: the connect path
                                 // owns that case, with its own 4s timer
   if (Date.now() - lastFrameAt > 8000) {
+    if (!sourceIsLive()) {
+      // Nothing is wrong with the transport. Keep the clock honest so this
+      // does not fire again the instant the picture comes back.
+      lastFrameAt = Date.now();
+      return;
+    }
     addLine(new Date(), 'transport', 'no frames for 8s — restarting', 'k-note');
     restart();
   }
@@ -2286,7 +2328,7 @@ addEventListener('resize', measureBars);
 measureBars();
 
 function showSettings(on) {
-  if (on) { measureBars(); closePop(); if (lastState) $('rig').innerHTML = rigRows(lastState); }
+  if (on) { measureBars(); closePop(); if (lastState) $('stats').innerHTML = statsRows(lastState); }
   $('settings').hidden = !on;
   $('setback').hidden = !on;
   $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
@@ -2688,7 +2730,7 @@ async function pollState() {
   lastState = j;
   // Only while it is on screen: this rebuilds a dozen rows and nobody is
   // reading them behind a closed drawer.
-  if (!$('settings').hidden) $('rig').innerHTML = rigRows(j);
+  if (!$('settings').hidden) $('stats').innerHTML = statsRows(j);
   // What this tab is actually pulling. Two tabs open is two of these, and on
   // this rig that is the difference between a smooth picture and a stuttering
   // one -- worth being able to see rather than guess at.
@@ -2774,78 +2816,6 @@ const esc = t => String(t).replace(/[&<>"]/g,
 // cached reading carries its age rather than being drawn as instantaneous;
 // and nothing here maps a board id to anything, because the daemon resolves
 // that so there is exactly one table.
-function rigRows(j) {
-  const out = [];
-  const g = t => out.push('<div class="rgroup">' + t + '</div>');
-  const kv = (k, v, cls) => out.push(
-    '<div class="kv ' + (cls || '') + '"><span>' + k + '</span><span>'
-    + esc(v == null ? '—' : String(v)) + '</span></div>');
-  const unk = (k, why) => kv(k, why || 'could not tell', 'unk');
-
-  const b = j.board || {};
-  g('Target');
-  if (b.id == null) unk('board', b.reason || 'not reported');
-  else {
-    kv('target', b.target || b.name || ('board ' + b.id));
-    kv('board', (b.name || '?') + ' · PBID ' + b.id);
-    kv('read from', b.source + (b.stale ? ' (stale)' : ''),
-       b.stale ? 'warn' : '');
-  }
-
-  g('Capture');
-  for (const [label, c] of [['video', j.video || {}], ['audio', j.audio || {}]]) {
-    kv(label, c.state || '—',
-       c.state === 'locked' || c.state === 'capturing' ? '' : 'warn');
-    kv(label + ' device', c.device || '—');
-    if (label === 'video')
-      kv('resolution', capSize() ? capSize() + ' from the device' : 'no frame yet',
-         capSize() ? '' : 'unk');
-    if (c.device_present === false) kv(label + ' present', 'no', 'warn');
-    else if (c.device_present === true) kv(label + ' present', 'yes');
-    else unk(label + ' present');
-    if (c.last_error && c.state !== 'locked' && c.state !== 'capturing')
-      kv(label + ' error', ffmpegReason(c.last_error), 'bad');
-  }
-
-  const p = j.power || {};
-  g('Power');
-  kv('plug', [p.alias && '"' + p.alias + '"', p.model, p.host]
-       .filter(Boolean).join(' · ') || '—');
-  if (p.on == null) unk('state', p.reason || 'plug not answering');
-  else kv('state', p.on ? 'on' : 'off');
-  kv('read', p.stale ? 'not answering'
-       : p.age_s != null ? fmtAge(p.age_s) + ' ago' : '—',
-     p.stale ? 'warn' : '');
-
-  const h = j.host;
-  if (h) {
-    g('Host');
-    kv('model', h.model);
-    kv('kernel', (h.kernel || '') + (h.arch ? ' · ' + h.arch : ''));
-    if (h.temp_c != null)
-      kv('temperature', h.temp_c.toFixed(1) + ' °C',
-         h.temp_c >= 80 ? 'bad' : h.temp_c >= 70 ? 'warn' : '');
-    const th = heat(h);
-    if (th) kv('throttling', th.text, th.now ? 'bad' : 'warn');
-    if (h.governor) kv('governor', h.governor);
-    if (h.mem_total_mb)
-      kv('memory', h.mem_used_mb + ' / ' + h.mem_total_mb + ' MB');
-    if (h.disk_total_gb)
-      kv('disk', h.disk_used_gb + ' / ' + h.disk_total_gb + ' GB');
-    if (h.load) kv('load', Array.isArray(h.load) ? h.load.join(' ') : h.load);
-    if (h.uptime_s != null) kv('uptime', fmtAge(h.uptime_s));
-  }
-
-  g('Sessions');
-  kv('viewers', j.viewers);
-  kv('listeners', j.listeners);
-  kv('input lock', (j.lock && j.lock.owner) || 'unheld');
-  return out.join('');
-}
-
-// The low bits are NOW, the 0x10000 bits are SINCE BOOT, and reporting a
-// past brownout as a present one would send someone looking for a fault that
-// has already been and gone.
 function heat(h) {
   const t = Number(h && h.throttled) || 0;
   if (!t) return null;
@@ -3047,6 +3017,48 @@ function statsRows(j) {
   if (w.sent_frames != null) kv('ws frames sent', w.sent_frames.toLocaleString());
   if (w.dropped) kv('ws frames dropped', w.dropped.toLocaleString(),
                     'warn');
+
+  g('Devices');
+  for (const [label, c] of [['video', v], ['audio', a]]) {
+    kv(label, c.device || '—');
+    if (c.device_present === false) kv(label + ' present', 'no', 'warn');
+    else if (c.device_present === true) kv(label + ' present', 'yes');
+    else kv(label + ' present', 'could not tell', 'unk');
+    if (c.last_error && c.state !== 'locked' && c.state !== 'capturing')
+      kv(label + ' error', ffmpegReason(c.last_error), 'bad');
+  }
+
+  const b = j.board || {};
+  g('Target');
+  if (b.id == null) kv('board', b.reason || 'not reported', 'unk');
+  else {
+    kv('target', b.target || b.name || ('board ' + b.id));
+    kv('board', (b.name || '?') + ' · PBID ' + b.id);
+    kv('read from', b.source + (b.stale ? ' (stale)' : ''), b.stale ? 'warn' : '');
+  }
+
+  const pw = j.power || {};
+  g('Power');
+  kv('plug', [pw.alias && '"' + pw.alias + '"', pw.model, pw.host]
+       .filter(Boolean).join(' · ') || '—');
+  if (pw.on == null) kv('state', pw.reason || 'plug not answering', 'unk');
+  else kv('state', pw.on ? 'on' : 'off');
+  kv('read', pw.stale ? 'not answering'
+       : pw.age_s != null ? fmtAge(pw.age_s) + ' ago' : '—',
+     pw.stale ? 'warn' : '');
+
+  const h = j.host;
+  if (h) {
+    g('Host');
+    kv('model', h.model);
+    kv('kernel', (h.kernel || '') + (h.arch ? ' · ' + h.arch : ''));
+    if (h.governor) kv('governor', h.governor);
+    const th = heat(h);
+    if (th) kv('throttling', th.text, th.now ? 'bad' : 'warn');
+    if (h.mem_total_mb) kv('memory', h.mem_used_mb + ' / ' + h.mem_total_mb + ' MB');
+    if (h.disk_total_gb) kv('disk', h.disk_used_gb + ' / ' + h.disk_total_gb + ' GB');
+    if (h.load) kv('load', Array.isArray(h.load) ? h.load.join(' ') : h.load);
+  }
 
   g('Daemon');
   // NOT "in flight". That sampled an instant: a command takes about 3 ms and
@@ -3315,7 +3327,7 @@ function showCapture() {
   const b = document.querySelector('#pop-zoom [data-zoom="1"]');
   if (b) b.textContent = capSize() ? 'Original — ' + capSize()
                                    : 'Original — actual resolution';
-  if (!$('settings').hidden && lastState) $('rig').innerHTML = rigRows(lastState);
+  if (!$('settings').hidden && lastState) $('stats').innerHTML = statsRows(lastState);
 }
 const ZOOMLABEL = {fit: 'Fit Screen', '1': 'Original',
                    '2': '200%', '4': '400%'};
