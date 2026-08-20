@@ -225,10 +225,71 @@ def frame_signature(path):
 
 
 def sig_differs(a, b, threshold=8):
-    if a is None or b is None:
-        return True
+    """Compare two frame signatures. `b` MUST NOT be None.
+
+    The previous version returned True when either argument was None, which
+    made a no-picture poll score as MOVEMENT: `sig` was None, this returned
+    True, `still_since` reset, and the watch loop printed "changing still 0s"
+    for six minutes against a black screen. A wedge produced the healthiest
+    possible output the loop can print.
+
+    Raising on a null `b` rather than guessing makes that reintroducible only
+    by deleting this check. No-picture is a third state and belongs to the
+    caller -- see StallTracker.
+    """
+    if b is None:
+        raise ValueError(
+            "sig_differs received a null signature. No-picture is a third "
+            "state, not a difference; handle it in the caller.")
+    if a is None:
+        return True          # nothing to compare against yet: first poll
     diff = sum(1 for x, y in zip(a, b) if abs(x - y) > threshold)
     return diff > len(a) * 0.02
+
+
+# Consecutive polls with no picture before the watch loop stops waiting. At
+# POLL_SECONDS this is a couple of minutes -- long enough to ride out the
+# capture stick's intermittent flat frames and a mode change, short enough
+# that six minutes of a black screen cannot pass as a healthy run.
+BLIND_POLLS_MAX = 20
+
+
+class StallTracker(object):
+    """Three-state classification of a poll: changing, static, or blind.
+
+    Extracted from the watch loop so it can be tested without a sweep, a
+    target, or a capture stick. The bug it replaces was only ever observable
+    on hardware, in a log that was later deleted, which is a bad place for the
+    only copy of a regression to live.
+    """
+
+    def __init__(self, blind_limit=BLIND_POLLS_MAX):
+        self.last_sig = None
+        self.still_since = None
+        self.blind = 0
+        self.blind_limit = blind_limit
+
+    def update(self, sig, now=None):
+        now = time.time() if now is None else now
+        if sig is None:
+            self.blind += 1
+            # last_sig is deliberately NOT cleared. The next real frame has to
+            # be compared against the last frame actually seen, not against
+            # the gap -- otherwise the first frame after a blind spell reports
+            # movement whether or not anything moved, and the blind spell
+            # launders itself into evidence of life.
+            return {"state": "blind", "blind": self.blind, "still": 0.0,
+                    "escalate": self.blind >= self.blind_limit}
+        self.blind = 0
+        changed = sig_differs(self.last_sig, sig)
+        self.last_sig = sig
+        if changed:
+            self.still_since = None
+        elif self.still_since is None:
+            self.still_since = now
+        still = 0.0 if self.still_since is None else now - self.still_since
+        return {"state": "changing" if changed else "static", "blind": 0,
+                "still": still, "escalate": False}
 
 
 def load_conf():
@@ -347,7 +408,7 @@ def main(argv):
     t0 = time.time()
 
     print("\n== monitor (%d min budget) ==" % spec["timeout_min"])
-    last_sig, still_since = None, None
+    tracker = StallTracker()
     while True:
         elapsed = time.time() - t0
         if elapsed > budget:
@@ -356,15 +417,25 @@ def main(argv):
         time.sleep(POLL_SECONDS)
         shot, mean = grab("sweep-poll")
         sig = frame_signature(shot) if shot else None
-        changed = sig_differs(last_sig, sig)
-        last_sig = sig
-        if changed:
-            still_since = None
-        elif still_since is None:
-            still_since = time.time()
-        still = 0 if still_since is None else time.time() - still_since
+        st = tracker.update(sig)
+        changed, still = st["state"] == "changing", st["still"]
+
+        if st["state"] == "blind":
+            print("  t+%5.1f min  NO PICTURE (%d consecutive) -- cannot tell "
+                  "a running sweep from a wedged one" % (elapsed / 60, st["blind"]))
+            if st["escalate"]:
+                blind_min = st["blind"] * POLL_SECONDS / 60.0
+                print("\n!! %d consecutive polls with no picture (%.1f min)."
+                      % (st["blind"], blind_min))
+                print("   This is NOT stillness and NOT movement. The harness has")
+                print("   been unable to see the target at all. Scoring it as")
+                print("   movement is why a black screen once read as a healthy")
+                print("   run for six minutes.")
+                return on_timeout(sweep, mach, recover)
+            continue
+
         print("  t+%5.1f min  brightness %5.1f  %s  still %ds" %
-              (elapsed / 60, mean or -1, "changing" if changed else "static", still))
+              (elapsed / 60, mean or -1, st["state"], still))
 
         if elapsed > budget * EARLIEST_COMPLETION and still >= STILL_SECONDS:
             print("\n== screen static for %ds past %.0f%% of budget -- probing ==" %

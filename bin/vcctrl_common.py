@@ -18,6 +18,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -106,20 +107,55 @@ def power_on():
     return bool(vc_json("power", "state").get("power", {}).get("on"))
 
 
+# A poll used to cost ~1.5 s, which is why this loop had no sleep: a delay
+# would have been coarser than the thing it measured. On the Pi 5 a call is
+# ~3 ms locally and ~57 ms from the VM, so that justification is wrong by
+# between one and three orders of magnitude and the loop became a busy-wait.
+# Measured: 280 polls in one 16 s window. Small enough to poll often, large
+# enough not to spin.
+LED_POLL_S = 0.02
+
+
 def wait_led(name, want, timeout):
     """Wait for LED `name` to read `want`. Returns elapsed seconds, or None.
 
-    No sleep between polls -- each poll is already a ~1.5 s round-trip, so
-    adding a delay only makes the loop coarser than the thing it measures.
-
     LEVEL-triggered, so it is only trustworthy when the starting level is
-    known. Across a power cycle it is NOT: see wait_cold_boot().
+    known. Across a power cycle it is NOT: see wait_cold_boot(). And when the
+    starting level is merely ASSUMED, this fails in the worst direction --
+    see stable_led() and at_prompt().
     """
     want = bool(want)
     t0 = time.time()
     while time.time() - t0 < timeout:
         if bool(leds().get(name)) is want:
             return time.time() - t0
+        time.sleep(LED_POLL_S)
+    return None
+
+
+def stable_led(name, tries=6):
+    """Read an LED until two consecutive reads agree. None if they never do.
+
+    MEASURED FAILURE, 2026-08-20: at_prompt() took a single reading of caps
+    lock as its starting level, and on one run in five that reading was taken
+    while the value was still settling. It then waited 8 s for a state the LED
+    was already leaving, missed it, and missed the restore symmetrically --
+    16.28 s and a confident False, on a machine that was perfectly healthy.
+
+    That is the worst failure direction this harness has: at_prompt() returning
+    False reads as "something is still running", so the caller declines to type
+    and an unattended sweep stalls looking exactly like a wedge.
+
+    The flip itself takes 48 ms against an 8 s timeout -- a margin of 168x --
+    so the timeout was never the problem. One sample was.
+    """
+    last = None
+    for _ in range(tries):
+        now = bool(leds().get(name))
+        if last is not None and now == last:
+            return now
+        last = now
+        time.sleep(LED_POLL_S)
     return None
 
 
@@ -152,7 +188,14 @@ def at_prompt():
     the re-read; it passed, but only because the two leds() calls bracketing
     the sleep added ~3 s of their own. The sleep was never doing the work.
     """
-    before = bool(leds().get("capslock"))
+    before = stable_led("capslock")
+    if before is None:
+        # Refusing is right: a probe whose starting level will not settle
+        # cannot answer the question, and answering anyway is how a healthy
+        # machine gets reported as busy.
+        sys.stderr.write("at_prompt: caps lock level would not settle; "
+                         "declining to guess\n")
+        return None
     vc("key", "capslock")
     flipped = wait_led("capslock", not before, 8) is not None
     # Restore either way. On the failure path the keystroke was usually only

@@ -1668,6 +1668,69 @@ def test_buffer_span():
           cap._state().get("target_span_s"))
 
 
+def test_stall_tracker_three_states():
+    """A no-picture poll is neither movement nor stillness.
+
+    The two-valued version scored it as MOVEMENT: `sig` was None,
+    sig_differs(prev, None) returned True, `still_since` reset, and the sweep
+    watch loop printed "changing still 0s" for six minutes against a black
+    screen. A wedge produced the healthiest output the loop can print.
+
+    This is a unit test rather than a replay of that log, deliberately. The log
+    was deleted, and a replay would only prove the detector handles THAT
+    recording -- feeding it a run of Nones tests the property, which is the
+    finding: absence must not participate in a difference test.
+    """
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+
+    path = os.path.join(HERE, os.pardir, "bin", "vcctrl-sweep")
+    loader = SourceFileLoader("vcctrl_sweep", path)
+    spec = importlib.util.spec_from_loader("vcctrl_sweep", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+
+    A = [10] * 768
+    B = [200] * 768        # far beyond the 2%-of-pixels threshold
+
+    t = mod.StallTracker(blind_limit=5)
+    check("first real frame reads as changing", t.update(A, now=0)["state"] == "changing")
+    check("an identical frame reads as static", t.update(A, now=1)["state"] == "static")
+    check("stillness accumulates", t.update(A, now=5)["still"] == 4)
+
+    # The regression itself.
+    r = t.update(None, now=6)
+    check("a no-picture poll is BLIND, not changing and not static",
+          r["state"] == "blind", "got %r" % r["state"])
+    check("blind does not reset the stillness clock to zero-and-moving",
+          r["blind"] == 1)
+
+    # And it must escalate rather than wait forever.
+    for i in range(2, 5):
+        r = t.update(None, now=6 + i)
+        check("blind poll %d does not escalate early" % i, not r["escalate"])
+    r = t.update(None, now=20)
+    check("escalates once the blind run hits the limit", r["escalate"],
+          "a run of no-picture polls must terminate the watch, not extend it")
+
+    # A frame arriving after a blind spell compares against the last frame
+    # actually SEEN, not against the gap -- otherwise the blind spell launders
+    # itself into evidence of movement.
+    r = t.update(A, now=25)
+    check("the first frame after a blind spell is compared to the last real one",
+          r["state"] == "static", "got %r -- blind spell reported as movement" % r["state"])
+    check("a genuinely different frame still reads as changing",
+          t.update(B, now=26)["state"] == "changing")
+
+    # And the old shape must be impossible to reintroduce quietly.
+    try:
+        mod.sig_differs(A, None)
+        check("sig_differs REFUSES a null signature", False,
+              "it returned instead of raising -- the old bug is reachable again")
+    except ValueError:
+        check("sig_differs REFUSES a null signature", True)
+
+
 if __name__ == "__main__":
     test_key_table()
     test_concurrent_type()
@@ -1693,6 +1756,7 @@ if __name__ == "__main__":
     test_zoom_layout_in_a_browser()
     test_favicon_single_source()
     test_shot_out_contract()
+    test_stall_tracker_three_states()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
