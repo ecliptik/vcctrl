@@ -147,6 +147,51 @@ def load(d, label, required=True):
     return cells
 
 
+def manifest_diff(inc, base, have_baseline):
+    """Report declared-field differences between the manifests, without
+    failing on them.
+
+    A declaration is what somebody believed was fitted; it is not a
+    measurement, so a difference here does not invalidate a comparison by
+    itself. But it is the cheapest possible signal that the two runs were not
+    set up identically, and it should be the TOOL that surfaces it rather than
+    whoever happens to read both files. This run differed in exactly one field
+    and it was caught by eye; the next one might differ in a field that
+    matters.
+    """
+    if not have_baseline:
+        return
+    a = os.path.join(base, "GPUMP.NFO")
+    b = os.path.join(inc, "GPUMP.NFO")
+    if not (os.path.exists(a) and os.path.exists(b)):
+        print("\n== manifest ==")
+        print("  no manifest to compare (%s)"
+              % ("baseline missing" if not os.path.exists(a) else "run missing"))
+        return
+
+    def fields(p):
+        out = {}
+        for ln in open(p, errors="replace"):
+            k, _, v = ln.strip().partition("=")
+            if _ and " " not in k:
+                out.setdefault(k, []).append(v.strip())
+        return out
+
+    fa, fb = fields(a), fields(b)
+    keys = sorted(set(fa) | set(fb))
+    diffs = [(k, fa.get(k), fb.get(k)) for k in keys if fa.get(k) != fb.get(k)]
+    print("\n== manifest ==")
+    if not diffs:
+        print("  identical to the baseline in every declared field")
+        return
+    for k, va, vb in diffs:
+        print("  %-20s baseline %-16s run %s"
+              % (k, va[0] if va else "(absent)", vb[0] if vb else "(absent)"))
+    print("  Declared fields, not measurements. A difference here does not")
+    print("  invalidate the comparison on its own -- but it means the two runs")
+    print("  were not set up identically, and you should know why.")
+
+
 def main(argv):
     inc = DEFAULT_INCOMING
     base = DEFAULT_BASELINE
@@ -202,18 +247,37 @@ def main(argv):
             return 2
 
     # --- the two quantities ----------------------------------------------
+    manifest_diff(inc, base, old is not None)
+
     print("\n== pair spread (threshold %.1f) ==" % SPREAD_MAX)
-    verdicts = []
+    verdicts, signed = [], []
     for name, (a, b) in (("control", CONTROL), ("arm", ARM)):
         s, ok = spread_verdict(now[a]["fps"], now[b]["fps"])
+        d = round(now[b]["fps"] - now[a]["fps"], 4)
+        signed.append(d)
         was = ""
         if old:
             os_, _ = spread_verdict(old[a]["fps"], old[b]["fps"])
-            was = "   (Pi 3: %.1f)" % os_
-        print("  %-8s %s %.1f vs %s %.1f  ->  spread %.1f  %s%s"
-              % (name, a, now[a]["fps"], b, now[b]["fps"], s,
+            od = round(old[b]["fps"] - old[a]["fps"], 4)
+            was = "   (was %.1f, %+.1f)" % (os_, od)
+        print("  %-8s %s %.1f -> %s %.1f  ->  spread %.1f (%+.1f)  %s%s"
+              % (name, a, now[a]["fps"], b, now[b]["fps"], s, d,
                  "ok" if ok else "WIDE", was))
         verdicts.append(ok)
+
+    # The SIGN matters more than the magnitude, and the magnitude alone hides
+    # it. The repeat cell runs later in the sweep, so a consistent negative
+    # difference on both pairs is monotone drift -- thermal, cache or harness
+    # state -- and NOT the added variance the threshold was meant to catch. A
+    # pair range is only a variance estimator when the sign is random; when it
+    # is not, this test is a drift budget wearing a variance label.
+    if all(x < 0 for x in signed) or all(x > 0 for x in signed):
+        print("  NOTE: both pairs decline in the same direction (%s)."
+              % ", ".join("%+.1f" % x for x in signed))
+        print("  The repeat cell runs later, so a consistent sign is DRIFT")
+        print("  across the sweep, not scatter within it. This run therefore")
+        print("  says little about added variance -- the quantity the")
+        print("  threshold nominally tests.")
 
     wide = verdicts.count(False)
     if wide == 0:

@@ -499,6 +499,58 @@ positive), against ATI Mach64 1/6. Declared VIRGE and detected ViRGE agree,
 which is worth having on the first run from new hardware — that is exactly
 when a silently different configuration is most plausible.
 
+### 6d. The spreads are drift, not scatter — and the test was never testing variance
+
+The benchmarking session found structure in the two "upper end of normal"
+spreads, and it holds up. Put the cells in execution order — read off the log
+clocks, not assumed — and the repeat always reads lower than its first cell:
+
+    Pi 3   control -0.1   arm -0.1
+    Pi 5   control -0.2   arm -0.2
+
+Four observations, four the same sign, and the two arms of each session agree
+to the digit. Random scatter gives 4/4 one-sided about 6% of the time and does
+not make the arms agree. **The repeat cell runs later in the sweep, so a
+consistent sign is monotone drift — thermal, cache or harness state — not the
+added variance the threshold nominally tests.**
+
+**This corrects the framework, not the result.** Sigma = 0.10 was derived from
+pair ranges, and if those ranges are dominated by drift then per-cell sigma is
+*smaller* than 0.10 and the 0.2 threshold is a drift budget wearing a variance
+label. 0.10 remains fine as a conservative upper bound for the delta window,
+which is what it is used for; it is not an estimate of scatter.
+
+The sharper consequence, which follows and is worth stating plainly: **there is
+at present no test in this harness for added variance.** The quantity that was
+supposed to detect it measures something else. Building one needs repeats that
+are not separated in time — interleaved rather than appended — and that is a
+change to the sweep, not to the scorer.
+
+**And the delta is more robust than the argument that chose it.** It was picked
+because it cancels an additive session confound. It also cancels within-sweep
+drift, because drift hits both arms equally — which is exactly why it
+reproduced to the digit while every single cell moved. The instrument survived
+a confound nobody had identified when they selected it.
+
+**Pre-registered re-run criteria**, fixed before the data as before:
+
+    within-pair decline ~0.2 on both pairs   drift confirmed at the new level;
+                                             the question becomes why it doubled
+    0.1, or mixed signs                      the doubling was noise, note stands
+
+Either outcome leaves the phase-6 PASS untouched. The delta is the acceptance
+criterion and drift cannot reach it.
+
+**`irq_source` needs no re-run.** It is a declaration, and what it would have
+asserted is independently attested by a field present and identical in both
+manifests: `config=PGSB`. The packet stack only loads under NET, so a non-NET
+profile satisfies the precondition by construction — proven by detection
+rather than assertion, which is the stronger of the two. `UNDECLARED` is the
+correct value for a field nobody set and must not be defaulted into a claim.
+The scorer now diffs the manifests itself and reports declared-field
+differences without failing on them, so the next one is caught by the tool
+rather than by eye.
+
 **Phase 6 is complete, and with it the migration.**
 
 ## 7. Rollback
