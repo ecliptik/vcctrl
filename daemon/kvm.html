@@ -197,7 +197,7 @@
        captures the keyboard, so these three are duplicates on a phone. */
     /* The clip stays on a phone: it is inside the field, costs no row, and
        typing a file in is if anything more useful there. */
-    body #grabbtn, body #soundbtn, body #powerbtn { display:none; }
+    body #grabbtn, body #soundwrap, body #powerbtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -393,7 +393,29 @@
   /* A real gap, not a space in the string: HTML collapses runs of whitespace,
      so "🖥️  Fit" and "🖥️ Fit" render identically and the emoji sits right on
      the F. Flex gap is the only version that actually moves it. */
+  /* The divider, and the spacing that makes it read as one. Same shape as the
+     command field: an emoji cell, a rule, then the label. */
   .bi { flex:none; font-size:14px; line-height:1; }
+  #cmdbar button > .bi, #zoombtn > .bi {
+    border-right:1px solid var(--rule); padding-right:8px; margin-right:0;
+  }
+  #cmdbar button, #zoombtn { display:flex; align-items:center; gap:8px; }
+  #cmdbar button > .bl, #zoombtn > .bl { flex:none; white-space:nowrap; }
+  /* The split pair looks like one button and behaves like two. */
+  .split {
+    display:flex; align-items:stretch; flex:none;
+    border:1px solid var(--rule); border-radius:6px;
+    background:rgba(0,0,0,.22); overflow:hidden;
+  }
+  #cmdbar .split button {
+    border:0; border-radius:0; background:transparent; min-height:0;
+    display:flex; align-items:center;
+  }
+  #cmdbar .split button:hover { background:var(--rule); }
+  #cmdbar .split #mutebtn {
+    border-right:1px solid var(--rule); font-size:14px; padding:0 9px;
+  }
+  #cmdbar .split #mutebtn.on { color:var(--green); }
 
   .popmenu { padding:5px; min-width:150px; }
   .popmenu button {
@@ -926,19 +948,27 @@
       <button id="sendline" title="Type this line at the target and press Enter">Send ↵</button>
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
-    <button id="keysbtn" aria-expanded="true"
-            aria-controls="keys" title="Show or hide the key rail">⌨️ Keys ▾</button>
-    <button id="grabbtn" title="Send what you type straight to the target">🔐 Grab</button>
+    <button id="keysbtn" aria-expanded="true" aria-controls="keys"
+            title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys ▾</span></button>
+    <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
     <!-- NOT display:none. A file input that is display:none is not focusable,
          and .click() on it is ignored outright by some browsers -- which is
          exactly why the button appeared to do nothing. Visually hidden but
          still laid out is the form that works everywhere. -->
     <input id="fileinput" type="file" accept=".txt,.bat,.ini,.cfg,.sys,text/*"
            tabindex="-1" aria-hidden="true">
-    <button id="soundbtn" aria-haspopup="true" aria-expanded="false"
-            title="Sound and volume"><span id="soundglyph">🔇</span> Sound ▾</button>
+    <!-- TWO CONTROLS IN ONE OBJECT. The divider is not decoration here: the
+         speaker half mutes, the word half opens the menu, and the line is
+         what says they are different buttons. The other three carry the same
+         divider because they sit in a row with this one -- a rule that only
+         appears where it is load-bearing reads as an inconsistency. -->
+    <span class="split" id="soundwrap">
+      <button id="mutebtn" class="bi" title="Turn the sound on">🔇</button>
+      <button id="soundbtn" class="bl" aria-haspopup="true" aria-expanded="false"
+              title="Sound and volume">Sound ▾</button>
+    </span>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
-            title="Mains power — on, off, cycle">🔌 Power ▾</button>
+            title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power ▾</span></button>
   </div>
 
   <div id="stalebar">A newer version of this page is available — reload
@@ -1849,7 +1879,7 @@ function setArmed(v, opts) {
   // control. "Capture" is spoken for by screenshots and recording.
   // The verb says what it does to the KEYBOARD rather than what you then
   // do with it, which is what "Type" left ambiguous.
-  $('grabbtn').textContent = v ? '🔐 Ungrab' : '🔐 Grab';
+  $('grabbtn').querySelector('.bl').textContent = v ? 'Ungrab' : 'Grab';
   $('grabbtn').classList.toggle('on', v);
   $('grabbtn').title = v ? 'Keys are going to the target — click, or press '
                            + 'Ctrl+Alt+Shift, to stop'
@@ -2058,7 +2088,9 @@ function setSound(on) {
   soundOn = on;
   $('sbtn').textContent = on ? '🔊' : '🔇';
   $('sbtn').title = on ? 'Mute the sound' : 'Turn the sound on';
-  $('soundglyph').textContent = on ? '🔊' : '🔇';
+  $('mutebtn').textContent = on ? '🔊' : '🔇';
+  $('mutebtn').title = on ? 'Mute' : 'Turn the sound on';
+  $('mutebtn').classList.toggle('on', on);
   $('sbtn').classList.toggle('on', on);
   applyVolume();
   // Off stops the STREAM, not just the output: silence still costs 1.5 Mbit/s,
@@ -2068,6 +2100,10 @@ function setSound(on) {
   if (on) startAudio(); else stopAudio();
 }
 
+// The strip's speaker and the popover's are the same control in two
+// places, so they share a handler rather than each having their own idea
+// of what muting means.
+$('mutebtn').onclick = () => $('sbtn').onclick();
 $('sbtn').onclick = () => {
   // resume() must happen inside the gesture handler, not after an await, or
   // both target browsers leave the context suspended.
@@ -3387,7 +3423,7 @@ $('stage').addEventListener('pointerdown', e => {
   const b = $('keysbtn');
   const set = hide => {
     document.body.classList.toggle('nokeys', hide);
-    b.textContent = hide ? '⌨️ Keys \u25b4' : '⌨️ Keys \u25be';
+    b.querySelector('.bl').textContent = hide ? 'Keys \u25b4' : 'Keys \u25be';
     b.setAttribute('aria-expanded', hide ? 'false' : 'true');
     localStorage.setItem('vcctrl.keys', hide ? 'hidden' : 'shown');
     measureBars();
