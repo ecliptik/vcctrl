@@ -1667,3 +1667,18 @@ rather than returning a bare `ok`. A verdict with an unstated subject gets
 read as covering whatever the reader was worried about, which is the same
 failure as sec. 30: a guarantee is sound inside the boundary it was written
 for, and nothing about the words says where that boundary is.
+
+**Why a bare `ok` is not neutral**, in the benchmarking session's words, which
+are sharper than mine: *the reader supplies the boundary their current
+question needs.* It is not that the reader is careless — it is that nothing in
+the artifact contradicts the extension, so the most useful reading is also the
+unopposed one.
+
+**And the remedy belongs in the OUTPUT, not the docs.** Documentation is read
+before a tool is trusted; output is read at the moment of trusting it.
+
+Both instances are worth keeping together, because the pair is what shows this
+is a shape rather than two bugs: a two-valued file contract, sound on the
+machine it ran on, producing the forbidden third state one host over; and a
+readiness verdict, sound about the harness, readable as "fit to run". Both
+correct. Both read wider than written, by the people who wrote them.
