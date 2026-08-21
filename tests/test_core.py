@@ -646,9 +646,14 @@ def test_uniform_frame_is_not_picture():
     import threading
     from PIL import Image
 
-    class Fake(vcctrld.VideoCapability):
-        def __init__(self):
-            self.lock = threading.Lock()
+    # THE REAL __init__, not a hand-built subset. This used to be a subclass
+    # that set `self.lock` and nothing else, and it broke the moment the class
+    # gained a decode counter -- an AttributeError from a fake that had
+    # drifted from the thing it stands in for. That is the same defect this
+    # file already records about `pinned_at`: state that exists on the real
+    # object and not on the stand-in, with nothing saying which. The real
+    # constructor opens no device and spawns nothing, so there was never a
+    # reason to avoid it.
 
     def const(v):
         b = io.BytesIO()
@@ -666,7 +671,7 @@ def test_uniform_frame_is_not_picture():
         im.save(b, "JPEG", quality=90)
         return b.getvalue()
 
-    v = Fake()
+    v = vcctrld.VideoCapability(None, vcctrld.Bus())
     check("a uniform frame is not picture", not v._is_picture(const(7)))
     check("a dark frame with content IS picture", v._is_picture(scene()))
 
