@@ -256,8 +256,12 @@
       background:var(--panel);
       padding-bottom:env(safe-area-inset-bottom,0px);
     }
+    /* EQUAL SHARES. flex:1 alone distributes the FREE space, so a seven-item
+       bar with words from three to six characters came out with visibly
+       different gaps. flex-basis:0 makes each share equal regardless of what
+       it contains. */
     #tabs button {
-      flex:1; border:0; border-radius:0; background:transparent;
+      flex:1 1 0; min-width:0; border:0; border-radius:0; background:transparent;
       color:var(--dim); font:var(--t-micro)/1 var(--mono);
       letter-spacing:.06em; min-height:46px; padding:0;
       border-top:2px solid transparent;
@@ -514,7 +518,7 @@
   /* The readout is a caption for the track above it, not a control in the
      row -- as a flex item it sat between Save and Live and pushed Live onto
      a line of its own. Its own full-width line, centred under the transport. */
-  #scrubpos { grid-column:1 / -1; text-align:center; }
+  #scrubpos { grid-column:1 / -1; text-align:center; justify-self:center; }
   /* 34, not 30. Everything else on the page has a 36px minimum with a mouse
      and 44 with a thumb; the transport was the one row of controls set below
      both, which is why it read as a different kind of thing sitting inside
@@ -522,7 +526,13 @@
   #scrubbar button { min-height:34px; padding:0 9px; }
   @media (max-width:640px) {
     #scrub { left:6px; right:6px; bottom:6px; padding:7px 8px; }
-    #scrubbar { gap:4px; row-gap:6px; }
+    /* ONE GROUP PER ROW, FULL WORDS. The three-column grid squeezes each
+       group into a third of a phone and they wrap inside themselves -- "In"
+       and "Save" on one line with "Out" under them, which reads as four
+       controls in no order. Stacked, each group is centred, intact, and says
+       the same thing the desktop says. */
+    #scrubbar { grid-template-columns:1fr; gap:4px; row-gap:6px; }
+    #scrubbar .sg { justify-self:center; }
     #scrubbar button { padding:0 7px; min-height:34px; }
     #scrubpos { font-size:10.5px; }
     /* The tip is half the screen on a phone; smaller keeps the frame under
@@ -766,8 +776,12 @@
     border:1px solid var(--yellow); border-radius:8px;
     box-shadow:0 8px 22px rgba(0,0,0,.42);
     font:600 var(--t-data)/1.3 var(--sans); text-align:center;
-    max-width:min(92vw, 520px);
+    /* WIDTH, not max-width. As a max it shrank to its content and wrapped
+       "A newer version of this page is available" onto four lines in a box
+       half the screen wide, with room on both sides it would not use. */
+    width:max-content; max-width:min(94vw, 520px);
   }
+  @media (max-width:640px) { #stalebar { width:94vw; } }
   #stalebar.show { display:flex; animation:toastin .18s ease-out; }
   @keyframes toastin {
     from { opacity:0; transform:translate(-50%, -8px); }
@@ -1263,11 +1277,11 @@
            same argument as the separators in the status rail. -->
       <div id="scrubbar">
         <div class="sg" id="sg-mark">
-          <button id="scrubin" data-short="In"
+          <button id="scrubin"
                   title="Start the selection here">Mark in</button>
-          <button id="scrubsave" data-short="Save"
+          <button id="scrubsave"
                   title="Save the selected range as a video">Save range</button>
-          <button id="scrubout" data-short="Out"
+          <button id="scrubout"
                   title="End the selection here">Mark out</button>
         </div>
         <!-- The step buttons carry the bar, because on a phone Play collapses
@@ -1275,12 +1289,12 @@
              worse than the wrapping it was fixing. -->
         <div class="sg" id="sg-play">
           <button id="scrubprev" title="Back one frame (←)">|◀</button>
-          <button id="scrubplay" data-short="▶"
+          <button id="scrubplay"
                   title="Play the buffer through">▶ Play</button>
           <button id="scrubnext" title="Forward one frame (→)">▶|</button>
         </div>
         <div class="sg" id="sg-out">
-          <button id="scrubsnap" data-short="📷"
+          <button id="scrubsnap"
                   title="Save the frame you are looking at as a JPEG">Capture frame</button>
           <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
         </div>
@@ -2472,7 +2486,16 @@ $('verifybtn').onclick = async () => {
 };
 $('grabbtn').onclick = () => setArmed(!armed);
 
-function armFromStage() {
+function armFromStage(e) {
+  // THE OVERLAYS ARE NOT THE PICTURE. The scrub panel, the No Signal notice
+  // and the update toast all live inside #stage so they can float over it
+  // without re-fitting anything -- which means a tap on any of them reached
+  // this handler and grabbed the keyboard. On a phone that raises the
+  // on-screen keyboard over the very controls being pressed. Reported as
+  // "tapping any element in Buffer captures the screen and brings up the
+  // keyboard", which is exactly what it did.
+  if (e && e.target && e.target.closest
+      && e.target.closest('#scrub, #veil, #stalebar, #veilback')) return;
   if (armed) {
     // Already grabbed. Do not silently do nothing -- the previous build's
     // real bug was invisible state, so say what is true, over the picture
@@ -3402,16 +3425,11 @@ $('scrubtrack').addEventListener('pointermove', e => {
 $('scrubtrack').addEventListener('pointerleave', hideTip);
 $('scrubprev').onclick = () => { stopPlay(); seekIdx(tlAt - 1); };
 $('scrubnext').onclick = () => { stopPlay(); seekIdx(tlAt + 1); };
-// Swapped on a media query rather than baked into the markup, so rotating a
-// phone or dragging a desktop window narrow gets the right one either way.
-function fitScrubLabels() {
-  for (const b of document.querySelectorAll('#scrubbar [data-short]')) {
-    if (!b.dataset.long) b.dataset.long = b.textContent;
-    b.textContent = narrowUI() ? b.dataset.short : b.dataset.long;
-  }
-}
-fitScrubLabels();
-addEventListener('resize', fitScrubLabels);
+// The abbreviations are gone. They existed to stop a three-column grid
+// wrapping inside itself on a phone, which stacking the groups solves
+// properly -- and they made the phone say something different from the
+// desktop about the same control, which is worse than a taller panel.
+function fitScrubLabels() {}
 $('scrubexit').onclick = exitReview;
 $('scrubin').onclick  = () => { bufFrom = tl.frames[tlAt].seq; markRange(); };
 $('scrubout').onclick = () => { bufTo   = tl.frames[tlAt].seq; markRange(); };
@@ -4309,7 +4327,11 @@ function setTab(name) {
   // them on screen with nothing highlighted -- a panel with no way back to
   // the button that owns it.
   if (name !== 'set') showSettings(false);
-  if (name !== 'sound' && name !== 'power' && name !== 'keys') closePop();
+  // KEYS opens the command bar, not a popover -- it stopped opening the key
+  // menu when that was unstacked -- so it must close whatever IS open. It was
+  // still in this exemption from when it did open one, which left the Sound
+  // popover sitting over the key rail until Sound was pressed again.
+  if (name !== 'sound' && name !== 'power') closePop();
   // Leaving the BUFFER tab has to release the ring, or a phone that wandered
   // off to another tab would hold it until the daemon's 300s backstop.
   if (name !== 'buffer' && reviewing) exitReview();
