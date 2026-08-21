@@ -113,7 +113,7 @@
      beat over a frozen picture. */
   #state.live span { animation:beat 1.6s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) {
-    #state.live span { animation:none; opacity:1; }
+    #state.live span, #state.live > i { animation:none; opacity:1; }
   }
   .chip {
     font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
@@ -214,7 +214,21 @@
        state WORD goes too: it is the one thing in this row the veil over the
        picture already says in full sentences, and on a phone the width it
        costs is width the controls need. */
-    body h1 + .sep, body #state, body #state + .sep { display:none; }
+    /* A LAMP, NOT A WORD. The desktop's ACTIVE beats when frames are landing
+       and there was no equivalent on a phone at all -- the word was hidden
+       for width, and with it went the only thing on the page that says "this
+       is live NOW" rather than "the daemon says it is locked". The dot is
+       the same element and the same `live` class, drawn as the <i> every
+       lamp already carries and nothing has ever used. */
+    body h1 + .sep, body #state + .sep { display:none; }
+    body #state { flex:none; overflow:visible; }
+    body #state > span { display:none; }
+    body #state > i {
+      display:block; width:9px; height:9px; border-radius:50%;
+      background:var(--dim); opacity:.45;
+    }
+    body #state.live > i { background:var(--green); opacity:1;
+                           animation:beat 1.6s ease-in-out infinite; }
     /* NO BOXES ON ANY OF THE THREE. I gave light/dark a bare glyph and kept
        boxes on the other two, on the argument that a box is the affordance
        for something that opens. Beside each other at phone size that is
@@ -1860,9 +1874,20 @@ function gotFrame() {
 // says it is capturing. Those come apart exactly when it matters: a suspended
 // iOS tab, a dropped multipart stream, a socket that opened and delivers
 // nothing. Two seconds is about three missed frames at the rate we run.
+let stateWord = '';
 setInterval(() => {
   const live = xport !== 'connecting' && Date.now() - lastFrameAt < 2000;
-  $('state').classList.toggle('live', live);
+  const el = $('state');
+  el.classList.toggle('live', live);
+  // TWO DIFFERENT FACTS, BOTH TRUE, and on a phone the dot is all there is to
+  // carry them. What the daemon says about the capture, and whether frames
+  // are landing in THIS TAB -- which is the distinction the beat exists for,
+  // since a locked capture and a dead socket look identical without it.
+  const here = live
+    ? 'receiving frames · last ' + Math.round(Date.now() - lastFrameAt) + ' ms ago'
+    : xport === 'connecting' ? 'connecting…'
+    : 'no frames here in the last 2 s — what is on screen may be old';
+  el.title = (stateWord ? stateWord + '\n' : '') + here;
 }, 700);
 
 // ── RATE CONTROL: ASK FOR WHAT IS GETTING THROUGH ────────────────────────
@@ -3832,8 +3857,15 @@ function pill(id, cls, text) {
     // the word carrying the meaning, which is what the monochrome themes and
     // a colour-blind reader both need.
     $('state').querySelector('span').textContent = w;
+    // The word carries the daemon's judgement; the tooltip has to carry it
+    // too, because on a phone the word is a dot. Stored rather than written,
+    // so there is ONE writer -- the liveness tick below composes both. Two
+    // writers on different intervals meant the tooltip alternated between
+    // "the daemon says locked" and "frames are arriving", which are different
+    // facts and both true.
+    stateWord = 'Video: ' + String(text).replace(/^video\s*/, '');
     setLamp('state', cls === 'on' ? 'on' : cls === 'off' ? 'bad' : 'warn',
-            'Video: ' + String(text).replace(/^video\s*/, ''));
+            stateWord);
     return;
   }
   const map = {};
