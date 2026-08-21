@@ -379,9 +379,15 @@
   /* Emoji sit low: their glyph box is taller than the text around them and
      the baseline lands below the letters. The underline is this span's
      own border, so a padlock hanging past it reads as a second row. */
+  /* FULL SIZE. At .8em of --t-micro these were eight pixels, and an open
+     shackle leaning left is not eight pixels of difference from a closed one
+     -- the two states were telling themselves apart by opacity alone, which
+     is the failure this page bans everywhere else. At the rail's own size the
+     shackle is visible, and the opacity difference stays as the second
+     carrier rather than the only one. */
   .lamp.lockable span::after {
-    content:"\00a0🔓"; font-size:.8em; opacity:.6;
-    line-height:1; vertical-align:.12em;
+    content:"\00a0🔓"; font-size:1em; opacity:.55;
+    line-height:1; vertical-align:-.08em;
   }
   .lamp.lockable.locked span::after { content:"\00a0🔒"; opacity:1; }
 
@@ -509,7 +515,11 @@
      row -- as a flex item it sat between Save and Live and pushed Live onto
      a line of its own. Its own full-width line, centred under the transport. */
   #scrubpos { grid-column:1 / -1; text-align:center; }
-  #scrubbar button { min-height:30px; padding:0 9px; }
+  /* 34, not 30. Everything else on the page has a 36px minimum with a mouse
+     and 44 with a thumb; the transport was the one row of controls set below
+     both, which is why it read as a different kind of thing sitting inside
+     the same panel. */
+  #scrubbar button { min-height:34px; padding:0 9px; }
   @media (max-width:640px) {
     #scrub { left:6px; right:6px; bottom:6px; padding:7px 8px; }
     #scrubbar { gap:4px; row-gap:6px; }
@@ -613,9 +623,15 @@
   #cmdbar #bufbtn { gap:6px; padding-right:9px; }
 
   .popmenu { padding:5px; min-width:150px; }
+  /* 500, STATED. `font:` is a shorthand and resets every part it does not
+     name, so `font:var(--t-read)/1 var(--sans)` silently set weight back to
+     400 -- and the screen menu was the one list on the page a shade lighter
+     than every other menu. Measured, not noticed: 15px/400 against 15px/500
+     everywhere else. */
   .popmenu button {
     display:block; width:100%; text-align:left; border:0; border-radius:5px;
-    background:transparent; font:var(--t-read)/1 var(--sans); padding:0 9px;
+    background:transparent; font:500 var(--t-read)/1 var(--sans);
+    padding:0 9px;
   }
   .popmenu button:hover { background:var(--rule); }
   .popmenu button.sel { color:var(--green); }
