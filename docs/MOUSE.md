@@ -129,6 +129,32 @@ The 60 used above was chosen to make departure unambiguous and it did that.
 For arrival, prefer 45 — the extra sensitivity costs little once the object is
 also required to be cursor-sized, since noise does not arrive in 12x20 blocks.
 
+**CORRECTION 2026-08-20: those numbers are a property of THIS CONTENT, not of
+the capture path, and carrying them elsewhere will break the measurement.**
+
+They were measured against a white cursor on a light Windows desktop. The
+benchmarking session swept the same way on Cave Story's backdrop, whose pixels
+run 20–47, and found a stable plateau at **4–24** — where a threshold of 40
+starts eating the backdrop itself and 60 clips everything but the HUD. I swept
+a static DOS console, bright text on black, and found a plateau at **50–80**.
+
+**The two plateaus do not overlap at all.** A single global constant would have
+been wrong for one of us whichever number was picked, and I recommended 60 to
+someone whose content it would have destroyed.
+
+**What transfers is the method, not the value:**
+
+1. Take ten *consecutive* frames of a static screen of the content class you
+   actually mean to measure.
+2. Sweep the threshold and record how many distinct results appear at each.
+3. Take the **middle of the plateau** where the count is 1 — so a small drift
+   in either direction changes nothing.
+
+A threshold sitting on the edge of a plateau is the failure: 40 gave three
+different bounding boxes across ten identical frames, because a faint row sat
+exactly on the cut. Instability like that reads as a property of the subject
+and is a property of the instrument.
+
 ## 5. Why no DOS test can prove this, which is why Windows was used
 
 Both obvious approaches are structurally incapable, not merely awkward:
