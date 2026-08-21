@@ -3084,3 +3084,88 @@ def test_why_values_are_all_documented():
     check("the docstring states the set is NOT closed",
           "NOT CLOSED" in doc.upper(),
           "it does not tell a consumer the set can grow")
+
+
+def test_led_change_record():
+    """A history, so an intermittent that clears itself leaves a trace.
+
+    The webkvm session's case: the Pi held 1/0/0 while the target had 0/1/1,
+    and it cleared on its own with nobody watching. A level cannot show that
+    afterwards. It is deliberately NOT a currency proof -- the LED byte
+    arrives only on a lock-key change, so an idle machine publishes nothing,
+    indistinguishably from one that has fallen off the wire.
+    """
+    class Devs(object):
+        def __init__(self, v): self.v = dict(v)
+        def read_leds(self): return dict(self.v)
+
+    import collections as _c
+    a = {"capslock": 0, "numlock": 1, "scrolllock": 1}
+    d = Devs(a)
+    c = vcctrld.LedsCapability(d)
+    c.support = lambda: (True, None)
+
+    orig = (vcctrld.LedsCapability._changes,
+            vcctrld.LedsCapability._seen_values,
+            vcctrld.LedsCapability._changes_seq)
+    try:
+        vcctrld.LedsCapability._changes = _c.deque(
+            maxlen=vcctrld.LedsCapability.CHANGES_MAX)
+        vcctrld.LedsCapability._seen_values = None
+        vcctrld.LedsCapability._changes_seq = 0
+
+        c._sample()
+        check("the first sample records NO transition -- nothing to move from",
+              len(vcctrld.LedsCapability._changes) == 0)
+
+        d.v = {"capslock": 1, "numlock": 1, "scrolllock": 1}
+        c._sample()
+        rec = list(vcctrld.LedsCapability._changes)
+        check("a change is recorded", len(rec) == 1, rec)
+        check("with from and to", rec[0]["from"] == a and rec[0]["to"] == d.v,
+              rec[0])
+        check("and a MONOTONIC clock, because the wall clock can step and the "
+              "whole value of this record is ordering", "mono" in rec[0])
+        check("and the epoch, so a change can be tied to this boot",
+              "epoch" in rec[0])
+
+        c._sample()
+        check("an unchanged sample records nothing",
+              len(vcctrld.LedsCapability._changes) == 1)
+
+        # BOUNDED. A daemon runs for weeks; an unbounded record is a slow leak.
+        for i in range(vcctrld.LedsCapability.CHANGES_MAX + 50):
+            d.v = {"capslock": i % 2, "numlock": 1, "scrolllock": 1}
+            c._sample()
+        # Asserted INDEPENDENTLY of the constant. The first version compared
+        # the length against CHANGES_MAX read from the code, so it agreed with
+        # itself for any value -- raising the constant to 100000 left it
+        # passing, which a control caught. The property is "bounded, and
+        # bounded at a size a daemon can run for weeks with", not "equal to
+        # whatever the source says".
+        dq = vcctrld.LedsCapability._changes
+        check("the record is a BOUNDED deque, not an unbounded list",
+              getattr(dq, "maxlen", None) is not None, type(dq).__name__)
+        check("and the bound is small enough to run for weeks (<= 1000)",
+              vcctrld.LedsCapability.CHANGES_MAX <= 1000,
+              vcctrld.LedsCapability.CHANGES_MAX)
+        check("and it actually stops growing",
+              len(dq) <= vcctrld.LedsCapability.CHANGES_MAX, len(dq))
+
+        out = c._led_changes({"n": 5})
+        check("led_changes returns newest first",
+              out["changes"][0]["seq"] > out["changes"][-1]["seq"],
+              [x["seq"] for x in out["changes"]])
+        check("and honours n", len(out["changes"]) == 5)
+        check("and says what it does NOT prove",
+              "does not establish" in out["note"].lower(), out["note"][:60])
+
+        snap = c.snapshot()
+        check("snapshot summarises the same record, not a second one",
+              snap["changes"] == len(vcctrld.LedsCapability._changes)
+              and snap["changed_at"] == list(
+                  vcctrld.LedsCapability._changes)[-1]["t"], snap.get("changes"))
+    finally:
+        (vcctrld.LedsCapability._changes,
+         vcctrld.LedsCapability._seen_values,
+         vcctrld.LedsCapability._changes_seq) = orig

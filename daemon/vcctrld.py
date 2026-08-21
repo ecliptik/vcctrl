@@ -815,9 +815,103 @@ class LedsCapability(Capability):
     _seen_values = None
     _proven_epoch = None
 
+    # A BOUNDED history of transitions. The webkvm session asked for this to
+    # catch an intermittent: the Pi held 1/0/0 while the target had 0/1/1, and
+    # it cleared on its own with nobody watching. A level cannot show that
+    # afterwards; a history can.
+    #
+    # WHAT IT PROVES, AND WHAT IT DOES NOT. There is no heartbeat on this
+    # channel -- the LED byte arrives only when a lock key changes, so an idle
+    # machine publishes nothing, indistinguishably from one that has fallen off
+    # the wire. This therefore shows that an intermittent LEFT A TRACE. It does
+    # NOT establish that a reading is current on a quiet machine, and the
+    # naming should stop anyone reaching for that.
+    #
+    # Bounded at 200 deliberately: a daemon that runs for weeks with an
+    # unbounded record has a slow leak nobody notices until it matters.
+    CHANGES_MAX = 200
+    POLL_S = 1.0
+    _changes = None            # collections.deque, newest last
+    _changes_seq = 0
+    _poll_thread = None
+
+    def start(self):
+        """Poll at 1 Hz so a change is recorded whether or not anyone asks.
+
+        Sampling only on demand would miss precisely the event this exists for
+        -- a divergence that appears and clears with nobody watching. Three
+        sysfs reads at 1 Hz is microseconds and bounds the timestamp error to
+        one second, which is far inside anything we reason about here.
+        """
+        if LedsCapability._changes is None:
+            LedsCapability._changes = collections.deque(maxlen=self.CHANGES_MAX)
+        self._poll_thread = threading.Thread(
+            target=self._poll, name="led-changes", daemon=True)
+        self._poll_thread.start()
+
+    def _poll(self):
+        while True:
+            try:
+                self._sample()
+            except Exception:
+                pass
+            time.sleep(self.POLL_S)
+
+    def _sample(self):
+        """Read the nodes and record a transition if the value moved.
+
+        Returns the values read, or None if they could not be read. Shared by
+        the poller and snapshot(), so both maintain the same record and there
+        is one place that decides what counts as a change.
+        """
+        try:
+            values = self.devs.read_leds()
+        except Exception:
+            return None
+        if not values:
+            return None
+        prev = LedsCapability._seen_values
+        if values != prev:
+            epoch, _powered, _at = TARGET.state()
+            LedsCapability._seen_values = dict(values)
+            LedsCapability._proven_epoch = epoch
+            if prev is not None:
+                # The first sample of a daemon's life is not a transition --
+                # there is no prior state for it to have moved from, and
+                # recording one would put a fictitious change at every start.
+                LedsCapability._changes_seq += 1
+                LedsCapability._changes.append({
+                    "seq": LedsCapability._changes_seq,
+                    "t": time.time(),
+                    # MONOTONIC alongside wall clock, because this Pi's clock
+                    # can step and the entire value of this record is ordering.
+                    "mono": round(time.monotonic(), 3),
+                    "epoch": epoch,
+                    "from": prev,
+                    "to": dict(values),
+                })
+        return values
+
+    def _led_changes(self, req):
+        n = req.get("n", 50)
+        try:
+            n = max(1, min(self.CHANGES_MAX, int(n)))
+        except (TypeError, ValueError):
+            n = 50
+        rec = list(LedsCapability._changes or ())
+        rec.reverse()                      # newest first
+        return {"ok": True, "changes": rec[:n], "count": len(rec),
+                "bounded_at": self.CHANGES_MAX,
+                "note": ("shows that an intermittent left a trace. Does NOT "
+                         "establish that a reading is current: the byte "
+                         "arrives only on a lock-key change, so an idle "
+                         "machine publishes nothing, indistinguishably from "
+                         "one that has fallen off the wire.")}
+
     def commands(self):
         return {"leds": self._leds, "ledwait": self._ledwait,
-                "verify_input": self._verify_input}
+                "verify_input": self._verify_input,
+                "led_changes": self._led_changes}
 
     def support(self):
         """Is an LED return channel MEANINGFUL on the installed board?
@@ -844,7 +938,8 @@ class LedsCapability(Capability):
     def snapshot(self):
         """The LED object as it appears to consumers.
 
-            {"available": true,  "why": null,          "capslock": 0, ...}
+            {"available": true,  "why": null,          "capslock": 0, ...,
+             "changed_at": 1787270112.481, "changes": 37}
             {"available": false, "why": "unsupported", "reason": "..."}
             {"available": false, "why": "error",       "reason": "..."}
             {"available": false, "why": "unknown",     "reason": "..."}
@@ -873,6 +968,11 @@ class LedsCapability(Capability):
         is announced to consumers in the same breath as it is deployed, not
         left to be discovered by reading.
 
+        `changed_at` and `changes` are present only when available, and are a
+        SUMMARY of the `led_changes` record rather than a second source --
+        both read the same bounded deque. The full history is its own command
+        because it has a different lifetime and size from a snapshot.
+
         WHEN available IS FALSE THE VALUE KEYS ARE ABSENT, NEVER ZERO. A
         plausible set of zeroes is worse than no data: a consumer that forgets
         to check `available` reads it as "all three LEDs are off" and is
@@ -883,20 +983,14 @@ class LedsCapability(Capability):
         supported, reason = self.support()
         if supported is False:
             return {"available": False, "why": "unsupported", "reason": reason}
-        try:
-            values = self.devs.read_leds()
-        except Exception as exc:
-            return {"available": False, "why": "error",
-                    "reason": errstr(exc, "could not read the LED nodes: ")}
+        # One sampler, shared with the 1 Hz poller, so both maintain the same
+        # record and there is a single place that decides what a change is.
+        values = self._sample()
         if not values:
             return {"available": False, "why": "error",
-                    "reason": "no LED nodes are mapped for our keyboard"}
+                    "reason": "could not read the LED nodes"}
 
-        # Has the far end published since the last power transition?
         epoch, powered, changed_at = TARGET.state()
-        if values != LedsCapability._seen_values:
-            LedsCapability._seen_values = dict(values)
-            LedsCapability._proven_epoch = epoch
 
         if powered is False:
             # POSITIVE determination, not a guess: a machine with no power
@@ -933,6 +1027,12 @@ class LedsCapability(Capability):
             # dropped and the number does not.
             return {"available": False, "why": "unknown", "reason": reason}
         out = {"available": True, "why": None, "reason": None}
+        # SUMMARY of the change record, not a second source of truth -- both
+        # are derived from the same deque. This is what a lamp tooltip needs
+        # ("last moved 4m ago") without fetching a history it will not show.
+        last = (LedsCapability._changes or ())
+        out["changed_at"] = last[-1]["t"] if last else None
+        out["changes"] = len(last)
         out.update(values)
         return out
 
