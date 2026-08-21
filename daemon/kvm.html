@@ -1794,24 +1794,40 @@ const FPS_MIN = 2;
 // device is a different piece of hardware with no reason to match this one --
 // the assumption this replaces would have been wrong there too, in an unknown
 // direction.
-let srcFps = 0, srcFrames = null, srcAt = 0;
+let srcFps = 0, srcFrames = null, srcAt = 0, srcFresh = 0;
 function noteSourceRate(v) {
   const now = Date.now();
   if (v && v.frames != null) {
     if (srcFrames != null && now > srcAt) {
       const r = (v.frames - srcFrames) * 1000 / (now - srcAt);
-      // Smoothed, and bounded against nonsense: a daemon restart resets the
-      // counter and would otherwise read as a large negative rate.
-      if (r > 0 && r < 200) srcFps = srcFps ? srcFps * 0.7 + r * 0.3 : r;
+      // ZERO IS A MEASUREMENT. The old guard was `r > 0`, written to reject
+      // the negative jump a daemon restart produces -- but it discarded every
+      // genuine zero too, so a counter that stopped advancing left the last
+      // good rate standing forever and this page reported it as current.
+      //
+      // Seen on a phone: "at source 40.7 fps" while the counter had not moved
+      // in ten seconds. The stall is real and daemon-side -- a pinned, full
+      // ring drops arriving frames through an early return that updates
+      // last_frame_t but not frames_total -- but presenting a RETAINED number
+      // as a live one is the same fault the LED lamps were fixed for tonight,
+      // in my own code, and found the same way: by measuring instead of
+      // reading.
+      if (r >= 0 && r < 200) {
+        srcFps = srcFps ? srcFps * 0.7 + r * 0.3 : r;
+        srcFresh = now;
+      }
     }
     srcFrames = v.frames; srcAt = now;
   }
 }
+// Say nothing rather than something old. A rate nobody has been able to
+// measure for ten seconds is not a rate.
+const srcRate = () => (Date.now() - srcFresh < 10000 && srcFps) ? srcFps : null;
 const fpsCeiling = () => {
   // The device cap is a bandwidth choice and stays: a phone does not want 30
   // fps of a 60 KB screen even when the source offers it.
   const device = smallScreen() ? 12 : 30;
-  return Math.max(FPS_MIN, Math.min(device, Math.round(srcFps || 20)));
+  return Math.max(FPS_MIN, Math.min(device, Math.round(srcRate() || 20)));
 };
 let fpsWant = 0, fpsGoodRuns = 0;
 function achievedFps() {
@@ -3964,13 +3980,16 @@ function statsRows(j) {
   kv('state', v.state || '—',
      v.state === 'locked' ? '' : 'warn');
   kv('resolution', capSize() || 'no frame yet', capSize() ? '' : 'unk');
-  kv('at source', srcFps ? srcFps.toFixed(1) + ' fps' : '—');
+  kv('at source', srcRate() ? srcRate().toFixed(1) + ' fps'
+     : v.state === 'frozen' ? 'not advancing' : '—',
+     srcRate() ? '' : 'unk');
   const got = achievedFps();
   // Against what the SOURCE is producing: 18 fps is excellent from a 20 fps
   // source and poor from a 30 fps one, so the bare number cannot be judged.
   kv('arriving here',
-     got ? got.toFixed(1) + ' fps' + (srcFps ? ' · ' + pct(got / srcFps) : '') : '—',
-     got && srcFps ? bandLow(got / srcFps, 0.6, 0.35) : '');
+     got ? got.toFixed(1) + ' fps'
+           + (srcRate() ? ' · ' + pct(got / srcRate()) : '') : '—',
+     got && srcRate() ? bandLow(got / srcRate(), 0.6, 0.35) : '');
   kv('asking for', fpsWant ? fpsWant + ' fps' : '—');
   kv('bitrate', byteWin.length > 1 ? streamMbit().toFixed(2) + ' Mbit/s' : '—');
   kv('transport', xportLabel);
