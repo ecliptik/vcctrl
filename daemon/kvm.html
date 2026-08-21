@@ -454,8 +454,21 @@
      emoji beside it and too small to read as a direction at a glance. Sized
      against the glyph cell instead, and nudged down because a triangle's
      optical centre sits above its box. */
-  .caret { flex:none; font-size:15px; line-height:1; display:inline-block;
-           transform:translateY(.5px); margin-left:-2px; }
+  /* DRAWN, NOT TYPED. U+25B4 and U+25BE are literally named SMALL up- and
+     down-pointing triangle, and they render at about 7px against a 9px cap
+     height -- so the caret was smaller than the letters beside it. Swapping
+     to the full-size U+25B2/U+25BC gains one pixel: measured 8x8 against 7x7
+     at the same size, because the glyph is at the mercy of whichever font
+     resolves. Two attempts at nudging font-size were two attempts at fixing
+     a shape with typography.
+     A border triangle is exact and identical on every platform: 11 wide by 7
+     tall, against a 9px cap height, in the button's own colour. */
+  .caret {
+    flex:none; width:0; height:0; margin-left:1px;
+    border-left:5.5px solid transparent; border-right:5.5px solid transparent;
+  }
+  .caret.dn { border-top:7px solid currentColor; }
+  .caret.up { border-bottom:7px solid currentColor; }
   /* Lit while its panel is the one showing. NOT the global .on rule, which
      paints a green border -- green on this page means a thing is working, and
      which panel you are looking at is not a health reading. A filled ground
@@ -1017,7 +1030,7 @@
     </button>
     <span class="grow"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
-            title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen</span><span class="caret">▾</span></button>
+            title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- Fit to Screen acts on the PICTURE; the three to its right open panels
          about the rig. The rule is where that changes. -->
     <span class="sep" aria-hidden="true">|</span>
@@ -1131,7 +1144,7 @@
     <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
     <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
             aria-controls="pop-keys"
-            title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys</span><span class="caret">▾</span></button>
+            title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- ALWAYS RECORDING, so this does not start anything -- which is why it
          is not called Record. The ring has been rolling since the daemon came
          up; the button opens a window onto what it is already holding. It
@@ -1140,7 +1153,7 @@
          way within an hour of shipping. -->
     <button id="bufbtn" aria-haspopup="true" aria-expanded="false"
             aria-controls="scrub"
-            title="Look back through the last half minute the daemon kept"><span class="bi">⏱️</span><span class="bl">Buffer</span><span class="caret">▾</span></button>
+            title="Look back through the last half minute the daemon kept"><span class="bi">⏱️</span><span class="bl">Buffer</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- NOT display:none. A file input that is display:none is not focusable,
          and .click() on it is ignored outright by some browsers -- which is
          exactly why the button appeared to do nothing. Visually hidden but
@@ -1155,10 +1168,10 @@
     <span class="split" id="soundwrap">
       <button id="mutebtn" class="bi" title="Turn the sound on">🔇</button>
       <button id="soundbtn" class="bl" aria-haspopup="true" aria-expanded="false"
-              title="Sound and volume">Sound <span class="caret">▾</span></button>
+              title="Sound and volume">Sound<span class="caret dn" aria-hidden="true"></span></button>
     </span>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
-            title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret">▾</span></button>
+            title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret dn" aria-hidden="true"></span></button>
   </div>
 
   <!-- A POPOVER, like Sound and Power. As a row in the flow it took ~40px of
@@ -2506,7 +2519,8 @@ function setBufOpen(on) {
   const b = $('bufbtn');
   b.setAttribute('aria-expanded', on ? 'true' : 'false');
   const lab = b.querySelector('.caret');
-  lab.textContent = on ? '\u25be' : '\u25b4';
+  lab.classList.toggle('up', !on);
+  lab.classList.toggle('dn', on);
 }
 let openPopName = null;
 
@@ -2533,7 +2547,9 @@ function setCaret(name, open) {
   const up = open
     ? $('pop-' + name).getBoundingClientRect().top < b.getBoundingClientRect().top
     : !!b.closest('#cmdbar');
-  lab.textContent = (open ? !up : up) ? '\u25b4' : '\u25be';
+  const pointUp = open ? !up : up;
+  lab.classList.toggle('up', pointUp);
+  lab.classList.toggle('dn', !pointUp);
 }
 
 function closePop() {

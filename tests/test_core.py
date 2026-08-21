@@ -1372,7 +1372,7 @@ HARNESS = r"""
 
   // The caret points where the menu WILL GO, so the strip menus and the
   // header menu must disagree about which glyph means closed. 1 = up.
-  const tipUp = n => caretLabel(n).textContent.trim() === '\u25b4' ? 1 : 0;
+  const tipUp = n => caretLabel(n).classList.contains('up') ? 1 : 0;
   // THE KEYBOARD IS LAID OUT, not reflowed. Every one of these was wrong
   // when the menu was a wrapping bag of buttons, and every one of them would
   // silently come back if the row containers were ever dropped.
@@ -1403,8 +1403,8 @@ HARNESS = r"""
   // size, and was reported undiscoverable within the hour.
   {
     const bb = document.getElementById('bufbtn');
-    const lab = () => bb.querySelector('.caret').textContent.trim();
-    const up = t => t === '\u25b4' ? 1 : 0;
+    const lab = () => bb.querySelector('.caret');
+    const up = el => el.classList.contains('up') ? 1 : 0;
     const inStrip = bb.closest('#cmdbar') ? 1 : 0;
     setBufOpen(true);
     const opened = up(lab());
@@ -1436,6 +1436,26 @@ HARNESS = r"""
     const t1 = heat({});
     const t2 = heat({throttled: '0x0'});
     emit(`heatabsent ${t1 && t1.unknown ? 1 : 0} ${t2 === null ? 1 : 0}`);
+    // THE DASHES STILL MEAN WHAT THEY MEANT. A solid lamp claims the reading
+    // reflects the TARGET, and it only does if the input link has been
+    // proven -- with the PS/2 lead unplugged the daemon still reports
+    // plausible values, all true and all about the Pi's end of the wire.
+    // lamps() was rewritten today for the three-state, so this asserts the
+    // behaviour that was already there survived the rewrite.
+    const dashed = () => capsEl.classList.contains('stale') ? 1 : 0;
+    lamps({available: true, capslock: 1}, 'locked',
+          {available: true, ok: true, age_s: 3});
+    const proven = dashed();
+    lamps({available: true, capslock: 1}, 'locked',
+          {available: true, ok: true, age_s: 1200});
+    const tooOld = dashed();
+    lamps({available: true, capslock: 1}, 'nosignal',
+          {available: true, ok: true, age_s: 3});
+    const noPicture = dashed();
+    lamps({available: true, capslock: 1}, 'locked', null);
+    const never = dashed();
+    emit(`dashes ${proven === 0 && tooOld === 1 ? 1 : 0} `
+       + `${noPicture === 1 && never === 1 ? 1 : 0}`);
     lamps(null, 'locked', null);
   }
   closePop();
@@ -1803,6 +1823,10 @@ def test_zoom_layout_in_a_browser():
     # board whose LEDs are all off.
     check("control: an unsupported channel is not drawn as a dark lamp",
           got["ledstates"][1] == 1.0, got["ledstates"])
+    check("a proven link is solid and a stale proof goes back to dashed",
+          got["dashes"][0] == 1.0, got["dashes"])
+    check("and no picture, or never proven, dashes them too",
+          got["dashes"][1] == 1.0, got["dashes"])
     check("absent throttling reports unknown, not healthy",
           got["heatabsent"][0] == 1.0, got["heatabsent"])
     check("control: a real zero still reports healthy",
