@@ -3204,7 +3204,32 @@ function drawMap() {
   // which is what I did first, left a static buffer drawing 1px bars at 40%
   // opacity -- present in the canvas, invisible on the screen, which is
   // indistinguishable from the bug being unfixed.
-  const NOISE = 0.35;
+  // THE FLOOR IS A PROPERTY OF THE CONTENT, so it cannot be a constant.
+  //
+  // 0.35 was measured on a static DOS console -- bright text on black -- and
+  // hardcoding it assumed every future screen has that content class. The
+  // benchmarking session settled the general form of this on their own
+  // thresholds: a static console plateaus at 50-80, a game backdrop at 4-24,
+  // no overlap, and a constant picked on one reports an edge in the other
+  // that is not an edge. Analog capture noise scales with signal the same
+  // way, so a bright game screen has a higher still-frame floor than a mostly
+  // black prompt, and a fixed 0.35 would read that difference as motion.
+  //
+  // So it is measured per recording: the quietest tenth of this buffer IS
+  // this content's noise floor, whatever the content is. Clamped only against
+  // nonsense -- a buffer that is motion end to end has no quiet tenth, and
+  // the clamp stops it subtracting real movement.
+  // NONZERO ONLY. A change of exactly 0 is a byte-identical frame -- the
+  // stick repeating itself, which carries no analog noise at all because it
+  // is not a fresh sample. Including those dragged the tenth percentile to 0
+  // on a real buffer, the floor clamped to its minimum, and 549 columns of
+  // sampling noise drew as motion where 140 were real. Measured, and it is
+  // the constant's failure in the opposite direction.
+  const quiet = f.map(k => k.change)
+                 .filter(v => v != null && v > 0).sort((a, b) => a - b);
+  const NOISE = quiet.length
+    ? Math.min(3, Math.max(0.05, quiet[Math.floor(quiet.length * 0.10)]))
+    : 0.35;
   const adj = v => v == null ? null : Math.max(0, v - NOISE);
   const vals = f.map(k => adj(k.change)).filter(v => v).sort((a, b) => a - b);
   const p95 = vals.length ? vals[Math.min(vals.length - 1,
