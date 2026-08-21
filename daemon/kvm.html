@@ -665,7 +665,7 @@
      command field: an emoji cell, a rule, then the label. */
   .bi { flex:none; font-size:14px; line-height:1; }
   #cmdbar button > .bi, #zoombtn > .bi, .lbtn > .bi {
-    border-right:1px solid var(--rule); padding-right:8px; margin-right:0;
+    border-right:1px solid var(--edge); padding-right:8px; margin-right:0;
   }
   #cmdbar button, #zoombtn, .lbtn {
     display:flex; align-items:center; gap:8px;
@@ -710,7 +710,7 @@
      beside it. Same minimum, same rules, stated rather than inherited. */
   .split {
     display:flex; align-items:stretch; flex:none;
-    border:1px solid var(--rule); border-radius:6px;
+    border:1px solid var(--edge); border-radius:6px;
     background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1))); overflow:hidden;
     min-height:var(--tap);
   }
@@ -738,7 +738,7 @@
      and measuring the gaps BETWEEN buttons kept saying it was fine, because
      the unevenness was inside them. */
   #cmdbar .split #mutebtn, #cmdbar .split #snapbtn {
-    border-right:1px solid var(--rule); font-size:14px;
+    border-right:1px solid var(--edge); font-size:14px;
     padding:0 8px 0 9px;
   }
   #cmdbar .split #soundbtn, #cmdbar .split #bufbtn { padding-left:8px; }
@@ -838,7 +838,7 @@
      read as one control rather than a button parked next to a box. */
   #linewrap {
     flex:1 1 auto; min-width:0; display:flex; align-items:stretch;
-    background:var(--bg); border:1px solid var(--rule); border-radius:6px;
+    background:var(--bg); border:1px solid var(--edge); border-radius:6px;
     overflow:hidden;
   }
   #linewrap:focus-within { border-color:var(--muted); }
@@ -856,7 +856,7 @@
      after it was. The same translucent black every other button uses, so it
      needs no new colour and works on all twenty-two palettes. */
   #cmdbar #keysbtn {
-    flex:none; border:0; border-right:1px solid var(--rule); border-radius:0;
+    flex:none; border:0; border-right:1px solid var(--edge); border-radius:0;
     background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
     color:var(--muted); padding:0 9px; min-height:0; font-size:15px;
   }
@@ -864,7 +864,7 @@
   #cmdbar #keysbtn[aria-expanded="true"] { background:var(--rule); }
   #cmdbar #filebtn, #cmdbar #filestop {
     flex:none; display:flex; align-items:center; cursor:pointer;
-    border:0; border-right:1px solid var(--rule); border-radius:0;
+    border:0; border-right:1px solid var(--edge); border-radius:0;
     background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
     color:var(--muted); padding:0 10px;
     min-height:0;
@@ -878,7 +878,7 @@
      followed a change to --t-data. It inherits the family declaration now and
      overrides nothing but the chrome. */
   #cmdbar #sendline {
-    flex:none; border:0; border-left:1px solid var(--rule); border-radius:0;
+    flex:none; border:0; border-left:1px solid var(--edge); border-radius:0;
     background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
     color:var(--green); padding:0 11px;
     min-height:0;
@@ -1008,7 +1008,7 @@
        what is on screen, they read as a row of blocks. --dark is already
        published per theme, so the alpha follows it: .22 dark, .06 light. */
     background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
-    border:1px solid var(--rule); border-radius:6px;
+    border:1px solid var(--edge); border-radius:6px;
     padding:0 11px; min-height:var(--tap); cursor:pointer;
     touch-action:manipulation;
   }
@@ -1423,7 +1423,12 @@
             title="What the daemon has been doing"><span class="bi">📋</span><span class="bl">Activity</span></button>
     <button id="statbtn" class="lbtn pbtn" aria-expanded="false" aria-controls="body"
             title="Measured state of the rig"><span class="bi">📊</span><span class="bl">Status</span></button>
-    <button id="gbtn" class="lbtn" aria-label="settings"
+    <!-- `pbtn` as well as `lbtn`: the lit-when-open styling lives on
+         `.pbtn[aria-expanded="true"]`, which Activity and Status carry and
+         this did not. It was special-cased in the mobile block instead, so
+         the gear lit on a phone and stayed dark on a desktop -- the same
+         control answering the same question two different ways. -->
+    <button id="gbtn" class="lbtn pbtn" aria-label="settings"
             title="Themes, video, input and the rest"><span class="bi">⚙️</span><span class="bl">Settings</span></button>
     <!-- The one bare glyph left, and the only separator. It is not a panel --
          it changes the page under you rather than opening something over it --
@@ -3311,7 +3316,15 @@ addEventListener('resize', measureBars);
 measureBars();
 
 function showSettings(on) {
-  if (on) { measureBars(); closePop(); }
+  // ONE THING OPEN AT A TIME. Activity and Status already replace each other,
+  // and Settings closed the sound and power popovers -- but not the side
+  // panel, so it opened on top of it. Reported as exactly that: the same
+  // gesture behaving differently depending on which menu you started from.
+  //
+  // Closed WITHOUT remembering: the panel is a stored preference, and losing
+  // your Activity column permanently because you once opened Settings is a
+  // worse surprise than the one being fixed.
+  if (on) { measureBars(); closePop(); showPanel('', false); }
   $('settings').hidden = !on;
   $('setback').hidden = !on;
   $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
@@ -5250,7 +5263,11 @@ $('stage').addEventListener('pointerdown', e => {
 // like the phone's tabs: each opens its own, and pressing the lit one puts
 // the column away.
 let sidePanel = 'log';
-function showPanel(which) {
+function showPanel(which, remember) {
+  // Opening a panel closes Settings, for the same reason Settings closes the
+  // panel. The guard matters: showSettings(false) does not call back here,
+  // and showSettings(true) only ever passes '' -- so there is no loop.
+  if (which && !$('settings').hidden) showSettings(false);
   sidePanel = which;                       // 'log' | 'stats' | ''
   const body = document.body;
   body.classList.toggle('nopanel', !which);
@@ -5262,7 +5279,7 @@ function showPanel(which) {
   // readout onto the previous minute's numbers, or onto nothing at all on a
   // fresh load, is the failure this page keeps having to design against.
   if (which === 'stats' && lastState) $('stats').innerHTML = statsRows(lastState);
-  localStorage.setItem('vcctrl.panel', which);
+  if (remember !== false) localStorage.setItem('vcctrl.panel', which);
   applyZoom();
 }
 (function sidepanel() {

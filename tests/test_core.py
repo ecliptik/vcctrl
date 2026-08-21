@@ -613,6 +613,29 @@ def test_theme_contrast():
     check("worst indicator ratio %.2f:1 (floor 3.0)" % worst_accent,
           worst_accent >= 3.0)
 
+    # A CONTROL BOUNDARY IS NOT A DIVIDER. WCAG 1.4.11 asks 3:1 of the edge
+    # of an interactive component and nothing of a decorative line, and one
+    # token was doing both jobs at 1.1-1.7:1. Reported as "buttons don't have
+    # borders like they do in Dark themes" -- and the token was equally weak
+    # in both. What differed was the button's ground, a black wash that barely
+    # moves a dark fill and drags a light one down onto the border colour.
+    weak = []
+    for name in T.THEMES:
+        roles, _n = T.fitted(name)
+        for surface in ("bg", "panel"):
+            c = T.contrast(roles["edge"], roles[surface])
+            if c < 3.0:
+                weak.append("%s: edge on %s is %.2f:1" % (name, surface, c))
+    check("every theme's control edge clears 3:1 on both surfaces",
+          not weak, "; ".join(weak[:3]))
+
+    # And the page must actually USE it: a token nothing references is a
+    # value that passes its own test and changes nothing on screen.
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    check("and the page draws its controls with it",
+          page.count("var(--edge)") >= 5, page.count("var(--edge)"))
+
     # THE ORDERING, which the floors do not give you for free.
     #
     # text > muted > dim is what those names promise the page: three levels of

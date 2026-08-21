@@ -170,7 +170,7 @@ THEMES = {
    cyan="#000000", blue="#4a4a44", magenta="#1e1e1a")),
 }
 
-ROLES = ("bg", "panel", "rule", "dim", "muted", "text", "bright",
+ROLES = ("bg", "panel", "rule", "edge", "dim", "muted", "text", "bright",
          "red", "orange", "yellow", "green", "cyan", "blue", "magenta")
 
 
@@ -230,6 +230,23 @@ def contrast(a, b):
 #   (tokyo-night-light yellow/orange). Nothing collapses.
 FLOOR = {"text": 4.5, "muted": 4.5, "dim": 4.5}
 ACCENT_FLOOR = 4.5
+# The boundary of an INTERACTIVE control, as opposed to a divider between two
+# bits of text. WCAG 1.4.11 asks 3:1 of a UI component boundary and nothing of
+# a decorative line, and `rule` was doing both jobs at 1.1-1.7:1.
+#
+# Reported as "buttons don't have borders like they do in Dark themes", and
+# the interesting part is that the token was equally weak in BOTH -- median
+# 1.25 light, 1.30 dark. What differs is the button's own ground, which is a
+# BLACK wash on both polarities: on a dark theme it barely moves the fill, so
+# a mid-tone border still shows against it; on a light theme it drags the fill
+# down toward the border colour and cancels it. Measured on a header button:
+#
+#     border against its own fill    light 1.03-1.10    dark 1.31-1.46
+#
+# So the light themes were not missing a rule the dark ones had. Both were
+# drawing a border nearly nobody could see, and only one of them had a ground
+# that happened to hide it less.
+EDGE_FLOOR = 3.0
 ACCENTS = ("red", "orange", "yellow", "green", "cyan", "blue", "magenta")
 
 
@@ -277,6 +294,11 @@ def fitted(name):
         if changed:
             notes.append("%s %s->%s" % (role, roles[role], new))
             roles[role] = new
+    # Derived, not authored: every theme ships a `rule` and none ships an
+    # `edge`, and a hand-picked edge per theme is 22 more values to keep in
+    # step with a palette that already defines the relationship.
+    roles["edge"], _e = fit(roles["rule"], surfaces, EDGE_FLOOR, toward)
+
     for role in ACCENTS:
         new, changed = fit(roles[role], surfaces, ACCENT_FLOOR, toward)
         if changed:
