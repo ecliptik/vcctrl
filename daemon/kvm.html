@@ -1766,7 +1766,11 @@ const smallScreen = () => Math.min(screen.width, screen.height) < 500;
 // WINDOW, because a narrow desktop window has the same layout problem as a
 // phone and a phone held sideways does not.
 const narrowUI = () => matchMedia('(max-width:640px)').matches;
-const FPS_MIN = 4;
+// A KVM at two frames a second is still a KVM: you can read a screen, watch
+// a boot, see a prompt appear. Four was chosen when the only bad link in
+// evidence was a busy LAN; on a phone over cellular the honest floor is
+// lower, and asking for four when one arrives is what produces the stutter.
+const FPS_MIN = 2;
 // THE CEILING IS MEASURED, NOT WRITTEN DOWN. It used to be 20, "because the
 // stick only produces ~24" -- true of the VGA stick on the Pi 3 and wrong
 // here: the same stick on the Pi 5 delivers 29.99 fps, measured over six
@@ -1812,25 +1816,46 @@ function streamMbit() {
   return bytes * 8 / span / 1000;
 }
 function requestRate(f) {
-  f = Math.max(FPS_MIN, Math.min(fpsCeiling(), Math.round(f)));
+  // The floor is a floor for the ASK, not for the halving above it: a link
+  // carrying one frame a second must be able to be asked for one.
+  f = Math.max(1, Math.min(fpsCeiling(), Math.round(f)));
   if (f === fpsWant || !ws || ws.readyState !== 1) return;
   fpsWant = f;
   try { ws.send(JSON.stringify({t: 'rate', fps: f})); } catch (e) {}
 }
 function rateStep(got) {
   if (got < fpsWant * 0.75) {
+    // Halve rather than track when almost nothing is arriving. `got * 0.9` of
+    // a number near zero clamps straight to the floor, which on a link that
+    // cannot carry the floor means asking for the same wrong number forever.
     // Going missing. Drop to just under what is arriving, not to a fixed
     // floor: the point is to stop asking for what cannot be delivered.
     fpsGoodRuns = 0;
-    requestRate(got * 0.9);
+    requestRate(got > FPS_MIN ? got * 0.9 : Math.max(1, fpsWant / 2));
   } else if (got > fpsWant * 0.92 && ++fpsGoodRuns >= 3) {
     fpsGoodRuns = 0;
     requestRate(fpsWant + 2);
   }
 }
 setInterval(() => {
-  if (xport !== 'ws' || !wsAlive || fpsWin.length < 4) return;
-  rateStep(achievedFps());
+  if (xport !== 'ws' || !wsAlive) return;
+  // FEWER THAN FOUR FRAMES IS NOT "NO DATA", IT IS THE ANSWER.
+  //
+  // This used to return early unless fpsWin held four samples -- and fpsWin
+  // is a two-second window, so four samples means two frames a second. Below
+  // that the controller went silent and stayed pinned at whatever it had
+  // asked for at connect. It stopped adapting exactly in the case it exists
+  // for. Measured on a phone: asked for 8, receiving 1.1, and the daemon
+  // dropping 33,126 frames to deliver 838 -- 3% -- with the request never
+  // once revised downward.
+  //
+  // Same shape as the preflight that printed ok about an empty dict: a guard
+  // written to avoid acting on thin data, which made the mechanism inert
+  // precisely where the data being thin WAS the signal.
+  const got = achievedFps();
+  const starved = Date.now() - lastFrameAt > 1500;
+  if (fpsWin.length < 2 && !starved) return;   // genuinely nothing yet
+  rateStep(starved ? 0 : got);
 }, 3000);
 
 // The rate the mjpeg stream is asked for, named once so the tooltip that
