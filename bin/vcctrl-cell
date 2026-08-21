@@ -379,15 +379,34 @@ def main(argv):
                 still = []
                 for k in missing:
                     cmd('SET | FIND "%s"' % k)
+                    # SETTLE. cmd() sleeps 0.5 s and wait_for_prompt returns
+                    # almost immediately, because at_prompt only proves the
+                    # BIOS ISR is alive. Grabbing straight after issuing a
+                    # second command in a loop reads the FIRST command's
+                    # screen -- which is exactly what happened: the re-check
+                    # for FASTPATH_OVERSIZED OCR'd the previous variable's
+                    # output and reported a false absence on a variable that
+                    # was correctly set.
+                    time.sleep(2.0)
                     _sh, t2 = read_env_text_raw()
                     if t2 is None:
                         still.append(k)
                         continue
+                    # MATCH ON "NAME=", NOT ON THE NAME.
+                    #
+                    # The echoed command line is  SET | FIND "SDL_HINT_FOO"
+                    # and it CONTAINS the variable name. Matching the name
+                    # alone would be satisfied by the echo of the very
+                    # question being asked, and would pass for a variable
+                    # that is genuinely absent -- a check answering itself.
+                    # Only SET's own output carries NAME=, so that is what is
+                    # required.
+                    flat = t2.upper().replace(" ", "").replace("_", "")
                     stem2 = k[:max(12, len(k) - 4)].replace("_", "")
-                    if stem2 not in t2.upper().replace(" ", "").replace("_", ""):
-                        still.append(k)
-                    else:
+                    if (stem2 + "=") in flat or (k.replace("_", "") + "=") in flat:
                         print("     %-32s found on re-check (had scrolled)" % k)
+                    else:
+                        still.append(k)
                 missing = still
 
             for k in sorted(wanted):
