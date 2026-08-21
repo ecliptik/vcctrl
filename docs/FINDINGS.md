@@ -1741,16 +1741,49 @@ moment for a retained reading is exactly the moment it is most likely to be
 consulted** — because that is when something has just changed and the reader
 wants to know whether it has finished changing.
 
-### Not fixed
+### Fixed  [2026-08-20, same evening]
 
-Fixing it properly needs a timestamped record of when a value CHANGED, which
-is the instrument the webkvm session proposed for a different reason: an
-intermittent LED divergence that the boot-path edges pass straight through.
-The same record answers both, and it is theirs to build.
+`TargetEpoch` — a module-level fact, not a call across capabilities.
+`PowerCapability` reports every observed power transition to it;
+`LedsCapability` reads it. Neither holds a reference to the other, the same
+shape as `installed_board_id()`.
 
-`age_s` on `leds` would be a partial fix and is not one this can do alone —
-nothing currently tracks when the LED byte last arrived, and `LedsCapability`
-may not reach across to `PowerCapability` to ask whether the target is even
-powered (see InputCapability's rule 1). **Recorded rather than patched**,
-because a half-fix here would produce a freshness field that is itself
-retained, which is the same bug wearing the remedy's clothes.
+Two guards, and the second is the one a power check alone would miss:
+
+**Powered off → `why: "unpowered"`, values OMITTED.** A positive
+determination, not a guess: a machine with no power publishes nothing, so
+whatever the nodes hold predates the cut.
+
+**Powered on, but nothing published since the transition → `why:
+"unproven"`.** This is the sharp case. Just after power returns, the nodes
+still hold the *previous* boot's values and the machine is on, so a power
+check alone reports them as live. It is the moment `wait_cold_boot()` exists
+for — readiness is the last thing a healthy boot sets, so a level check for
+"ready" reads TRUE 2.5 s after power-on on a machine that has not begun to
+POST. Evidence of currency is that the value has CHANGED since the
+transition; the capability records which epoch each change was seen in.
+
+Deliberately **not** "refuse whenever power is unknown". An unreachable plug
+does not mean an unpowered target, and refusing there would make `at_prompt()`
+return could-not-look on a perfectly healthy machine every time the Kasa was
+unreachable — a cure that stalls sweeps. Only the positive determinations act.
+
+Verified live against the powered-off Gateway, the exact reading that was
+wrong an hour earlier:
+
+    leds            available false, why "unpowered", no value keys
+    leds_available  (False, 'unpowered', ...)
+    stable_led      None          -- could not look
+    at_prompt       None          -- NOT False, which reads as "still running"
+    wait_led        None in 0.05s -- rather than burning a 30 s timeout
+    preflight       fault, decided_by power
+
+`input_verified` is voided the same way: a proof of the input path is a
+statement about a moment, and a power transition since means it describes a
+machine that no longer exists in that state.
+
+**Still owed to the webkvm session:** a full change record with a monotonic
+clock, which answers this *and* the intermittent LED divergence that the
+boot-path edges pass straight through. What is here proves currency only
+across power transitions. That is the case that was demonstrated, and it is
+not the whole of the problem.

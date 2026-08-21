@@ -2821,3 +2821,106 @@ def test_preflight_is_a_gate_not_a_list():
              verdict([("a", c.FAULT)])[0]}
     check("ok / unknown / fault are three distinct exit codes",
           codes == {0, 1, 2}, codes)
+
+
+def test_a_reading_must_belong_to_this_epoch():
+    """A retained reading must not render as a live one. FINDINGS sec. 33.
+
+    Demonstrated on the rig: minutes after the Gateway was powered off, the
+    daemon reported "the target is powered off" and "the target acknowledged
+    a keystroke" in the same breath. Both fields worked exactly as written.
+    Only one was about now.
+
+    Reading again does not help -- the retained value is what you get, and a
+    stale value and a current one are the same value. The fix is evidence the
+    reading was PRODUCED in the current epoch.
+    """
+    class Devs(object):
+        def __init__(self, v):
+            self.v = dict(v)
+
+        def read_leds(self):
+            return dict(self.v)
+
+    live = {"capslock": 1, "numlock": 1, "scrolllock": 1}
+
+    def fresh(devs):
+        c = vcctrld.LedsCapability(devs)
+        c.support = lambda: (True, None)
+        vcctrld.LedsCapability._seen_values = None
+        vcctrld.LedsCapability._proven_epoch = None
+        return c
+
+    orig = vcctrld.TARGET
+    try:
+        vcctrld.TARGET = vcctrld.TargetEpoch()
+        d = Devs(live)
+        c = fresh(d)
+
+        # Powered and publishing: a normal reading.
+        vcctrld.TARGET.observe(True)
+        s = c.snapshot()
+        check("powered target reports values", s["available"] is True, s)
+        check("and the values are flat", s.get("capslock") == 1, s)
+
+        # THE DEMONSTRATED BUG: power cut, nodes unchanged, reading retained.
+        vcctrld.TARGET.observe(False)
+        s = c.snapshot()
+        check("an unpowered target does NOT report available",
+              s["available"] is False, s)
+        check("why is 'unpowered', distinct from every other reason",
+              s["why"] == "unpowered", s.get("why"))
+        check("and the retained VALUES ARE OMITTED, not published",
+              not any(k in s for k in live), s)
+
+        # THE SHARPER CASE a power-off check alone misses: power returns, the
+        # nodes still hold the previous boot's values, the machine is ON.
+        vcctrld.TARGET.observe(True)
+        s = c.snapshot()
+        check("just after power returns, an unchanged reading is UNPROVEN",
+              s["available"] is False and s["why"] == "unproven", s)
+        check("and those values are omitted too",
+              not any(k in s for k in live), s)
+
+        # Once the target publishes something different, it is proven again.
+        d.v = {"capslock": 0, "numlock": 1, "scrolllock": 1}
+        s = c.snapshot()
+        check("a change in this epoch proves the channel is live again",
+              s["available"] is True, s)
+        check("and the new values are reported", s.get("capslock") == 0, s)
+
+        # The four unavailable reasons must stay distinguishable.
+        whys = set()
+        vcctrld.TARGET = vcctrld.TargetEpoch(); vcctrld.TARGET.observe(True)
+        c2 = fresh(Devs(live)); c2.support = lambda: (False, "adb")
+        whys.add(c2.snapshot()["why"])
+        c3 = fresh(Devs(live)); c3.support = lambda: (True, None)
+        c3.devs = type("D", (), {"read_leds": lambda self: (_ for _ in ()).throw(OSError("x"))})()
+        whys.add(c3.snapshot()["why"])
+        vcctrld.TARGET.observe(False)
+        c4 = fresh(Devs(live)); c4.support = lambda: (True, None)
+        whys.add(c4.snapshot()["why"])
+        check("unsupported / error / unpowered stay distinct",
+              whys == {"unsupported", "error", "unpowered"}, whys)
+    finally:
+        vcctrld.TARGET = orig
+        vcctrld.LedsCapability._seen_values = None
+        vcctrld.LedsCapability._proven_epoch = None
+
+
+def test_first_power_reading_is_not_a_transition():
+    """The daemon's first sight of the plug must not void everything.
+
+    If the initial observation counted as a transition, every verification
+    made before the first power heartbeat would be marked as belonging to a
+    previous epoch -- so a freshly started daemon would declare its own
+    startup checks void.
+    """
+    t = vcctrld.TargetEpoch()
+    check("first observation is not a transition", t.observe(True) is False)
+    check("and does not advance the epoch", t.state()[0] == 0, t.state())
+    check("a real change IS a transition", t.observe(False) is True)
+    check("and advances the epoch", t.state()[0] == 1, t.state())
+    check("an unchanged reading is not a transition",
+          t.observe(False) is False)
+    check("and does not advance it", t.state()[0] == 1, t.state())

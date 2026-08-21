@@ -478,6 +478,28 @@ class TLSServer(Server):
 
 # --------------------------------------------------------------- capability
 
+def _verification_is_void(verified_at):
+    """Has the target been power-cycled since this verification?
+
+    Imported lazily from the daemon module rather than held as a reference,
+    because vcweb does not import vcctrld at module scope and adding that
+    coupling for one field is not worth it. Returns False on any doubt: a
+    verification wrongly voided is a nuisance, but wrongly KEPT is the bug
+    this exists to fix -- so doubt resolves toward keeping only when we
+    genuinely cannot tell, and the caller still sees `age_s`.
+    """
+    try:
+        import sys as _s
+        mod = _s.modules.get("vcctrld") or _s.modules.get("__main__")
+        target = getattr(mod, "TARGET", None)
+        if target is None:
+            return False
+        _epoch, _powered, changed_at = target.state()
+    except Exception:
+        return False
+    return bool(changed_at and verified_at and verified_at < changed_at)
+
+
 class WebCapability(object):
     """Registered by vcctrld. Talks to the other capabilities via the registry.
 
@@ -614,6 +636,16 @@ class WebCapability(object):
         elif leds_cap.verified_at is None:
             verified = {"available": False, "why": "unknown",
                         "reason": "the input path has not been verified yet"}
+        elif _verification_is_void(leds_cap.verified_at):
+            # A proof of the input path is a statement about a moment. The
+            # target has been through a power transition since this one, so
+            # it proves something about a machine that no longer exists in
+            # that state -- and it must not keep rendering as a live green
+            # tick. FINDINGS sec. 33.
+            verified = {"available": False, "why": "unproven",
+                        "reason": ("the target's power changed after this was "
+                                   "proven, so it is about the previous "
+                                   "epoch -- run verify-input again")}
         else:
             verified = {"available": True, "why": None, "reason": None,
                         "ok": leds_cap.verified_ok,

@@ -710,6 +710,58 @@ class InputCapability(Capability):
         return {"ok": True}
 
 
+class TargetEpoch(object):
+    """When the TARGET last changed power state, so a reading can be shown to
+    belong to the present rather than merely to have been read recently.
+
+    THE PROBLEM (FINDINGS sec. 33). A status surface retains the last value
+    published to it, and a machine that is off publishes nothing -- so it goes
+    on reporting what was true before, and it does not read as stale, because
+    a stale value and a current one ARE the same value. Minutes after the
+    Gateway was powered off the daemon reported "the target is powered off"
+    and "the target acknowledged a keystroke" in the same breath. Both fields
+    were working exactly as written. Only one was about now.
+
+    Reading it again does not help: the retained value is what you get. What
+    is needed is evidence the reading was PRODUCED in the current epoch, and
+    the cheapest such evidence is that the value has changed since the last
+    power transition.
+
+    A module-level fact rather than a call across capabilities: PowerCapability
+    reports transitions here, LedsCapability reads them, and neither holds a
+    reference to the other. Same shape as installed_board_id().
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.epoch = 0            # increments on every OBSERVED transition
+        self.powered = None       # last observed: True / False / None
+        self.changed_at = None    # wall clock of that transition
+
+    def observe(self, on):
+        """Record a power reading. Returns True if this was a transition."""
+        with self.lock:
+            if on == self.powered:
+                return False
+            first = self.powered is None
+            self.powered = on
+            if first:
+                # The first reading is not a transition -- there is no prior
+                # state for it to have moved from, and counting it would void
+                # every verification made before the daemon's first heartbeat.
+                return False
+            self.epoch += 1
+            self.changed_at = time.time()
+            return True
+
+    def state(self):
+        with self.lock:
+            return self.epoch, self.powered, self.changed_at
+
+
+TARGET = TargetEpoch()
+
+
 # Boards that have a PS/2 LED return channel. PBID 1 is the IBM PC board; 2
 # and 3 are ADB, which has no equivalent -- there is no protocol message in
 # which a Macintosh reports its lock-key state back to a keyboard.
@@ -755,6 +807,13 @@ class LedsCapability(Capability):
     # When was the input path last PROVEN, rather than assumed?
     verified_at = None
     verified_ok = None
+
+    # Evidence that the target has published on this channel since the last
+    # power transition. `_seen_values` is the last sample; when it changes we
+    # know something on the far end produced it, and we record which epoch
+    # that happened in. See TargetEpoch.
+    _seen_values = None
+    _proven_epoch = None
 
     def commands(self):
         return {"leds": self._leds, "ledwait": self._ledwait,
@@ -815,6 +874,41 @@ class LedsCapability(Capability):
         if not values:
             return {"available": False, "why": "error",
                     "reason": "no LED nodes are mapped for our keyboard"}
+
+        # Has the far end published since the last power transition?
+        epoch, powered, changed_at = TARGET.state()
+        if values != LedsCapability._seen_values:
+            LedsCapability._seen_values = dict(values)
+            LedsCapability._proven_epoch = epoch
+
+        if powered is False:
+            # POSITIVE determination, not a guess: a machine with no power
+            # publishes nothing, so whatever these nodes hold was produced
+            # before the plug was cut. Values OMITTED, per the same rule as
+            # every other unavailable state -- a plausible set of retained
+            # numbers is worse than none, because it is indistinguishable
+            # from a live reading.
+            return {"available": False, "why": "unpowered",
+                    "reason": ("the target has no power, so these nodes hold "
+                               "what it published before the cut -- a real "
+                               "reading, and not about now")}
+
+        if (LedsCapability._proven_epoch is not None
+                and LedsCapability._proven_epoch != epoch):
+            # The sharpest case, and the one a power-off check alone misses:
+            # just after power returns, the nodes still hold the PREVIOUS
+            # boot's values and the machine is on. This is the moment
+            # wait_cold_boot() exists for -- readiness is the last thing a
+            # healthy boot sets, so a level check for "ready" reads TRUE
+            # 2.5 s after power-on on a machine that has not begun to POST.
+            return {"available": False, "why": "unproven",
+                    "reason": ("the target's power changed at %s and it has "
+                               "not published on this channel since, so these "
+                               "values belong to the previous epoch"
+                               % (time.strftime("%H:%M:%S",
+                                                time.localtime(changed_at))
+                                  if changed_at else "an unknown time"))}
+
         if supported is None:
             # Readable, but we cannot say the reading MEANS anything, because
             # we do not know which board is in. Values are withheld rather
@@ -981,6 +1075,9 @@ class PowerCapability(Capability):
 
     def _remember(self, host, st):
         self._seen, self._seen_t, self._seen_host = st, time.time(), host
+        # Tell the epoch, so readings taken before a power transition can be
+        # told from readings taken after one. See TargetEpoch.
+        TARGET.observe(st.get("on"))
 
     def snapshot(self):
         """Plug identity and last known relay state, for /state.json.
