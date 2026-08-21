@@ -53,7 +53,10 @@
      One line. Never wraps: a status bar that reflows is one you have to read
      rather than glance at. */
   header {
-    flex:none; display:flex; align-items:center; gap:11px;
+    /* The same 7px the control strip uses between its buttons. The status
+       half keeps its own wider gap: those are words to be read apart, not
+       controls to be grouped. */
+    flex:none; display:flex; align-items:center; gap:7px;
     padding:0 11px; padding-top:env(safe-area-inset-top,0px);
     height:calc(46px + env(safe-area-inset-top,0px));
     background:var(--panel); border-bottom:1px solid var(--rule);
@@ -67,8 +70,15 @@
   }
   #hdrstatus::-webkit-scrollbar { display:none; }
   header > button, header > .sep { flex:none; }
+  /* And the rule between them is drawn like the strip's: proportional to the
+     row it divides rather than to the smallest text in it. */
+  header > .sep { font-size:15px; opacity:.6; padding:0 2px; }
+  /* --t-data, not --t-micro. The rail's left half was set a pixel and a half
+     smaller than every control beside it, which made the one row you are
+     meant to READ the hardest thing on the page to read. Micro is for units
+     and group labels inside panels, not for the status line itself. */
   h1 {
-    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+    font:600 var(--t-data)/1 var(--mono); letter-spacing:.12em;
     text-transform:uppercase; color:var(--dim); margin:0; flex:none;
   }
   .grow { flex:1 1 auto; min-width:4px; }
@@ -205,6 +215,13 @@
        picture already says in full sentences, and on a phone the width it
        costs is width the controls need. */
     body h1 + .sep, body #state, body #state + .sep { display:none; }
+    /* NO BOX ON THE ONE BARE GLYPH. Zoom and Settings keep theirs -- they
+       open things, and the box is the affordance saying so. Light/dark
+       changes the page under you rather than opening anything over it, which
+       is why it already sits behind a separator, and an outline drawn tight
+       around a single emoji reads as an artefact rather than a control. */
+    body #dbtn { border-color:transparent; background:transparent; }
+    body #dbtn:active { background:var(--rule); }
     body #gbtn .bl, body #zoombtn #zoomlabel { display:none; }
     body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
     body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
@@ -330,7 +347,7 @@
   .lamp.na > span { opacity:.34; border-bottom-color:currentColor; }
   .lamp i { display:none; }
   .lamp span {
-    font:var(--t-micro)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
+    font:var(--t-data)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
     border-bottom:1px solid transparent; padding-bottom:2px;
   }
   .lamp.on span {
@@ -450,13 +467,33 @@
   #markout::after { bottom:0; clip-path:polygon(100% 100%, 100% 0, 0 100%); }
   /* The frame under the pointer, while dragging. A timeline you can only
      read by letting go is one you scrub twice. */
+  /* THE PICTURE AND THE MOMENT, together. Showing the frame without saying
+     when it is leaves you scrubbing twice: once to find the thing and once
+     to find out how long before the end it happened, which is the actual
+     question. The readout below the track only updates on a real seek, so
+     hovering had the image and no time at all. */
   #scrubtip {
-    position:absolute; bottom:calc(100% + 7px); width:196px; height:147px;
-    border:1px solid var(--muted); border-radius:5px; background:#000;
+    position:absolute; bottom:calc(100% + 7px); width:198px;
+    border:1px solid var(--muted); border-radius:5px; background:var(--panel);
     box-shadow:0 8px 22px rgba(0,0,0,.5); pointer-events:none;
-    image-rendering:pixelated; transform:translateX(-50%);
+    transform:translateX(-50%); overflow:hidden;
   }
   #scrubtip[hidden] { display:none; }
+  /* TWO IDS. The tip lives inside #stage, so `#stage img` -- which sizes the
+     PICTURE at 640x480 -- outranks a bare #scrubtipimg: one id plus an
+     element beats one id alone. The preview was rendering full frame size
+     and making the tooltip 505px tall. Same shape as the mobile strip
+     showing through a later same-specificity rule; specificity here is not
+     a detail, it is the whole mechanism. */
+  #stage #scrubtipimg { display:block; width:100%; height:147px;
+                        background:#000; image-rendering:pixelated; }
+  #scrubtipt { display:block; padding:3px 6px; text-align:center;
+               font:var(--t-micro)/1.4 var(--mono); color:var(--text);
+               border-top:1px solid var(--rule); }
+  @media (max-width:640px) {
+    #scrubtip { width:142px; }
+    #stage #scrubtipimg { height:106px; }
+  }
   /* A grid, not a flex row: the middle group has to be centred on the TRACK
      rather than on whatever is left after the other two, or it drifts every
      time a label changes width. */
@@ -1168,7 +1205,10 @@
         <div class="markpin" id="markin" hidden></div>
         <div class="markpin" id="markout" hidden></div>
         <div id="scrubhead"></div>
-        <img id="scrubtip" alt="" hidden>
+        <div id="scrubtip" hidden>
+          <img id="scrubtipimg" alt="">
+          <span id="scrubtipt">—</span>
+        </div>
       </div>
       <!-- THREE GROUPS, BY WHAT THEY DO TO. The marks change the SELECTION,
            the transport changes WHERE YOU ARE, and the right-hand three
@@ -1179,6 +1219,8 @@
         <div class="sg" id="sg-mark">
           <button id="scrubin" data-short="In"
                   title="Start the selection here">Mark in</button>
+          <button id="scrubsave" data-short="Save"
+                  title="Save the selected range as a video">Save range</button>
           <button id="scrubout" data-short="Out"
                   title="End the selection here">Mark out</button>
         </div>
@@ -1192,8 +1234,6 @@
           <button id="scrubnext" title="Forward one frame (→)">▶|</button>
         </div>
         <div class="sg" id="sg-out">
-          <button id="scrubsave" data-short="Save"
-                  title="Save the selected range as a video">Save range</button>
           <button id="scrubsnap" data-short="📷"
                   title="Save the frame you are looking at as a JPEG">Capture frame</button>
           <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
@@ -1371,11 +1411,18 @@
       <h2 style="margin-top:14px">Video</h2>
       <div class="row" style="margin-bottom:4px">
         <span style="flex:1 1 auto">Scrub buffer</span>
+        <!-- THE COST IS PART OF THE CHOICE. This is asked for in seconds and
+             paid for in Pi memory at about 1.6 MB a second, so ten minutes is
+             most of a gigabyte on a four-gigabyte box with no swap. The daemon
+             clamps against free memory and says when it has, but a menu that
+             lets you pick a number without showing what it spends is a menu
+             that has to be regretted before it teaches you anything. -->
         <select id="bufsel" title="How much recent video the daemon keeps">
-          <option value="30">30 seconds</option>
-          <option value="60">1 minute</option>
-          <option value="120">2 minutes</option>
-          <option value="300">5 minutes</option>
+          <option value="30">30 seconds · ~48 MB</option>
+          <option value="60">1 minute · ~96 MB</option>
+          <option value="120">2 minutes · ~190 MB</option>
+          <option value="300">5 minutes · ~480 MB</option>
+          <option value="600">10 minutes · ~960 MB</option>
         </select>
       </div>
       <div class="hint" id="bufinfo" style="margin-left:0">—</div>
@@ -3094,11 +3141,22 @@ function markRange() {
 let tipSeq = null;
 function showTip(k, cx) {
   const tip = $('scrubtip'), tr = $('scrubtrack');
-  const half = tip.offsetWidth / 2 || 98;
+  const half = tip.offsetWidth / 2 || 99;
   tip.style.left = Math.max(half + 2,
                             Math.min(tr.clientWidth - half - 2, cx)) + 'px';
   tip.hidden = false;
-  if (k.seq !== tipSeq) { tipSeq = k.seq; tip.src = '/frame.jpg?seq=' + k.seq; }
+  // Time BEFORE THE END, the same reading the bar below uses, plus the gap
+  // that got it here -- a long gap is the buffer having been thinned, and
+  // seeing it under the thumbnail is what tells you a jump is the recording
+  // rather than the machine.
+  const f = tl.frames;
+  $('scrubtipt').textContent =
+    '−' + (f[f.length - 1].t - k.t).toFixed(2) + 's'
+    + (k.gap_ms != null ? '  +' + k.gap_ms.toFixed(0) + 'ms' : '');
+  if (k.seq !== tipSeq) {
+    tipSeq = k.seq;
+    $('scrubtipimg').src = '/frame.jpg?seq=' + k.seq;
+  }
 }
 function hideTip() { $('scrubtip').hidden = true; tipSeq = null; }
 
