@@ -842,19 +842,36 @@ class LedsCapability(Capability):
                        "report lock-key state back to the keyboard)" % bid)
 
     def snapshot(self):
-        """The LED object as it appears to consumers. Three states, named.
+        """The LED object as it appears to consumers.
 
             {"available": true,  "why": null,          "capslock": 0, ...}
             {"available": false, "why": "unsupported", "reason": "..."}
             {"available": false, "why": "error",       "reason": "..."}
             {"available": false, "why": "unknown",     "reason": "..."}
+            {"available": false, "why": "unpowered",   "reason": "..."}
+            {"available": false, "why": "unproven",    "reason": "..."}
 
-        `why` is a CLOSED SET and not two falsy values wearing one flag.
-        `unsupported` is a Macintosh, which is working hardware. `error` is a
-        Gateway whose PS/2 lead is dead, which is a fault. Collapsing them
-        makes those two render identically, which is the entire reason this
-        change exists. `unknown` is "not checked yet" and must not fall into
-        either neighbour.
+        `why` names a distinct reason and is not several falsy values wearing
+        one flag. `unsupported` is a Macintosh, which is working hardware.
+        `error` is a Gateway whose PS/2 lead is dead, which is a fault.
+        `unknown` is "not checked yet". `unpowered` and `unproven` are about
+        CURRENCY rather than capability -- the channel exists and these values
+        are real, they are simply not about now (sec. 33).
+
+        **THE SET IS NOT CLOSED, AND THIS DOCSTRING IS WHERE THAT IS LEARNED.**
+        It said CLOSED SET and listed three while emitting five, for two hours,
+        and the cost was not hypothetical: the webkvm session read this code in
+        good faith, wrote a consumer branch against the three, and a Gateway
+        that was merely switched off would have been described to the operator
+        as a board with no LED hardware. Then I read THEIR code, equally in
+        good faith, and predicted it would render correctly. Same seam, three
+        times in one day, in both directions.
+
+        So: a consumer must map `why` to PRESENTATION and show `reason` as
+        written, never paraphrase it, and must degrade sensibly on a value it
+        has never heard of. And **adding a value here is a seam event** -- it
+        is announced to consumers in the same breath as it is deployed, not
+        left to be discovered by reading.
 
         WHEN available IS FALSE THE VALUE KEYS ARE ABSENT, NEVER ZERO. A
         plausible set of zeroes is worse than no data: a consumer that forgets

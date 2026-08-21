@@ -2947,3 +2947,48 @@ def test_first_power_reading_is_not_a_transition():
     check("an unchanged reading is not a transition",
           t.observe(False) is False)
     check("and does not advance it", t.state()[0] == 1, t.state())
+
+
+def test_why_values_are_all_documented():
+    """Every `why` the daemon can emit must appear in the docstring that
+    consumers are told to read.
+
+    This is the test the cost justifies rather than a tidiness check.
+    LedsCapability.snapshot() said "CLOSED SET" and listed three while the
+    daemon emitted five, for two hours. The webkvm session read it in good
+    faith and wrote a consumer branch against the three, so a Gateway that
+    was merely switched OFF would have been described to the operator as a
+    board with no LED hardware. Then I read their code, equally in good faith,
+    and predicted it would render correctly.
+
+    Same seam, three times in one day, in both directions -- and every time
+    the code was right and the description of it was not. A docstring that can
+    silently lag the values it documents is not documentation, it is a second
+    source of truth. So the drift is made detectable.
+    """
+    import re
+    src = open(os.path.join(HERE, os.pardir, "daemon", "vcctrld.py")).read()
+    web = open(os.path.join(HERE, os.pardir, "daemon", "vcweb.py")).read()
+
+    emitted = set(re.findall(r'"why":\s*"([a-z]+)"', src + web))
+    check("the daemon emits several distinct why values", len(emitted) >= 4,
+          emitted)
+
+    doc = vcctrld.LedsCapability.snapshot.__doc__ or ""
+    undocumented = sorted(w for w in emitted if w not in doc)
+    check("every emitted `why` appears in snapshot()'s docstring",
+          not undocumented,
+          "missing from the docstring: %s" % ", ".join(undocumented))
+
+    # And it must SAY SO that the set is open. A positive assertion rather
+    # than "the phrase 'closed set' is absent" -- the first version of this
+    # check searched for that phrase and tripped over the docstring's own
+    # account of the day it was wrong, which is a check that fails on the
+    # presence of its own history.
+    #
+    # A consumer told the set is closed will branch exhaustively on it and
+    # mis-describe anything added later. That is not hypothetical: it is what
+    # happened.
+    check("the docstring states the set is NOT closed",
+          "NOT CLOSED" in doc.upper(),
+          "it does not tell a consumer the set can grow")
