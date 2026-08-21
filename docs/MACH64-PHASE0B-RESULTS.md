@@ -102,8 +102,8 @@ running inside that window.
 frame. **It does mean an optimisation there may recover less than the bucket
 promises.**
 
-The cheap measurement needs no new instrument: **run the same cell with music
-off and see what the tilemap bucket drops by.** One cell, later.
+**MEASURED. See the TAUD section below — the correction is ~3%, and the cell
+found something larger than the correction it was for.**
 
 ## E6A: audio, and the three meanings of a zero
 
@@ -149,3 +149,81 @@ absence; these two produce output that looks like data.
 Pre-registered by the benchmarking session before this round ran, and it holds:
 nothing here says how to make the tilemap faster, only that it is where the
 time is.
+
+
+---
+
+# TAUD: audio is 2.4 ms of the frame, and it was in nobody's bucket
+
+One cell, `SDL_HINT_DOSKUTSU_AUDIO_OFF=1` plus E1D's instrument, compared
+against E1D. Same reel, same instrument, within-session.
+
+**`MUSIC_OFF` is the wrong lever** and was rejected before running: it is a
+dispatch-level gate, the device and mixer still come up, and the OPL pump keeps
+running. `AUDIO_OFF=1` is the device-level both-off.
+
+**The gate was verified by hand because nobody knew what `AUDIO_OFF` prints:**
+
+    "4-state audio"  in E1D.LOG   count: 1     <- the pattern works
+    "4-state audio"  in TAUD.LOG  count: 0     <- genuinely absent
+    "Sound system"   in TAUD.LOG  count: 1     <- pipeline still live
+
+Presence proven before absence was believed, on an output string whose spelling
+was unknown.
+
+## The correction Phase 0b needed
+
+    phase                 E1D med   TAUD med    drop    drop %
+    mds_tilemap_bg          10.56      10.24   +0.32     +3.0%
+    mds_tilemap_fg           7.23       6.92   +0.31     +4.3%
+    mds_clear                2.14       2.10   +0.04     +1.9%
+    mds_object_loop          0.66       0.66   +0.00      0.0%
+    SCENE TOTAL             20.82      20.15   +0.67     +3.2%
+
+**Proportional to bucket duration — the signature of a smeared cost.** So the
+tilemap buckets above need roughly a 3% haircut. This is an **upper bound** on
+smeared audio: `AUDIO_OFF` removes main-thread audio work too.
+
+## The larger finding
+
+    E1D    28.2 fps   35.46 ms
+    TAUD   30.2 fps   33.11 ms      -2.35 ms
+
+**Audio costs ~2.35 ms of the frame, about 6.6%, and no decomposition had it.**
+That is larger than anything the LFB was going to buy.
+
+**THE 30.2 IS A DIAG NUMBER AND DOES NOT TRANSFER.** Both cells carry
+instrumentation, so the *difference* is sound and the *absolute* is not the
+shipping configuration. Applied to Round R's clean 27.6:
+
+    36.23 ms - 2.35 ms = 33.88 ms = 29.5 fps      target 30.0 = 33.33 ms
+
+**Still 0.55 ms short. Audio is worth ~1.9 fps and does not on its own reach
+the target.** Carry the 2.35 ms delta, never the 30.2.
+
+## The smear is NOT uniform
+
+The scene draw is 59% of the frame. A uniform smear would put 1.38 ms of the
+2.35 inside it. **It absorbed 0.67 — 49% of its proportional share.** So ~1.7 ms
+lands outside the scene draw.
+
+**First suspect, flagged as a hypothesis: the yield.** Phase 0's D2 measured
+`fb_yield` at 1.41 ms inside the flip, close to the missing 1.7. Under a
+cooperative scheduler a yield is where other work is *allowed to run*, and at
+28 fps the game is nowhere near frame-pacing idle — so that 1.41 ms is likely
+work rather than waiting.
+
+**Testable with instruments that already exist**: one `FLIP_BODY_INSTR` cell
+with `AUDIO_OFF=1`. If `fb_yield` collapses, the pump's location is settled
+rather than inferred.
+
+## What it does and does not license
+
+**Audio cannot be removed**, so the lever is making it cheaper. Numeric knobs
+exist — `ORG_PUMP_TARGET_MS`, `ORG_PUMP_MAX_CHUNKS`, `PIXTONE_IRQ_RATEDIV`,
+`AUDIO_DEVICE_FRAMES`, `AUDIO_MIDGAP_PUMP`, `FORCE_PUMP_YIELD` — several of
+them pump-rate or budget controls, which is the shape that trades audio quality
+for CPU.
+
+**A 2.35 ms finding from one cell changes the value of twelve tilemap cells**,
+and that is a priority question rather than a measurement one.
