@@ -240,29 +240,61 @@ Two clamps are now echoed rather than silent: asked 40 → 30, asked 0.2 → 1.0
 
 ---
 
-## 5b. A VGA splitter was fitted 2026-08-21 — brightness is discontinuous
+## 5b. THE VGA SPLITTER — what it costs, if it is used again
 
-Measured on **identical content** (a screen reproduced from a pre-splitter
-capture), not on whatever happened to be showing:
+**Fitted and removed 2026-08-21. NOT currently in the path.** Measured
+properly while it was in, so the next person does not have to.
 
-    mean lit brightness   174.5 -> 108.9    -38%
-    mean edge step         96.1 ->  65.2    -32%, softer
-    lit pixel count        2063 ->  2063    geometry UNCHANGED
-    dark noise floor       0.07 ->  0.07    no added noise
-    bytes/frame, matched  ~17.0 ->  17.6 KB
-    distinct / n             90 / 90        healthy analog source
-    OCR + read_count()    still correct ('count: 1' reads as 1)
+Measured on **identical content** — a screen reproduced from a pre-splitter
+capture, not whatever happened to be showing. First attempt compared a full
+PGSB boot log against a near-empty-prompt baseline and read 55.2 KB/frame
+against ~17: an alarming number that meant nothing.
 
-A passive splitter halves the drive into two loads, so amplitude drops and
-edges soften. **Nothing operational broke** — lock, OCR, attestation, decode
-counters and compression are all fine.
+    state            lit px   mean-lit   edge   noise
+    no splitter        2063      174.5   96.1    0.07
+    WITH splitter      2063      108.9   65.2    0.07
+    after removal      2063      174.5   97.9    0.07
 
-**BUT ANY BRIGHTNESS FIGURE IS NOW DISCONTINUOUS AT THIS BOUNDARY.** Round R's
-game cells read 24.6; the same content reads dimmer now. **A pre-splitter
-brightness and a post-splitter brightness are different instruments** and must
-not be compared. Thresholds are not at risk — `_is_picture` needs a range of 4
-and text still spans ~109 — but a cross-boundary comparison of the *numbers*
-is invalid.
+**Amplitude and sharpness recovered 100% on removal, and the lit pixel count
+is identical at all three points.** The splitter causes it, and it is fully
+reversible.
+
+### What it costs
+
+    signal amplitude   -38%   (mean lit brightness 174.5 -> 108.9)
+    edge sharpness     -32%   (mean edge step 96.1 -> 65.2)
+
+A passive splitter halves the drive into two loads. **It ATTENUATES rather
+than DISTORTS** — identical geometry, no added noise — which is the difference
+between a splitter you can live with and one that quietly corrupts what the
+rig sees.
+
+### What it does NOT cost — checked, not assumed
+
+    lock                  locked, spawns 1, last_error null
+    distinct / n          90 / 90    healthy analog source
+    bytes/frame, matched  ~17.0 -> 17.6 KB
+    OCR + read_count()    'count: 1' reads as 1 -- ARGUABLY CLEANER
+                          (straight quotes where the pre-splitter image
+                          produced curly ones)
+    decode_errs           no new errors across ~75k post-fit attempts
+
+**The attestation pipeline survives it.** Every arm attestation in every round
+depends on OCR reading a `count:` line off the glass, and at -38% amplitude
+that was the likeliest thing to break. It does not.
+
+### THE HAZARD: brightness is discontinuous across the boundary
+
+**Round R's game cells read 24.6. The same content reads dimmer with the
+splitter in.** A pre-splitter brightness and a with-splitter brightness are
+**different instruments wearing the same units**, and nobody reading a table in
+three weeks will know the cable changed.
+
+No threshold is at risk — `_is_picture` needs a range of 4 and text still
+spans ~109 — but comparing the *numbers* across the boundary is invalid.
+
+**If it goes back in: re-baseline every brightness figure, and say in the
+writeup which side of the swap each number came from.**
 
 ---
 
