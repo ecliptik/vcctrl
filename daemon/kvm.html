@@ -3866,7 +3866,14 @@ function statsRows(j) {
   kv('holding', v.span_s != null ? v.span_s.toFixed(1) + ' s' : '—',
      v.span_s != null && v.target_span_s
        ? bandLow(v.span_s / v.target_span_s, 0.9, 0.5) : '');
-  kv('asked to hold', v.target_span_s != null ? v.target_span_s + ' s' : '—');
+  // "asked to hold" read as a target being missed by 4x. It is a FLOOR: the
+  // setting buys a byte budget sized for that many seconds at a pessimistic
+  // 1.6 MB/s, and when the picture compresses better than that -- a static
+  // DOS screen does -- the same budget buys more seconds. The daemon also
+  // thins the oldest third rather than dropping it, which trades frame rate
+  // at the old end for more span. Holding MORE than asked is the system
+  // working; the label was the thing that made it look broken.
+  kv('asked for at least', v.target_span_s != null ? v.target_span_s + ' s' : '—');
   kv('frames', v.ring_frames != null ? v.ring_frames.toLocaleString() : '—');
   kv('memory', v.ring_bytes != null
        ? (v.ring_bytes / 1048576).toFixed(1) + ' MB' : '—');
