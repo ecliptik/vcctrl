@@ -8,6 +8,7 @@ nothing but which wrapper you call.
 """
 
 import json
+import os
 import socket
 import sys
 
@@ -579,13 +580,17 @@ def main(argv):
         # than the load-bearing part -- but it costs nothing, it makes the
         # two-valued contract easy to reason about, and the daemon expires it
         # by itself after 300 s if this process dies holding it.
-        pinned = call({"cmd": "pin", "action": "on"}) or {}
+        # Under our own name, so releasing it at the end drops OUR lease and
+        # not a KVM reviewer's -- the ring is shared and the old unnamed
+        # release took everyone's.
+        me = "record-%d" % os.getpid()
+        pinned = call({"cmd": "pin", "action": "on", "holder": me}) or {}
         try:
             data, meta = fetch_avi(first, last)
             return write_avi(data, meta, out)
         finally:
             if pinned.get("ok"):
-                call({"cmd": "pin", "action": "off"})
+                call({"cmd": "pin", "action": "off", "holder": me})
 
     if cmd == "status":
         req = {"cmd": "status"}
@@ -661,7 +666,12 @@ def main(argv):
     elif cmd == "burst":
         req = {"cmd": "burst", "n": int(rest[0]) if rest else 8}
     elif cmd == "pin":
+        # `pin on NAME` takes a lease of your own; `pin off NAME` drops just
+        # that one. Bare `pin off` clears every holder, which is what you want
+        # when you are at a terminal getting the ring moving again.
         req = {"cmd": "pin", "action": rest[0] if rest else "status"}
+        if len(rest) > 1:
+            req["holder"] = rest[1]
     elif cmd == "buffer":
         req = {"cmd": "buffer"}
         if rest:

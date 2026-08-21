@@ -1559,7 +1559,16 @@ class VideoCapability(Capability):
         self.seq = 0
         self.thin_passes = 0
         self.dropped_pinned = 0
-        self.pinned_at = None
+        # WHO is holding the ring, not merely THAT it is held. One boolean
+        # could not tell two holders apart, and the consequence was reported
+        # from a phone: a reviewer scrubbing a capture got a broken image
+        # where the frame should be, because a second browser tab took the
+        # auto-pin on losing the picture and dropped it 45 s later. The
+        # release was correct for the tab that made it and wrong for
+        # everybody else, and neither side could have known -- the flag
+        # carried no owner. Held while ANY holder holds; each lease expires
+        # on its own.
+        self.pin_holders = {}
         # Per-frame change scores, by sequence number. Filled lazily when a
         # timeline is asked for, never on the capture path.
         self._chg = {}
@@ -1719,7 +1728,7 @@ class VideoCapability(Capability):
     def _push(self, frame):
         now = time.time()
         with self.lock:
-            pinned = self.pinned_at is not None
+            pinned = bool(self.pin_holders)
             cap = self._cap()
             # Counted BEFORE the pinned early return, deliberately. The field
             # is published as "frames" and rendered as "frames seen": a frame
@@ -1826,14 +1835,19 @@ class VideoCapability(Capability):
             # A pin that outlives its usefulness turns the KVM stale, which is
             # the failure this whole tool exists to prevent. Expire it.
             with self.lock:
-                if self.pinned_at is not None and \
-                        time.time() - self.pinned_at > self.PIN_TIMEOUT_S:
-                    self.pinned_at = None
-                    expired = True
-                else:
-                    expired = False
+                cut = time.time() - self.PIN_TIMEOUT_S
+                expired = sorted(h for h, t in self.pin_holders.items()
+                                 if t < cut)
+                for h in expired:
+                    del self.pin_holders[h]
+                still = bool(self.pin_holders)
             if expired:
-                self._publish("video.pin", state="expired")
+                # Names them, because "the pin expired" is not actionable when
+                # more than one thing can hold it -- and says whether the ring
+                # is actually moving again, which is the part a reader cares
+                # about.
+                self._publish("video.pin", state="expired",
+                              holders=expired, pinned=still)
 
             if not owned:
                 continue
@@ -1950,22 +1964,48 @@ class VideoCapability(Capability):
         Without this the scrub feature is subtly broken in exactly the case it
         exists for: the live stream keeps writing while you look at something
         interesting, and the frame under the cursor gets evicted from under it.
+
+        HELD BY NAME. The ring is one object and several things want it still
+        at once -- a KVM tab reviewing a capture, a second tab that auto-pinned
+        on losing the picture, `vcctrl record` muxing an AVI, a sweep pinning
+        at the moment a cell loses lock. With a single flag the last release
+        won, whoever it belonged to. Each caller now takes its own lease and
+        can only drop its own; the ring moves again when the last one lets go.
+
+        `off` with no holder named clears EVERY lease. That asymmetry is
+        deliberate: it is the operator's escape hatch, it is what the recovery
+        note in vcctrl-cell already tells someone to type, and a person at a
+        terminal asking for the pin off means the ring, not their share of it.
+        Programs name themselves and get the narrow behaviour by default.
         """
         action = req.get("action", "status")
+        holder = str(req.get("holder") or "")[:64]
+        now = time.time()
         with self.lock:
             if action == "on":
-                self.pinned_at = time.time()
+                self.pin_holders[holder or "cli"] = now
             elif action == "off":
-                self.pinned_at = None
-                self.dropped_pinned = 0
-            held = (time.time() - self.pinned_at) if self.pinned_at else None
-            out = {"ok": True, "pinned": self.pinned_at is not None,
-                   "held_s": round(held, 1) if held else None,
+                if holder:
+                    self.pin_holders.pop(holder, None)
+                else:
+                    self.pin_holders.clear()
+                if not self.pin_holders:
+                    self.dropped_pinned = 0
+            taken = self.pin_holders.values()
+            # Two different questions, so two different numbers: how long the
+            # ring has been standing still (the OLDEST lease) and how long
+            # before it starts moving on its own (the NEWEST one to lapse).
+            held = (now - min(taken)) if taken else None
+            left = (self.PIN_TIMEOUT_S - (now - max(taken))) if taken else None
+            out = {"ok": True, "pinned": bool(self.pin_holders),
+                   "holders": sorted(self.pin_holders),
+                   "held_s": round(held, 1) if held is not None else None,
                    "dropped_while_pinned": self.dropped_pinned,
-                   "expires_in_s": round(self.PIN_TIMEOUT_S - held, 1)
-                   if held else None}
+                   "expires_in_s": round(left, 1) if left is not None else None}
         if action in ("on", "off"):
-            self._publish("video.pin", state=action)
+            self._publish("video.pin", state=action,
+                          holder=holder or None, pinned=out["pinned"],
+                          holders=out["holders"])
         return out
 
     def _buffer(self, req):
@@ -2073,7 +2113,7 @@ class VideoCapability(Capability):
         """
         with self.lock:
             items = list(self.ring)
-            pinned = self.pinned_at is not None
+            pinned = bool(self.pin_holders)
             span = (items[-1][0] - items[0][0]) if len(items) > 1 else 0.0
             cap = self._cap()
             used = self.ring_bytes
@@ -2356,7 +2396,7 @@ class VideoCapability(Capability):
                     # be the instrument's own state reported as the target's.
                     "device_present": os.path.exists(self.DEVICE),
                     "device": self.DEVICE,
-                    "pinned": self.pinned_at is not None,
+                    "pinned": bool(self.pin_holders),
                     "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
                     if len(self.ring) > 1 else 0.0,
                     # What the buffer is ASKED to keep, beside what it is

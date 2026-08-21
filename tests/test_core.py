@@ -3252,3 +3252,97 @@ def test_every_daemon_command_has_a_cli_verb():
           "no CLI verb for: %s" % ", ".join(missing))
     check("and the daemon exposes a substantial command set",
           len(daemon_cmds) >= 20, len(daemon_cmds))
+
+
+def test_a_pin_belongs_to_whoever_took_it():
+    """One release must not free somebody else's frame.
+
+    The ring is one object and several things want it to stand still at once:
+    a KVM tab stepping through a capture, a SECOND tab that auto-pinned the
+    moment it lost the picture, `vcctrl record` muxing an AVI, a sweep pinning
+    at the instant a cell loses lock. The pin was a single timestamp, so the
+    last release won whoever it belonged to, and the loser could not tell that
+    anything had happened -- it simply asked for a frame that was no longer
+    there and got a broken image.
+
+    That is the reported symptom this pins down, and the reason it took a
+    while to see: BOTH SIDES WERE BEHAVING CORRECTLY. The tab that released
+    had genuinely finished with the ring. The flag it wrote to just could not
+    say on whose behalf.
+    """
+    print("\npin holders")
+    cap = vcctrld.VideoCapability(None, vcctrld.Bus())
+
+    a = cap._pin({"action": "on", "holder": "reviewer"})
+    check("a named pin holds", a["pinned"] and a["holders"] == ["reviewer"], a)
+    b = cap._pin({"action": "on", "holder": "recorder"})
+    check("two holders are two holders", b["holders"] == ["recorder", "reviewer"], b)
+
+    # THE WHOLE POINT.
+    c = cap._pin({"action": "off", "holder": "recorder"})
+    check("one holder letting go does not release the ring",
+          c["pinned"] and c["holders"] == ["reviewer"], c)
+    d = cap._pin({"action": "off", "holder": "reviewer"})
+    check("the last one letting go does", not d["pinned"] and not d["holders"], d)
+
+    # Releasing something you never held is a no-op, not a way to free it.
+    cap._pin({"action": "on", "holder": "reviewer"})
+    e = cap._pin({"action": "off", "holder": "some-other-tab"})
+    check("releasing a lease you do not hold changes nothing",
+          e["pinned"] and e["holders"] == ["reviewer"], e)
+
+    # The operator's escape hatch, and the reason it is spelled differently:
+    # a person at a terminal typing `vcctrl pin off` means the ring, not their
+    # share of it -- and vcctrl-cell's recovery note already tells them to.
+    f = cap._pin({"action": "off"})
+    check("an unnamed release clears every holder",
+          not f["pinned"] and not f["holders"], f)
+
+    # Two numbers, two questions. Reading one for the other was how the old
+    # single-value report managed to be true and useless at the same time.
+    cap._pin({"action": "on", "holder": "old"})
+    cap.pin_holders["old"] = time.time() - 100.0
+    g = cap._pin({"action": "on", "holder": "new"})
+    check("held_s measures the OLDEST lease -- how long the ring has stood still",
+          g["held_s"] >= 99.0, g["held_s"])
+    check("expires_in_s measures the NEWEST -- when the ring moves again",
+          g["expires_in_s"] > cap.PIN_TIMEOUT_S - 5.0, g["expires_in_s"])
+
+    # A status read must not take a pin. A `pin` with no action used to be
+    # harmless because there was nothing to key on; with holders, defaulting
+    # the holder in the wrong branch would make every status call a holder.
+    before = sorted(cap.pin_holders)
+    h = cap._pin({})
+    check("a bare status read takes nothing", sorted(cap.pin_holders) == before, h)
+
+
+def test_one_stale_lease_expires_without_taking_the_others():
+    """Expiry is per lease, or the timeout becomes another shared release.
+
+    The 300 s expiry exists because a pinned ring stops accepting new frames,
+    and a KVM showing a held buffer while claiming to be live is the failure
+    this tool exists to prevent. With more than one holder the expiry has the
+    same trap the release did: firing on the oldest and clearing the flag
+    would drop a lease taken four seconds ago.
+    """
+    print("\npin expiry")
+    import threading as _th
+    cap = vcctrld.VideoCapability(None, vcctrld.Bus())
+    # Comfortably longer than the pass this test waits for, or the "live"
+    # lease ages out during the wait and the test proves the opposite of what
+    # it says. The first version of this used 1.0 s and did exactly that.
+    cap.PIN_TIMEOUT_S = 5.0
+    cap.pin_holders = {"abandoned": time.time() - 60.0, "live": time.time()}
+    cap.running = True
+    cap.owned = False           # no device: the pass reaches the pin block and
+    cap.proc = None             # then continues, which is what we want
+    t = _th.Thread(target=cap._watchdog)
+    t.start()
+    time.sleep(1.6)             # >= one 0.5 s pass
+    cap.running = False
+    t.join(timeout=3)
+
+    holders = sorted(cap.pin_holders)
+    check("the abandoned lease expired", "abandoned" not in holders, holders)
+    check("and the live one did not", holders == ["live"], holders)
+    check("so the ring is still held", bool(cap.pin_holders), holders)

@@ -3357,6 +3357,30 @@ function applyStale() {
 // KVM showing a held buffer while claiming to be live is the failure this
 // tool exists to prevent. The daemon expires it after 300s on its own.
 let pinned = false;
+// WHOSE HOLD IT IS. The daemon's pin used to be one boolean, so every holder
+// released everyone's -- and this page is the one holder that takes it
+// WITHOUT BEING ASKED, on losing the picture. Reported from a phone: a
+// capture under review showed a broken image instead of a frame, because a
+// second tab open on the same rig auto-pinned, dropped the pin 45 s later,
+// and the ring rolled out from under the reviewer. Nothing was wrong with
+// either tab's reasoning; the flag simply could not tell them apart.
+//
+// A name per TAB, not per page load shared between them: two tabs are two
+// holders, and that is exactly the case that broke.
+const PINME = 'kvm-' + Math.random().toString(36).slice(2, 8);
+// A lease lapses after 300 s daemon-side, which is right for a tab that was
+// closed and wrong for a human still reading the same frame. Renewed while
+// the reviewer is open AND THE PAGE IS VISIBLE -- a backgrounded phone stops
+// renewing, so a pocket cannot hold the ring still.
+let pinRenew = null;
+function renewPin() {
+  clearInterval(pinRenew);
+  pinRenew = setInterval(() => {
+    if (reviewing && pinned && document.visibilityState === 'visible')
+      post('pin', {action: 'on', holder: PINME});
+    else if (!reviewing) { clearInterval(pinRenew); pinRenew = null; }
+  }, 60000);
+}
 // THE AUTOMATIC HOLD IS BOUNDED, AND IT HAS TO BE.
 //
 // It latches otherwise, and vcctrl-94 measured it twice: the picture is lost
@@ -3394,7 +3418,8 @@ function holdBuffer(on, why) {
   }
   if (on === pinned) return;
   pinned = on;
-  post('pin', {action: on ? 'on' : 'off'});
+  post('pin', {action: on ? 'on' : 'off', holder: PINME});
+  if (on) renewPin(); else { clearInterval(pinRenew); pinRenew = null; }
   addLine(new Date(), 'capture',
           on ? 'holding the capture — no signal, so nothing is evicted'
              : 'capture released', 'k-note');
@@ -3627,9 +3652,72 @@ async function seekIdx(i) {
   const img = $('review');
   img.src = '/frame.jpg?seq=' + k.seq;
   img.style.display = '';
+  seekWant = k.seq;
   // The reviewer's frame sits ON TOP of the live one, so hide the stale
   // overlay or two pictures argue about the same rectangle.
   $('stale').style.display = 'none';
+}
+
+// A FRAME THAT IS NO LONGER THERE.
+//
+// The timeline is a list of sequence numbers read at one instant; the ring
+// keeps moving. Ask for one that has since been evicted and the daemon
+// answers 404, the browser draws its broken-image glyph, and -- because the
+// element carries alt text for screen readers -- paints the words "a frame
+// from the capture" across the picture. That is what a phone showed, and it
+// says nothing about why.
+//
+// It should be rare now that a reviewer's hold is its own lease, but rare is
+// not never: a lease can lapse, and a daemon restart empties the ring
+// outright. So say which frame went and offer the way back, rather than
+// leaving a glyph to be interpreted.
+let seekWant = null;
+$('review').addEventListener('error', () => {
+  const gone = seekWant;
+  $('review').style.display = 'none';
+  if (!reviewing) return;
+  $('scrubpos').textContent = 'frame ' + gone + ' is no longer in the capture';
+  addLine(new Date(), 'capture',
+          'frame ' + gone + ' had already been evicted — rereading the '
+          + 'capture', 'k-warn');
+  refreshTimeline();
+});
+
+// THE SAME RULE FOR EVERY PICTURE ON THE STAGE: a broken one hides itself.
+//
+// A failed <img> does not fail quietly. The browser draws its own glyph and,
+// where there is alt text, paints the words across whatever is behind --
+// which on a phone put "a frame from the capture" over the DOS prompt in
+// letters an inch high. Whatever the cause, an image that cannot load has
+// nothing to contribute to a rectangle showing a computer, so it gets out of
+// the way and lets the layer underneath be seen.
+$('stale').addEventListener('error', () => {
+  $('stale').style.display = 'none';
+});
+$('scrubtipimg').addEventListener('error', () => {
+  hideTip();          // clears tipSeq too, so moving back over retries it
+});
+
+// Re-read the ring and land as close to where we were as it still allows.
+async function refreshTimeline() {
+  let j;
+  try {
+    j = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
+  } catch (e) { note('capture: ' + e); return; }
+  if (!j || !j.frames || !j.frames.length) {
+    note('the capture is empty');
+    exitReview();
+    return;
+  }
+  const want = seekWant;
+  tl = j;
+  // Marks that point at frames the ring no longer holds are not marks.
+  if (bufFrom != null && !j.frames.some(f => f.seq === bufFrom)) bufFrom = null;
+  if (bufTo != null && !j.frames.some(f => f.seq === bufTo)) bufTo = null;
+  drawMap();
+  markRange();
+  let i = j.frames.findIndex(f => f.seq >= want);
+  await seekIdx(i < 0 ? j.frames.length - 1 : i);
 }
 
 // Each end shows as soon as it is set, and the tint only once both are.
