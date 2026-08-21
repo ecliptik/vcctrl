@@ -882,6 +882,26 @@ class WebCapability(object):
         considered fresh. Nothing is buffered on this side either.
         """
         vid = self.video()
+        # A CLIENT THAT NEVER DRAINS IS GONE, AND THIS LOOP CANNOT SEE IT.
+        #
+        # The send path only writes when select() says writable, so a socket
+        # whose peer has vanished -- tab closed, phone asleep, network gone --
+        # fills its send buffer, never becomes writable again, and is never
+        # written to. No write means no error, so nothing ever raises and the
+        # loop drops a frame and sleeps, forever.
+        #
+        # Measured on the rig: two such sockets dropping 35 frames a second
+        # between them, 100% of attempts, dead flat for ninety seconds, while
+        # a socket opened alongside them took 20 fps cleanly. Flatness was the
+        # tell -- a congested link fluctuates and the page's own rate control
+        # would have halved within twelve seconds. These were not congested,
+        # they were abandoned.
+        #
+        # Ten seconds of CONTINUOUS unwritability is the test. A live peer
+        # that is merely slow drains something in that window; one that drains
+        # nothing at all is not reading.
+        STALL_S = 10.0
+        stalled_since = None
         last_t, last_state = 0.0, None
         while not stop.is_set():
             if vid is None:
@@ -896,6 +916,7 @@ class WebCapability(object):
                 except Exception:
                     return
                 if writable:
+                    stalled_since = None
                     last_t = item[0]
                     try:
                         with (wlock or _NULLLOCK):
@@ -905,6 +926,17 @@ class WebCapability(object):
                     with self.lock:
                         self.ws_sent_frames += 1
                         self.ws_sent_bytes += len(item[2])
+                elif stalled_since is None:
+                    stalled_since = time.time()
+                    with self.lock:
+                        self.ws_dropped += 1
+                elif time.time() - stalled_since > STALL_S:
+                    with self.lock:
+                        self.ws_dropped += 1
+                        self.ws_last = ("closed: unwritable for %.0fs after "
+                                        "%d frames" % (STALL_S,
+                                                       self.ws_sent_frames))
+                    return
                 else:
                     with self.lock:
                         self.ws_dropped += 1
