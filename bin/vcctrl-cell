@@ -395,9 +395,22 @@ def main(argv):
                     # instrument).
                     stem2 = k[:max(12, len(k) - 4)].replace("_", "")
                     cmd('SET | FIND "%s" | FIND /C "="' % k)
+                    # A GENEROUS BUDGET, because mode 12h text is SLOW.
+                    #
+                    # DKTCAP=1 keeps the console in mode 12h between cells and
+                    # its own banner says "text will be SLOW". A full SET
+                    # listing scrolls, and redrawing that takes many seconds --
+                    # so the FIRST re-check after the bulk listing was polling
+                    # a screen still being painted, while the second, by then
+                    # settled, passed. That is why a different variable failed
+                    # every run and why it was always the first one checked.
+                    #
+                    # 20 x 1.5 s = 30 s per variable, and only for variables
+                    # the bulk read missed. Waiting is cheap; a refused cell
+                    # is not.
                     verdict = None
-                    for _try in range(6):
-                        time.sleep(1.2)
+                    for _try in range(20):
+                        time.sleep(1.5)
                         _sh, t2 = read_env_text_raw()
                         if t2 is None:
                             continue
