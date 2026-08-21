@@ -299,9 +299,21 @@
        welded to the tab strip with square corners, so one of the four tabs
        produced a different KIND of thing. Same radius, border, shadow and
        inset as the popovers, floating clear of the bar that opened it. */
+    /* SITTING ON THE TAB BAR, so only the top corners round and the bottom
+       edge is the bar's own top rule rather than a second line beside it.
+       A card with four rounded corners pressed against a straight edge shows
+       two slivers of background at the join, which is what a bottom sheet
+       exists not to do. */
+    body #cmdbar.open, body #pop-sound, body #pop-power, body #scrub {
+      border-radius:9px 9px 0 0; border-bottom:0;
+    }
+    /* EDGE TO EDGE, like the strip that opens it. A tab panel inset from the
+       sides reads as a floating card that failed to line up with anything;
+       these are the phone's four bottom panels and they are one object seen
+       four ways, so they take the full width and match each other exactly. */
     body #cmdbar.open {
       display:flex; position:fixed; z-index:60;
-      left:6px; right:6px;
+      left:0; right:0;
       bottom:calc(58px + env(safe-area-inset-bottom, 0px));
       border:1px solid var(--rule); border-radius:9px;
       box-shadow:0 12px 30px rgba(0,0,0,.36);
@@ -592,7 +604,7 @@
      the same panel. */
   #scrubbar button { min-height:34px; padding:0 9px; }
   @media (max-width:640px) {
-    #scrub { left:6px; right:6px; bottom:6px; }
+    #scrub { left:0; right:0; bottom:0; }
     /* ONE GROUP PER ROW, FULL WORDS. The three-column grid squeezes each
        group into a third of a phone and they wrap inside themselves -- "In"
        and "Save" on one line with "Out" under them, which reads as four
@@ -3098,6 +3110,28 @@ function openPop(name) {
   $('setback').hidden = false;
   anchor.setAttribute('aria-expanded', 'true');
   openPopName = name;
+  // ON A PHONE THESE ARE TAB PANELS, NOT MENUS HANGING OFF A BUTTON. Sound
+  // and Power open from the tab bar there -- their strip buttons do not
+  // exist -- so anchoring them to a control that is not on screen produces a
+  // narrow card floating somewhere near the bottom. They are the same object
+  // as TYPE and CAPTURE and they take the same shape: full width, sitting on
+  // the tab bar. Zoom is excluded on purpose; it opens from the header and
+  // belongs to the button that opened it.
+  const tabbed = (name === 'sound' || name === 'power')
+                 && matchMedia('(max-width:640px)').matches;
+  if (tabbed) {
+    const tr = $('tabs').getBoundingClientRect();
+    el.style.left = '0px';
+    el.style.right = '0px';
+    el.style.width = 'auto';
+    el.style.maxWidth = 'none';
+    el.style.top = '';
+    el.style.bottom = Math.max(0, Math.round(window.innerHeight - tr.top)) + 'px';
+    return;
+  }
+  el.style.right = '';
+  el.style.width = '';
+  el.style.maxWidth = '';
   // Measure after it is visible: a hidden element has no width to place.
   const a = anchor.getBoundingClientRect(), w = el.offsetWidth;
   if (!a.width) {
