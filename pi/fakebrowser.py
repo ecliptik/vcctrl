@@ -14,20 +14,7 @@ not a video socket. Every open tab also:
   - polls /state.json every 1.5 s (host facts: /proc and /sys reads)
   - opens a SECOND websocket for audio, streaming PCM continuously, off a
     different capability with its own ring, subprocess and reader thread --
-    The audio streaming path had never been touched by any stress.
-
-    CORRECTION, recorded rather than quietly edited: an earlier version of
-    this comment said `_read_pcm` was "in both crash stacks". Wrong twice.
-    There is only ONE stack -- faulthandler was armed AFTER the first abort,
-    so 23:09 logged nothing but the glibc line, and everything we know about
-    thread state at a crash comes from a single sample. And `_read_pcm` is a
-    PERMANENT thread: the daemon owns the ALSA device for its lifetime and the
-    reader runs whether or not anyone is listening, so it sits in that stack
-    the way `_watchdog` does, and sits in a healthy daemon's stack right now.
-    It is not evidence about browsers. The reason to stress audio is that the
-    WEBSOCKET half -- chunks pulled from the ring and pushed over SSL -- is
-    browser-driven and untested; the evidence it was present at the aborts is
-    the operator saying sound was connected, and that is now the only evidence
+    a path no stress had ever touched
   - fetches /shot.jpg and /lastgood.jpg, which decode JPEGs through Pillow
     IN A REQUEST THREAD rather than on the watchdog
   - fetches /timeline.json while reviewing, which decodes and differences the
@@ -38,6 +25,18 @@ not a video socket. Every open tab also:
 Testing the video socket alone and calling it "browser load" is the same
 mistake as counting frames and calling it "picture" -- the instrument covered
 a fraction of the thing it was named after.
+
+CORRECTION, recorded rather than quietly edited: an earlier version of this
+file said `_read_pcm` was "in both crash stacks". Wrong twice. There is only
+ONE stack -- faulthandler was armed AFTER the first abort, so 23:09 logged
+nothing but the glibc line, and everything we know about thread state at a
+crash comes from a single sample. And `_read_pcm` is a PERMANENT thread: the
+daemon owns the ALSA device for its lifetime and the reader runs whether or
+not anyone is listening, so it sits in that stack the way `_watchdog` does,
+and sits in a healthy daemon's stack right now. It is not evidence about
+browsers. The audio websocket is still worth stressing because that half IS
+browser-driven and untested -- but the evidence it was present at the aborts
+is the operator saying sound was connected, and that is now the only evidence.
 
     pi/fakebrowser.py 2 45          two tabs, forty-five minutes
     pi/fakebrowser.py 2 45 --review one of them also scrubs the timeline
