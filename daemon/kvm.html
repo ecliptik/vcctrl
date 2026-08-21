@@ -1286,6 +1286,14 @@
       <span class="lamp" id="lamp-num"><i></i><span>N</span></span>
       <span class="lamp" id="lamp-scroll"><i></i><span>S</span></span>
     </button>
+    <!-- CLOSES THE STATUS BLOCK. Every other rule in this row divides two
+         groups of readings; this one divides the readings from the controls,
+         which is the bigger boundary of the two and was the only one not
+         marked. It lives INSIDE the scrolling status area, so it travels
+         with the lamps rather than sitting in the gap after them -- a rule
+         floating in open space is the thing I removed from between the
+         phone's glyphs an hour ago. -->
+    <span class="sep" aria-hidden="true">|</span>
    </div>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
             title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen</span><span class="caret dn" aria-hidden="true"></span></button>
