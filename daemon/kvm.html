@@ -233,7 +233,15 @@
     body #zoombtn[aria-expanded="true"], body #gbtn[aria-expanded="true"] {
       background:var(--rule);
     }
-    body #gbtn .bl, body #zoombtn #zoomlabel { display:none; }
+    /* THE CARET WITHOUT ITS LABEL READS AS A MISSING LABEL, which is what
+       it is: "🖥 ▾" is a dropdown with the dropdown's name cut off, and it
+       sits next to two glyphs that carry no caret at all. Reported as the
+       top menu looking like something is missing. At icon size the glyph is
+       the whole control, so the caret goes with the word.
+       The separators go too. Between boxed buttons a rule is structure;
+       between three bare glyphs it is a mark floating in space. */
+    body #gbtn .bl, body #zoombtn #zoomlabel,
+    body #zoombtn .caret, body header > .sep { display:none; }
     body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
     body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
     /* Keys STAYS on a phone. It is the only one of the strip's controls whose
@@ -267,12 +275,18 @@
       background:var(--panel);
       padding-bottom:env(safe-area-inset-bottom,0px);
     }
-    /* EQUAL SHARES. flex:1 alone distributes the FREE space, so a seven-item
-       bar with words from three to six characters came out with visibly
-       different gaps. flex-basis:0 makes each share equal regardless of what
-       it contains. */
+    /* EVEN GAPS, NOT EVEN CELLS -- and the difference is the whole
+       complaint. flex:1 1 0 gave every tab the same width, so the WORDS sat
+       centred in equal boxes and the space between them varied with their
+       length: STATUS and BUFFER, six letters each in adjacent cells, ended up
+       visibly closer than LOG and STATUS. Equalising the cells optimised the
+       thing nobody looks at. space-between with natural widths equalises the
+       gaps, which is what the eye is actually measuring. */
+    body #tabs { justify-content:space-between; padding-left:10px;
+                 padding-right:10px; }
     #tabs button {
-      flex:1 1 0; min-width:0; border:0; border-radius:0; background:transparent;
+      flex:0 0 auto; padding:0 6px;
+      min-width:0; border:0; border-radius:0; background:transparent;
       color:var(--dim); font:var(--t-micro)/1 var(--mono);
       letter-spacing:.06em; min-height:46px; padding:0;
       border-top:2px solid transparent;
@@ -1579,8 +1593,6 @@
   <button data-zoom="2" title="Twice the captured size">200% Original</button>
   <button data-zoom="4" title="Four times the captured size">400% Original</button>
   <hr>
-  <button id="reviewitem"
-          title="Step back through the last seconds the daemon kept">Review buffer</button>
   <button id="refresh"
           title="Restart the capture if the picture is stuck">Refresh video</button>
   <hr>
@@ -3610,7 +3622,10 @@ $('dimbtn').onclick = () => {
   else { setVeilHidden(true); holdBuffer(false); }
 };
 $('reviewbtn').onclick = () => { setVeilHidden(true); enterReview(); };
-$('reviewitem').onclick = () => { closePop(); enterReview(); };
+// Review buffer was in the screen menu because there was nowhere else for
+// it. There is now: the Capture control in the strip opens the same timeline
+// and says what it is. Two doors to one room, one of them behind a menu
+// about picture size.
 // Press it again to put it away, the way every other menu on this page works.
 $('bufbtn').onclick = () => { closePop(); reviewing ? exitReview() : enterReview(); };
 $('veilback').onclick = () => { liveAnyway = false; setVeilHidden(false); };
