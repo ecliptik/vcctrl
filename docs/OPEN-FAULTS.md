@@ -114,6 +114,22 @@ it runs. Two measurements that shape the fuzzing:
 
 `video state` now carries **`decode_errs`** and **`decode_last`**.
 
+**FIRST LIVE-SOURCE READING, 2026-08-21.** Snapshotted before a restart
+destroyed it:
+
+    daemon 388273, up 22,419 s, state locked
+    frames 672,372 total, ~37,000 of them live 640x480
+    decode_errs 0    decode_last null    spawns 1    no abort
+
+**Zero decode failures across ~37,000 real frames of live game content**, with
+age eviction freeing 40-60 KB objects thirty times a second throughout — the
+byte-churn condition present at both aborts, sustained for 22 minutes without
+incident. Three measurement cells ran inside that window.
+
+**This is a real null on the exact input the hypothesis is about, and the
+hypothesis is looking weak.** It is not a week and it does not close the
+question, but it is no longer "no data".
+
 **A zero reading only counts with a LIVE SOURCE.** With the target off the
 stick emits well-formed JPEG for its no-lock constant, so there is nothing
 malformed to count and a clean counter means nothing. **Zero after a week of
