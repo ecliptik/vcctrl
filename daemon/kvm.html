@@ -215,13 +215,24 @@
        picture already says in full sentences, and on a phone the width it
        costs is width the controls need. */
     body h1 + .sep, body #state, body #state + .sep { display:none; }
-    /* NO BOX ON THE ONE BARE GLYPH. Zoom and Settings keep theirs -- they
-       open things, and the box is the affordance saying so. Light/dark
-       changes the page under you rather than opening anything over it, which
-       is why it already sits behind a separator, and an outline drawn tight
-       around a single emoji reads as an artefact rather than a control. */
-    body #dbtn { border-color:transparent; background:transparent; }
-    body #dbtn:active { background:var(--rule); }
+    /* NO BOXES ON ANY OF THE THREE. I gave light/dark a bare glyph and kept
+       boxes on the other two, on the argument that a box is the affordance
+       for something that opens. Beside each other at phone size that is
+       three adjacent controls with two treatments, and the inconsistency is
+       what the eye catches -- reported as "the shading makes them look off".
+       An outline drawn tight around a single emoji is a weak affordance
+       anyway; the glyph is the control, and press and hover say the rest. */
+    body #dbtn, body #gbtn, body #zoombtn {
+      border-color:transparent; background:transparent;
+    }
+    body #dbtn:active, body #gbtn:active, body #zoombtn:active {
+      background:var(--rule);
+    }
+    /* Open still shows: the caret flips and the ground fills, which is the
+       state, rather than a permanent outline that says nothing. */
+    body #zoombtn[aria-expanded="true"], body #gbtn[aria-expanded="true"] {
+      background:var(--rule);
+    }
     body #gbtn .bl, body #zoombtn #zoomlabel { display:none; }
     body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
     body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
@@ -1119,6 +1130,23 @@
   #ghost { position:absolute; left:-9999px; top:0; width:1px; height:1px;
            opacity:0; padding:0; border:0; margin:0; font-size:16px; }
 
+  /* ── the middle band: wide enough for the panel buttons, not wide enough
+     for their words ────────────────────────────────────────────────────────
+     A phone in landscape is 852px, which passes the 640 breakpoint and gets
+     the full labelled rail -- 513px of controls, leaving 268 for a status
+     area that needs 642. Measured: every lamp clipped, only the title
+     surviving. The lamps are the readings this page exists to show and the
+     buttons have glyphs and tooltips, so below 1100 the words go and the
+     lamps stay. The title goes too; it is the one thing up there that says
+     nothing about the rig. */
+  @media (min-width:641px) and (max-width:1099px) {
+    h1, h1 + .sep, #state, #state + .sep { display:none; }
+    #zoomlabel, header .lbtn .bl { display:none; }
+    header .lbtn, #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
+    header .lbtn .bi, #zoombtn .bi { border-right:0; padding-right:0; }
+    #zoombtn { min-width:52px; }
+  }
+
   /* ── desktop ─────────────────────────────────────────────────────────── */
   @media (min-width:641px) {
     body.panel-stats #stats { display:block; }
@@ -1311,8 +1339,13 @@
       <div class="row">
         <button id="dimbtn" title="Hide this notice and show the last frame it captured">Show last frame</button>
         <button id="savebtn" title="Download this frame as a JPEG">Save this frame</button>
+        <!-- Save buffer lived here and does not need to: Review buffer opens
+             the timeline, which has Save range and Capture frame in it. Four
+             buttons on a notice is a menu, and two of them did the same job
+             one click apart. The element stays -- the timeline's Save range
+             drives it -- it simply is not offered twice. -->
         <button id="reviewbtn" title="Step back through the seconds before it stopped">Review buffer</button>
-        <button id="savebuf" title="Download the buffer as a video, so what led up to this can be replayed">Save buffer</button>
+        <button id="savebuf" hidden title="Download the buffer as a video">Save buffer</button>
       </div>
     </div>
     <!-- Bring the notice back. Dismissing it is useful -- the last frame is
@@ -1879,6 +1912,16 @@ function requestRate(f) {
   // carrying one frame a second must be able to be asked for one.
   f = Math.max(1, Math.min(fpsCeiling(), Math.round(f)));
   if (f === fpsWant || !ws || ws.readyState !== 1) return;
+  // LEAVE A TRAIL. A stuttering stream was reported with "Status showed a ton
+  // of dropped frames" and no photograph, and there was nothing in the log to
+  // reconstruct it from -- the readout shows the current numbers and keeps no
+  // history, so by the time anyone looks the episode is over. Every change of
+  // ask is now a line with what was arriving and how much data that was, so
+  // the next one is diagnosable from the activity log alone.
+  addLine(new Date(), 'rate',
+          'asking ' + fpsWant + ' \u2192 ' + f + ' fps · arriving '
+          + (achievedFps() || 0).toFixed(1) + ' · ' + streamMbit().toFixed(2)
+          + ' Mbit/s', 'k-note');
   fpsWant = f;
   try { ws.send(JSON.stringify({t: 'rate', fps: f})); } catch (e) {}
 }
@@ -3499,7 +3542,7 @@ function poll_render_veil(state, uni) {
   // worth showing because typing changes it. Frames arriving and UNIFORM is
   // not a picture at all, and offering to "show the live picture" there would
   // promise something that was never sampled. Say what it is instead.
-  $('dimbtn').textContent = uni ? 'Show the blank frame'
+  $('dimbtn').textContent = uni ? 'Show blank frame'
                           : frozen ? 'Show live picture' : 'Show last frame';
   $('dimbtn').title = uni
     ? 'Show what the stick is emitting, unjudged. It is a flat ' + uni
