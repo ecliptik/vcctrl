@@ -2755,6 +2755,29 @@ function isReleaseChord() {
 }
 
 function setArmed(v, opts) {
+  // GRABBING IS REFUSED WHILE SOMEONE ELSE HOLDS THE INPUT LOCK.
+  //
+  // Reported: "if I grab the screen, and then another process holds input,
+  // the screen still has the green box around it and grab is still selected".
+  // The release itself was already there -- setInputHeld calls setArmed(false)
+  // the moment an owner appears -- but it was the only door being watched.
+  // Two other paths arm, and neither knew about the lock: clicking the
+  // picture (armFromStage) and the ghost input taking focus, which is how a
+  // phone arms. So the release fired and the next click put it straight back.
+  //
+  // The guard belongs HERE, at the one function every path goes through,
+  // rather than on each door. Disabling #grabbtn was the per-door version of
+  // this and it covered exactly one of the three.
+  //
+  // And it says so rather than doing nothing: a control that silently ignores
+  // you is the invisible-state failure this button already has history with.
+  // Releasing is never refused -- letting go must always work.
+  if (v && inputHeldBy) {
+    hint('input is held by "' + inputHeldBy + '" — keystrokes from here '
+         + 'would be refused');
+    if (!armed) return;
+    v = false;                    // held while armed: let go, do not re-grab
+  }
   if (armed === v) return;
   armed = v;
   $('stage').classList.toggle('armed', v);
@@ -4573,7 +4596,11 @@ function setInputHeld(owner) {
   // control at all rather than looking like one that does nothing.
   $('filebtn').style.pointerEvents = owner ? 'none' : '';
   $('filebtn').style.opacity = owner ? '.4' : '';
-  for (const el of [$('line'), $('sendline'), $('grabbtn')]) {
+  // The ghost too: on a phone the tap lands on it and its focus event is the
+  // arming signal, so leaving it live means the on-screen keyboard rises for
+  // a grab that setArmed is about to refuse. A disabled input cannot take
+  // focus, which stops the keyboard before it starts.
+  for (const el of [$('line'), $('sendline'), $('grabbtn'), ghost]) {
     el.disabled = !!owner;
     if (owner) el.title = why;
   }
