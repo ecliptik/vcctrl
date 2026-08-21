@@ -1,5 +1,9 @@
 # Three jobs, planned before starting any of them
 
+**See also `OPEN-FAULTS.md`** -- the live register of what is still broken
+and what to check before trusting a result. Item 1 below is superseded; the
+register says why.
+
 Written 2026-08-20 at the end of Round Q, for work that should be done fresh
 rather than at the end of a long session. Each section states what is
 **measured**, what is **guessed**, and what the first step is — because on

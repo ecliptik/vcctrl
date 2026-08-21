@@ -1,5 +1,8 @@
 # vcctrl -- findings from building it
 
+**This file records what happened. For what is still broken and what to
+check before trusting a result, see `OPEN-FAULTS.md`.**
+
 Things learned by measurement, not by reading. Each one changed the code.
 
 ## 1. USB4VC ingests uinput devices with no modification  [measured]
