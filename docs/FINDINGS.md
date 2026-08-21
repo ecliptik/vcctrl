@@ -1682,3 +1682,75 @@ is a shape rather than two bugs: a two-valued file contract, sound on the
 machine it ran on, producing the forbidden third state one host over; and a
 readiness verdict, sound about the harness, readable as "fit to run". Both
 correct. Both read wider than written, by the people who wrote them.
+
+## 33. The right measurement of the wrong moment  [demonstrated 2026-08-20]
+
+Distinct from sec. 31 and sec. 32, and it took the benchmarking session to
+name why: those were a proxy standing in for a thing, and a guarantee read
+past its boundary. **This one is a correct reading of a moment that has
+passed.** Same consequence, different cause.
+
+A status surface retains the last value published to it. A target that is off
+publishes nothing. So the surface keeps reporting what was true before — and
+**it does not read as stale, because a stale value and a current one are the
+same value.**
+
+### Demonstrated, minutes after powering the Gateway off
+
+    $ vcctrl power state
+      on: False                                    <- correct
+
+    $ vcctrl leds
+      {"available": true, "capslock": 1, "numlock": 1, "scrolllock": 1}
+
+    $ curl /state.json
+      input_verified: {"available": true, "ok": true, "age_s": 104.8}
+      video: "frozen"
+
+The daemon says **"the target is powered off"** and **"the target
+acknowledged a keystroke"** in the same breath. Both fields are working
+exactly as written. Only one of them is about now.
+
+**`available: true` is a field added earlier the same day**, in the change
+that gave `leds` three honest states. It distinguishes "this board has no LED
+channel" from "the channel is unreadable" and it does **not** distinguish
+either from "the machine is not powered to publish on it". A schema built to
+stop a Macintosh looking like a broken Gateway does not stop a powered-off
+Gateway looking like a live one.
+
+Note `input_verified` carries `age_s`, so a careful reader *could* catch it at
+104.8 s. `leds` carries nothing at all. The difference is not principle, it is
+that one of them happened to be built with a clock.
+
+### The rule
+
+**A reading must be shown to belong to the current epoch.** Not "recently
+read" — reading it again returns the same retained value — but demonstrably
+produced by the system as it is now.
+
+The worked example is `wait_cold_boot()`, and the general statement is what
+makes it more than a quirk: **readiness is the last thing a healthy boot
+sets**, so a level check for "ready" returns TRUE immediately after power-on
+on a machine that has not begun to POST. Observed 2026-08-19, 2.5 s after
+power-on. The edge pair — wait for the LEDs to CLEAR, proving this boot, then
+wait for them to set — is the proof of epoch, not a workaround for a flaky
+check.
+
+The benchmarking session's line is the one to keep: **the most misleading
+moment for a retained reading is exactly the moment it is most likely to be
+consulted** — because that is when something has just changed and the reader
+wants to know whether it has finished changing.
+
+### Not fixed
+
+Fixing it properly needs a timestamped record of when a value CHANGED, which
+is the instrument the webkvm session proposed for a different reason: an
+intermittent LED divergence that the boot-path edges pass straight through.
+The same record answers both, and it is theirs to build.
+
+`age_s` on `leds` would be a partial fix and is not one this can do alone —
+nothing currently tracks when the LED byte last arrived, and `LedsCapability`
+may not reach across to `PowerCapability` to ask whether the target is even
+powered (see InputCapability's rule 1). **Recorded rather than patched**,
+because a half-fix here would produce a freshness field that is itself
+retained, which is the same bug wearing the remedy's clothes.
