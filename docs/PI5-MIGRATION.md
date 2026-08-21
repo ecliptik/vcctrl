@@ -750,10 +750,12 @@ rather than by doing anything.
 - ~~**`snd_bcm2835` cmdline parameters**~~ — **CLOSED.** Not present in
   `/boot/firmware/cmdline.txt`. They were not carried forward, which is what
   the item asked for, and audio works without them.
-- **Whether the capture stick prefers a USB2 or USB3 port** — **still open**,
-  and now cheap to test since the machine is stable and there is a measured
-  baseline to compare against. It is a no-name `0001:ff02` and cheap capture
-  dongles are occasionally happier on USB2.
+- ~~**Whether the capture stick prefers a USB2 or USB3 port**~~ — **CLOSED,
+  2026-08-20: it is on USB3 (blue), confirmed by the operator.** It has since
+  driven two PUMP runs, a ViRGE reel, five Mach64 cells and several 800 MB
+  ring dumps from that port, so there is no unexplored configuration sitting
+  behind any of tonight's frame rates. The USB2 alternative was never tried
+  and does not need to be unless something starts misbehaving.
 
 **Thermals, measured 2026-08-20 under load:** 55.4 °C, `throttled=0x0`, ARM
 clock at its full 2.40 GHz, load average 0.21 while driving a sweep. The
