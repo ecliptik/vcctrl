@@ -200,13 +200,18 @@
        the control on a phone, which is what it was before the labels and is
        the one thing that always fits. */
     /* h1 is hidden here, so the rule that followed it separated nothing from
-       the left edge -- two pipes with a gap between them and no content. */
-    body h1 + .sep { display:none; }
+       the left edge -- two pipes with a gap between them and no content. The
+       state WORD goes too: it is the one thing in this row the veil over the
+       picture already says in full sentences, and on a phone the width it
+       costs is width the controls need. */
+    body h1 + .sep, body #state, body #state + .sep { display:none; }
     body #gbtn .bl, body #zoombtn #zoomlabel { display:none; }
     body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
     body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
-    /* The tab bar already opens and closes the menu here. */
-    body #keysbtn { display:none; }
+    /* Keys STAYS on a phone. It is the only one of the strip's controls whose
+       job the tab bar cannot do: SOUND and POWER open the same popovers the
+       buttons do, but the KEYS tab opens the command line, and the key menu
+       has to be reachable from inside it. */
     /* The tab bar is the panel here; there is no column to collapse. */
     body #actbtn, body #statbtn { display:none; }
     /* The tab bar carries sound and power here, and a tap on the picture
@@ -316,7 +321,13 @@
      them and the whole row read as broken. Faint is enough to say "not a
      reading" when the tooltip carries the reason, and it keeps the row
      level. */
-  .lamp.na > span { opacity:.34; }
+  /* EVERY LAMP HAS ITS UNDERLINE. The base rule leaves it transparent and
+     only `on` paints it, so a not-applicable lamp lost the rule the eight
+     beside it were wearing and the row looked like it had gaps in it. It is
+     the state carrier here, not decoration: a lamp without one reads as a
+     lamp that failed to render. Dim, in its own colour, so it says "present,
+     not a reading" rather than "off". */
+  .lamp.na > span { opacity:.34; border-bottom-color:currentColor; }
   .lamp i { display:none; }
   .lamp span {
     font:var(--t-micro)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
@@ -446,13 +457,21 @@
     image-rendering:pixelated; transform:translateX(-50%);
   }
   #scrubtip[hidden] { display:none; }
-  #scrubbar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  /* A grid, not a flex row: the middle group has to be centred on the TRACK
+     rather than on whatever is left after the other two, or it drifts every
+     time a label changes width. */
+  #scrubbar {
+    display:grid; grid-template-columns:1fr auto 1fr;
+    align-items:center; gap:6px;
+  }
+  #scrubbar .sg { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  #sg-mark { justify-self:start; }
+  #sg-play { justify-self:center; }
+  #sg-out  { justify-self:end; }
   /* The readout is a caption for the track above it, not a control in the
      row -- as a flex item it sat between Save and Live and pushed Live onto
-     a line of its own. Its own full-width line, centred with the transport,
-     so the group reads as one object at any width. */
-  #scrubbar { justify-content:center; }
-  #scrubpos { flex:1 0 100%; text-align:center; order:9; }
+     a line of its own. Its own full-width line, centred under the transport. */
+  #scrubpos { grid-column:1 / -1; text-align:center; }
   #scrubbar button { min-height:30px; padding:0 9px; }
   @media (max-width:640px) {
     #scrub { left:6px; right:6px; bottom:6px; padding:7px 8px; }
@@ -529,7 +548,7 @@
   .split {
     display:flex; align-items:stretch; flex:none;
     border:1px solid var(--rule); border-radius:6px;
-    background:rgba(0,0,0,.22); overflow:hidden;
+    background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1))); overflow:hidden;
     min-height:var(--tap);
   }
   @media (pointer:fine) { .split { min-height:36px; } }
@@ -647,7 +666,8 @@
   #cmdbar #filebtn, #cmdbar #filestop {
     flex:none; display:flex; align-items:center; cursor:pointer;
     border:0; border-right:1px solid var(--rule); border-radius:0;
-    background:rgba(0,0,0,.22); color:var(--muted); padding:0 10px;
+    background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
+    color:var(--muted); padding:0 10px;
     min-height:0;
   }
   #cmdbar #filebtn { font-size:15px; }
@@ -660,7 +680,8 @@
      overrides nothing but the chrome. */
   #cmdbar #sendline {
     flex:none; border:0; border-left:1px solid var(--rule); border-radius:0;
-    background:rgba(0,0,0,.22); color:var(--green); padding:0 11px;
+    background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
+    color:var(--green); padding:0 11px;
     min-height:0;
   }
   #cmdbar #sendline .ret { font-size:15px; line-height:1; opacity:.8; }
@@ -747,7 +768,13 @@
        the darker of the two -- so swapping tokens produced a difference you
        had to look for. A translucent black reads as "recessed into the
        surface" on every palette, dark or light, and needs no new colour. */
-    background:rgba(0,0,0,.22); border:1px solid var(--rule); border-radius:6px;
+    /* SCALED BY THE THEME'S OWN DARK FLAG. A flat 22% black is a recess on a
+       dark palette and a grey slab on a light one -- eleven of the
+       twenty-two are light, and on a phone, where the buttons are most of
+       what is on screen, they read as a row of blocks. --dark is already
+       published per theme, so the alpha follows it: .22 dark, .06 light. */
+    background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
+    border:1px solid var(--rule); border-radius:6px;
     padding:0 11px; min-height:var(--tap); cursor:pointer;
     touch-action:manipulation;
   }
@@ -758,7 +785,8 @@
   button:disabled, .split:has(button:disabled) {
     opacity:.45; cursor:not-allowed;
   }
-  button:disabled:hover { border-color:var(--rule); background:rgba(0,0,0,.22); }
+  button:disabled:hover { border-color:var(--rule);
+    background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1))); }
   button:hover { border-color:var(--muted); }
   button:active { background:var(--rule); }
   button.on { border-color:var(--green); color:var(--green); }
@@ -1142,25 +1170,35 @@
         <div id="scrubhead"></div>
         <img id="scrubtip" alt="" hidden>
       </div>
+      <!-- THREE GROUPS, BY WHAT THEY DO TO. The marks change the SELECTION,
+           the transport changes WHERE YOU ARE, and the right-hand three
+           produce something and leave. In one row they were nine controls in
+           a line and the eye had to work out which belonged together -- the
+           same argument as the separators in the status rail. -->
       <div id="scrubbar">
+        <div class="sg" id="sg-mark">
+          <button id="scrubin" data-short="In"
+                  title="Start the selection here">Mark in</button>
+          <button id="scrubout" data-short="Out"
+                  title="End the selection here">Mark out</button>
+        </div>
         <!-- The step buttons carry the bar, because on a phone Play collapses
              to a bare triangle and three controls where two look identical is
              worse than the wrapping it was fixing. -->
-        <button id="scrubprev" title="Back one frame (←)">|◀</button>
-        <button id="scrubplay" data-short="▶"
-                title="Play the buffer through">▶ Play</button>
-        <button id="scrubnext" title="Forward one frame (→)">▶|</button>
-        <span class="sep" aria-hidden="true">|</span>
-        <button id="scrubin" data-short="In"
-                title="Start the selection here">Mark in</button>
-        <button id="scrubout" data-short="Out"
-                title="End the selection here">Mark out</button>
-        <button id="scrubsave" data-short="Save"
-                title="Save the selected range as a video">Save range</button>
-        <button id="scrubsnap" data-short="📷"
-                title="Save the frame you are looking at as a JPEG">Snap frame</button>
+        <div class="sg" id="sg-play">
+          <button id="scrubprev" title="Back one frame (←)">|◀</button>
+          <button id="scrubplay" data-short="▶"
+                  title="Play the buffer through">▶ Play</button>
+          <button id="scrubnext" title="Forward one frame (→)">▶|</button>
+        </div>
+        <div class="sg" id="sg-out">
+          <button id="scrubsave" data-short="Save"
+                  title="Save the selected range as a video">Save range</button>
+          <button id="scrubsnap" data-short="📷"
+                  title="Save the frame you are looking at as a JPEG">Capture frame</button>
+          <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
+        </div>
         <span id="scrubpos">—</span>
-        <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
       </div>
     </div>
     <div id="zhint" aria-hidden="true"></div>
@@ -3909,7 +3947,11 @@ function setTab(name) {
   // tab still opens them; it just opens the same thing the header does,
   // rather than a second copy that can disagree with it.
   else if (name === 'buffer') { body.classList.add('closed'); enterReview(); }
-  else if (name === 'keys') { openPop('keys'); body.classList.add('closed'); }
+  // NOT the key menu, only the bar that holds it. The tab used to open both
+  // at once, so a phone that wanted the command line got a menu covering
+  // half the screen and had to dismiss it first. The Keys button is right
+  // there in the bar; tapping it is one tap and it is the tap that says so.
+  else if (name === 'keys') { body.classList.add('closed'); }
   else if (name === 'sound') { openPop('sound'); body.classList.add('closed'); }
   else if (name === 'power') { openPop('power'); body.classList.add('closed'); }
   else if (name === 'set')   { showSettings(true); body.classList.add('closed'); }
