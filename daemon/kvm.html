@@ -858,12 +858,18 @@
     border:1px solid var(--yellow); border-radius:8px;
     box-shadow:0 8px 22px rgba(0,0,0,.42);
     font:600 var(--t-data)/1.3 var(--sans); text-align:center;
+    white-space:nowrap;
     /* WIDTH, not max-width. As a max it shrank to its content and wrapped
        "A newer version of this page is available" onto four lines in a box
        half the screen wide, with room on both sides it would not use. */
     width:max-content; max-width:min(94vw, 520px);
   }
   @media (max-width:640px) { #stalebar { width:94vw; } }
+  /* nowrap is right where the sentence fits and wrong where it cannot: at
+     308px natural against a 94vw budget, anything under about 340px would
+     overflow its own box rather than wrap, and a toast that runs off both
+     edges is worse than one on two lines. */
+  @media (max-width:359px) { #stalebar { white-space:normal; } }
   #stalebar.show { display:flex; animation:toastin .18s ease-out; }
   @keyframes toastin {
     from { opacity:0; transform:translate(-50%, -8px); }
@@ -1353,7 +1359,11 @@
         PICTURE. Window-centred put it off to one side whenever the column was
         open, and it needed the header's measured height to know where the top
         was; anchored here it needs neither, and it follows full screen. -->
-   <div id="stalebar" role="status">A newer version of this page is available
+   <!-- "of this page" is carried by the toast being ON the page, and it was
+        the phrase pushing "available" onto a second line at phone width. A
+        two-line notice reads as a paragraph and takes a row of picture with
+        it. -->
+   <div id="stalebar" role="status">A newer version is available
      <button id="reloadbtn" title="Reload the page">Reload now</button></div>
    <div id="scroll">
     <div id="frame">
