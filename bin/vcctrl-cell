@@ -378,50 +378,43 @@ def main(argv):
                       " a filtered read, which cannot scroll" % len(missing))
                 still = []
                 for k in missing:
-                    cmd('SET | FIND "%s"' % k)
-                    # SETTLE. cmd() sleeps 0.5 s and wait_for_prompt returns
-                    # almost immediately, because at_prompt only proves the
-                    # BIOS ISR is alive. Grabbing straight after issuing a
-                    # second command in a loop reads the FIRST command's
-                    # screen -- which is exactly what happened: the re-check
-                    # for FASTPATH_OVERSIZED OCR'd the previous variable's
-                    # output and reported a false absence on a variable that
-                    # was correctly set.
-                    time.sleep(2.0)
-                    _sh, t2 = read_env_text_raw()
-                    if t2 is None:
-                        still.append(k)
-                        continue
-                    # MATCH ON "NAME=", NOT ON THE NAME.
+                    # ONE SHORT, UNAMBIGUOUS ANSWER, AND PROVE IT IS THIS
+                    # COMMAND'S ANSWER.
                     #
-                    # The echoed command line is  SET | FIND "SDL_HINT_FOO"
-                    # and it CONTAINS the variable name. Matching the name
-                    # alone would be satisfied by the echo of the very
-                    # question being asked, and would pass for a variable
-                    # that is genuinely absent -- a check answering itself.
-                    # Only SET's own output carries NAME=, so that is what is
-                    # required.
-                    # PER LINE, stem anywhere and an '=' on the same line.
+                    # `FIND /C` prints a single `count: N` line. N is 1 or 0
+                    # and the echoed question cannot produce a count line, so
+                    # there is no way for the check to be satisfied by its own
+                    # echo -- which the previous version could be.
                     #
-                    # Appending '=' to the STEM was wrong: the stem is the
-                    # name truncated to 32 chars, so for
-                    # SDL_HINT_DOSKUTSU_FASTPATH_OVERSIZED it built
-                    # ...OVERS= which can never match ...OVERSIZED=0. And
-                    # requiring the full 36-character name assumes OCR reads
-                    # every character of the longest name correctly, which is
-                    # the assumption stems exist to avoid.
-                    #
-                    # The line is the unit that distinguishes SET's output
-                    # from the echoed question: the echo is
-                    # SET | FIND "NAME" with no '=', the output is NAME=value.
+                    # The screen is then polled until the OCR shows the echo
+                    # of THIS variable's command, because a grab taken too
+                    # soon returns the PREVIOUS command's screen. That is what
+                    # made this refuse MQ1 three times on variables a
+                    # photograph showed plainly set: the reading was real and
+                    # was about the wrong moment (FINDINGS sec. 33, in my own
+                    # instrument).
                     stem2 = k[:max(12, len(k) - 4)].replace("_", "")
-                    found = False
-                    for line in t2.upper().splitlines():
-                        fl = line.replace(" ", "").replace("_", "")
-                        if stem2 in fl and "=" in fl and "FIND" not in fl:
-                            found = True
+                    cmd('SET | FIND "%s" | FIND /C "="' % k)
+                    verdict = None
+                    for _try in range(6):
+                        time.sleep(1.2)
+                        _sh, t2 = read_env_text_raw()
+                        if t2 is None:
+                            continue
+                        up = t2.upper()
+                        flat = up.replace(" ", "").replace("_", "")
+                        # the echo proves we are looking at this command
+                        if stem2 not in flat:
+                            continue
+                        m = re.search(r"COUNT[:\s]+(\d+)", up)
+                        if m:
+                            verdict = int(m.group(1))
                             break
-                    if found:
+                    if verdict is None:
+                        print("     %-32s COULD NOT READ -- not the same as absent"
+                              % k)
+                        still.append(k)
+                    elif verdict > 0:
                         print("     %-32s found on re-check (had scrolled)" % k)
                     else:
                         still.append(k)
