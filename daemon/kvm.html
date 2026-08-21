@@ -813,18 +813,38 @@
      its own buttons over the screen. It should be readable and then get out of
      the way. */
   #veil { gap:4px; padding:10px; }
+  /* A PERMANENTLY DARK PANEL MUST NOT WEAR A LIGHT THEME'S INK.
+     #veil is rgba(0,0,0,.84) over a stage that is near-black in every theme
+     -- deliberately, for the reason #stage already gives: a theme may
+     recolour any panel it likes, it may not change how the evidence looks.
+     But the notice drew its text with --yellow, --muted, --dim and --text,
+     which on the eleven light themes are DARK colours. Dark ink on a black
+     panel: the title read 3.58:1, and the three buttons under it -- Show last
+     frame, Save this frame, Review capture -- rendered at 1.62:1.
+     This is the no-signal notice. It is the screen you are looking at when
+     the rig has stopped working, and on a light theme it was the least
+     readable thing the page could show you.
+     Found by CONSTRUCTING the state rather than waiting to meet it: nothing
+     reaches this screen on a connected page, so every contrast pass until now
+     measured the page that was working. */
   #veil .big { font:600 clamp(12px, 3.6vw, 18px)/1.25 var(--mono);
-               color:var(--yellow); letter-spacing:.02em; }
+               color:#f2c96b; letter-spacing:.02em; }
   /* Wider and larger. At 46ch the explanation set as a narrow column in the
      middle of a black screen, which reads as a blob rather than as a sentence.
      72ch is a comfortable measure and the picture behind it is 4:3 anyway. */
-  #veil .sub { color:var(--muted); max-width:62ch;
+  #veil .sub { color:#d8dde0; max-width:62ch;
                font:clamp(10px, 2.9vw, 14px)/1.45 var(--sans); }
-  #veil .age { color:var(--dim); font:clamp(9px, 2.6vw, 12px)/1.4 var(--mono); }
+  #veil .age { color:#a9b0b4; font:clamp(9px, 2.6vw, 12px)/1.4 var(--mono); }
   #veil .row { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;
                justify-content:center; }
   #veil .row button { font:clamp(10px, 2.8vw, 13px) var(--sans);
-                      min-height:32px; padding:0 9px; }
+                      min-height:32px; padding:0 9px;
+                      /* Fixed, like everything else on this panel: a WHITE
+                         wash rather than the black one the themed buttons
+                         use, because this ground is already black. */
+                      color:#eef1f2; background:rgba(255,255,255,.10);
+                      border-color:rgba(255,255,255,.44); }
+  #veil .row button:hover { background:rgba(255,255,255,.17); }
 
   /* ── rails ───────────────────────────────────────────────────────────── */
   /* Full width under the picture: a command line in a 340px sidebar could not
