@@ -633,6 +633,56 @@ def main(argv):
                     print("   validity rule was never actually checked.")
                     return 2
 
+            # PROFILE WITNESS: BLASTER MUST BE SET.
+            #
+            # A cell inherits whatever boot profile the machine happens to be
+            # sitting in, and NOTHING in this tool has ever checked which one.
+            # R1A died on 2026-08-20 because the machine was still in the NET
+            # profile from a hand-run FTP transfer forty minutes earlier --
+            #     [critical] ack, sdl_init failed: No BLASTER environment
+            #     variable to find Sound Blaster.
+            # -- and it wrote a 1,102-byte log instead of ~120,000.
+            #
+            # THE TWO PROFILES LOOK IDENTICAL FROM HERE. Same `C:\DOSKUTSU>`
+            # prompt, same screen, same at_prompt, same everything this
+            # harness can see. `vcctrl-collect` even warns "DO NOT start a
+            # measured run without rebooting it first" when it leaves the
+            # machine in NET -- but the warning is printed to a log nobody
+            # reads at the moment it matters, and an ad-hoc FTP session
+            # bypasses it entirely.
+            #
+            # BLASTER is set by the default profile's AUTOEXEC and is absent
+            # in NET, so it is a witness to the whole boot path rather than a
+            # declaration about it. Checked with the same count primitive, and
+            # unreadable REFUSES.
+            print("   -- profile witness --")
+            cmd("CLS")
+            time.sleep(1.0)
+            cmd('SET | FIND "BLASTER" | FIND /C "="')
+            wv = None
+            for _try in range(20):
+                time.sleep(1.5)
+                _sh, t4 = read_env_text_raw()
+                if t4 is None:
+                    continue
+                wv = read_count(t4)
+                if wv is not None:
+                    break
+            if wv is None:
+                print("     BLASTER                          COULD NOT READ")
+                print("   REFUSED: could not establish which boot profile is")
+                print("   running. That is COULD NOT LOOK, not a pass.")
+                return 2
+            if wv == 0:
+                print("     BLASTER                          *** NOT SET ***")
+                print("   REFUSED: the machine is not on the sound profile.")
+                print("   Almost certainly still in NET from a collect or a")
+                print("   hand-run FTP session. sdl_init will fail and the cell")
+                print("   will die in seconds. Reboot to the menu default")
+                print("   (ctrl-alt-del, let the 5s timeout land on PGSB).")
+                return 1
+            print("     BLASTER                          set (profile is PGSB)")
+
         print("-- launch --")
         t0 = time.time()
         vc("type", "DOSKUTSU.EXE")
