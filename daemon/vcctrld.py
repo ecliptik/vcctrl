@@ -1572,6 +1572,15 @@ class VideoCapability(Capability):
         # If this reads zero after a week, the malformed-frame hypothesis is
         # dead on the evidence rather than on argument. If it reads several an
         # hour, it becomes the first thing to chase.
+        #
+        # ZERO WITH NO SIGNAL IS NOT EVIDENCE. When nothing is plugged in, the
+        # capture stick emits a well-formed JPEG of its own no-lock constant,
+        # so there is nothing malformed for this to count and it will sit at 0
+        # no matter how long it runs. The counter only says anything while a
+        # real source is being captured. Anyone reading a clean 0 the morning
+        # after a dark night and closing the question has read the instrument's
+        # state as the target's -- which is the failure this whole tool exists
+        # to prevent, and it has caught four of us this evening already.
         self.decode_errs = 0
         self.decode_last = None
         # _chg is read and written by concurrent /timeline.json requests --
