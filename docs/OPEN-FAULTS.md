@@ -240,6 +240,32 @@ Two clamps are now echoed rather than silent: asked 40 → 30, asked 0.2 → 1.0
 
 ---
 
+## 5b. A VGA splitter was fitted 2026-08-21 — brightness is discontinuous
+
+Measured on **identical content** (a screen reproduced from a pre-splitter
+capture), not on whatever happened to be showing:
+
+    mean lit brightness   174.5 -> 108.9    -38%
+    mean edge step         96.1 ->  65.2    -32%, softer
+    lit pixel count        2063 ->  2063    geometry UNCHANGED
+    dark noise floor       0.07 ->  0.07    no added noise
+    bytes/frame, matched  ~17.0 ->  17.6 KB
+    distinct / n             90 / 90        healthy analog source
+    OCR + read_count()    still correct ('count: 1' reads as 1)
+
+A passive splitter halves the drive into two loads, so amplitude drops and
+edges soften. **Nothing operational broke** — lock, OCR, attestation, decode
+counters and compression are all fine.
+
+**BUT ANY BRIGHTNESS FIGURE IS NOW DISCONTINUOUS AT THIS BOUNDARY.** Round R's
+game cells read 24.6; the same content reads dimmer now. **A pre-splitter
+brightness and a post-splitter brightness are different instruments** and must
+not be compared. Thresholds are not at risk — `_is_picture` needs a range of 4
+and text still spans ~109 — but a cross-boundary comparison of the *numbers*
+is invalid.
+
+---
+
 ## 6. Volume measures cannot see the signal die  — INSTRUMENT HAZARD
 
 A stress harness logged **a flat 111 fps straight through the target losing
