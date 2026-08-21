@@ -2000,3 +2000,71 @@ glass and one was never looked at.
   on it is wrong.
 - A recording should carry the cell's own start time and be clipped to it.
   Until it is, the filename is a label and not a provenance claim.
+
+## 37. The prompt detector inverts the text the harness types  [measured 2026-08-20]
+
+`vcctrl type` produces an uppercase letter by holding SHIFT. **Caps Lock
+inverts SHIFT.** `at_prompt()` toggles Caps Lock as its probe, several times a
+second, for the whole life of a cell. So **the case of everything this harness
+types is decided by a bit its own prompt detector is flipping.**
+
+Measured on the target, same command, same second, one LED apart:
+
+    capslock=1  ->  set | find "blaster" | find /c "="   ->  count: 0
+    capslock=0  ->  SET | FIND "BLASTER" | FIND /C "="   ->  count: 1
+
+DOS does not care about the case of `SET` or `FIND`, which is why this hid for
+so long. **`FIND`'s search string is case-sensitive by default**, so the
+pattern matched nothing and the pipeline answered 0.
+
+### Why that was worse than a wrong answer
+
+**`0` is also what "absent" looks like.** The forbidden-variable gate — added
+hours earlier specifically because a counting check cannot prove absence —
+would print
+
+    DOSKUTSU_SHOT_TICKS   absent (count 0, read back)
+
+for a variable that was **set**. Absence read as a value, inside the gate
+written to prevent absence being read as a value. R1A passed it because Caps
+Lock happened to be off, which is luck, not design.
+
+It surfaced only because the same pipeline was also asked about BLASTER, a
+variable that is *known to be set*. A false 0 there refuses a cell loudly; a
+false 0 on the forbidden check passes one silently. **The check that could
+only fail safely is the one that revealed the bug in the check that could
+fail dangerously.**
+
+### The fix that is not just a patch
+
+`FIND /I` removes the case dependency, and that alone would have closed this
+instance. The structural fix is the ordering:
+
+**A known-present probe now runs FIRST, through the identical pipeline, and
+an absence is only believed after it returns 1.** BLASTER proves `SET`, the
+pipe, `FIND`, the typing and the OCR all work end to end. Only then does a 0
+mean the variable is absent rather than the instrument being broken. The log
+carries the warrant with the claim:
+
+    -- profile witness --
+      BLASTER              set (profile is PGSB)
+    -- and 1 that must be ABSENT (pipeline proven by BLASTER above) --
+      DOSKUTSU_SHOT_TICKS  absent (count 0, read back)
+
+One probe, two jobs: boot-profile guard, and the control that makes every
+absence under it mean something.
+
+### Rules
+
+- **Never prove an absence on a pipeline that has not just proved a presence.**
+  A negative result from an untested instrument is not evidence.
+- Use `FIND /I` for every DOS-side match. Any case-sensitive comparison driven
+  by this harness has the same exposure — including
+  `MEM /C | FIND "UNIVBE"`, which appears in a proposed provider check.
+- The deeper defect is still open: **`type_text` cannot produce a requested
+  string independent of Caps Lock.** `/I` fixes matching, not typing. The
+  daemon should read the LED and invert the shift for letters.
+- **An instrument that perturbs its subject can perturb its own other
+  instruments.** `at_prompt` was known to move Caps Lock; nobody asked what
+  else read that bit. Fourth instance this week of the diagnostic changing
+  what it measures (sec. 28, 33, 34).
