@@ -100,6 +100,41 @@ and roughly 2.5 million real-frame failures did not either. **That is about as
 strong a negative as this mechanism can be given** — and it is still a bound,
 not an exoneration.
 
+### RESULT: it ran clean. 2.69 million real-frame failures, no abort.
+
+    daemon 519329, NRestarts 0, spawns 1, up 2h16m, zero abort lines
+
+    real-frame arm   55.0 min   2,687,682 GENUINE malformed-frame decode
+                                failures (814/s), interleaved with
+                                7,215,513 good decodes
+    input arm        53.6 min   92,009 ops, 0 errors
+    browser arm      55.1 min   72,207 video frames, 329,976 audio chunks,
+                                1,029 shots, 1,029 lastgood, 253 timelines
+
+Load average north of 7 on a 4-core box for the whole window.
+
+**THE MALFORMED-FRAME HYPOTHESIS IS AS CLOSE TO SETTLED AS IT CAN GET WITHOUT
+A CORE.** Thousands of synthetic mutants, then 2.69 million real ones, plus two
+genuine truncated frames that reached Pillow through the live system during
+actual cells. **A decoder overrunning on a malformed frame is not what aborted
+that daemon.**
+
+**AND THE COMBINATION IS FINALLY TESTED** — cells-shaped input load, browser
+clients and heavy decode simultaneously, which is what was present at both
+aborts and had never been run together. **Both aborts happened at 32 and 28
+minutes under a load LIGHTER than this one in every dimension we can measure**,
+which makes "it is load-related" harder to hold, not easier.
+
+**The model was wrong too, not just the mechanism.** `decode_errs` stayed at 1
+for the entire 55 minutes — no new malformed frames, because **nothing changed
+video mode**. Both frames ever observed came from a cell teardown, 11 and 13
+seconds before exit. **That is a mode-transition artefact on a schedule, not a
+rate.** "Malformed frames arrive at some frequency" was never the right model.
+
+**What remains is the armed core.** It fires once and names the frame, and it
+is worth more than any further stress either session can design. We have run
+out of hypotheses that are cheap to test.
+
 ### The hunt of 2026-08-21: four arms, no reproduction
 
 Run against one daemon (214909, `NRestarts 0`, target powered OFF):
