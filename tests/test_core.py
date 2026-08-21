@@ -1070,17 +1070,18 @@ HARNESS = r"""
     // The command field too. Its minimum lived on the INPUT while the border
     // lived on the WRAPPER, so the field stood two pixels proud of every
     // button beside it -- small, and enough to make the strip look crooked.
-    emit(`fieldh ${h('linewrap')} ${h('keysbtn')}`);
-    // Send is the ONE exception to the glyph-rule-label shape, deliberately:
-    // "Send" and the return glyph say the same thing, so a rule between them
-    // would be dividing a phrase rather than separating two facts. Asserted
-    // so the exception stays a decision rather than becoming a drift.
+    // Against a button still IN the strip. keysbtn moved inside the field,
+    // so comparing to it now measures the field against its own contents.
+    emit(`fieldh ${h('linewrap')} ${h('grabbtn')}`);
+    // Send is the return glyph alone now: the word said the same thing twice
+    // and cost width in the one row that had none. And the key menu lives
+    // INSIDE the field, with the clip, because a key the field cannot type is
+    // the same kind of thing as a file it cannot type.
     const sb = document.getElementById('sendline');
     const ret = sb.querySelector('.ret');
-    emit(`sendparts ${ret && sb.querySelector('.bl') && !sb.querySelector('.bi') ? 1 : 0} `
-       + `${ret && getComputedStyle(ret).borderLeftWidth === '0px'
-             && sb.querySelector('.bl').getBoundingClientRect().left
-                < ret.getBoundingClientRect().left ? 1 : 0}`);
+    const kb = document.getElementById('keysbtn');
+    emit(`sendparts ${ret && !sb.querySelector('.bl') && !sb.querySelector('.bi') ? 1 : 0} `
+       + `${kb && kb.closest('#linewrap') ? 1 : 0}`);
   }
 
   // A DARK TARGET IS NOT A BROKEN TRANSPORT. Both are silence from here, and
@@ -1547,9 +1548,9 @@ HARNESS = r"""
     liveAnyway = false;
   }
   closePop();
-  emit(`caretshut ${tipUp('keys')} ${tipUp('zoom')}`);
-  document.getElementById('keysbtn').click();
-  emit(`caretopen ${tipUp('keys')} 0`);
+  emit(`caretshut ${tipUp('sound')} ${tipUp('zoom')}`);
+  document.getElementById('soundbtn').click();
+  emit(`caretopen ${tipUp('sound')} 0`);
   closePop();
   document.getElementById('zoombtn').click();
   emit(`caretzoom ${tipUp('zoom')} 0`);
@@ -1772,9 +1773,9 @@ def test_zoom_layout_in_a_browser():
           got["striph"][1] >= 30, got["striph"])
     check("the command field is the same height as the buttons beside it",
           got["fieldh"][0] == got["fieldh"][1], got["fieldh"])
-    check("Send carries a return glyph and no divider cell",
+    check("Send is the return glyph alone, with no word beside it",
           got["sendparts"][0] == 1.0, got["sendparts"])
-    check("and the glyph sits after the word, undivided",
+    check("and the key menu opens from inside the command field",
           got["sendparts"][1] == 1.0, got["sendparts"])
 
     check("a fallback schedules a retry, backs off, and resets on success",
@@ -2233,6 +2234,30 @@ def test_buffer_span():
     check("control: it is four times the 30 s default",
           abs(got["asked_bytes"] / (30 * cap.BYTES_PER_S) - 4.0) < 0.01,
           got["asked_bytes"])
+
+    # THE SPAN IS A CEILING, NOT ONLY A FLOOR. Eviction used to run only on
+    # bytes, so the setting bought a budget of want * BYTES_PER_S and the span
+    # was whatever that budget happened to buy. On content compressing better
+    # than the pessimistic 1.6 MB/s the ring simply kept more -- measured live
+    # at 1193 s held against 480 asked. Nobody chose twenty minutes.
+    import time as _t
+    cap2 = vcctrld.VideoCapability(None, vcctrld.Bus())
+    cap2._buffer({"seconds": 10})
+    now = _t.time()
+    # Frames small enough that the BYTE cap can never be the thing evicting:
+    # if the span still holds, it is age doing it and not size.
+    for age in range(60, -1, -1):
+        cap2.ring.append((now - age, age, b"x" * 64))
+        cap2.ring_bytes += 64
+    cap2._push(b"y" * 64)
+    span = cap2.ring[-1][0] - cap2.ring[0][0]
+    check("age evicts even when bytes are nowhere near the cap",
+          span <= 10 * 1.05 + 1, round(span, 1))
+    check("control: the byte cap was never reached, so size did not do it",
+          cap2.ring_bytes < cap2.RING_BYTES / 100,
+          (cap2.ring_bytes, cap2.RING_BYTES))
+    check("control: and it kept the RECENT end, not the old one",
+          cap2.ring[-1][2] == b"y" * 64, cap2.ring[-1][1])
 
     check("an absurd request is clamped, not obeyed",
           cap._buffer({"seconds": 99999})["target_span_s"]

@@ -244,10 +244,8 @@
     body #zoombtn .caret, body header > .sep { display:none; }
     body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
     body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
-    /* Keys STAYS on a phone. It is the only one of the strip's controls whose
-       job the tab bar cannot do: SOUND and POWER open the same popovers the
-       buttons do, but the KEYS tab opens the command line, and the key menu
-       has to be reachable from inside it. */
+    /* Keys is inside the command field now, so there is nothing here to hide
+       or to keep: it travels with the row the KEYS tab opens. */
     /* The tab bar is the panel here; there is no column to collapse. */
     body #actbtn, body #statbtn { display:none; }
     /* The tab bar carries sound and power here, and a tap on the picture
@@ -765,6 +763,13 @@
      text area -- which is what made the paper clip look unclickable even
      after it was. The same translucent black every other button uses, so it
      needs no new colour and works on all twenty-two palettes. */
+  #cmdbar #keysbtn {
+    flex:none; border:0; border-right:1px solid var(--rule); border-radius:0;
+    background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
+    color:var(--muted); padding:0 9px; min-height:0; font-size:15px;
+  }
+  #cmdbar #keysbtn:hover { background:var(--rule); }
+  #cmdbar #keysbtn[aria-expanded="true"] { background:var(--rule); }
   #cmdbar #filebtn, #cmdbar #filestop {
     flex:none; display:flex; align-items:center; cursor:pointer;
     border:0; border-right:1px solid var(--rule); border-radius:0;
@@ -786,7 +791,7 @@
     color:var(--green); padding:0 11px;
     min-height:0;
   }
-  #cmdbar #sendline .ret { font-size:15px; line-height:1; opacity:.8; }
+  #cmdbar #sendline .ret { font-size:17px; line-height:1; opacity:.9; }
   #cmdbar #sendline:hover { background:var(--rule); }
   #cmdbar #sendline:disabled { color:var(--dim); }
   /* Proportional to the row it divides, like the rail's. */
@@ -1400,20 +1405,24 @@
       <label id="filebtn" for="fileinput"
              title="Type a text file into the target, line by line">📄</label>
       <button id="filestop" hidden title="Stop where it has got to">■</button>
+      <!-- THE KEYS THAT BELONG TO THIS FIELD, IN IT. The clip is here on the
+           argument that "put a file in" is the same gesture as "put text in";
+           a key the field cannot type is the third member of that set, not a
+           separate control standing outside the box. As a labelled button in
+           the strip it left the command line squeezed into what was left. -->
+      <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
+              aria-controls="pop-keys"
+              title="Keys this field cannot type — Esc, F-keys, Ctrl-Alt-Del">⌨️</button>
       <input id="line" placeholder="type a command"
              autocapitalize="off" autocorrect="off" spellcheck="false">
-      <!-- The glyph is not a separate control here, it is part of the verb --
-           "Send ↵" is one thing to read. Every other button in the strip puts
-           a rule between its icon and its label because the icon says WHAT
-           and the label says which; this one says the same thing twice, so a
-           rule between them would be dividing a phrase. -->
-      <button id="sendline" title="Type this line at the target and press Enter"><span class="bl">Send</span><span class="ret">↵</span></button>
+      <!-- JUST THE GLYPH. "Send ↵" said the same thing twice and cost the
+           width of a word in the one row that had none to spare. A return
+           arrow at the end of a text field is the least ambiguous control on
+           this page. -->
+      <button id="sendline" title="Type this line at the target and press Enter"><span class="ret">↵</span></button>
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
     <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
-    <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
-            aria-controls="pop-keys"
-            title="Show or hide the key rail"><span class="bi">⌨️</span><span class="bl">Keys</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- ALWAYS RECORDING, so this does not start anything -- which is why it
          is not called Record. The ring has been rolling since the daemon came
          up; the button opens a window onto what it is already holding. It
@@ -4240,14 +4249,12 @@ function statsRows(j) {
   kv('holding', v.span_s != null ? v.span_s.toFixed(1) + ' s' : '—',
      v.span_s != null && v.target_span_s
        ? bandLow(v.span_s / v.target_span_s, 0.9, 0.5) : '');
-  // "asked to hold" read as a target being missed by 4x. It is a FLOOR: the
-  // setting buys a byte budget sized for that many seconds at a pessimistic
-  // 1.6 MB/s, and when the picture compresses better than that -- a static
-  // DOS screen does -- the same budget buys more seconds. The daemon also
-  // thins the oldest third rather than dropping it, which trades frame rate
-  // at the old end for more span. Holding MORE than asked is the system
-  // working; the label was the thing that made it look broken.
-  kv('asked for at least', v.target_span_s != null ? v.target_span_s + ' s' : '—');
+  // A CEILING NOW, NOT A FLOOR. It used to be neither -- the setting bought
+  // a byte budget and the span was whatever that budget happened to buy, so
+  // asking for 480 s and getting 1193 was the system working as built and
+  // nothing anybody had chosen. The daemon evicts on age as well as on bytes
+  // now, so the number means what the menu says.
+  kv('set to hold', v.target_span_s != null ? v.target_span_s + ' s' : '—');
   kv('frames', v.ring_frames != null ? v.ring_frames.toLocaleString() : '—');
   kv('memory', v.ring_bytes != null
        ? (v.ring_bytes / 1048576).toFixed(1) + ' MB' : '—');

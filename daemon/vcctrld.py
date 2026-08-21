@@ -1744,6 +1744,23 @@ class VideoCapability(Capability):
             self.seq += 1
             self.ring.append((now, self.seq, frame))
             self.ring_bytes += len(frame)
+            # A DURATION HAS TO BE ABLE TO END A FRAME'S LIFE ON ITS OWN.
+            #
+            # Eviction used to run only when BYTES exceeded the cap, so the
+            # setting bought a byte budget -- want * BYTES_PER_S -- and the
+            # span was whatever that budget happened to buy. BYTES_PER_S is a
+            # pessimistic 1.6 MB/s, so on content that compresses better the
+            # ring simply kept more: asked for 480 s, measured holding 1193
+            # at 25 KB a frame. Nobody chose twenty minutes.
+            #
+            # The menu offers seconds, so seconds must be a ceiling as well as
+            # a floor. Cheap content now costs LESS than its budget instead of
+            # silently spending all of it; expensive content is unchanged,
+            # because the byte loop below still thins to protect the span.
+            while len(self.ring) > 1 and \
+                    now - self.ring[0][0] > self.TARGET_SPAN_S * 1.05:
+                _t, _s, old = self.ring.popleft()
+                self.ring_bytes -= len(old) if old else 0
             while self.ring_bytes > cap and len(self.ring) > 1:
                 span = now - self.ring[0][0]
                 if span > self.TARGET_SPAN_S * 1.05 or len(self.ring) < 8:
