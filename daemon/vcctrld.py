@@ -20,6 +20,7 @@ Constraints read out of the USB4VC source, all load-bearing:
 
 import collections
 import errno
+import faulthandler
 import glob
 import hashlib
 import io
@@ -3206,6 +3207,27 @@ def serve(devs, registry):
 
 
 def main():
+    # THE NEXT ABORT MUST NAME ITSELF.
+    #
+    # 2026-08-20 23:09:03 this process died with one line -- "double free or
+    # corruption (top)" -- and status 6/ABRT. That message is glibc's heap
+    # allocator, so it cannot come from Python code; it comes from a C
+    # extension, and the only ones on the frame path are Pillow's JPEG decode
+    # and hashlib. Which one, and doing what, was unrecoverable: no core (this
+    # host has no systemd-coredump), no traceback, nothing in the journal
+    # either side of it. A daemon that aborts and says nothing is a daemon
+    # whose fault cannot be found, and systemd restarted it three seconds
+    # later so from the outside it looked perfectly healthy -- it looked
+    # healthy BECAUSE it restarted, which is the state this tool exists to
+    # make visible rather than reproduce.
+    #
+    # faulthandler catches SIGABRT and SIGSEGV among others and writes every
+    # thread's Python stack to stderr, which systemd puts in the journal. It
+    # costs nothing until the process is already dying. It cannot say which C
+    # frame corrupted the heap, but it says which Python line was running in
+    # each thread when it happened, and with a capture thread, a watchdog and
+    # several web threads all touching Pillow that is most of the answer.
+    faulthandler.enable(file=sys.stderr, all_threads=True)
     if os.geteuid() != 0:
         sys.stderr.write("vcctrld must run as root (needs /dev/uinput)\n")
         return 1
