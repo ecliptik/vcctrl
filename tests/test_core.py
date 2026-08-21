@@ -1519,6 +1519,33 @@ HARNESS = r"""
     emit(`headerpin ${hsOK && pinned ? 1 : 0} `
        + `${cr.right <= zr.right + 0.5 && cr.left >= zr.left - 0.5 ? 1 : 0}`);
   }
+  // FROZEN OFFERS A LIVE PICTURE; NOSIGNAL DOES NOT. Identical frames are
+  // what a DOS prompt produces, so there the stream is available and typing
+  // is what settles it -- handing back a still would leave you typing at a
+  // photograph. The two states must not offer the same button.
+  {
+    const db = document.getElementById('dimbtn');
+    lastState = {video: {state: 'frozen'}};
+    poll_render_veil('frozen', null);
+    const froz = db.textContent;
+    poll_render_veil('nosignal', null);
+    const nosig = db.textContent;
+    // A THIRD CASE. Frames arriving and UNIFORM is not a picture at all, so
+    // offering "show the live picture" would promise something never sampled.
+    poll_render_veil('frozen', '#000000');
+    const blank = db.textContent;
+    emit(`veiluniform ${/blank/i.test(blank) ? 1 : 0} `
+       + `${blank !== froz && blank !== nosig ? 1 : 0}`);
+    emit(`veilbtn ${/live/i.test(froz) && /last frame/i.test(nosig) ? 1 : 0} `
+       + `${froz !== nosig ? 1 : 0}`);
+    // And choosing live must uncover the canvas, not merely hide the notice.
+    lastState = {video: {state: 'frozen'}};
+    document.getElementById('stale').style.display = '';
+    showLive();
+    emit(`veillive ${document.getElementById('stale').style.display === 'none' ? 1 : 0} `
+       + `${liveAnyway ? 1 : 0}`);
+    liveAnyway = false;
+  }
   closePop();
   emit(`caretshut ${tipUp('keys')} ${tipUp('zoom')}`);
   document.getElementById('keysbtn').click();
@@ -1878,6 +1905,18 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][0] == 1.0, got["cadcolour"])
     check("Refresh video is in the screen menu, not the power menu",
           got["cadcolour"][1] == 1.0, got["cadcolour"])
+    check("a uniform frame is offered as blank, not as a picture",
+          got["veiluniform"][0] == 1.0, got["veiluniform"])
+    check("control: three states, three labels",
+          got["veiluniform"][1] == 1.0, got["veiluniform"])
+    check("frozen offers the live picture, no-signal offers the last frame",
+          got["veilbtn"][0] == 1.0, got["veilbtn"])
+    check("control: and the two states do not share a label",
+          got["veilbtn"][1] == 1.0, got["veilbtn"])
+    check("choosing live uncovers the canvas",
+          got["veillive"][0] == 1.0, got["veillive"])
+    check("and suppresses the still until a real picture returns",
+          got["veillive"][1] == 1.0, got["veillive"])
     check("the header's status can shrink and its controls cannot",
           got["headerpin"][0] == 1.0, got["headerpin"])
     check("so the zoom caret stays inside its own button",

@@ -3314,7 +3314,82 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape')     { e.preventDefault(); exitReview(); }
 });
 
+// Frames are arriving in the frozen case, so there is a live picture to
+// offer; in the nosignal case there is not, and the button must not pretend
+// otherwise. Named rather than inline so it can be driven directly.
+// WHAT THE STICK IS ACTUALLY EMITTING, looked at rather than inferred from
+// an absence. "No frames at all" and "uniform black at full rate" render the
+// same on this page and are completely different facts: the second says the
+// cable, the stick and ffmpeg are all fine and the TARGET is in a mode the
+// stick cannot sample. That is a diagnosis; a blank rectangle is not.
+//
+// Measured on the rig by vcctrl-94 while the console sat in text mode 03h:
+// every pixel exactly 0, sixty consecutive frames byte-identical at 15011
+// bytes, arriving at rate. 720x400 at 70 Hz against 60 Hz-only firmware -- it
+// never locked, so there was nothing to reveal. This is the page learning to
+// say that instead of showing nothing and letting it be guessed at.
+let _uc = null;
+function uniformFrame() {
+  if (!frames) return null;
+  const el = mediaEl();
+  if (!(el.naturalWidth || el.width)) return null;
+  if (!_uc) _uc = document.createElement('canvas');
+  _uc.width = 24; _uc.height = 18;
+  const x = _uc.getContext('2d', {willReadFrequently: true});
+  let d;
+  try {
+    x.drawImage(el, 0, 0, 24, 18);
+    d = x.getImageData(0, 0, 24, 18).data;
+  } catch (e) { return null; }
+  const r = d[0], g = d[1], b = d[2];
+  // A tolerance of 2, not 0: the downscale averages, and a genuinely still
+  // picture still varies far more than this across 432 samples. Analog noise
+  // on a REAL frame measured about 1 mean absolute difference, so a picture
+  // that passes this is not a picture.
+  for (let i = 4; i < d.length; i += 4)
+    if (Math.abs(d[i] - r) > 2 || Math.abs(d[i+1] - g) > 2
+        || Math.abs(d[i+2] - b) > 2) return null;
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function poll_render_veil(state, uni) {
+  const frozen = state === 'frozen';
+  // THREE CASES, NOT TWO. Frames arriving and identical BUT NOT UNIFORM is a
+  // real picture that is not moving -- a DOS prompt -- and the live stream is
+  // worth showing because typing changes it. Frames arriving and UNIFORM is
+  // not a picture at all, and offering to "show the live picture" there would
+  // promise something that was never sampled. Say what it is instead.
+  $('dimbtn').textContent = uni ? 'Show the blank frame'
+                          : frozen ? 'Show live picture' : 'Show last frame';
+  $('dimbtn').title = uni
+    ? 'Show what the stick is emitting, unjudged. It is a flat ' + uni
+      + ' field, not a dark picture — seeing it beats inferring it.'
+    : frozen
+    ? 'Hide this notice and show the stream itself — identical frames are '
+      + 'what a DOS prompt looks like, and typing will prove it'
+    : 'Hide this notice and show the last frame it captured';
+}
+
 let veilHidden = false;
+// FROZEN AND NOSIGNAL OFFER DIFFERENT THINGS, so the button must not offer
+// the same one for both.
+//
+// nosignal: no frames are arriving, so the last good frame is all there is.
+// frozen: frames ARE arriving, they are merely identical -- which is exactly
+// what a DOS prompt sitting at C:\> produces. There the LIVE picture is
+// available and is the only thing that can settle it, because typing makes
+// the frames stop being identical. Handing back a still there would leave
+// you typing at a photograph.
+let liveAnyway = false;
+function showLive() {
+  liveAnyway = true;
+  setVeilHidden(true);
+  holdBuffer(false);
+  $('stale').style.display = 'none';   // uncover the canvas
+  staleBlob = null;                    // and let a save take the live frame
+  addLine(new Date(), 'video',
+          'showing the live picture through a frozen stream', 'k-note');
+}
 function setVeilHidden(v) {
   veilHidden = v;
   staleFull = v;                    // undimmed while it is the only picture
@@ -3323,12 +3398,16 @@ function setVeilHidden(v) {
   $('veil').classList.toggle('show', showing && !v);
   $('veilback').hidden = !(showing && v);
 }
-$('dimbtn').onclick = () => { setVeilHidden(true); holdBuffer(false); };
+$('dimbtn').onclick = () => {
+  if (lastState && lastState.video && lastState.video.state === 'frozen')
+    showLive();
+  else { setVeilHidden(true); holdBuffer(false); }
+};
 $('reviewbtn').onclick = () => { setVeilHidden(true); enterReview(); };
 $('reviewitem').onclick = () => { closePop(); enterReview(); };
 // Press it again to put it away, the way every other menu on this page works.
 $('bufbtn').onclick = () => { closePop(); reviewing ? exitReview() : enterReview(); };
-$('veilback').onclick = () => setVeilHidden(false);
+$('veilback').onclick = () => { liveAnyway = false; setVeilHidden(false); };
 // Save works on whatever is on screen: the last live frame while the stream is
 // frozen, the current one otherwise. Saving the dimmed version would be saving
 // the presentation rather than the evidence, so this always writes the
@@ -3438,7 +3517,7 @@ async function showStale() {
   // paints the last-good frame back over whatever frame is being examined,
   // every five seconds, and the picture jumps under the person stepping
   // through it.
-  if (reviewing) return;
+  if (reviewing || liveAnyway) return;
   const el = $('stale');
   if (Date.now() - staleAt > 5000) {
     staleAt = Date.now();
@@ -3549,6 +3628,9 @@ async function pollState() {
   const v = j.video || {};
   if (v.state === 'locked') {
     pill('p-video','on','video locked');
+    // A real picture ends the choice: the next outage starts with the notice
+    // shown rather than silently suppressed by a decision made an hour ago.
+    liveAnyway = false;
     // NOT WHILE REVIEWING. The signal returning is the moment the ring would
     // overwrite what is being looked at, which is precisely when the hold has
     // to survive -- and the notice must not be dismissed out from under a
@@ -3577,14 +3659,21 @@ async function pollState() {
     // opens, so the page can tell them apart instead of describing all three
     // with the same three words.
     const t = deviceTrouble(v);
+    const uni = v.state === 'frozen' ? uniformFrame() : null;
     $('veil-title').textContent = t ? t[0]
       : {nosignal: 'No Signal', frozen: 'No Signal',
          starting: 'Waiting for the first frame'}[v.state] || v.state || '—';
     // One short line. The full explanation was four lines of prose in the
     // middle of a black screen, which is a document, not a status.
     $('veil-sub').textContent = t ? t[1]
-      : v.state === 'frozen' ? 'Receiving identical frames, showing buffer.'
+      : v.state === 'frozen'
+        ? (uni
+           ? 'Receiving uniform ' + uni + ' at '
+             + (achievedFps() || 0).toFixed(0)
+             + ' fps — the capture is running; the mode is outside its range.'
+           : 'Receiving identical frames, showing buffer.')
       : v.state === 'nosignal' ? 'No frames are arriving at all.' : '';
+    poll_render_veil(v.state, uni);
     // Not while merely STARTING: the first frame has not arrived yet, so
     // there is no buffer worth holding and pinning would only stop it filling.
     if (v.state === 'nosignal' || v.state === 'frozen') holdBuffer(true);
