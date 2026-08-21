@@ -1403,6 +1403,13 @@ HARNESS = r"""
   // size, and was reported undiscoverable within the hour.
   {
     const bb = document.getElementById('bufbtn');
+    // The camera half acts on the spot; the word half opens the menu. Same
+    // shape as Sound, and the shape is the point: a control that both DOES
+    // something and OPENS something has to say which half is which.
+    const snap = document.getElementById('snapbtn');
+    emit(`capsplit ${snap && snap.closest('#capwrap') === bb.closest('#capwrap')
+                     ? 1 : 0} `
+       + `${document.getElementById('scrubsnap') ? 1 : 0}`);
     const lab = () => bb.querySelector('.caret');
     const up = el => el.classList.contains('up') ? 1 : 0;
     const inStrip = bb.closest('#cmdbar') ? 1 : 0;
@@ -1896,6 +1903,10 @@ def test_zoom_layout_in_a_browser():
           got["heatabsent"][0] == 1.0, got["heatabsent"])
     check("control: a real zero still reports healthy",
           got["heatabsent"][1] == 1.0, got["heatabsent"])
+    check("the camera and the menu are two halves of one control",
+          got["capsplit"][0] == 1.0, got["capsplit"])
+    check("and the capture menu can snap the frame being scrubbed to",
+          got["capsplit"][1] == 1.0, got["capsplit"])
     check("the buffer control is in the strip, where it can be found",
           got["bufbtn"][0] == 1.0, got["bufbtn"])
     check("and its caret follows the same rule as the menus beside it",

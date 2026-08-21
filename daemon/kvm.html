@@ -220,7 +220,7 @@
        written tonight when the button family was consolidated; this is its
        blast radius. */
     body #cmdbar #grabbtn, body #cmdbar #soundwrap,
-    body #cmdbar #powerbtn, body #cmdbar #bufbtn { display:none; }
+    body #cmdbar #powerbtn, body #cmdbar #capwrap { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -542,12 +542,19 @@
      that is the feedback saying it will do something. The word opens a menu,
      like Keys and Power, so it does what they do: the outline brightens and
      nothing fills. Same hover, same meaning, across the whole strip. */
-  #cmdbar .split #mutebtn:hover { background:var(--rule); }
-  .split:has(#soundbtn:hover) { border-color:var(--muted); }
-  #cmdbar .split #mutebtn {
+  #cmdbar .split #mutebtn:hover, #cmdbar .split #snapbtn:hover {
+    background:var(--rule);
+  }
+  .split:has(#soundbtn:hover), .split:has(#bufbtn:hover),
+  .split.open { border-color:var(--muted); }
+  #cmdbar .split #mutebtn, #cmdbar .split #snapbtn {
     border-right:1px solid var(--rule); font-size:14px; padding:0 9px;
   }
   #cmdbar .split #mutebtn.on { color:var(--green); }
+  /* A shutter flash: the file lands in the browser's downloads with no
+     visible event of its own, so the button says it happened. */
+  #cmdbar .split #snapbtn.flash { background:var(--green); }
+  #cmdbar #bufbtn { gap:6px; padding-right:9px; }
 
   .popmenu { padding:5px; min-width:150px; }
   .popmenu button {
@@ -1150,6 +1157,8 @@
                 title="End the selection here">Mark out</button>
         <button id="scrubsave" data-short="Save"
                 title="Save the selected range as a video">Save range</button>
+        <button id="scrubsnap" data-short="📷"
+                title="Save the frame you are looking at as a JPEG">Snap frame</button>
         <span id="scrubpos">—</span>
         <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
       </div>
@@ -1207,9 +1216,18 @@
          lives here rather than in the screen menu because a control nobody
          can find is a control that does not exist, and it was reported that
          way within an hour of shipping. -->
-    <button id="bufbtn" aria-haspopup="true" aria-expanded="false"
-            aria-controls="scrub"
-            title="Look back through the last half minute the daemon kept"><span class="bi">⏱️</span><span class="bl">Buffer</span><span class="caret dn" aria-hidden="true"></span></button>
+    <!-- TWO CONTROLS IN ONE, the same shape as Sound: the camera acts on the
+         spot, the word opens a menu. A clock said "duration" when what this
+         is about is PICTURES -- the rolling buffer, a frame out of it, a frame
+         of now. Not "Record", because the ring has been running since the
+         daemon came up and there is nothing to start. -->
+    <span class="split" id="capwrap">
+      <button id="snapbtn" class="bi"
+              title="Save a picture of the screen right now">📷</button>
+      <button id="bufbtn" class="bl" aria-haspopup="true" aria-expanded="false"
+              aria-controls="scrub"
+              title="Look back through the last half minute the daemon kept">Capture<span class="caret dn" aria-hidden="true"></span></button>
+    </span>
     <!-- NOT display:none. A file input that is display:none is not focusable,
          and .click() on it is ignored outright by some browsers -- which is
          exactly why the button appeared to do nothing. Visually hidden but
@@ -2585,6 +2603,9 @@ function setBufOpen(on) {
   const lab = b.querySelector('.caret');
   lab.classList.toggle('up', !on);
   lab.classList.toggle('dn', on);
+  // The wrapper carries the open state too, so the pair outlines together
+  // rather than half of it looking pressed.
+  $('capwrap').classList.toggle('open', on);
 }
 let openPopName = null;
 
@@ -3104,6 +3125,7 @@ $('scrubexit').onclick = exitReview;
 $('scrubin').onclick  = () => { bufFrom = tl.frames[tlAt].seq; markRange(); };
 $('scrubout').onclick = () => { bufTo   = tl.frames[tlAt].seq; markRange(); };
 $('scrubsave').onclick = () => $('savebuf').click();
+$('scrubsnap').onclick = () => snapshot('scrubbed frame');
 $('scrubplay').onclick = () => {
   if (playTimer) { stopPlay(); return; }
   $('scrubplay').textContent = '❚❚ Pause';
@@ -3199,22 +3221,50 @@ $('savebuf').onclick = async () => {
   }
 };
 
-$('savebtn').onclick = async () => {
+// ONE SNAPSHOT PATH, three buttons. The camera in the strip, "Save this
+// frame" on the No Signal notice, and Snap in the capture menu all want the
+// same thing written the same way; three copies would have drifted the file
+// naming apart within a week.
+//
+// WHICH frame is the whole question, and it is answered by what is on screen
+// rather than by what is newest. While scrubbing, the frame under the
+// playhead IS the picture, and saving the live one instead would hand back
+// something the operator never saw.
+async function snapshot(why) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  let blob = null, label = 'screen';
   try {
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    let blob = staleBlob, label = 'lastframe';
-    if (!blob) {
+    if (reviewing && tl && tl.frames[tlAt]) {
+      const k = tl.frames[tlAt];
+      const r = await fetch('/frame.jpg?seq=' + k.seq);
+      if (!r.ok) { note('that frame is no longer in the buffer'); return; }
+      blob = await r.blob();
+      // Named by how far back it is, because "the frame 4.2 seconds before it
+      // stopped" is the thing being kept -- a wall-clock stamp alone would
+      // not say which moment of the outage this was.
+      const back = (tl.frames[tl.frames.length - 1].t - k.t).toFixed(2);
+      label = 'buffer-minus' + back + 's-seq' + k.seq;
+    } else if (staleBlob) {
+      blob = staleBlob; label = 'lastframe';
+    } else {
       const r = await fetch('/shot.jpg');
       if (!r.ok) { note('no picture to save'); return; }
-      blob = await r.blob(); label = 'screen';
+      blob = await r.blob();
     }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `vcctrl-${label}-${stamp}.jpg`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    addLine(new Date(), 'saved', a.download, 'k-vid');
+    addLine(new Date(), 'saved', a.download + (why ? ' · ' + why : ''), 'k-vid');
   } catch (e) { note('save failed: ' + e); }
+}
+$('savebtn').onclick = () => snapshot('no-signal notice');
+$('snapbtn').onclick = () => {
+  const b = $('snapbtn');
+  b.classList.add('flash');
+  setTimeout(() => b.classList.remove('flash'), 180);
+  snapshot(reviewing ? 'scrubbed frame' : 'live');
 };
 async function showStale() {
   // The reviewer owns the rectangle while it is up. Without this the poll
