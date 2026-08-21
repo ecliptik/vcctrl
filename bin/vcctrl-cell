@@ -120,6 +120,42 @@ def cmd(line, timeout=60):
     return wait_for_prompt(timeout) is not None
 
 
+# OCR DOES NOT READ DIGITS RELIABLY IN THIS CONSOLE FONT.
+#
+# Measured on the target 2026-08-20: `count: 0` OCRs as `count: @`, every
+# time. A `\d+` regex therefore never matches, the answer is scored
+# COULD NOT READ, and the gate refuses a cell whose environment was in fact
+# correct -- which is exactly what happened to R1A.
+#
+# The anchor word survives fine; only the glyph after it is unreliable. So
+# the count is classified by CONFUSION CLASS rather than parsed as a number.
+# `FIND /C` on a single variable name can only answer 0 or 1, so there are
+# just two classes to separate and a wide margin between them.
+#
+# ANYTHING UNRECOGNISED STAYS None. A character that is in neither class is
+# not guessed at -- it returns could-not-read and the caller refuses, which
+# is the whole point of the three-state contract. Widening these sets to
+# make a stubborn cell pass would be the same mistake as widening the
+# brightness threshold to make the capture regression go away.
+ZERO_LIKE = set("0OoQ@©")
+ONE_LIKE = set("1lI|i!")
+
+
+def read_count(text):
+    """0, 1, or None for could-not-read. Never guesses."""
+    if not text:
+        return None
+    m = re.search(r"COUNT\s*[:;.]?\s*(\S)", text.upper().replace(" ", " "))
+    if not m:
+        return None
+    ch = m.group(1)
+    if ch in ZERO_LIKE or ch.lower() in ZERO_LIKE:
+        return 0
+    if ch in ONE_LIKE or ch.lower() in ONE_LIKE:
+        return 1
+    return None
+
+
 def read_env_text_raw():
     """OCR the current screen without issuing anything.
 
@@ -572,9 +608,8 @@ def main(argv):
                         _sh, t3 = read_env_text_raw()
                         if t3 is None:
                             continue
-                        m = re.search(r"COUNT[:\s]+(\d+)", t3.upper())
-                        if m:
-                            verdict = int(m.group(1))
+                        verdict = read_count(t3)
+                        if verdict is not None:
                             break
                     if verdict is None:
                         print("     %-32s COULD NOT READ -- NOT the same as absent" % k)
