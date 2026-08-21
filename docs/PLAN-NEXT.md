@@ -213,7 +213,21 @@ must compare content, not status codes.
 - **`--dry-run`, and a sanity gate that refuses if the target does not look
   like the game directory.** Both stolen from `cf-clean.sh`.
 - **Expect two layouts**: flat `LOGS\*.PPM` for everything written up to now,
-  and `LOGS\<TAG>\*.PPM` after benchmarking's naming fix lands.
+  and `LOGS\<TAG>\*.PPM` from patch 0322 onward.
+
+**0322 LANDED 2026-08-21 and it simplifies this job.** A round's output is now
+a DIRECTORY rather than a filename pattern, so the silent-overwrite problem
+that destroyed two frames (`S02400.PPM` written by two cells, the second
+overwriting the first with no error and no log line) is structurally
+impossible rather than prevented by collecting between cells. Verified tagged,
+untagged and regression by its author: `LOG_TAG=D1A` gives
+`LOGS\D1A\S00300.PPM`, no tag gives flat `LOGS\S00300.PPM` as 0318 did.
+
+**Consequence for the cleanup: scope by directory, not by glob.** "Delete the
+tags this round produced" becomes "delete these directories once every file in
+them is proven collected", which is easier to make safe and easier to make
+resumable. The historical flat debris is a separate, one-off problem — which
+is the answer to open question 1 below.
 
 ### Open questions — the operator's, not mine
 
