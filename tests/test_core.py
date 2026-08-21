@@ -1443,6 +1443,20 @@ HARNESS = r"""
     lamps({available: false, why: 'martian', reason: 'the daemon says so'},
           'locked', null);
     const future = /the daemon says so/i.test(capsEl.title);
+    // `unproven` must not be quieter than the absences that mean less. It
+    // is the only state saying "the machine is mid-change and these values
+    // are from before it" -- and it must be tellable apart from a plain
+    // stale reading WITHOUT colour, or the monochrome themes lose it.
+    lamps({available: false, why: 'unproven', reason: 'not published yet'},
+          'locked', {available: false, why: 'unproven'});
+    const unprovenLoud = capsEl.classList.contains('warn')
+                      && capsEl.classList.contains('stale')
+                      && !capsEl.classList.contains('na');
+    lamps({available: true, capslock: 1}, 'nosignal',
+          {available: true, ok: true, age_s: 3});
+    const plainStale = capsEl.classList.contains('stale')
+                    && !capsEl.classList.contains('warn');
+    emit(`unprovenloud ${unprovenLoud && plainStale ? 1 : 0} 0`);
     emit(`whyset ${unpowered && errored ? 1 : 0} ${future ? 1 : 0}`);
     lamps(null, 'locked', null);
     const unknown = cls() === 'na' && /not reporting/i.test(capsEl.title);
@@ -1835,6 +1849,8 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][0] == 1.0, got["cadcolour"])
     check("Refresh video is in the screen menu, not the power menu",
           got["cadcolour"][1] == 1.0, got["cadcolour"])
+    check("unproven is louder than a plain stale reading, and not by colour alone",
+          got["unprovenloud"][0] == 1.0, got["unprovenloud"])
     check("each why shows the daemon's own sentence, not a paraphrase",
           got["whyset"][0] == 1.0, got["whyset"])
     # The page must not have to be edited every time the daemon adds a state.

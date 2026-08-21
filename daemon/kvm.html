@@ -4384,7 +4384,13 @@ const LEDLOOK = {
   unsupported: 'na',      // a Macintosh: working hardware, no such channel
   unpowered:   'na',      // nothing to read, and nothing wrong
   unknown:     'na',      // not looked yet
-  unproven:    'stale',   // there IS a channel, it has not spoken this epoch
+  // THE LOUDEST OF THE ABSENCES, deliberately. The others say a reading is
+  // missing; this one says the machine is CHANGING and has not finished --
+  // the values are real and belong to the boot before this one. It is the
+  // wait_cold_boot() trap in miniature, where a level check reads ready 2.5s
+  // after power-on. Yellow, bold and dashed: three carriers, so a monochrome
+  // theme still tells it apart from a grey dashed reading.
+  unproven:    'warn',    // there IS a channel, it has not spoken this epoch
   error:       'bad',     // a Gateway with a dead PS/2 lead: a fault
 };
 function lamps(leds, videoState, verified) {
@@ -4410,7 +4416,10 @@ function lamps(leds, videoState, verified) {
     if (!el) continue;
     const v = why || blind ? null : leds[key];
     el.classList.toggle('on', v === 1);
-    el.classList.toggle('stale', stale || look === 'stale');
+    // Dashed as well as yellow: `warn` here is not a fault, it is an
+    // unconfirmed reading, and a solid underline would claim otherwise.
+    el.classList.toggle('stale', stale || look === 'stale' || look === 'warn');
+    el.classList.toggle('warn', look === 'warn');
     el.classList.toggle('na', look === 'na' || blind);
     el.classList.toggle('bad', look === 'bad');
     el.title =
