@@ -3402,7 +3402,13 @@ async function showStale() {
     } catch (e) {}
     el.style.display = 'none';
     staleBlob = null;
-    $('veil-age').textContent = 'no live picture has been seen yet';
+    // THE NEGATIVE OF THE LINE ABOVE IT. Its sibling names what we have --
+    // "last live picture · 12s old" -- so this one names what we do not, and
+    // that is the single fact the two lines above have not already said: the
+    // black behind this notice is not a dimmed old frame, it is all there is.
+    // "yet" was the problem with the old wording. It promises a picture is
+    // coming, which is false when the stick is unplugged.
+    $('veil-age').textContent = 'no earlier frame to fall back on';
   }
 }
 function hideStale() {
