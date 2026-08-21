@@ -2851,15 +2851,28 @@ function drawMap() {
   const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
   const px = k => Math.round(((k.t - t0) / span) * (w - 1));
 
-  // AGAINST THIS RECORDING'S OWN BUSIEST MOMENTS, not a constant: a scrolling
-  // DIR and a mode change are orders of magnitude apart, and a fixed scale
-  // would flatten one of them. The floor matters as much -- an idle analog
-  // capture still differs frame to frame by about 1 from sampling noise, and
-  // normalising to that would fill the bar with a picture of nothing.
-  const vals = f.map(k => k.change).filter(v => v != null).sort((a, b) => a - b);
+  // SUBTRACT THE NOISE, THEN SCALE. A still screen does not score zero: this
+  // is analog capture, sampling noise differs every frame, and measured on
+  // this rig at 1/8 draft scale a motionless DOS prompt scores 0.21 to 0.35
+  // across 821 frames -- never zero, never above 0.35. So the zero of this
+  // waveform is 0.35, not the observed minimum.
+  //
+  // Getting this wrong goes both ways and I had it wrong in both directions.
+  // Autoscaling to the observed range makes 0.14 of noise a full-height
+  // wiggle, so a motionless screen looks busy. Flooring the DIVISOR instead,
+  // which is what I did first, left a static buffer drawing 1px bars at 40%
+  // opacity -- present in the canvas, invisible on the screen, which is
+  // indistinguishable from the bug being unfixed.
+  const NOISE = 0.35;
+  const adj = v => v == null ? null : Math.max(0, v - NOISE);
+  const vals = f.map(k => adj(k.change)).filter(v => v).sort((a, b) => a - b);
   const p95 = vals.length ? vals[Math.min(vals.length - 1,
                                           Math.floor(vals.length * 0.95))] : 0;
-  const norm = Math.max(3, p95);
+  // Against this recording's own busiest moments, because a scrolling DIR and
+  // a mode change are orders of magnitude apart and a fixed top would flatten
+  // one of them. The minimum stops a single spike in an otherwise dead buffer
+  // from making every other frame look like nothing.
+  const norm = Math.max(0.5, p95);
   const STRIP = 3, base = h, top = STRIP + 1;
 
   const gaps = f.map(k => k.gap_ms).filter(v => v != null).sort((a, b) => a - b);
@@ -2872,14 +2885,22 @@ function drawMap() {
 
   for (const k of f) {
     const cx = px(k);
-    const v = k.change;
-    if (v != null) {
-      const hh = Math.max(1, Math.round(Math.min(1, v / norm) * (base - top)));
-      // Bright where it moved, dim where it merely existed: a still screen
-      // should read as a floor you can see past, not as data.
-      x.globalAlpha = v / norm > 0.12 ? 0.95 : 0.4;
-      x.fillStyle = green;
-      x.fillRect(cx, base - hh, 1, hh);
+    const a = adj(k.change);
+    if (a != null) {
+      if (a <= 0) {
+        // STILL, and that is a reading. A 2px tick says "there is a frame
+        // here and the screen was not moving" -- which has to look different
+        // from an empty column, where there is no frame at all.
+        x.globalAlpha = 0.45;
+        x.fillStyle = rule;
+        x.fillRect(cx, base - 2, 1, 2);
+      } else {
+        const hh = Math.max(2,
+          Math.round(Math.min(1, a / norm) * (base - top)));
+        x.globalAlpha = 0.95;
+        x.fillStyle = green;
+        x.fillRect(cx, base - hh, 1, hh);
+      }
     }
     const gm = k.gap_ms == null ? med : k.gap_ms;
     if (gm > med * 1.8) {
