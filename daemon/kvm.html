@@ -634,14 +634,24 @@
   }
   .split:has(#soundbtn:hover), .split:has(#bufbtn:hover),
   .split.open { border-color:var(--muted); }
+  /* THE RULE NEEDS THE SAME AIR ON BOTH SIDES, and on the splits it had none
+     on one of them. Measured across the strip: a plain button puts 8px
+     between its glyph and the rule and 8px between the rule and its word;
+     the splits put 9px before and ZERO after, so "Capture" and "Sound" sat
+     hard against their divider while "Grab", "Keys" and "Power" stood clear
+     of theirs. Reported three times as the strip's spacing looking uneven,
+     and measuring the gaps BETWEEN buttons kept saying it was fine, because
+     the unevenness was inside them. */
   #cmdbar .split #mutebtn, #cmdbar .split #snapbtn {
-    border-right:1px solid var(--rule); font-size:14px; padding:0 9px;
+    border-right:1px solid var(--rule); font-size:14px;
+    padding:0 8px 0 9px;
   }
+  #cmdbar .split #soundbtn, #cmdbar .split #bufbtn { padding-left:8px; }
   #cmdbar .split #mutebtn.on { color:var(--green); }
   /* A shutter flash: the file lands in the browser's downloads with no
      visible event of its own, so the button says it happened. */
   #cmdbar .split #snapbtn.flash { background:var(--green); }
-  #cmdbar #bufbtn { gap:6px; padding-right:9px; }
+  #cmdbar #bufbtn { gap:6px; padding-right:9px; padding-left:8px; }
 
   .popmenu { padding:5px; min-width:150px; }
   /* 500, STATED. `font:` is a shorthand and resets every part it does not
@@ -1889,9 +1899,22 @@ function noteSourceRate(v) {
 // measure for ten seconds is not a rate.
 const srcRate = () => (Date.now() - srcFresh < 10000 && srcFps) ? srcFps : null;
 const fpsCeiling = () => {
-  // The device cap is a bandwidth choice and stays: a phone does not want 30
-  // fps of a 60 KB screen even when the source offers it.
-  const device = smallScreen() ? 12 : 30;
+  // TWELVE WAS INSURANCE AGAINST A CONTROLLER THAT COULD NOT BACK OFF.
+  //
+  // The phone cap was written when the adaptive loop went silent below two
+  // frames a second -- so a bad link stayed pinned at whatever it asked for
+  // at connect, and a low hard cap was the only thing stopping that being a
+  // disaster. That loop was fixed tonight: it acts when starved, halves
+  // rather than tracking, and can ask for one frame a second. The insurance
+  // is now costing what it was insuring against, reported as a game running
+  // at 25 fps arriving at 12 with no drops at all -- a link with headroom,
+  // held back by a constant.
+  //
+  // So measurement governs on both, as it does everywhere else on this page
+  // now. The initial ask is still low and still creeps up two at a time, so
+  // a phone ramps into it rather than opening at thirty and flooding a link
+  // nobody has tested yet.
+  const device = 30;
   return Math.max(FPS_MIN, Math.min(device, Math.round(srcRate() || 20)));
 };
 let fpsWant = 0, fpsGoodRuns = 0;
