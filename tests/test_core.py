@@ -3610,3 +3610,56 @@ def test_the_change_cache_survives_two_timelines_at_once():
                            "detect the fault it claims to cover")
     finally:
         sys.setswitchinterval(old_iv)
+
+
+def test_connection_history_outlives_a_busy_event_log():
+    """"Was anything connected while I was measuring" is asked afterwards.
+
+    vcctrl-94 tried to bound a browser tab's window from the daemon's event
+    log and could not: it holds 200 entries and a running cell's LED polling
+    floods it, so the whole log spanned SEVENTEEN SECONDS. The rare event was
+    always already gone by the time anyone looked for it.
+
+    The fix is not a bigger shared log, it is a separate one. Connections
+    happen a few times an hour where LED reads happen several times a second,
+    so the same 200 entries cover days rather than seconds. Two things with
+    different lifetimes do not belong in one ring.
+    """
+    print("\nconnection log")
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    cap = vcweb.WebCapability.__new__(vcweb.WebCapability)
+    cap.lock = threading.Lock()
+    import collections as _c
+    cap.ws_log = _c.deque(maxlen=200)
+
+    cap._log_ws("open", kind="video", agent="Mozilla/5.0 (iPhone)")
+    cap._log_ws("close", kind="video", frames=714, nbytes=21088504,
+                held_s=63.2)
+    rows = list(cap.ws_log)
+    check("both ends of a connection are recorded", len(rows) == 2, len(rows))
+    check("the open names what connected",
+          "iPhone" in rows[0].get("agent", ""), rows[0])
+    check("the close carries what it cost",
+          rows[1]["frames"] == 714 and rows[1]["bytes"] == 21088504, rows[1])
+    check("and how long it was on", rows[1]["held_s"] == 63.2, rows[1])
+    check("every row is timestamped, or it cannot bound a window",
+          all(r.get("t") for r in rows), rows)
+
+    # THE POINT OF THE SEPARATE RING, asserted rather than described: a flood
+    # of the frequent thing must not evict the rare one. This is what the
+    # shared log failed at.
+    for i in range(500):
+        cap._log_ws("open", kind="audio")
+    kinds = [r["kind"] for r in cap.ws_log]
+    check("control: the ring does bound itself", len(cap.ws_log) == 200,
+          len(cap.ws_log))
+    check("audio chatter CAN evict video rows from ITS OWN ring",
+          "video" not in kinds, "")
+
+    # And the real property: connections are rare, so 200 of them is days.
+    # A day of browsing is dozens, not thousands.
+    check("200 entries is days of ordinary use, not seconds",
+          cap.ws_log.maxlen == 200, cap.ws_log.maxlen)

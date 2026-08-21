@@ -18,6 +18,7 @@ only per-frame work is a header write and a socket send.
 """
 
 import base64
+import collections
 import hashlib
 import json
 import os
@@ -229,6 +230,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, base64.b64decode(r["jpeg"]), "image/jpeg",
                                   {"X-Frame-Age": str(r.get("age_s")),
                                    "X-Frame-Mean": str(r.get("mean"))})
+            if path == "/wslog.json":
+                # Its own endpoint rather than a field on /state.json: every
+                # open tab polls state every 1.5 s and none of them wants 200
+                # connection records with it. This is read once, afterwards,
+                # by somebody asking what was connected during a window.
+                with self.cap.lock:
+                    rows = list(self.cap.ws_log)
+                return self._json({"ok": True, "now": round(time.time(), 3),
+                                   "count": len(rows), "log": rows})
             if path == "/timeline.json":
                 return self._json(self.cap.call("timeline", {}))
             if path == "/buffer.avi":
@@ -548,6 +558,21 @@ class WebCapability(object):
         self.ws_last_error = None
         self.ws_last_agent = None
         self.ws_dropped = 0
+        # WHO WAS CONNECTED, AND WHEN. Durable, because the question is always
+        # asked afterwards.
+        #
+        # vcctrl-94 tried to bound a browser tab's window from the daemon's
+        # event log and could not: it holds 200 events and a running cell's
+        # LED polling floods it, so the entire log spanned SEVENTEEN SECONDS.
+        # "Was anything else connected while I was measuring" is unanswerable
+        # from it, and that is exactly the question you have after a
+        # measurement rather than before it.
+        #
+        # Connections are rare where LED polls are not -- a few an hour
+        # against several a second -- so the same 200 entries cover days
+        # instead of seconds. Different lifetime, different log; putting them
+        # in one was what made the short one useless.
+        self.ws_log = collections.deque(maxlen=200)
         # Per-connection accounting. The WebSocket question could not be
         # settled from either end alone: the browser reports what it received,
         # the daemon reported only that it wrote without error. If the daemon
@@ -833,6 +858,8 @@ class WebCapability(object):
             self.ws_sent_frames = 0     # per connection, so the number answers
             self.ws_sent_bytes = 0      # "did THIS client get anything"
             self.ws_last = "open"
+        opened_t = time.time()
+        self._log_ws("open", kind="video", agent=agent)
         stop = threading.Event()
         held = set()
         # A list so the input thread can retune it live: the client knows how
@@ -853,6 +880,9 @@ class WebCapability(object):
                 self.ws_closed += 1
                 self.ws_last = "closed after %d frames / %d bytes written" % (
                     self.ws_sent_frames, self.ws_sent_bytes)
+                nf, nb = self.ws_sent_frames, self.ws_sent_bytes
+            self._log_ws("close", kind="video", frames=nf, nbytes=nb,
+                         held_s=time.time() - opened_t)
             # Release anything this viewer was holding. A dropped wifi
             # connection mid-keypress must not leave a key down at the g2k,
             # where at a DOS prompt it types until the buffer fills.
@@ -865,6 +895,27 @@ class WebCapability(object):
                 sock.close()
             except Exception:
                 pass
+
+    def _log_ws(self, event, kind, agent=None, frames=None, nbytes=None,
+                held_s=None):
+        """Record one connection event. Cheap, bounded, and NOT the event bus.
+
+        Kept separate from `events` deliberately: that log is sized for
+        activity, which on this daemon means LED polls at several a second,
+        and a browser connection is a few an hour. Sharing one ring meant the
+        rare thing was always already gone by the time anyone looked.
+        """
+        row = {"t": round(time.time(), 3), "event": event, "kind": kind}
+        if agent:
+            row["agent"] = agent[:120]
+        if frames is not None:
+            row["frames"] = frames
+        if nbytes is not None:
+            row["bytes"] = nbytes
+        if held_s is not None:
+            row["held_s"] = round(held_s, 1)
+        with self.lock:
+            self.ws_log.append(row)
 
     def _ws_say(self, sock, wlock, obj):
         """Send one JSON text frame, or give up quietly.
@@ -993,6 +1044,8 @@ class WebCapability(object):
             return
         with self.lock:
             self.listeners += 1
+        opened_t = time.time()
+        self._log_ws("open", kind="audio")
         last_seq = 0
         try:
             # Start from the live edge, not the ring's tail: a listener joining
@@ -1024,6 +1077,8 @@ class WebCapability(object):
         finally:
             with self.lock:
                 self.listeners -= 1
+            self._log_ws("close", kind="audio",
+                         held_s=time.time() - opened_t)
             try:
                 sock.close()
             except Exception:
