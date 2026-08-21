@@ -3461,3 +3461,152 @@ def test_a_running_total_does_not_lead_a_live_rate():
           "self.ws_sent_frames = 0" in body, "")
     check("control: dropped is NOT reset there",
           "self.ws_dropped = 0" not in body, "")
+
+
+def test_a_frame_that_will_not_decode_is_counted():
+    """Four call sites hand ring bytes to Pillow and all four swallow failure.
+
+    Swallowing is correct -- one bad frame must not take down a timeline --
+    but swallowed with NO COUNTER means the daemon has never been asked
+    whether malformed frames arrive at all. That question became load-bearing
+    the night vcctrld aborted twice with glibc heap corruption: the classic
+    shape for "double free or corruption" is a decoder overrunning on bad
+    input, and the only validation between the capture pipe and Image.open is
+    "starts FFD8, ends FFD9, at least 128 bytes".
+
+    Zero is a real answer and an interesting one. Nobody could give it before.
+    """
+    print("\ndecode errors")
+    cap = vcctrld.VideoCapability(None, vcctrld.Bus())
+    check("a fresh capability has counted none", cap.decode_errs == 0,
+          cap.decode_errs)
+    check("and reports no last error rather than a stale one",
+          cap.decode_last is None, cap.decode_last)
+
+    # A frame that passes the daemon's ENTIRE filter -- SOI, EOI, >= 128 bytes
+    # -- and is still not a JPEG. This is exactly what the reader would push.
+    junk = b"\xff\xd8" + b"\x00" * 200 + b"\xff\xd9"
+    check("control: it would pass _read_frames' filter",
+          junk.startswith(b"\xff\xd8") and junk.endswith(b"\xff\xd9")
+          and len(junk) >= 128, len(junk))
+
+    ok = cap._is_picture(junk)
+    check("an undecodable frame is not called a picture", ok is False, ok)
+    check("and it was counted", cap.decode_errs == 1, cap.decode_errs)
+    check("with the site that saw it named",
+          (cap.decode_last or {}).get("where") == "is_picture", cap.decode_last)
+    check("and something of the error kept",
+          bool((cap.decode_last or {}).get("error")), cap.decode_last)
+
+    # Control in the other direction: a real frame must not be counted, or the
+    # counter measures traffic instead of faults.
+    import io as _io
+    try:
+        from PIL import Image
+        buf = _io.BytesIO()
+        Image.new("RGB", (64, 48), (30, 60, 90)).save(buf, "JPEG")
+        cap._is_picture(buf.getvalue())
+        check("control: a decodable frame is NOT counted",
+              cap.decode_errs == 1, cap.decode_errs)
+    except ImportError:
+        print("  SKIP  no Pillow")
+
+
+def test_the_change_cache_survives_two_timelines_at_once():
+    """Two open tabs is enough to make this raise.
+
+    `_score_changes` prunes a shared dict by ITERATING it, while another
+    request thread may be inserting -- RuntimeError: dictionary changed size
+    during iteration. It cannot corrupt anything (the GIL is on; checked on
+    the Pi with sys._is_gil_enabled() rather than assumed), but a 500 on
+    /timeline is a real fault in a path a reviewing tab hits every few
+    seconds.
+
+    THE FIRST VERSION OF THIS TEST PASSED ON THE BROKEN CODE. It scored 40
+    tiny frames from four threads and never once interleaved -- the prune is
+    microseconds of pure Python against a 40-entry dict, and CPython switches
+    threads every 5 ms, so the window essentially did not exist. A test that
+    cannot fail is worse than no test: it reports coverage it does not have.
+
+    Two changes make it real, and both are deliberate rather than incidental:
+    a prune with THOUSANDS of entries to delete, so the iteration lasts long
+    enough to be interrupted, and a switch interval short enough to guarantee
+    the interruption. The race is genuinely rarer than this in production --
+    but "rare" is a statement about frequency, not about whether the fault
+    exists, and the fix is a lock either way.
+    """
+    print("\nconcurrent timelines")
+    import threading as _th
+    try:
+        from PIL import Image
+    except ImportError:
+        print("  SKIP  no Pillow")
+        return
+    import io as _io
+
+    frames = []
+    for i in range(24):
+        b = _io.BytesIO()
+        Image.new("RGB", (64, 48), (i * 7 % 256, 40, 80)).save(b, "JPEG")
+        frames.append((time.time() + i * 0.03, i + 1, b.getvalue()))
+
+    def run(cap):
+        errs = []
+
+        def hammer(offset):
+            for _ in range(30):
+                # Refill with entries no live window mentions, so every pass
+                # has thousands of keys to prune -- that long iteration is
+                # where another thread gets in.
+                #
+                # THROUGH THE CAPABILITY'S OWN LOCK, not around it. A first
+                # version wrote to the dict directly and made the locked build
+                # fail too -- but nothing in the daemon writes `_chg` except
+                # `_score_changes`, so that was the test inventing a writer
+                # that does not exist and then blaming the code for it. The
+                # control below swaps in a lock that does nothing, which is
+                # what makes this a fair comparison rather than a rigged one.
+                with cap._chg_lock:
+                    for k in range(10000 + offset, 14000 + offset):
+                        cap._chg[k] = 0.0
+                try:
+                    cap._score_changes(frames[offset % 4:])
+                except Exception as exc:
+                    errs.append("%s: %s" % (type(exc).__name__, exc))
+
+        ts = [_th.Thread(target=hammer, args=(i,)) for i in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(timeout=90)
+        return errs
+
+    class _Null(object):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    _NULL = _Null()
+
+    old_iv = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)          # guarantee the interleave
+    try:
+        cap = vcctrld.VideoCapability(None, vcctrld.Bus())
+        errs = run(cap)
+        check("four concurrent scorings raise nothing", not errs,
+              errs[0] if errs else "")
+
+        # CONTROL, in the same run rather than in a separate script: give a
+        # second capability a lock that does not lock and require the fault to
+        # appear. Without this the green above says only that nothing
+        # happened, which is what the first version of this test said.
+        loose = vcctrld.VideoCapability(None, vcctrld.Bus())
+        loose._chg_lock = _NULL
+        broke = run(loose)
+        check("control: the same test DOES fail without the lock",
+              bool(broke), "unlocked run raised nothing -- this test cannot "
+                           "detect the fault it claims to cover")
+    finally:
+        sys.setswitchinterval(old_iv)

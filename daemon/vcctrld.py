@@ -1560,6 +1560,26 @@ class VideoCapability(Capability):
         self.seq = 0
         self.thin_passes = 0
         self.dropped_pinned = 0
+        # DECODE FAILURES, COUNTED. Four call sites hand ring bytes to Pillow
+        # and all four swallow the exception -- correctly, since one bad frame
+        # must not take down a timeline. But swallowed with no counter means
+        # the daemon has never been asked whether malformed frames arrive at
+        # all, and that question is now load-bearing: a glibc "double free" is
+        # heap metadata damage, the classic shape is a decoder overrunning on
+        # bad input, and the only validation between the capture pipe and
+        # Image.open is "starts FFD8, ends FFD9, at least 128 bytes".
+        #
+        # If this reads zero after a week, the malformed-frame hypothesis is
+        # dead on the evidence rather than on argument. If it reads several an
+        # hour, it becomes the first thing to chase.
+        self.decode_errs = 0
+        self.decode_last = None
+        # _chg is read and written by concurrent /timeline.json requests --
+        # two open tabs is enough -- and the prune iterates it while another
+        # thread may insert. That raises RuntimeError rather than corrupting
+        # anything (the GIL is on; checked, not assumed), but a 500 on a
+        # timeline is a real fault and this is a cheap fix.
+        self._chg_lock = threading.Lock()
         # WHO is holding the ring, not merely THAT it is held. One boolean
         # could not tell two holders apart, and the consequence was reported
         # from a phone: a reviewer scrubbing a capture got a broken image
@@ -2051,6 +2071,16 @@ class VideoCapability(Capability):
                 "ring_frames": frames, "span_s": round(actual, 2),
                 "mem_limited": cap < asked}
 
+    def _note_decode_error(self, where, exc, seq=None):
+        """Record that a frame would not decode. Never raises, never blocks."""
+        with self.lock:
+            self.decode_errs += 1
+            self.decode_last = {
+                "where": where, "seq": seq,
+                "error": errstr(exc)[:160],
+                "t": round(time.time(), 3),
+            }
+
     def _score_changes(self, items):
         """How much each frame differs from the one before it.
 
@@ -2075,10 +2105,18 @@ class VideoCapability(Capability):
         except Exception:
             return {}                      # no Pillow: no waveform, not a crash
         import io as _io
+        # EVERY touch of the shared cache is under the lock, and only the
+        # touches -- the decode, which is the expensive part, stays outside
+        # it. A first version guarded the prune alone, and a test with a
+        # control caught that being wrong within the minute: the prune
+        # iterates while ANOTHER thread inserts, so locking the pruners
+        # against each other and not against the writers changes nothing.
         cache = self._chg
+        with self._chg_lock:
+            known = frozenset(cache)
         start = len(items)
         for i, (_t, sq, _f) in enumerate(items):
-            if sq not in cache:
+            if sq not in known:
                 # One frame EARLIER than the first unscored one, because a
                 # difference needs something to differ from.
                 start = max(0, i - 1)
@@ -2090,20 +2128,28 @@ class VideoCapability(Capability):
                 im = Image.open(_io.BytesIO(f))
                 im.draft("L", (max(1, im.size[0] // 8), max(1, im.size[1] // 8)))
                 im = im.convert("L")
-            except Exception:
+            except Exception as exc:
+                self._note_decode_error("timeline", exc, sq)
                 prev = None
-                cache.setdefault(sq, None)
+                with self._chg_lock:
+                    cache.setdefault(sq, None)
                 continue
             if prev is not None and prev.size == im.size:
-                cache[sq] = round(
+                v = round(
                     ImageStat.Stat(ImageChops.difference(prev, im)).mean[0], 2)
+                with self._chg_lock:
+                    cache[sq] = v
             else:
-                cache.setdefault(sq, None)
+                with self._chg_lock:
+                    cache.setdefault(sq, None)
             prev = im
         live = set(sq for _t, sq, _f in items)
-        for k in [k for k in cache if k not in live]:
-            del cache[k]
-        return cache
+        with self._chg_lock:
+            for k in [k for k in cache if k not in live]:
+                cache.pop(k, None)
+            # A COPY out. The caller then reads a snapshot rather than a dict
+            # another request thread is still writing into.
+            return dict(cache)
 
     def _timeline(self, req):
         """Index of what is in the buffer: one entry per frame, no pixels.
@@ -2300,7 +2346,8 @@ class VideoCapability(Capability):
             im.draft("L", (im.size[0] // 8, im.size[1] // 8))
             lo, hi = im.convert("L").getextrema()
             return (hi - lo) >= self.MIN_RANGE
-        except Exception:
+        except Exception as exc:
+            self._note_decode_error("is_picture", exc)
             return False
 
     def _shot(self, req):
@@ -2355,7 +2402,8 @@ class VideoCapability(Capability):
                 im = Image.open(io.BytesIO(frame))
                 im.draft("L", (im.size[0] // 8, im.size[1] // 8))
                 mean = ImageStat.Stat(im.convert("L")).mean[0]
-            except Exception:
+            except Exception as exc:
+                self._note_decode_error("lastgood", exc)
                 mean = None
         return {"ok": True, "picture": True, "state": state, "stale": True,
                 "mean": mean, "t": t, "age_s": round(time.time() - t, 3),
@@ -2398,6 +2446,12 @@ class VideoCapability(Capability):
                     "device_present": os.path.exists(self.DEVICE),
                     "device": self.DEVICE,
                     "pinned": bool(self.pin_holders),
+                    # Frames that would not decode. Zero is a real answer here
+                    # and an interesting one: it says the capture pipe has
+                    # never handed Pillow anything malformed, which is the
+                    # standing hypothesis for an abort nobody has explained.
+                    "decode_errs": self.decode_errs,
+                    "decode_last": self.decode_last,
                     "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
                     if len(self.ring) > 1 else 0.0,
                     # What the buffer is ASKED to keep, beside what it is
