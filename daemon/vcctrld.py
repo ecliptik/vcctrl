@@ -1601,6 +1601,20 @@ class VideoCapability(Capability):
         with self.lock:
             pinned = self.pinned_at is not None
             cap = self._cap()
+            # Counted BEFORE the pinned early return, deliberately. The field
+            # is published as "frames" and rendered as "frames seen": a frame
+            # that arrived and was then dropped WAS seen, and the drop is
+            # separately counted in dropped_while_pinned. Counting arrivals is
+            # the honest semantics for both readers.
+            #
+            # It used to sit after the return, so the counter stalled exactly
+            # while the ring was pinned -- and the KVM auto-pins whenever the
+            # picture is lost. The state where a source rate is most
+            # interesting was the state that stopped measuring it, and a
+            # consumer computing a rate from the difference saw zero and kept
+            # showing the last good figure as current. Retained value rendered
+            # as live, which is sec. 33 again in a third place.
+            self.frames_total += 1
             if pinned and self.ring_bytes + len(frame) > cap:
                 # Pinned: the buffer is being examined, so drop the NEW frame
                 # rather than free one somebody may be looking at.
@@ -1622,7 +1636,6 @@ class VideoCapability(Capability):
                         _t, _s, old = self.ring.popleft()
                         self.ring_bytes -= len(old)
             self.last_frame_t = now
-            self.frames_total += 1
         # NOTE: this does NOT set state. A frame arriving attests that the USB
         # device produced bytes -- nothing more. Whether those bytes are a live
         # picture is a question about content across several frames, and the

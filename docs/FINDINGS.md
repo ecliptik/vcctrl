@@ -1824,3 +1824,66 @@ clock, which answers this *and* the intermittent LED divergence that the
 boot-path edges pass straight through. What is here proves currency only
 across power transitions. That is the case that was demonstrated, and it is
 not the whole of the problem.
+
+## 34. The pin that hides its own release  [measured 2026-08-20]
+
+**A capture went black and stayed black through three correct fixes, because
+each fix worked and the instrument could not report it.**
+
+The KVM auto-pins the frame ring whenever the picture is lost — sensible, so
+the last good frames can be examined. And `_push` drops the **NEW** frame when
+the ring is pinned and full, rather than freeing one somebody may be looking
+at — also sensible, and the whole point of a pin.
+
+Together they are a trap:
+
+> **The condition that engages the pin is the same condition that prevents you
+> from observing it end.** The picture comes back, the ring refuses the frames
+> that would show it, and the daemon goes on serving the black frames that
+> triggered the pin in the first place.
+
+Measured twice in one evening. `video state` read `frozen` for two solid
+minutes after the VGA lead was already reconnected and the stick was already
+locked — and flipped to `locked` within seconds of `vcctrl pin off`, with no
+other change.
+
+**This is not a bug in the pin.** The pin does exactly what it says. What is
+missing is that nothing in its design knows "picture lost" is a state you want
+to *leave*. An auto-engaging pin needs a release condition, or the pin should
+drop oldest rather than newest when full — and the choice between those is a
+real decision, not a detail.
+
+**It also stalls the frame counter.** `frames_total` was incremented after the
+pinned early return, so the counter froze while pinned — and a consumer
+computing a rate from the difference saw zero and kept displaying the last good
+figure as current. Retained value rendered as live, which is sec. 33 in a third
+place. Fixed by counting arrivals before the return: a frame that arrived and
+was dropped **was** seen, and the drop is separately counted in
+`dropped_while_pinned`.
+
+### Three causes stacked on one symptom
+
+Worth recording as a shape, because it is why the fault survived each correct
+fix and why every explanation looked wrong:
+
+1. **The stick had latched.** A physical reseat cleared it. Every software
+   reset tried first — ffmpeg respawn, `video release`/`acquire`, USB
+   unbind/rebind — addresses a different layer. **`unbind`/`bind` re-binds the
+   driver and never drops power to the device**, so it cannot clear a latched
+   analog front end. Only unplugging it does.
+2. **The cabling changed under the diagnosis.** With no splitter, the single
+   VGA lead feeds either the stick or the external monitor. Some "still black"
+   readings were taken with the lead on the monitor. The configuration was
+   confirmed once and then treated as durable across twenty minutes of tests.
+3. **The pin masked both recoveries.**
+
+**The diagnostic rule:** when a state persists across a fix that should have
+worked, ask whether something is holding the *observation* rather than the
+subject. And re-establish the physical configuration at each step — a
+confirmation is a reading, and readings expire (sec. 33).
+
+**The measurement that stayed honest** was a raw `ffmpeg -input_format yuyv422`
+grab straight from the device: it bypassed the daemon, the ring, the pin and
+the MJPEG path, and reported black when things were genuinely black. When every
+layered instrument agrees, the one that shares no layers with them is worth
+more than another opinion from inside the stack.
