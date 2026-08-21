@@ -1111,7 +1111,10 @@
     body.panel-stats #log { display:none; }
   }
   @media (min-width:900px) {
-    #app { display:grid; grid-template-columns:minmax(0,1fr) 340px;
+    /* 406 = the drawer's 390 plus 8px of well on each side. The column and
+       Settings are the same kind of object and were different widths, which
+       is visible the moment one opens over the other. */
+    #app { display:grid; grid-template-columns:minmax(0,1fr) 406px;
            grid-template-rows:auto 1fr auto auto; height:100vh; }
     header { grid-column:1/-1; }
     #app { grid-template-rows:auto 1fr auto auto auto; }
@@ -1128,6 +1131,9 @@
        was. */
     body.nopanel #body { display:none; }
     body.nopanel #app, body.fs #app { grid-template-columns:minmax(0,1fr) 0; }
+    /* The well is only the card's surround. With the column collapsed there
+       is no card, so nothing should be painting a strip beside the stage. */
+    body.nopanel #app, body.fs #app { background:transparent; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
     /* THE GAP HAS TO SHOW SOMETHING. The card was already inset 8px, but the
@@ -1139,8 +1145,12 @@
        well here, so the two float over the same ground and read as the same
        kind of object. */
     #app { background:#000; }
-    #body   { grid-column:2; grid-row:2; height:auto;
-              margin:8px 8px 8px 0; }
+    /* EIGHT ON EVERY SIDE. With margin-left:0 the card's own 1px border sat
+       flush against the well, and a border with nothing on one side of it is
+       not an outline -- it is a line. Measured at x=1240: black, then
+       (41,46,66), then panel, running nearly the full height of the row, so
+       it read as a rule joining the top bar to the bottom one. */
+    #body   { grid-column:2; grid-row:2; height:auto; margin:8px; }
     #panels { max-height:none; flex:0 1 auto; }
   }
   /* Landscape phone: the screen is 4:3 and the phone is not, so give the
