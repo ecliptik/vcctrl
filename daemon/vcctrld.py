@@ -761,6 +761,20 @@ class TargetEpoch(object):
 
 TARGET = TargetEpoch()
 
+# When this daemon process began. The LED change record lives in memory, so a
+# restart empties it -- and a restart is one of the events most likely to sit
+# next to an intermittent worth investigating. The record therefore has to say
+# how far back it goes, or a suddenly-empty list reads as "nothing has
+# happened" rather than "I have not been watching long".
+#
+# Persisting it instead was considered and rejected, on the webkvm session's
+# reasoning: a record that survives a restart also survives the epoch it
+# belongs to, which is a different kind of lie. Saying the scope is the honest
+# fix, and it belongs in the OUTPUT rather than in one consumer's UI -- the
+# page already says it, and a CLI caller deserves the same sentence
+# (FINDINGS sec. 32).
+DAEMON_START_T = time.time()
+
 
 # Boards that have a PS/2 LED return channel. PBID 1 is the IBM PC board; 2
 # and 3 are ADB, which has no equivalent -- there is no protocol message in
@@ -902,7 +916,13 @@ class LedsCapability(Capability):
         rec.reverse()                      # newest first
         return {"ok": True, "changes": rec[:n], "count": len(rec),
                 "bounded_at": self.CHANGES_MAX,
-                "note": ("shows that an intermittent left a trace. Does NOT "
+                # SCOPE, stated rather than left to be inferred: the record is
+                # in memory and starts empty at every restart.
+                "since_t": DAEMON_START_T,
+                "since_s": round(time.time() - DAEMON_START_T, 1),
+                "note": ("counted since this daemon started (see since_s) -- "
+                         "the record is in memory and a restart empties it. "
+                         "Shows that an intermittent left a trace. Does NOT "
                          "establish that a reading is current: the byte "
                          "arrives only on a lock-key change, so an idle "
                          "machine publishes nothing, indistinguishably from "
