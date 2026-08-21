@@ -2317,8 +2317,31 @@ class VideoCapability(Capability):
                 "thin_passes": thins, "mem_limited": memlim,
                 "target_span_s": self.TARGET_SPAN_S}
 
-    def buffer_avi(self, first=None, last=None):
+    def buffer_avi(self, first=None, last=None, since=None, clip=False):
         """Snapshot the ring and mux it into a playable AVI.
+
+        `since` IS THE CALLER'S OWN START TIME, and passing it turns this from
+        a dump of whatever the ring holds into a recording of YOUR run.
+
+        GMQ3-glass.avi is 815 MB and looks like a recording of cell MQ3.
+        18,871 of its 19,976 frame packets are byte-identical to frames in
+        GMQ2-glass.avi -- 94.5%, because the ring was holding 1,193 s against
+        the 480 s it was asked for, so consecutive dumps necessarily overlapped.
+        A peer sampled it, found real game frames, and reported a finding
+        refuted. The frames were real, correctly identified, and the PREVIOUS
+        CELL'S.
+
+        The metadata said so the whole time: first_seq and first_t have always
+        been in the returned meta, and a reader could have compared them
+        against the cell's own start. Nobody did, because nothing made them.
+        That is the same defect as a lock check whose answer nothing consumes
+        -- the information existed, was correct, and was not load-bearing.
+
+        So the check moves to the point of WRITING. Pass `since` and a window
+        that opens before it is refused, with the overlap measured. Pass
+        `clip=True` to take the part that is yours and be told what was cut.
+        Pass neither and you get the old behaviour, which is correct for "show
+        me the buffer" and wrong for "record my run".
 
         Returns (bytes, meta). Called directly rather than through the command
         table because the result is forty megabytes of binary and the command
@@ -2341,6 +2364,34 @@ class VideoCapability(Capability):
             items = [i for i in items if i[1] <= last]
         if not items:
             return None, {"error": "the buffer is empty"}
+
+        # PROVENANCE, BEFORE ANY BYTES ARE WRITTEN.
+        if since is not None and items[0][0] < since:
+            older = [i for i in items if i[0] < since]
+            gap = round(since - items[0][0], 3)
+            if not clip:
+                return None, {
+                    "error": "the buffer opens %.3fs before the caller's own "
+                             "start: %d of %d frames predate it and belong to "
+                             "whatever ran before. Pass clip to take only "
+                             "yours." % (gap, len(older), len(items)),
+                    "refused": "window_precedes_caller",
+                    "since": round(since, 3),
+                    "first_t": round(items[0][0], 3),
+                    "older_by_s": gap,
+                    "foreign_frames": len(older),
+                    "frames": len(items),
+                    "first_seq": items[0][1], "last_seq": items[-1][1],
+                }
+            items = [i for i in items if i[0] >= since]
+            clipped = len(older)
+            if not items:
+                return None, {"error": "nothing in the buffer is newer than "
+                                       "the caller's start time",
+                              "refused": "nothing_after_since",
+                              "clipped_frames": clipped}
+        else:
+            clipped = 0
 
         dims = None
         for _t, _s, f in items:
@@ -2377,6 +2428,10 @@ class VideoCapability(Capability):
             "span_s": round(span, 2), "bytes": len(blob),
             "first_seq": items[0][1], "last_seq": items[-1][1],
             "first_t": round(items[0][0], 3), "last_t": round(items[-1][0], 3),
+            # Always present, so a reader never has to know whether to look.
+            # 0 is a fact -- "nothing was cut" -- and null would be a question.
+            "clipped_frames": clipped,
+            "since": round(since, 3) if since is not None else None,
         }
 
     def _frame(self, req):

@@ -11,6 +11,7 @@ import json
 import os
 import socket
 import sys
+import time
 
 SOCKET_PATH = "/run/vcctrl.sock"
 
@@ -329,7 +330,7 @@ def write_avi(url_bytes, meta, path):
     return 0
 
 
-def fetch_avi(first, last):
+def fetch_avi(first, last, since=None, clip=False):
     """Pull /buffer.avi over HTTPS. Returns (bytes|None, meta).
 
     Over HTTP rather than the unix socket because the AVI is tens of
@@ -346,6 +347,10 @@ def fetch_avi(first, last):
         q.append("from=%d" % first)
     if last is not None:
         q.append("to=%d" % last)
+    if since is not None:
+        q.append("since=%f" % since)
+    if clip:
+        q.append("clip=1")
     url = "%s/buffer.avi%s" % (base, ("?" + "&".join(q)) if q else "")
     try:
         with urllib.request.urlopen(url, timeout=120) as r:
@@ -528,6 +533,11 @@ def main(argv):
     who = None
     out = None
     out_dir = None
+    # A recording's own start time, so the daemon can refuse a window that
+    # opens before the run it claims to be of. `--since now` is the common
+    # case: start the clock here, do the work, then record.
+    since = None
+    clip = False
     args = []
     i = 0
     while i < len(argv):
@@ -538,6 +548,15 @@ def main(argv):
         if argv[i] == "--as":
             who = argv[i + 1]
             i += 2
+            continue
+        if argv[i] == "--since":
+            v = argv[i + 1]
+            since = time.time() if v == "now" else float(v)
+            i += 2
+            continue
+        if argv[i] == "--clip":
+            clip = True
+            i += 1
             continue
         if argv[i] == "--out":
             out = argv[i + 1]
@@ -586,7 +605,22 @@ def main(argv):
         me = "record-%d" % os.getpid()
         pinned = call({"cmd": "pin", "action": "on", "holder": me}) or {}
         try:
-            data, meta = fetch_avi(first, last)
+            data, meta = fetch_avi(first, last, since=since, clip=clip)
+            if data is None and meta.get("refused") == "window_precedes_caller":
+                # Say what is wrong and how to proceed, on stderr, rather than
+                # a bare failure. This refusal exists because a recording that
+                # silently contained the previous cell's frames produced a
+                # confident, wrong conclusion three cells later.
+                sys.stderr.write(
+                    "refused: the buffer opens %.3fs before --since, so %d of "
+                    "%d frames belong to whatever ran before.\n"
+                    "  first_t %.3f   since %.3f   seqs %s..%s\n"
+                    "  re-run with --clip to take only your own frames.\n"
+                    % (meta.get("older_by_s", 0), meta.get("foreign_frames", 0),
+                       meta.get("frames", 0), meta.get("first_t", 0),
+                       meta.get("since", 0), meta.get("first_seq"),
+                       meta.get("last_seq")))
+                return 4
             return write_avi(data, meta, out)
         finally:
             if pinned.get("ok"):

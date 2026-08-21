@@ -253,14 +253,32 @@ class Handler(BaseHTTPRequestHandler):
                         k, _, v = part.partition("=")
                         if k in ("from", "to") and v.isdigit():
                             a[k] = int(v)
+                        # The caller's own start time, so a recording can be
+                        # refused when its window opens before the run it
+                        # claims to be of. Float, because it is an epoch.
+                        elif k == "since":
+                            try:
+                                a["since"] = float(v)
+                            except ValueError:
+                                pass
+                        elif k == "clip" and v in ("1", "true", "yes"):
+                            a["clip"] = True
                 vid = self.cap.registry.caps.get("video")
                 if vid is None or not hasattr(vid, "buffer_avi"):
                     return self._json({"ok": False,
                                        "error": "no video capability"}, 503)
-                blob, meta = vid.buffer_avi(a.get("from"), a.get("to"))
+                blob, meta = vid.buffer_avi(a.get("from"), a.get("to"),
+                                            since=a.get("since"),
+                                            clip=a.get("clip", False))
                 if blob is None:
-                    return self._json({"ok": False, "error": meta.get("error")},
-                                      503)
+                    # A REFUSAL IS NOT A SERVER FAULT. 409 rather than 503:
+                    # the daemon is fine and the request is answerable, it is
+                    # the window that is wrong, and the whole meta goes back so
+                    # the caller can see by how much rather than guess.
+                    code = 409 if meta.get("refused") else 503
+                    body = {"ok": False, "error": meta.get("error")}
+                    body.update({k: v for k, v in meta.items() if k != "error"})
+                    return self._json(body, code)
                 name = "vcctrl-buffer-%s.avi" % time.strftime("%Y%m%dT%H%M%S")
                 return self._send(200, blob, "video/x-msvideo", {
                     "Content-Disposition": 'attachment; filename="%s"' % name,

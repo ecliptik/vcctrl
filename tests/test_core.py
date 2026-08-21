@@ -3947,3 +3947,80 @@ def test_the_glyph_halo_never_lands_on_a_button_box():
           page.count('class="gly"') >= 2, page.count('class="gly"'))
     check("and the theme toggle builds its glyph wrapped too",
           "className: 'gly'" in page or 'class="gly"' in page, "")
+
+
+def test_a_recording_refuses_a_window_that_predates_its_caller():
+    """A dump is bounded by the ring, not by the run that asked for it.
+
+    GMQ3-glass.avi is 815 MB and looks like a recording of cell MQ3. 94.5% of
+    its frame packets are byte-identical to GMQ2's, because the ring was
+    holding 1,193 s against the 480 s it was asked for, so consecutive dumps
+    necessarily overlapped. A peer sampled it, found real game frames, and
+    reported a finding refuted -- correctly identified frames, belonging to
+    the previous cell.
+
+    `first_seq` and `first_t` were in the returned meta the whole time. The
+    information existed, was correct, and was not load-bearing: nothing
+    refused on it. Same defect as a lock check whose answer nothing consumes.
+    """
+    print("\nrecording provenance")
+    import io as _io
+    try:
+        from PIL import Image
+    except ImportError:
+        print("  SKIP  no Pillow")
+        return
+
+    cap = vcctrld.VideoCapability(None, vcctrld.Bus())
+    t0 = time.time()
+
+    def frame(i):
+        b = _io.BytesIO()
+        Image.new("RGB", (64, 48), (i * 5 % 256, 30, 60)).save(b, "JPEG")
+        return b.getvalue()
+
+    # Ten frames from "the previous cell", then ten from ours.
+    cap.ring.clear()
+    for i in range(20):
+        cap.ring.append((t0 + i * 0.1, i + 1, frame(i)))
+    mine = t0 + 1.0                      # our run began at frame 11
+
+    blob, meta = cap.buffer_avi()
+    check("with no start time it still dumps the whole ring",
+          blob is not None and meta["frames"] == 20, meta)
+    check("control: and that dump DOES contain the foreign frames",
+          meta["first_t"] < mine, (meta["first_t"], mine))
+
+    blob, meta = cap.buffer_avi(since=mine)
+    check("given its caller's start, it refuses", blob is None, "wrote bytes")
+    check("naming the reason rather than a bare failure",
+          meta.get("refused") == "window_precedes_caller", meta)
+    check("and measuring the overlap", meta.get("foreign_frames") == 10, meta)
+    check("in seconds as well as frames", meta.get("older_by_s") > 0.9, meta)
+    check("carrying the seq range so it can be checked against neighbours",
+          meta.get("first_seq") == 1 and meta.get("last_seq") == 20, meta)
+
+    blob, meta = cap.buffer_avi(since=mine, clip=True)
+    check("clip takes only the caller's own frames",
+          blob is not None and meta["frames"] == 10, meta)
+    check("and SAYS what it cut, rather than quietly shortening",
+          meta.get("clipped_frames") == 10, meta)
+    # AGAINST THE ROUNDING THE META ACTUALLY CARRIES. first_t is reported to
+    # three decimals by design, so comparing it to an unrounded threshold
+    # fails whenever the frame sits inside half a millisecond of the boundary
+    # -- which it did on roughly half of runs. The frame was never early; the
+    # REPORT of it was, by 0.00045 s. A test that compares a rounded readout
+    # against full precision is measuring the readout's format.
+    check("the clipped window no longer predates the caller",
+          meta["first_t"] >= round(mine, 3) - 0.0005, (meta["first_t"], mine))
+
+    # A window entirely before the caller is not a short recording, it is none.
+    blob, meta = cap.buffer_avi(since=t0 + 100, clip=True)
+    check("a window entirely foreign is refused even with clip",
+          blob is None and meta.get("refused") == "nothing_after_since", meta)
+
+    # And the field is always present, so a reader never has to know whether
+    # to look for it.
+    blob, meta = cap.buffer_avi()
+    check("clipped_frames is reported even when nothing was clipped",
+          meta.get("clipped_frames") == 0, meta)
