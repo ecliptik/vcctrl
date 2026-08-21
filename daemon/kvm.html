@@ -4236,7 +4236,12 @@ function statsRows(j) {
          ? fmtAge((Date.now() / 1000) - L2.changed_at) + ' ago'
          : 'not since the daemon started',
        L2.changed_at ? '' : 'unk');
-    kv('changes seen', L2.changes ?? '—');
+    // SINCE THE DAEMON STARTED, said rather than left to be inferred. The
+    // record is an in-memory deque, so a restart takes it to zero -- and a
+    // restart is one of the events most likely to sit next to an intermittent
+    // worth investigating. A count that silently began again would read as
+    // "nothing has happened" when it means "nothing has happened yet".
+    kv('changes seen', (L2.changes ?? '—') + ' since the daemon started');
     if (ledLog && ledLog.changes && ledLog.changes.length) {
       const nm = o => [o.capslock, o.numlock, o.scrolllock]
         .map(x => x ? '1' : '0').join('');
