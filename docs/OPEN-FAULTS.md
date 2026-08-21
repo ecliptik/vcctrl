@@ -34,11 +34,29 @@ Both columns must read `unlimited`. This is why the first abort left no core
 despite the unit looking configured.
 
 **What is ruled out:** not a deploy, not the ring-eviction change (a dict of
-names to timestamps, no `free`). **What is not ruled out:** the websocket
-frame streamer, which hands ring bytes to SSL from a thread that is not the
-capture reader. Evidence is two dirty windows (32, 28 min, browsers connected)
-against one clean 55-minute window and one clean 12.2-minute stress. **Neither
-is a controlled test and nobody should present them as one.**
+names to timestamps, no `free`).
+
+**The daemon lifetimes, from the journal:**
+
+    136204  22:36:51 -> 23:09:03   32.2 min   ABORT (top)     cells + browsers
+    143721  23:15:03 -> 23:43:15   28.2 min   ABORT (!prev)   cells + browsers
+    167771  23:43:18 -> 00:56:52   73.6 min   clean           12 cells, 2 collects,
+                                                              a 216 MB AVI mux,
+                                                              NO browsers
+
+**The clean window is 73.6 minutes, not the 55 quoted earlier**, and it
+carried more harness load than either aborting window: twelve cells, two
+NET-boot collects, and a 216 MB mux, including a period with the ring raised
+to 335 MB. It beats both abort intervals by better than 2x.
+
+**What is not ruled out:** the websocket frame streamer, which hands ring
+bytes to SSL from a thread that is not the capture reader.
+
+**The combination present at BOTH aborts has never been tested**: cells
+running AND streamers connected. vckvm's 12.2-minute stress had streamers and
+no cells; the 73.6-minute clean window had cells and no streamers. Neither
+arm reproduces it alone, and nobody has run both together. **None of this is a
+controlled test and it should not be presented as one.**
 
 **A cell that straddles a restart still finishes and writes a plausible
 number** — one did, 122,485 bytes. `roundR/run.sh` pins the daemon's MainPID
