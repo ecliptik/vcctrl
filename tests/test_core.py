@@ -3169,3 +3169,53 @@ def test_led_change_record():
         (vcctrld.LedsCapability._changes,
          vcctrld.LedsCapability._seen_values,
          vcctrld.LedsCapability._changes_seq) = orig
+
+
+def test_every_daemon_command_has_a_cli_verb():
+    """CLI/KVM parity, enforced instead of audited.
+
+    Six daemon commands were reachable only from the web page until this
+    evening -- buffer, burst, frame, pin, timeline, verify_input -- which
+    meant a headless sweep could not save the seconds before a crash or
+    assert its own input path. They were found by a one-off script and fixed
+    by hand.
+
+    Within the hour, `led_changes` shipped as a daemon command with no client
+    verb and printed usage instead of running. A gap closed by inspection
+    stays closed only until the next person adds a command; this one lasted
+    about forty minutes, and the person who reopened it was the one who had
+    closed it. So it is a test now.
+
+    The daemon and the client are separate files with nothing between them.
+    This is that missing thing.
+    """
+    import ast as _ast
+    import re as _re
+
+    dsrc = open(os.path.join(HERE, os.pardir, "daemon", "vcctrld.py")).read()
+    tree = _ast.parse(dsrc)
+    daemon_cmds = set()
+    for cls in [n for n in _ast.walk(tree) if isinstance(n, _ast.ClassDef)]:
+        for fn in [n for n in cls.body
+                   if isinstance(n, _ast.FunctionDef) and n.name == "commands"]:
+            for node in _ast.walk(fn):
+                if isinstance(node, _ast.Dict):
+                    for k in node.keys:
+                        if isinstance(k, _ast.Constant) and isinstance(k.value, str):
+                            daemon_cmds.add(k.value)
+
+    csrc = open(os.path.join(HERE, os.pardir, "bin", "vcctrl-client")).read()
+    # Every literal the client dispatches on, however it spells it.
+    reachable = set(_re.findall(r'cmd == "([a-z_-]+)"', csrc))
+    for grp in _re.findall(r'cmd in \(([^)]*)\)', csrc):
+        reachable |= {x.strip().strip('"\'') for x in grp.split(",") if x.strip()}
+    # Commands the client sends under a different verb name -- it builds the
+    # request dict explicitly, so accept any cmd literal it can emit.
+    reachable |= set(_re.findall(r'"cmd":\s*"([a-z_]+)"', csrc))
+
+    missing = sorted(c for c in daemon_cmds if c not in reachable)
+    check("every daemon command is reachable from the CLI",
+          not missing,
+          "no CLI verb for: %s" % ", ".join(missing))
+    check("and the daemon exposes a substantial command set",
+          len(daemon_cmds) >= 20, len(daemon_cmds))
