@@ -66,13 +66,21 @@ and refuses to continue across a change. Keep that guard in any new runner.
 
 Run against one daemon (214909, `NRestarts 0`, target powered OFF):
 
-    B  well-formed decode   ~3,800 decodes/s from real MJPEG frames   ~85 min
-    A  browser-shaped tabs  video + audio websockets, /state.json,
-                            /shot.jpg, a reviewing tab on /timeline    ~45 min
-    C  input path           56.8 ops/s uinput writes + LED reads,
-                            166,021 ops, 0 errors                     48.6 min
-    D  malformed decode     ~1,500 attempts/s, ~700/s failing,
-                            grow-dominant SOF rewrites                ~35 min
+    B  well-formed decode   ~3,800 decodes/s          85 min   4.1M decodes
+    A  browser-shaped tabs  video + audio ws,
+                            /state.json, /shot.jpg,
+                            reviewing tab             50 min   65,700 video frames
+                                                              299,983 audio chunks
+                                                              3,868 polls
+    C  input path           56.8 ops/s uinput
+                            writes + LED reads      48.6 min   166,021 ops, 0 errs
+    D  malformed decode     ~1,500 attempts/s,
+                            ~700/s failing,
+                            grow-dominant SOF         35 min
+
+Track A logged **966 `http-err` over 50 minutes and every one is the
+`/shot.jpg` 503** described above. Expected, not a fault -- recorded here so
+nobody later reads the count as one.
 
 **Not reproduced under any of them, alone or combined. This is a bound, not an
 exoneration.** What it does NOT cover:
