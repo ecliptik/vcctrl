@@ -1,0 +1,216 @@
+# Three jobs, planned before starting any of them
+
+Written 2026-08-20 at the end of Round Q, for work that should be done fresh
+rather than at the end of a long session. Each section states what is
+**measured**, what is **guessed**, and what the first step is — because on
+this rig the expensive mistake is always a plausible mechanism acted on
+before it was tested.
+
+---
+
+## 1. The capture regression: no Mach64 game lock since MQ2
+
+**This is the one worth doing first**, not because it blocks anything today
+but because it is the only item whose cost grows. No usable Mach64 glass
+exists. The surfaces carried Round Q because the defect happened to be
+engine-side; the next defect may be one only glass can see, and it will be
+found with an instrument that has been quietly broken for hours.
+
+### What is measured
+
+    cell   pre-launch screenshot   mid-cell capture
+    MQ0    ok                      brightness 23.2
+    MQ1    ok                      brightness  3.6
+    MQ2    ok                      brightness 23.6
+    MQ3    None                    None (NO LOCK)
+    MQ4    ok                      None (NO LOCK)
+    MQ5    ok                      None (NO LOCK)
+
+- **The console stays capturable throughout.** MQ4 and MQ5 read their whole
+  environment back off the screen. Only the game's mode stopped locking.
+- **MQ3's pre-launch failure was a one-off**, not the start of a permanent
+  console failure.
+- **Not the binary.** MQ0–MQ4 all ran `build_sha12=c292a24f649f`.
+- **Not a killswitch.** MQ5 was stock defaults and failed the same way.
+- **Not the ring pin.** `pinned=False` on every check since the 45 s bound.
+- **Not the daemon.** ffmpeg respawned repeatedly across this period,
+  `spawns` reset by restarts, no change.
+
+So: a persistent, mode-specific failure that began between MQ2's cell and
+MQ3's, and survives daemon restarts.
+
+### The leading guess, and why it is only a guess
+
+Earlier the same evening the stick latched and **only a physical reseat
+cleared it** — a USB unbind/rebind re-binds the driver and never drops power
+to the device. A partial latch, where the analog front end holds one timing
+and refuses to re-acquire another, would produce exactly this: console mode
+locks, game mode does not.
+
+**It is a guess.** Nothing has tested it, and five mechanisms were confidently
+wrong about the backdrop void before a bisection settled it.
+
+### First step: instrument, do not theorise
+
+The whole diagnosis so far rests on **one sample per cell** — a single frame
+grabbed at `shot_at` seconds. That is the same shape as every other failure
+this week: a proxy asked once and trusted.
+
+Run one cell with a **1 Hz time series** of `video state`, `framestats`
+distinct-count and `pinned`, from before launch to after exit, written to a
+file. That answers, without guessing:
+
+- does lock drop exactly at the DOS-text → game mode switch?
+- does it ever return during the cell?
+- is it `frozen` (uniform frames arriving) or no frames at all?
+
+`frozen` versus starved distinguishes "the stick is emitting its no-lock
+constant" from "nothing is arriving", which are different faults.
+
+**Two more series the webkvm session asked for, and both are one field each:**
+
+- **`spawns`.** If it climbs when lock is lost, ffmpeg is dying and being
+  restarted — a device or driver fault. If it stays put, the capture process
+  is alive and the signal is the problem. That single number separates two
+  investigations.
+- **`framestats` distinct-count**, as above: uniform frames arriving is a
+  stick that lost lock and is emitting its constant; no frames at all is a
+  starved pipe. The page renders those differently and so should we.
+
+**And this belongs in the log as a known capture fault before anyone meets it
+cold.** From the KVM's side a Mach64 cell now shows No Signal mid-run, which
+reads as the page breaking. It is not.
+
+### Then, in order, stopping as soon as one works
+
+1. `video release` / `acquire` **at the moment lock is lost** rather than
+   before the cell — tests whether re-acquiring against the live game signal
+   succeeds where re-acquiring against a console does not.
+2. USB unbind/rebind mid-cell. Expected to fail if the latch theory holds;
+   worth doing because it is free and it *distinguishes* driver state from
+   device state.
+3. **Operator reseat**, which is the only thing that cleared it last time.
+   If this is what works, that is a real finding about the hardware and
+   belongs in FINDINGS rather than being treated as a workaround.
+4. Only then, mode timings: `MODE12` on the console reads 640x480@59.6 Hz;
+   what the game emits on the Mach64 has never been measured. An external
+   monitor's OSD answers it in one look and no capture stack can.
+
+### Do not
+
+Do not change `shot_at`, add retries, or widen the brightness threshold to
+make the symptom go away. The single-sample design is what hid this; making
+the sample luckier hides it better.
+
+---
+
+## 2. `arm_leds` has no `stable_led` guard
+
+**Four refusals tonight, four immediate retries that succeeded.** It is a
+settling race in the function that arms the boot edges every reboot depends
+on, and I have been papering over it with retry loops in my own callers.
+
+### The bug
+
+`arm_leds()` reads `leds().get(name)` **once** to decide whether to press a
+key, and checks the final state **once** to decide whether it worked. Both
+are single reads of a value that takes ~48 ms to settle — exactly the failure
+`stable_led()` was written for after `at_prompt()` lost a run to it
+(FINDINGS, and `stable_led`'s own docstring).
+
+The consequence is not just noise: a false "could not arm" refuses a boot
+that would have worked, and a false "armed" would let a reboot proceed with
+an edge that cannot be detected, which is worse.
+
+### The fix
+
+- Decide with `stable_led(name)` rather than a bare read.
+- Confirm with `stable_led` too.
+- **Return three states, not two.** `stable_led` returns `None` for
+  could-not-look, and `arm_leds` currently collapses that into `False`
+  alongside genuine failure. `None` means the LEDs are unreadable — on ADB
+  that is permanent and on a booting machine it is transient — and the caller
+  acts differently on each.
+
+### Test it can fail
+
+A fake `leds()` that returns a settling value on the first read and a stable
+one after, asserting the current code refuses and the fixed code arms. And a
+control that removes the guard and shows the test going red.
+
+---
+
+## 3. Round self-cleanup of the CF card
+
+**Shape settled by the operator: automatic, round-scoped, gated on
+proven-collected.** The benchmarking session supplied the doskutsu-side facts.
+
+### Why it is needed
+
+`LOGS` grows monotonically between populates — deliberate and harmless for
+~150 KB text logs. Frame dumps are **230,415 bytes each, four per cell**, and
+they are in neither glob:
+
+    logback-qa.sh collects   *.LOG *.TXT *.CFG *.NFO      no *.PPM
+    install-qa.sh clears     *.LOG *.TXT *.CFG            no *.PPM
+
+Not collected, not cleared, invisible to both halves of the tooling meant to
+manage exactly this. **Nothing has been lost only because they have been
+pulled by hand after every cell.**
+
+**Capacity is NOT the problem** — 762 MB free, 110 files, 10.4 MB used. The
+problems are correctness: silent overwrites (`S02400.PPM` and `S04851.PPM`
+were each written by two different cells tonight, the second overwriting the
+first with no error and no log line) and invisibility to the tooling.
+
+### The one hard constraint
+
+**Never delete anything not PROVEN collected.** Not "the copy returned
+success" — proven, by size or hash against the local copy, per file. This is
+destructive and irreversible on a machine that is a card swap away.
+
+Given the week, the failure mode writes itself: **a collection check that can
+return a false yes deletes the only copy.** `all({}.values())` is `True`; a
+substring survived in nearby prose; a clip check passed on zero frames. Any
+of those shapes in a verify-before-delete path costs data rather than a run.
+So the verification must assert its population is non-empty (sec. 35) and
+must compare content, not status codes.
+
+### Shape
+
+- **Round-scoped.** Blast radius is the tags this round produced — a much
+  easier thing to make safe than a general "delete old files" sweep.
+- **Verified-then-delete, per file**, which also makes it resumable: one file
+  failing verification leaves that file and cleans the rest.
+- **`--dry-run`, and a sanity gate that refuses if the target does not look
+  like the game directory.** Both stolen from `cf-clean.sh`.
+- **Expect two layouts**: flat `LOGS\*.PPM` for everything written up to now,
+  and `LOGS\<TAG>\*.PPM` after benchmarking's naming fix lands.
+
+### Open questions — the operator's, not mine
+
+1. **Historical debris.** A round that cleans only its own tags never touches
+   what is already on the card, including every PPM written tonight. Does the
+   first run sweep the backlog, or does that stay a separate deliberate act
+   like `cf-clean.sh`? *My lean: separate. A cleanup that quietly widens its
+   scope beyond the round it belongs to is much harder to reason about — but
+   something still has to deal with the backlog.*
+2. **Abandoned rounds.** If a round dies mid-way and is never collected, its
+   files must not become the next round's orphans and get swept. **From the
+   card, uncollected data and stale data look identical.** Whatever rule
+   covers orphans must not eat uncollected data.
+3. **Same rules for both types?** Dumps are pure diagnostic and enormous;
+   once verified off the card there is no reason for them to stay. Text logs
+   are small enough that keeping the current round's costs nothing and
+   occasionally saves a trip.
+4. **A free-space warning threshold**, and where it lives.
+
+---
+
+## Order
+
+1. **Capture regression** — the only one whose cost grows, and the only one
+   that needs the rig.
+2. **`arm_leds`** — small, self-contained, testable without hardware, and it
+   removes a workaround from every caller.
+3. **Cleanup** — needs answers to the four questions above before any code.
