@@ -163,10 +163,25 @@ def wait_led(name, want, timeout):
     while time.time() - t0 < timeout:
         st = leds()
         if not st.get("available"):
-            # Return immediately rather than spend the full timeout waiting
-            # for a value that cannot arrive. Both answers are None, but one
-            # of them takes 240 s during a boot wait and looks like a hang.
-            return None
+            # ONLY `unsupported` means never. Everything else is transient and
+            # must be waited through.
+            #
+            # This bit within an hour of the epoch change that introduced it.
+            # After a power-on the epoch advances, leds correctly reports
+            # `unproven` until the target publishes -- and the first version
+            # of this abandoned on any unavailable state, so wait_cold_boot()
+            # returned None in 0.0 s on a machine that was booting perfectly.
+            # The function whose reasoning MOTIVATED the epoch work was the
+            # first thing the epoch work broke.
+            #
+            # `unpowered` is transient here too, and for a reason easy to
+            # miss: PowerCapability's cache has a 60 s heartbeat, so for up to
+            # a minute after power-on the daemon still believes the target is
+            # off. Abandoning on it would fail every cold boot.
+            if st.get("why") == "unsupported":
+                return None
+            time.sleep(LED_POLL_S)
+            continue
         if bool(st.get(name)) is want:
             return time.time() - t0
         time.sleep(LED_POLL_S)
