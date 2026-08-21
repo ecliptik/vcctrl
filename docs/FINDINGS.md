@@ -2068,3 +2068,54 @@ absence under it mean something.
   instruments.** `at_prompt` was known to move Caps Lock; nobody asked what
   else read that bit. Fourth instance this week of the diagnostic changing
   what it measures (sec. 28, 33, 34).
+
+## 38. The evidence capture answered "nothing happened" by asking the wrong question  [measured 2026-08-20]
+
+After `vcctrld` aborted mid-cell, the round runner gained a `grab_journal`
+step whose entire purpose was to preserve the daemon's dying words. It ran on
+the very next abort and produced:
+
+    -- No entries --
+
+**Which reads as "the daemon was fine."** The runner timestamps with
+`date -u`; `journalctl` on the Pi reads **local** time. PDT is UTC-7, so
+`--since '2026-08-21 06:26:29'` asked for entries starting nine hours in the
+future. There were none, and there could never have been any.
+
+Only the separate MainPID check — which compares two integers and has no
+timezone — proved a restart had happened at all. Querying by hand with a
+relative window returned the whole thing: `double free or corruption (!prev)`,
+`Fatal Python error: Aborted`, and eighteen threads of faulthandler output.
+
+### Why this one is worse than the others
+
+**The tool was written one hour earlier, specifically to prevent this class of
+failure.** It was built after the first abort, by someone who had spent the
+evening cataloguing checks that pass on nothing, and it shipped with the same
+defect: an empty result and a healthy result are the same output.
+
+That is not carelessness about the rule. It is the rule being known,
+articulated, freshly applied — and the implementation still not obeying it.
+Recent diagnosis is exactly when the guard slips, because naming a hazard
+produces a feeling of coverage that substitutes for the check.
+
+### Rules
+
+- **A capture that finds nothing must say so loudly.** `grab_journal` now
+  refuses to be quiet: under three non-empty lines prints
+  `JOURNAL CAPTURE RETURNED ALMOST NOTHING -- suspect the query, not the
+  daemon. Do NOT read this as 'no fault'.`
+- **Use relative windows across a timezone boundary.** `--since '-45 min'`
+  has nothing to get wrong. Absolute stamps must be generated in the
+  *reader's* timezone, not the writer's.
+- Two hosts, two clocks: the VM logs UTC, the Pi journals PDT. Any query
+  crossing that boundary is suspect by default.
+- **Prefer a check with no units.** The MainPID comparison worked precisely
+  because integers carry no timezone, no locale, and no format. When a guard
+  can be built out of an identity comparison rather than a parsed quantity,
+  build it that way.
+
+Same family as sec. 31 (absence read as a value), sec. 35 (a check passing on
+an empty population) and sec. 37 (a pipeline whose silent failure looks like a
+negative answer) — but this is the first where the guard containing the defect
+existed *because of* the others.
