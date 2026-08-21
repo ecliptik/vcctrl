@@ -813,6 +813,23 @@
     min-height:0;
   }
   #cmdbar #sendline .ret { font-size:17px; line-height:1; opacity:.9; }
+  /* ONE WIDTH FOR THE THREE THINGS IN THE FIELD. They were 40, 38 and 37 --
+     each padded to look right on its own glyph and therefore none of them
+     agreeing. The boxes were only half of it: the clip and the keyboard are
+     colour emoji that draw wide, while the return arrow is a thin text glyph,
+     so equal PADDING still gave unequal ink. Equal boxes with the glyph
+     centred in each is the only arrangement where the row reads as three of
+     the same thing.
+     Declared after the three rules above so it wins on order rather than by
+     out-specifying each of them separately. */
+  #cmdbar #filebtn, #cmdbar #filestop,
+  #cmdbar #keysbtn, #cmdbar #sendline {
+    flex:none; width:42px; min-width:42px; padding:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  /* The return arrow carries less ink than an emoji at the same point size,
+     so it takes a larger one to sit at the same visual weight. */
+  #cmdbar #sendline .ret { font-size:19px; line-height:1; opacity:.9; }
   #cmdbar #sendline:hover { background:var(--rule); }
   #cmdbar #sendline:disabled { color:var(--dim); }
   /* Proportional to the row it divides, like the rail's. */
