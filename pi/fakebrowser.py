@@ -46,6 +46,7 @@ anything else touches the box.
 """
 import asyncio
 import json
+import os
 import ssl
 import subprocess
 import sys
@@ -171,6 +172,41 @@ async def watch(end, start):
             return
 
 
+def guard_rig_free():
+    """Refuse to start while somebody holds the input lock.
+
+    A CHECK WHOSE RESULT NOTHING CONSUMES IS NOT A CHECK. I ran
+    `vcctrl lock status`, it printed the owner of a running cell, and I started
+    this anyway -- because the check and the launch were in one command line
+    with nothing between them to read the answer. The guard ran, produced the
+    correct result, and the result went nowhere.
+
+    That is the same shape as `pytest | tail -2 && git commit` reporting on
+    tail's exit status, and as a journal query returning "-- No entries --" and
+    being read as "no fault". Three of them in one day. The fix is not to look
+    harder; it is that something has to REFUSE.
+
+    --force overrides, deliberately awkward, and it says who it is interrupting.
+    """
+    import subprocess as _sp
+    try:
+        out = _sp.run(["./bin/vcctrl", "lock", "status"], capture_output=True,
+                      text=True, timeout=25,
+                      cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))).stdout
+        owner = (json.loads(out or "{}") or {}).get("owner")
+    except Exception as exc:
+        print("could not read the lock (%s) -- refusing; pass --force to "
+              "override" % type(exc).__name__)
+        return "--force" in sys.argv
+    if owner and "--force" not in sys.argv:
+        print("REFUSING TO START: the input lock is held by %r.\n"
+              "Something is driving the rig. Wait, or pass --force." % owner)
+        return False
+    if owner:
+        print("--force: starting anyway, interrupting %r" % owner)
+    return True
+
+
 async def main():
     start = pid()
     end = time.time() + MINS * 60
@@ -182,5 +218,8 @@ async def main():
     await asyncio.gather(*jobs)
     print("done:", dict(tally), "survived:", pid() == start, flush=True)
 
+
+if not guard_rig_free():
+    sys.exit(2)
 
 asyncio.run(main())
