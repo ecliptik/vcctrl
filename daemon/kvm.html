@@ -4693,12 +4693,31 @@ function statsRows(j) {
   // So: say whose they are, and show the RATE, which is the only form that
   // answers "is it bad right now". The colour follows the rate, not the
   // total; a total can only ever climb.
+  //
+  // SECOND PASS, because the first one did not fix it. The rate was added and
+  // the total was left in front of it, and the row was read the same way the
+  // next time it mattered: "dropping frames still", quoted from a screenshot
+  // reading `201 · 0.0/s`. Nothing was being dropped. The eye takes the first
+  // number, and the first number was the one that can only climb.
+  //
+  // Worse, and this is the part that made the misreading REASONABLE: the two
+  // totals do not share a denominator. `dropped` counts since the daemon
+  // started; `sent` is reset every time a viewer connects. So `212 sent` and
+  // `201 dropped` side by side invited exactly the ratio a person would take
+  // from them -- half our frames are going missing -- when the two numbers
+  // were counting over different spans entirely. Two figures in the same
+  // visual form that cannot be compared is a worse fault than either being
+  // hard to read.
+  //
+  // So the rate leads, the totals follow, and each label names the span its
+  // total covers. Fixing the denominators themselves is a daemon change and
+  // belongs in the same pass as per-socket counters.
+  const per = (r, tot) =>
+    (r != null ? r.toFixed(1) + '/s' : '—') + '  ·  ' + tot.toLocaleString();
   if (w.sent_frames != null)
-    kv('ws sent · all viewers', w.sent_frames.toLocaleString()
-       + (wsRate.sent != null ? '  ·  ' + wsRate.sent.toFixed(1) + '/s' : ''));
+    kv('ws sent · since a viewer joined', per(wsRate.sent, w.sent_frames));
   if (w.dropped)
-    kv('ws dropped · all viewers', w.dropped.toLocaleString()
-       + (wsRate.drop != null ? '  ·  ' + wsRate.drop.toFixed(1) + '/s' : ''),
+    kv('ws dropped · since daemon start', per(wsRate.drop, w.dropped),
        wsRate.drop == null ? '' : wsRate.drop > 2 ? 'warn' : 'good');
 
   g('Devices');

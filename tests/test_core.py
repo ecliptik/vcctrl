@@ -3424,3 +3424,40 @@ def test_the_page_reads_text_frames_at_all():
     check("and the status row prefers the applied value over the request",
           "diverged ? ' · asked ' + fpsWant" in page
           or "asked ' + fpsWant" in page, "")
+
+
+def test_a_running_total_does_not_lead_a_live_rate():
+    """The eye takes the first number, so the first number must be the answer.
+
+    "Dropping frames still" was reported from a screenshot reading
+    `201 · 0.0/s`. Nothing was being dropped: 201 was the count since the
+    daemon started and the rate beside it was zero. The row had already been
+    revised once to add the rate, and the total was left in front of it, so it
+    was misread the same way the next time it mattered.
+
+    The second half is why the misreading was reasonable. `dropped` counts
+    since the daemon started; `sent` is reset every time a viewer connects. Two
+    totals over different spans, in the same visual form, side by side, invite
+    a ratio that means nothing.
+    """
+    print("\nrate before total")
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    i = page.index("ws dropped")
+    row = page[i - 400:i + 200]
+    check("the rate is composed before the total, not after",
+          "r.toFixed(1) + '/s' : '—') + '  ·  ' + tot" in row, "")
+    check("the sent label names the span its total covers",
+          "ws sent · since a viewer joined" in page, "")
+    check("and so does the dropped label, which is a different span",
+          "ws dropped · since daemon start" in page, "")
+    # Control: the two spans really are different in the daemon, which is the
+    # whole reason the labels have to differ. If someone makes them the same,
+    # this test should start failing and the labels should be revisited.
+    web = open(os.path.join(HERE, os.pardir, "daemon", "vcweb.py"),
+               encoding="utf-8").read()
+    body = web[web.index("def serve_ws"):web.index("def serve_ws") + 3000]
+    check("control: sent IS reset per connection in the daemon",
+          "self.ws_sent_frames = 0" in body, "")
+    check("control: dropped is NOT reset there",
+          "self.ws_dropped = 0" not in body, "")
