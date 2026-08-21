@@ -2179,6 +2179,28 @@ function requestRate(f) {
   fpsWant = f;
   try { ws.send(JSON.stringify({t: 'rate', fps: f})); } catch (e) {}
 }
+// What the daemon says it is actually sending, as opposed to what we asked
+// for. Null until it has told us; never inferred, because inferring it is the
+// mistake this exists to correct.
+let fpsApplied = null;
+function noteApplied(f) {
+  const was = fpsApplied;
+  fpsApplied = f;
+  // A DIVERGENCE IS A FAULT, NOT A CURIOSITY -- so say so once, and fix it.
+  // The ask travels over the same socket as the frames; if it went missing,
+  // or arrived before a reconnect replaced the socket under it, the two sides
+  // will sit at different numbers forever with nothing to notice. Re-asserting
+  // costs one small message and makes the state self-correcting.
+  if (fpsWant && Math.abs(f - fpsWant) >= 1) {
+    if (was === null || Math.abs(was - f) >= 1)
+      addLine(new Date(), 'rate',
+              'daemon is sending ' + f + ' fps, we asked for ' + fpsWant
+              + ' — re-asserting', 'k-warn');
+    if (ws && ws.readyState === 1)
+      try { ws.send(JSON.stringify({t: 'rate', fps: fpsWant})); } catch (e) {}
+  }
+}
+
 function rateStep(got) {
   if (got < fpsWant * 0.75) {
     // Halve rather than track when almost nothing is arriving. `got * 0.9` of
@@ -2365,7 +2387,11 @@ function connect() {
     // Ask for a rate suited to the device. A phone on cellular does not want
     // 30 fps of a 70 KB screen, and the server drops rather than queues
     // anyway -- asking for less simply wastes less.
-    fpsWant = 0; fpsGoodRuns = 0;
+    // A NEW SOCKET KNOWS NOTHING ABOUT THE OLD ONE'S RATE. Carrying the last
+    // applied value across a reconnect would show a number belonging to a
+    // connection that no longer exists -- the retained-reading failure this
+    // page has now had in four places.
+    fpsWant = 0; fpsGoodRuns = 0; fpsApplied = null;
     requestRate(smallScreen() ? 8 : 14);
   };
   ws.onerror = () => { if (mine()) useMjpeg('errored'); };
@@ -2384,7 +2410,19 @@ function connect() {
   };
   ws.onmessage = ev => {
     if (!mine()) return;
-    if (typeof ev.data === 'string') return;
+    // TEXT IS THE DAEMON TALKING BACK, and it used to be thrown away
+    // unopened. The only reason that was survivable is that the one message
+    // it sent -- a state change -- was also available from the status poll.
+    // The rate is not: it is per-socket, it lives nowhere else, and the page
+    // was left displaying what it had ASKED for as though that were what it
+    // was getting.
+    if (typeof ev.data === 'string') {
+      try {
+        const m = JSON.parse(ev.data);
+        if (typeof m.rate === 'number') noteApplied(m.rate);
+      } catch (e) {}
+      return;
+    }
     if (!wsAlive) return;
     if (xport === 'mjpeg') return;
     if (xport !== 'ws') { setXport('ws'); img.style.display='none'; cv.style.display=''; }
@@ -4590,7 +4628,16 @@ function statsRows(j) {
      got ? got.toFixed(1) + ' fps'
            + (srcRate() ? ' · ' + pct(got / srcRate()) : '') : '—',
      got && srcRate() ? bandLow(got / srcRate(), 0.6, 0.35) : '');
-  kv('asking for', fpsWant ? fpsWant + ' fps' : '—');
+  // THE NUMBER THE DAEMON IS ACTING ON, with our request beside it only when
+  // the two disagree. Showing the request alone is what let a page claim it
+  // was asking for 5 while 9.5 arrived.
+  const applied = (xport === 'ws' && fpsApplied != null) ? fpsApplied : null;
+  const diverged = applied != null && fpsWant && Math.abs(applied - fpsWant) >= 1;
+  kv('asking for',
+     applied != null
+       ? applied + ' fps' + (diverged ? ' · asked ' + fpsWant : '')
+       : (fpsWant ? fpsWant + ' fps' : '—'),
+     diverged ? 'warn' : '');
   kv('bitrate', byteWin.length > 1 ? streamMbit().toFixed(2) + ' Mbit/s' : '—');
   kv('transport', xportLabel);
   kv('last frame', v.last_frame_age_s != null

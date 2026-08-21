@@ -3346,3 +3346,81 @@ def test_one_stale_lease_expires_without_taking_the_others():
     check("the abandoned lease expired", "abandoned" not in holders, holders)
     check("and the live one did not", holders == ["live"], holders)
     check("so the ring is still held", bool(cap.pin_holders), holders)
+
+
+def test_the_daemon_says_what_rate_it_applied():
+    """A per-socket value the client cannot see is one the client will guess.
+
+    Reported from a phone: 'asking for 5 fps' beside 'arriving here 9.5 fps'.
+    Both cannot be true of one socket -- the send loop sleeps 1/rate between
+    frames, and measured from outside it honours the ask to within 2% at 5, 15
+    and 30. They disagreed because one was a BELIEF: the page displayed what it
+    had asked for, and nothing ever told it what it got.
+
+    The clamp is the sharpest case. A client asking for 40 gets 30, and under
+    the old protocol was never told; it would go on reporting 40 while
+    receiving 30 and its rate controller would read the shortfall as a
+    congested link.
+    """
+    print("\nrate echo")
+    import json as _json
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+    sent = []
+
+    class FakeSock(object):
+        def sendall(self, b):
+            sent.append(b)
+
+    cap = vcweb.WebCapability.__new__(vcweb.WebCapability)
+    cap._ws_say(FakeSock(), None, {"rate": 12.0})
+    check("a control message is sent at all", len(sent) == 1, len(sent))
+
+    # Decode it as a client would: text opcode, unmasked (server->client),
+    # payload is the JSON. Reading our own writer back through the wire format
+    # rather than trusting the dict we passed in.
+    b = sent[0]
+    check("it is a TEXT frame, not a binary one the page would try to draw",
+          b[0] == 0x81, hex(b[0]))
+    n = b[1] & 0x7F
+    check("and it is not masked (a masked server frame is a protocol error)",
+          not (b[1] & 0x80), hex(b[1]))
+    body = _json.loads(b[2:2 + n].decode())
+    check("carrying the applied rate", body == {"rate": 12.0}, body)
+
+    # A send that fails must not take down a picture that is fine.
+    class Broken(object):
+        def sendall(self, b):
+            raise OSError("peer went away")
+
+    try:
+        cap._ws_say(Broken(), None, {"rate": 1.0})
+        raised = None
+    except Exception as exc:
+        raised = exc
+    check("a control message that cannot be delivered is not fatal",
+          raised is None, raised)
+
+
+def test_the_page_reads_text_frames_at_all():
+    """The rate echo is useless if the page drops every string it is sent.
+
+    It did. `if (typeof ev.data === 'string') return;` sat at the top of
+    onmessage, and the only reason that was survivable is that the one text
+    message the daemon sent -- a state change -- was also available from the
+    status poll. The rate is not: it is per-socket and it lives nowhere else.
+    """
+    print("\ntext frames")
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    body = page[page.index("ws.onmessage"):page.index("ws.onmessage") + 900]
+    check("a string message is parsed rather than discarded",
+          "JSON.parse(ev.data)" in body, body[:120])
+    check("and its rate is handed to the applied-rate reader",
+          "noteApplied(" in body, body[:120])
+    check("the applied rate is cleared on a new socket, not carried across",
+          "fpsApplied = null" in page, "")
+    check("and the status row prefers the applied value over the request",
+          "diverged ? ' · asked ' + fpsWant" in page
+          or "asked ' + fpsWant" in page, "")

@@ -866,6 +866,19 @@ class WebCapability(object):
             except Exception:
                 pass
 
+    def _ws_say(self, sock, wlock, obj):
+        """Send one JSON text frame, or give up quietly.
+
+        Used to tell a client what its request actually became. Never raises:
+        a control message that cannot be delivered must not take down a
+        picture that is being delivered fine.
+        """
+        try:
+            with (wlock or _NULLLOCK):
+                sock.sendall(ws_frame(json.dumps(obj).encode(), opcode=0x1))
+        except Exception:
+            pass
+
     def _ws_frames(self, sock, stop, rate, wlock=None):
         """Send frames, dropping rather than queueing when the client is slow.
 
@@ -903,6 +916,16 @@ class WebCapability(object):
         STALL_S = 10.0
         stalled_since = None
         last_t, last_state = 0.0, None
+        # THE RATE IS THIS SIDE'S NUMBER, SO THIS SIDE SAYS WHAT IT IS.
+        #
+        # A page reported "asking for 5 fps" beside "arriving here 9.5 fps",
+        # which cannot both be true of one socket -- the loop below sleeps
+        # 1/rate between frames, and measured from outside it honours the ask
+        # to within 2% at 5, 15 and 30. So the two numbers disagreed because
+        # one of them was a BELIEF: the page was displaying what it had asked
+        # for, and nothing ever told it what it got. Same correction as the
+        # ring length, which the page also used to remember rather than read.
+        self._ws_say(sock, wlock, {"rate": rate[0]})
         while not stop.is_set():
             if vid is None:
                 time.sleep(0.5)
@@ -1049,6 +1072,11 @@ class WebCapability(object):
                     self.call("combo", {"keys": msg["k"]})
                 elif kind == "rate" and rate is not None:
                     rate[0] = max(1.0, min(30.0, float(msg.get("fps", 20))))
+                    # Echo the APPLIED value, not the requested one: the clamp
+                    # above is exactly where a request and a reality diverge,
+                    # and a client that asks for 40 should be told it is
+                    # getting 30 rather than left to infer it.
+                    self._ws_say(sock, wlock, {"rate": rate[0]})
                 elif kind == "release":
                     held.clear()
                     self.call("release_all", {})
