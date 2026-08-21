@@ -389,8 +389,13 @@
   .lamp.bad span {
     color:var(--red); font-weight:700; border-bottom-color:var(--red);
   }
-  /* Colour is never the only carrier: held gets a padlock after the word, so
-     a monochrome theme and a colour-blind reader see the same thing. */
+  /* COLOUR IS STILL NOT THE ONLY CARRIER -- it just stopped being a padlock.
+     The glyphs cost 38px of a status row that is 100px over on a phone, and
+     a lamp row that has to scroll is one nobody reads. A doubled underline
+     says the same thing in zero width, and stays distinct from the three
+     rules already in use: solid means on, dashed means not proven or not
+     current, double means held by somebody else. A monochrome theme and a
+     colour-blind reader still see it. */
   /* Group markers: identity | state | what the daemon can reach | what the
      target's own keyboard says. Without them the row is nine words in a
      line and the eye has to work out which belong together. */
@@ -414,11 +419,10 @@
      is the failure this page bans everywhere else. At the rail's own size the
      shackle is visible, and the opacity difference stays as the second
      carrier rather than the only one. */
-  .lamp.lockable span::after {
-    content:"\00a0🔓"; font-size:1em; opacity:.55;
-    line-height:1; vertical-align:-.08em;
+  .lamp.lockable.locked span {
+    border-bottom-style:double; border-bottom-width:3px;
+    padding-bottom:1px;
   }
-  .lamp.lockable.locked span::after { content:"\00a0🔒"; opacity:1; }
 
   /* ── stage ───────────────────────────────────────────────────────────────
      The well stays near-black in EVERY theme, including the light ones.
@@ -1254,9 +1258,14 @@
     <span class="sep" aria-hidden="true">|</span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
             title="Caps, Num and Scroll read back over PS/2 — proof a keystroke landed">
-      <span class="lamp" id="lamp-caps"><i></i><span>CAP</span></span>
-      <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
-      <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
+      <!-- C N S rather than CAP NUM SCR. It breaks the three-character rule
+           the rest of the row follows, deliberately: these three are the only
+           group with a shared heading in their own tooltip, and 39px is the
+           difference between a status row that fits a phone and one that
+           scrolls. A row you scroll is a row you stop reading. -->
+      <span class="lamp" id="lamp-caps"><i></i><span>C</span></span>
+      <span class="lamp" id="lamp-num"><i></i><span>N</span></span>
+      <span class="lamp" id="lamp-scroll"><i></i><span>S</span></span>
     </button>
    </div>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
@@ -5045,7 +5054,9 @@ function lamps(leds, videoState, verified) {
     el.classList.toggle('warn', look === 'warn');
     el.classList.toggle('na', look === 'na' || blind);
     el.classList.toggle('bad', look === 'bad');
-    el.title =
+    const NAME = {capslock: 'Caps Lock', numlock: 'Num Lock',
+                  scrolllock: 'Scroll Lock'};
+    el.title = NAME[key] + ' — ' + (
       why   ? (leds.reason || 'no LED reading: ' + why)
       : blind ? 'The daemon is not reporting LED values'
       : (v === 1 ? 'lit' : 'dark')
@@ -5057,7 +5068,7 @@ function lamps(leds, videoState, verified) {
            : ' · unchanged since the daemon started')
         + (unproven ? ' — the input link is unproven, so this describes the '
                     + 'Pi rather than the target'
-           : stale ? ' — retained, the target is not showing a picture' : '');
+           : stale ? ' — retained, the target is not showing a picture' : ''));
   }
   $('lamps').title =
     why ? 'Caps / Num / Scroll are a PS/2 return channel.\n\n'
