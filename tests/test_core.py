@@ -1426,6 +1426,24 @@ HARNESS = r"""
            reason: 'no LED return channel on board 3 (ADB)'},
           'locked', {available: false, why: 'unsupported'});
     const unsupported = cls() === 'na' && /no LED return channel/i.test(capsEl.title);
+    // THE SET GREW TWICE IN ONE EVENING. Each new `why` must show the
+    // DAEMON's sentence rather than being folded into an older one -- the
+    // struck-through branch used to say "no LED return channel on this
+    // board" about a Gateway that was simply switched off.
+    lamps({available: false, why: 'unpowered',
+           reason: 'the target is powered off, so it publishes nothing'},
+          'nosignal', {available: false, why: 'unproven'});
+    const unpowered = /powered off/i.test(capsEl.title)
+                      && !/no LED return channel/i.test(capsEl.title);
+    lamps({available: false, why: 'error', reason: 'read failed: EIO'},
+          'locked', {available: true, ok: true, age_s: 3});
+    const errored = capsEl.classList.contains('bad')
+                    && /read failed/i.test(capsEl.title);
+    // A value this page has never heard of still says the right thing.
+    lamps({available: false, why: 'martian', reason: 'the daemon says so'},
+          'locked', null);
+    const future = /the daemon says so/i.test(capsEl.title);
+    emit(`whyset ${unpowered && errored ? 1 : 0} ${future ? 1 : 0}`);
     lamps(null, 'locked', null);
     const unknown = cls() === 'na' && /not reporting/i.test(capsEl.title);
     emit(`ledstates ${real && unsupported && unknown ? 1 : 0} `
@@ -1817,6 +1835,11 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][0] == 1.0, got["cadcolour"])
     check("Refresh video is in the screen menu, not the power menu",
           got["cadcolour"][1] == 1.0, got["cadcolour"])
+    check("each why shows the daemon's own sentence, not a paraphrase",
+          got["whyset"][0] == 1.0, got["whyset"])
+    # The page must not have to be edited every time the daemon adds a state.
+    check("control: an unrecognised why still shows its reason",
+          got["whyset"][1] == 1.0, got["whyset"])
     check("LED lamps render present, unsupported and unknown differently",
           got["ledstates"][0] == 1.0, got["ledstates"])
     # The exact failure: a board with no LED channel must not render as a

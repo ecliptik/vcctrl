@@ -4370,39 +4370,51 @@ if (autoTheme) autoPick();
 // and the last value stands. Drawn dashed when the picture says the machine is
 // not showing anything, because a lamp that looks live on a dead machine is
 // the same lie in miniature that cost a wrong readiness report.
+// THE DAEMON OWNS THE WORDS; THIS OWNS THE DRAWING. `why` is a closed set
+// that has grown twice in one evening -- unsupported, error, unknown, then
+// unpowered and unproven -- and both times the page collapsed the new values
+// into an old sentence. The struck-through branch said "no LED return
+// channel on this board" and would have said it about a Gateway that was
+// merely switched off.
+//
+// So the table below chooses only the LOOK. The sentence is always the
+// daemon's `reason`, shown as written. A `why` this page has never heard of
+// still says the right thing; only its styling falls back.
+const LEDLOOK = {
+  unsupported: 'na',      // a Macintosh: working hardware, no such channel
+  unpowered:   'na',      // nothing to read, and nothing wrong
+  unknown:     'na',      // not looked yet
+  unproven:    'stale',   // there IS a channel, it has not spoken this epoch
+  error:       'bad',     // a Gateway with a dead PS/2 lead: a fault
+};
 function lamps(leds, videoState, verified) {
-  // THREE STATES, because the daemon reports three. A board with no LED
-  // return channel sends {available:false, why:"unsupported"} and NO value
-  // keys at all -- and the old read, `leds && leds[key]`, saw a truthy
-  // object, got undefined for capslock, drew a dark lamp and captioned it
-  // "dark". "This machine has no LED channel" and "all three LEDs are off"
-  // rendered identically, which is exactly the confusion the three-state was
-  // added to prevent. The page would have defeated it silently.
-  const na    = !!(leds && leds.available === false);
-  const blind = !leds || (leds.available !== false && leds.capslock == null);
-  // Unverified is the default, and it is drawn as such. With the PS/2 lead
-  // physically unplugged the daemon still reports both devices held, input ok,
-  // and plausible LED values -- all true, and all about the Pi's end of the
-  // wire. Lit lamps on an unverified link are a reassuring lie.
-  const noVerify = !!(verified && verified.available === false);
-  const unproven = !na && !noVerify
-                   && (!verified || verified.ok !== true || verified.age_s > 900);
-  const stale = !na && (videoState === 'nosignal'
-                        || videoState === 'unavailable' || unproven || blind);
+  const why   = leds && leds.available === false ? (leds.why || 'unknown') : null;
+  const look  = why ? (LEDLOOK[why] || 'na') : null;
+  // Present, claiming to be readable, and carrying nothing. Not a state the
+  // daemon publishes -- which is why it is worth drawing rather than trusting.
+  const blind = !leds || (!why && leds.capslock == null);
+  const vWhy  = verified && verified.available === false
+                ? (verified.why || 'unknown') : null;
+  // Only `unsupported` means there is no round trip to run. Every other
+  // absence means the proof is missing or void, which is what the dashed
+  // underline has meant since it was added.
+  const noVerify = vWhy === 'unsupported';
+  const unproven = !why && !noVerify
+                   && (vWhy !== null || !verified || verified.ok !== true
+                       || verified.age_s > 900);
+  const stale = !why && (videoState === 'nosignal'
+                         || videoState === 'unavailable' || unproven || blind);
   for (const [key, id] of [['capslock','lamp-caps'], ['numlock','lamp-num'],
                            ['scrolllock','lamp-scroll']]) {
     const el = $(id);
     if (!el) continue;
-    const v = na || blind ? null : leds[key];
+    const v = why || blind ? null : leds[key];
     el.classList.toggle('on', v === 1);
-    el.classList.toggle('stale', stale);
-    el.classList.toggle('na', na || blind);
-    // ONE title, assigned once. There were three assignments here and the
-    // last won, so the two carefully worded ones above it were dead the day
-    // they were written and nobody ever saw them.
+    el.classList.toggle('stale', stale || look === 'stale');
+    el.classList.toggle('na', look === 'na' || blind);
+    el.classList.toggle('bad', look === 'bad');
     el.title =
-      na    ? 'No LED return channel on this board'
-              + (leds.reason ? ' — ' + leds.reason : '')
+      why   ? (leds.reason || 'no LED reading: ' + why)
       : blind ? 'The daemon is not reporting LED values'
       : (v === 1 ? 'lit' : 'dark')
         + (unproven ? ' — the input link is unproven, so this describes the '
@@ -4410,13 +4422,14 @@ function lamps(leds, videoState, verified) {
            : stale ? ' — retained, the target is not showing a picture' : '');
   }
   $('lamps').title =
-    na ? 'Caps / Num / Scroll are a PS/2 return channel. This board does not '
-         + 'have one' + (leds.reason ? ': ' + leds.reason : '')
-         + ', so there is nothing to read and nothing is being claimed.'
+    why ? 'Caps / Num / Scroll are a PS/2 return channel.\n\n'
+          + (leds.reason || why)
     : LAMP_ATTESTS
       + (noVerify
-         ? '\n\nThis board has no round-trip verification, so the link cannot '
-           + 'be proven the way a PS/2 one can.'
+         ? '\n\n' + (verified.reason
+            || 'This board has no round-trip verification.')
+         : vWhy
+         ? '\n\n' + (verified.reason || 'The link is not proven: ' + vWhy)
          : verified
          ? `\n\nLink last proven by round trip ${fmtAge(verified.age_s)} ago: `
            + (verified.ok ? 'the target answered.' : 'NO ANSWER — keystrokes are not arriving.')
