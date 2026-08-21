@@ -274,6 +274,13 @@
        blast radius. */
     body #cmdbar #grabbtn, body #cmdbar #soundwrap,
     body #cmdbar #powerbtn, body #cmdbar #capwrap { display:none; }
+    /* AND THE RULE THAT DIVIDED THEM FROM THE FIELD. With all four hidden it
+       separates the command line from nothing, and costs 20px of the one row
+       that has none to spare -- measured at 478..491 with every element after
+       it display:none. Second orphaned separator tonight: the first was the
+       one following the page title, also left behind by hiding what it was
+       there to divide. Hiding a thing has to include hiding its punctuation. */
+    body #cmdbar .barsep { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
