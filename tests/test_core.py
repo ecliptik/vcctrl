@@ -1490,6 +1490,28 @@ HARNESS = r"""
        + `${noPicture === 1 && never === 1 ? 1 : 0}`);
     lamps(null, 'locked', null);
   }
+  // THE HEADER'S CONTROLS MUST NOT BE ABLE TO LEAVE. Asserted as a
+  // MECHANISM rather than as a measurement, because headless clamps the
+  // window to 500px and the fault only appeared on a real 393px phone: the
+  // whole bar was overflow-x:auto, so the lamps pushed Settings and
+  // light/dark off the edge. If the status half can shrink and the controls
+  // cannot, no width can reproduce it.
+  {
+    const hs = document.getElementById('hdrstatus');
+    const hsOK = getComputedStyle(hs).minWidth === '0px'
+              && getComputedStyle(hs).overflowX === 'auto'
+              && getComputedStyle(document.querySelector('header')).overflowX
+                 === 'hidden';
+    const pinned = Array.from(document.querySelectorAll('header > button'))
+      .every(b => getComputedStyle(b).flexShrink === '0');
+    // And the zoom caret must sit inside its own button: it hung outside the
+    // box when the button was allowed to shrink under its content.
+    const zb = document.getElementById('zoombtn');
+    const cr = zb.querySelector('.caret').getBoundingClientRect();
+    const zr = zb.getBoundingClientRect();
+    emit(`headerpin ${hsOK && pinned ? 1 : 0} `
+       + `${cr.right <= zr.right + 0.5 && cr.left >= zr.left - 0.5 ? 1 : 0}`);
+  }
   closePop();
   emit(`caretshut ${tipUp('keys')} ${tipUp('zoom')}`);
   document.getElementById('keysbtn').click();
@@ -1849,6 +1871,10 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][0] == 1.0, got["cadcolour"])
     check("Refresh video is in the screen menu, not the power menu",
           got["cadcolour"][1] == 1.0, got["cadcolour"])
+    check("the header's status can shrink and its controls cannot",
+          got["headerpin"][0] == 1.0, got["headerpin"])
+    check("so the zoom caret stays inside its own button",
+          got["headerpin"][1] == 1.0, got["headerpin"])
     check("unproven is louder than a plain stale reading, and not by colour alone",
           got["unprovenloud"][0] == 1.0, got["unprovenloud"])
     check("each why shows the daemon's own sentence, not a paraphrase",

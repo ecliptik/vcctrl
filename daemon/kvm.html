@@ -57,9 +57,16 @@
     padding:0 11px; padding-top:env(safe-area-inset-top,0px);
     height:calc(46px + env(safe-area-inset-top,0px));
     background:var(--panel); border-bottom:1px solid var(--rule);
+    overflow:hidden;
+  }
+  /* The readable half takes what is left and scrolls inside itself; the
+     controls are flex:none and therefore never shrink or leave. */
+  #hdrstatus {
+    flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:11px;
     overflow-x:auto; scrollbar-width:none;
   }
-  header::-webkit-scrollbar { display:none; }
+  #hdrstatus::-webkit-scrollbar { display:none; }
+  header > button, header > .sep { flex:none; }
   h1 {
     font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
     text-transform:uppercase; color:var(--dim); margin:0; flex:none;
@@ -192,6 +199,9 @@
        off the right-hand edge with nothing to say they existed. The emoji is
        the control on a phone, which is what it was before the labels and is
        the one thing that always fits. */
+    /* h1 is hidden here, so the rule that followed it separated nothing from
+       the left edge -- two pipes with a gap between them and no content. */
+    body h1 + .sep { display:none; }
     body #gbtn .bl, body #zoombtn #zoomlabel { display:none; }
     body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
     body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
@@ -203,7 +213,14 @@
        captures the keyboard, so these three are duplicates on a phone. */
     /* The clip stays on a phone: it is inside the field, costs no row, and
        typing a file in is if anything more useful there. */
-    body #grabbtn, body #soundwrap, body #powerbtn, body #bufbtn { display:none; }
+    /* TWO IDS, because `#cmdbar button { display:flex }` is declared later in
+       this file at the same specificity as `body #grabbtn` and was winning on
+       source order -- so every one of these came back and the phone showed
+       the strip AND the tab bar for the same four controls. That rule was
+       written tonight when the button family was consolidated; this is its
+       blast radius. */
+    body #cmdbar #grabbtn, body #cmdbar #soundwrap,
+    body #cmdbar #powerbtn, body #cmdbar #bufbtn { display:none; }
 
     /* The command line is a panel, not a permanent row.
        `body` in front of each selector outranks the bare id, so these win
@@ -293,11 +310,13 @@
      "stale" is dashed, which is what the monochrome themes and a colour-blind
      reader both need. */
   .lamp { display:flex; align-items:center; }
-  /* NOT APPLICABLE is its own look: struck through and dimmed, so it reads as
-     "there is nothing here to read" rather than as a reading of nothing. A
-     dark lamp is a measurement; this is the absence of one. */
-  .lamp.na > span { opacity:.38; text-decoration:line-through;
-                    text-decoration-thickness:1px; }
+  /* NOT APPLICABLE is dimmed, and nothing else. The strike-through said the
+     right thing and looked wrong doing it: the line sits off the text's
+     baseline, so three struck words no longer lined up with the lamps beside
+     them and the whole row read as broken. Faint is enough to say "not a
+     reading" when the tooltip carries the reason, and it keeps the row
+     level. */
+  .lamp.na > span { opacity:.34; }
   .lamp i { display:none; }
   .lamp span {
     font:var(--t-micro)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
@@ -428,10 +447,16 @@
   }
   #scrubtip[hidden] { display:none; }
   #scrubbar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  /* The readout is a caption for the track above it, not a control in the
+     row -- as a flex item it sat between Save and Live and pushed Live onto
+     a line of its own. Its own full-width line, centred with the transport,
+     so the group reads as one object at any width. */
+  #scrubbar { justify-content:center; }
+  #scrubpos { flex:1 0 100%; text-align:center; order:9; }
   #scrubbar button { min-height:30px; padding:0 9px; }
   @media (max-width:640px) {
     #scrub { left:6px; right:6px; bottom:6px; padding:7px 8px; }
-    #scrubbar { gap:4px; }
+    #scrubbar { gap:4px; row-gap:6px; }
     #scrubbar button { padding:0 7px; min-height:34px; }
     #scrubpos { font-size:10.5px; }
     /* The tip is half the screen on a phone; smaller keeps the frame under
@@ -1025,6 +1050,13 @@
 
 <div id="app">
   <header>
+   <!-- THE STATUS SCROLLS; THE CONTROLS DO NOT. The whole bar was
+        overflow-x:auto, so on a 393px phone the lamps pushed Settings and
+        light/dark off the right-hand edge and the zoom button was squeezed
+        until its caret hung outside its own box. Reported from a real phone,
+        which is the only place it shows: headless clamps to 500px. A control
+        you have to scroll sideways to find is a control that is not there. -->
+   <div id="hdrstatus">
     <h1>vcctrl-kvm</h1>
     <span class="sep" aria-hidden="true">|</span>
     <span class="lamp" id="state" aria-live="polite"><i></i><span>—</span></span>
@@ -1046,7 +1078,7 @@
       <span class="lamp" id="lamp-num"><i></i><span>NUM</span></span>
       <span class="lamp" id="lamp-scroll"><i></i><span>SCR</span></span>
     </button>
-    <span class="grow"></span>
+   </div>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
             title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- Fit to Screen acts on the PICTURE; the three to its right open panels
@@ -1118,7 +1150,6 @@
                 title="End the selection here">Mark out</button>
         <button id="scrubsave" data-short="Save"
                 title="Save the selected range as a video">Save range</button>
-        <span class="grow"></span>
         <span id="scrubpos">—</span>
         <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
       </div>
@@ -2878,7 +2909,12 @@ function drawMap() {
   const green = css.getPropertyValue('--green').trim();
   const yellow = css.getPropertyValue('--yellow').trim();
   const red = css.getPropertyValue('--red').trim();
-  const rule = css.getPropertyValue('--rule').trim();
+  // NOT --rule. That token is a border colour, chosen to be nearly invisible
+  // against the surface it divides -- which is exactly wrong for data. On the
+  // light themes the still ticks vanished completely and the bar read as
+  // empty, so a buffer full of a motionless screen looked like a buffer full
+  // of nothing. --dim is the faintest token meant to be READ.
+  const rule = css.getPropertyValue('--dim').trim();
   x.clearRect(0, 0, w, h);
 
   const f = tl.frames, t0 = f[0].t, span = (f[f.length - 1].t - t0) || 1;
