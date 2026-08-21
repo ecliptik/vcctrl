@@ -16,6 +16,30 @@ exists. The surfaces carried Round Q because the defect happened to be
 engine-side; the next defect may be one only glass can see, and it will be
 found with an instrument that has been quietly broken for hours.
 
+### SUPERSEDED 2026-08-21 -- THE REGRESSION IS NOT REPRODUCING
+
+**Read this before acting on anything below.** Since a reboot to the default
+profile and a daemon restart, the Mach64 has locked game glass on **every**
+cell attempted: 8 of 8 in the invalid Round R, 8 of 8 in the re-run, plus a
+full 210 s recording at 30 fps with 11 repeated frames in 6,301. The
+`no usable Mach64 glass` premise below is **stale**.
+
+Two of the six rows in the table are also wrong, and wrong in ways worth
+keeping:
+
+- **MQ3's glass exists** and shows no game -- but the file is 94.5% MQ2's
+  frames (sec. 36), so the row was right for the wrong reason.
+- **MQ4 had NO RECORDING AT ALL** and was reported as `NO LOCK`. That is the
+  instrument's state published as the target's, in a table built to diagnose
+  the instrument.
+
+What actually cleared it is **not established**. Candidates are the reboot,
+the 22:36 daemon restart, and the ring age-eviction fix; nothing has separated
+them and nothing should be asserted. **If it returns, the instrumentation plan
+below is still the right first step** -- but start by checking whether a
+reboot clears it, which is one cheap experiment that was never run because the
+fault was assumed to be the stick latching.
+
 ### What is measured
 
     cell   pre-launch screenshot   mid-cell capture
