@@ -1805,11 +1805,10 @@ setInterval(() => {
 // converges on the rate the path can actually carry: back off hard when
 // frames are going missing, creep up while they are not.
 const smallScreen = () => Math.min(screen.width, screen.height) < 500;
-// NOT the same question as smallScreen(). That one asks about the DEVICE, to
-// decide what frame rate to ask the daemon for; this one asks about the
-// WINDOW, because a narrow desktop window has the same layout problem as a
-// phone and a phone held sideways does not.
-const narrowUI = () => matchMedia('(max-width:640px)').matches;
+// narrowUI() is gone with the last of the abbreviations. Every case it was
+// used for turned out to be one where the phone should say what the desktop
+// says, and the layout differences that remain are all expressible in CSS --
+// which is where a layout difference belongs.
 // A KVM at two frames a second is still a KVM: you can read a screen, watch
 // a boot, see a prompt appear. Four was chosen when the only bad link in
 // evidence was a busy LAN; on a phone over cellular the honest floor is
@@ -3311,14 +3310,17 @@ async function seekIdx(i) {
     Math.round(((k.t - t0) / span) * (tr.clientWidth - 2)) + 'px';
   // Seconds BEFORE THE END, because that is the question being asked -- how
   // long before it stopped did this happen -- not how far into a recording.
-  // The sequence number and the gap are for reading a buffer closely, which
-  // is not what anyone is doing on a phone; there the position and the count
-  // are the whole of it, and the rest would wrap the control row.
-  const back = '−' + (f[f.length - 1].t - k.t).toFixed(2) + 's';
-  $('scrubpos').textContent = narrowUI()
-    ? back + ' · ' + (tlAt + 1) + '/' + f.length
-    : back + ' · frame ' + (tlAt + 1) + '/' + f.length + ' · seq ' + k.seq
-      + (k.gap_ms != null ? ' · +' + k.gap_ms.toFixed(0) + 'ms' : '');
+  //
+  // THE SAME SENTENCE ON BOTH. This was shortened on a phone on the same
+  // reasoning as the button abbreviations, and it was wrong for the same
+  // reason: the seq and the gap are what you quote when reporting what you
+  // found, and a phone is a perfectly good place to find something. Measured
+  // at 500px it is 304px of a 470px row -- one line, with room. The
+  // abbreviation was never buying anything.
+  $('scrubpos').textContent =
+    '−' + (f[f.length - 1].t - k.t).toFixed(2) + 's'
+    + ' · frame ' + (tlAt + 1) + '/' + f.length + ' · seq ' + k.seq
+    + (k.gap_ms != null ? ' · +' + k.gap_ms.toFixed(0) + 'ms' : '');
   const img = $('review');
   img.src = '/frame.jpg?seq=' + k.seq;
   img.style.display = '';
@@ -3425,11 +3427,7 @@ $('scrubtrack').addEventListener('pointermove', e => {
 $('scrubtrack').addEventListener('pointerleave', hideTip);
 $('scrubprev').onclick = () => { stopPlay(); seekIdx(tlAt - 1); };
 $('scrubnext').onclick = () => { stopPlay(); seekIdx(tlAt + 1); };
-// The abbreviations are gone. They existed to stop a three-column grid
-// wrapping inside itself on a phone, which stacking the groups solves
-// properly -- and they made the phone say something different from the
-// desktop about the same control, which is worse than a taller panel.
-function fitScrubLabels() {}
+
 $('scrubexit').onclick = exitReview;
 $('scrubin').onclick  = () => { bufFrom = tl.frames[tlAt].seq; markRange(); };
 $('scrubout').onclick = () => { bufTo   = tl.frames[tlAt].seq; markRange(); };
