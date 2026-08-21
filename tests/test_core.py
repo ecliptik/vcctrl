@@ -613,6 +613,38 @@ def test_theme_contrast():
     check("worst indicator ratio %.2f:1 (floor 3.0)" % worst_accent,
           worst_accent >= 3.0)
 
+    # THE ORDERING, which the floors do not give you for free.
+    #
+    # text > muted > dim is what those names promise the page: three levels of
+    # emphasis. Fitting moves each role independently toward the same extreme,
+    # so raising dim's floor to 4.5 inverted everforest-dark -- dim landed at
+    # 5.41 against muted's 5.38. Three hundredths is invisible, which is
+    # exactly why it needs asserting rather than eyeballing: an inversion
+    # nobody can see is still a rule the names are breaking.
+    inverted = []
+    for name in T.THEMES:
+        roles, _n = T.fitted(name)
+        sur = (roles["bg"], roles["panel"])
+        lvl = {r: min(T.contrast(roles[r], s) for s in sur)
+               for r in ("text", "muted", "dim")}
+        if not (lvl["text"] >= lvl["muted"] >= lvl["dim"]):
+            inverted.append("%s: text %.2f muted %.2f dim %.2f"
+                            % (name, lvl["text"], lvl["muted"], lvl["dim"]))
+    check("emphasis runs text >= muted >= dim in all %d themes" % len(T.THEMES),
+          not inverted, "; ".join(inverted[:3]))
+
+    # AND THE FLOOR MATCHES THE USE. dim is the most-used text colour in
+    # kvm.html -- seventeen `color:var(--dim)` rules, carrying the product
+    # name, the lamp labels and every panel heading -- so it is text, and 3:1
+    # was the floor for a decoration. Same for the accents: green carries PWR,
+    # AUD and Send; red carries DAEMON UNREACHABLE. This test was GREEN while
+    # all of them rendered between 3.15 and 3.77 on solarized-light, because
+    # it asked whether each role cleared the floor for its NAME.
+    check("dim is floored as text, not as decoration",
+          T.FLOOR.get("dim") >= 4.5, T.FLOOR.get("dim"))
+    check("and so are the accents, which carry lamps and alarms",
+          T.ACCENT_FLOOR >= 4.5, T.ACCENT_FLOOR)
+
     # Control: the check must be able to fail. A floor nothing can trip is not
     # a floor.
     bad = T.contrast("#777777", "#808080")

@@ -197,8 +197,39 @@ def contrast(a, b):
 
 # Text must clear 4.5:1 against any surface it sits on; indicator colours and
 # large type must clear 3:1. WCAG's numbers, not invented ones.
-FLOOR = {"text": 4.5, "muted": 4.5, "dim": 3.0}
-ACCENT_FLOOR = 3.0
+#
+# FLOOR BY USE, NOT BY ROLE NAME. `dim` and the accents were held to the 3:1
+# indicator floor because their names suggest decoration. The page uses them
+# as TEXT: `color:var(--dim)` appears seventeen times -- it is the most-used
+# text colour in kvm.html, carrying the product name, the KBD/MOS/C/N/S lamp
+# labels and every panel heading -- and the accents carry PWR/AUD, the Send
+# button and DAEMON UNREACHABLE.
+#
+# Measured in a browser on solarized-light before changing anything, which is
+# the only reason this was found: `test_theme_contrast` was GREEN throughout,
+# because it asked whether each role cleared the floor for its NAME rather
+# than the floor for its JOB.
+#
+#   3.28:1   dim     vcctrl-kvm, KBD, MOS, C N S, panel headings
+#   3.15:1   green   PWR and AUD lit lamps
+#   3.58:1   green   Send
+#   3.77:1   red     DAEMON UNREACHABLE
+#
+# Modelled before committing, because raising a floor moves every value the
+# generator emits and the failure mode is a palette that reads as one colour:
+#
+#   dim lands 4.94-5.39 across the light themes, muted sits 5.18-5.78, so the
+#   text > muted > dim hierarchy survives -- narrowly, and that compression is
+#   a real cost paid for legibility.
+#
+#   Accents stay TELLABLE APART. Measured with Lab dE, not with contrast
+#   ratio: the first attempt compared accents by contrast and got ~1.0 for
+#   every pair, which says only that they share a lightness. Two lamps of the
+#   same lightness and different hue are not confusable, and a metric that
+#   cannot see that is the wrong instrument. Worst pair moves 14.8 -> 13.8
+#   (tokyo-night-light yellow/orange). Nothing collapses.
+FLOOR = {"text": 4.5, "muted": 4.5, "dim": 4.5}
+ACCENT_FLOOR = 4.5
 ACCENTS = ("red", "orange", "yellow", "green", "cyan", "blue", "magenta")
 
 
@@ -251,6 +282,36 @@ def fitted(name):
         if changed:
             notes.append("%s %s->%s" % (role, roles[role], new))
             roles[role] = new
+
+    # THE ORDERING IS PART OF THE CONTRACT, not a by-product of the floors.
+    #
+    # text > muted > dim is what the page means by those names: three levels
+    # of emphasis. Fitting moves each role independently toward the same
+    # extreme, so a role that started far from its floor barely moves while
+    # one that started below it jumps -- and raising dim's floor to 4.5
+    # inverted everforest-dark, where dim landed at 5.41 against muted at
+    # 5.38. Three hundredths is invisible and that is exactly the problem: it
+    # is an inversion nobody would see, in a rule the names promise.
+    #
+    # So enforce it. muted is pushed until it is at least as strong as dim,
+    # and text until it is at least as strong as muted -- toward the same
+    # extreme the floors use, so the nudge never reduces contrast.
+    for weaker, stronger in (("dim", "muted"), ("muted", "text")):
+        for _ in range(40):
+            wc = min(contrast(roles[weaker], s) for s in surfaces)
+            sc = min(contrast(roles[stronger], s) for s in surfaces)
+            if sc >= wc:
+                break
+            before = roles[stronger]
+            roles[stronger] = _mix(roles[stronger], toward, 0.06)
+            if roles[stronger] == before:
+                break                      # already at the extreme
+        else:
+            continue
+        if roles[stronger] != THEMES[name][4][stronger]:
+            note = "%s>=%s" % (stronger, weaker)
+            if note not in notes:
+                notes.append(note)
     return roles, notes
 
 
