@@ -62,6 +62,44 @@ controlled test and it should not be presented as one.**
 number** — one did, 122,485 bytes. `roundR/run.sh` pins the daemon's MainPID
 and refuses to continue across a change. Keep that guard in any new runner.
 
+### The combination run of 2026-08-21 19:16 — CEILING WRITTEN BEFORE THE RESULT
+
+Three arms together for the first time, daemon 519329:
+
+    real-frame decode stress   ~2,900 decodes/s, ~790/s FAILING on the
+                               GENUINE short frame the hardware emitted,
+                               interleaved with good frames at the rig's ratio
+    inputload                  4 threads, uinput + LED reads
+    2 browser-shaped tabs      video + audio ws, /state.json, /shot.jpg,
+                               reviewing tab on /timeline.json
+
+**What this arm has that no previous one did:**
+
+- **Real byte churn.** 52.0 KB/frame, `distinct 90/90` — ABOVE the game's
+  ~44 KB and far above console's ~17. Age eviction is freeing 52 KB objects
+  thirty times a second. This is the axis the morning's ceiling said was
+  "not the combination at reduced byte churn", and it is finally open.
+- **The genuine artifact**, not constructed mutants.
+- **All three load types at once**, which neither abort window ever lacked.
+
+**What it still does NOT have, stated in advance:**
+
+- **`inputload` is running at 27-29 ops/s, not the 57 it managed alone** — the
+  Pi is saturated by the decode stress. **A null from this arm is a null at
+  half the input throughput previously measured.**
+- **No cells are running**, so there are no mode transitions. Every real
+  malformed frame ever observed came from a cell boundary; here they are
+  supplied artificially instead.
+- **~790 failures/s against roughly 2 per cell naturally** — about five orders
+  of magnitude above the natural rate. That is the point of a stress, but it
+  means the *allocator pattern* is not the service pattern however well the
+  good/bad ratio is matched.
+
+**If it runs 55 minutes clean:** thousands of synthetic mutants did not abort,
+and roughly 2.5 million real-frame failures did not either. **That is about as
+strong a negative as this mechanism can be given** — and it is still a bound,
+not an exoneration.
+
 ### The hunt of 2026-08-21: four arms, no reproduction
 
 Run against one daemon (214909, `NRestarts 0`, target powered OFF):
