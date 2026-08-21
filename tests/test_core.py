@@ -1073,14 +1073,17 @@ HARNESS = r"""
     // Against a button still IN the strip. keysbtn moved inside the field,
     // so comparing to it now measures the field against its own contents.
     emit(`fieldh ${h('linewrap')} ${h('grabbtn')}`);
-    // Send is the return glyph alone now: the word said the same thing twice
-    // and cost width in the one row that had none. And the key menu lives
-    // INSIDE the field, with the clip, because a key the field cannot type is
-    // the same kind of thing as a file it cannot type.
+    // Send keeps its word where there is room for it -- this harness runs at
+    // desktop width -- with the arrow after it and no divider between, since
+    // both halves say the same thing. And the key menu lives INSIDE the
+    // field, with the clip, because a key the field cannot type is the same
+    // kind of thing as a file it cannot type.
     const sb = document.getElementById('sendline');
-    const ret = sb.querySelector('.ret');
+    const ret = sb.querySelector('.ret'), bl = sb.querySelector('.bl');
     const kb = document.getElementById('keysbtn');
-    emit(`sendparts ${ret && !sb.querySelector('.bl') && !sb.querySelector('.bi') ? 1 : 0} `
+    emit(`sendparts ${ret && bl && !sb.querySelector('.bi')
+          && bl.getBoundingClientRect().left < ret.getBoundingClientRect().left
+          ? 1 : 0} `
        + `${kb && kb.closest('#linewrap') ? 1 : 0}`);
   }
 
@@ -1776,7 +1779,7 @@ def test_zoom_layout_in_a_browser():
           got["striph"][1] >= 30, got["striph"])
     check("the command field is the same height as the buttons beside it",
           got["fieldh"][0] == got["fieldh"][1], got["fieldh"])
-    check("Send is the return glyph alone, with no word beside it",
+    check("Send keeps its word on a desktop, with the arrow after it",
           got["sendparts"][0] == 1.0, got["sendparts"])
     check("and the key menu opens from inside the command field",
           got["sendparts"][1] == 1.0, got["sendparts"])
