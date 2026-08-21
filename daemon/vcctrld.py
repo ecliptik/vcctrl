@@ -1515,6 +1515,14 @@ class VideoCapability(Capability):
     # at. It expires, because a pinned buffer stops accepting new frames and a
     # silently stale KVM is the failure this tool exists to prevent.
     PIN_TIMEOUT_S = 300.0
+    # How many undecodable frames to keep on disk, and where. Twenty 60 KB
+    # frames is about a megabyte -- enough to see a pattern, small enough that
+    # a cable fault producing a steady stream of them cannot fill the card.
+    # Twelve, not twenty: the observed rate is about one per 100,000 decode
+    # attempts, so a dozen is many days of ordinary operation, and a degraded
+    # cable producing a steady stream still cannot fill the card.
+    BAD_KEEP = 12
+    BAD_DIR = "/var/lib/vcctrl/badframes"
     NOSIGNAL_AFTER_S = 2.0
     # How many recent frames must be bit-identical before the stream is called
     # frozen. Eight is ~0.27 s at 30 fps -- long enough that a genuinely static
@@ -1596,6 +1604,22 @@ class VideoCapability(Capability):
         self.decode_attempts = 0
         self.decode_sites = {}
         self.decode_last = None
+        # AND KEEP THE FRAME THAT BROKE.
+        #
+        # 2026-08-21 17:29:12 the first decode failure ever recorded arrived
+        # -- "broken data stream when reading image file", seq 78658, off the
+        # live capture with no stress and no fuzzing involved. By the time
+        # anyone asked for that frame it had been evicted: the ring is 31
+        # seconds deep and the counter had taken 140 s to be read.
+        #
+        # A counter says a frame broke. The frame itself can be examined,
+        # replayed through the decoder, fuzzed against, and sent upstream. The
+        # whole malformed-frame hypothesis has run on frames we MADE UP,
+        # because no real one had ever been captured.
+        #
+        # Bounded hard, because this writes to the card from the capture path
+        # and a degraded cable could produce these continuously.
+        self.bad_frames = collections.deque(maxlen=self.BAD_KEEP)
         # _chg is read and written by concurrent /timeline.json requests --
         # two open tabs is enough -- and the prune iterates it while another
         # thread may insert. That raises RuntimeError rather than corrupting
@@ -2093,7 +2117,7 @@ class VideoCapability(Capability):
                 "ring_frames": frames, "span_s": round(actual, 2),
                 "mem_limited": cap < asked}
 
-    def _decoded(self, where, exc=None, seq=None):
+    def _decoded(self, where, exc=None, seq=None, frame=None):
         """Record one decode ATTEMPT and whether it failed.
 
         Both halves, always. The first version of this counted only failures,
@@ -2117,6 +2141,81 @@ class VideoCapability(Capability):
                     "error": errstr(exc)[:160],
                     "t": round(time.time(), 3),
                 }
+        # Outside the lock: this touches the disk, and the capture path takes
+        # the same lock thirty times a second.
+        if exc is not None and frame:
+            self._keep_bad_frame(where, seq, exc, frame)
+
+    def _keep_bad_frame(self, where, seq, exc, frame):
+        """Write an undecodable frame to disk. Bounded, and never fatal.
+
+        A counter says a frame broke; the frame itself can be replayed through
+        the decoder, fuzzed against, and sent upstream. Every malformed frame
+        this project has ever examined was one we manufactured, because no real
+        one had ever been kept -- the first real failure was evicted 140
+        seconds after it happened, before anyone could ask for it.
+
+        Failures here are swallowed on purpose. A full disk or a bad path must
+        not take down capture to preserve a diagnostic about capture.
+        """
+        try:
+            os.makedirs(self.BAD_DIR, exist_ok=True)
+            now = time.time()
+            # A MONOTONIC ORDINAL, not a finer clock. Seconds collided, so
+            # two failures in one second overwrote each other and the on-disk
+            # count fell behind the in-memory record -- which then unlinked a
+            # file a live record still pointed at. Milliseconds collided too:
+            # a burst runs faster than 1 ms, and twelve records shared three
+            # files. Any time-based name is a guess about the arrival rate,
+            # and the rate that matters is the one during a cable fault --
+            # exactly when nobody wants to debug the diagnostic.
+            #
+            # decode_errs is strictly increasing and already incremented by
+            # the caller, so it cannot repeat however fast they arrive.
+            with self.lock:
+                ordinal = self.decode_errs
+            name = "%s/%06d_%d_%s_%s.jpg" % (
+                self.BAD_DIR, ordinal, int(now),
+                seq if seq is not None else "noseq", where)
+            with open(name, "wb") as f:
+                f.write(frame)
+            # PROVENANCE TRAVELS WITH THE ARTIFACT. A bare .jpg in a directory
+            # in three weeks is an orphan; the same file with its seq, wall
+            # time, site and exception beside it is evidence. This is the
+            # GMQ3 lesson -- a recording that could not say which cell it
+            # belonged to produced a confident, wrong refutation -- applied
+            # before it costs anything instead of after.
+            with open(name[:-4] + ".json", "w") as f:
+                json.dump({
+                    "file": os.path.basename(name),
+                    "seq": seq, "where": where,
+                    "t": round(now, 3),
+                    "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                         time.gmtime(now)),
+                    "bytes": len(frame),
+                    "error": errstr(exc)[:300],
+                    "sha256": hashlib.sha256(frame).hexdigest(),
+                    "starts_soi": frame[:2] == b"\xff\xd8",
+                    "ends_eoi": frame[-2:] == b"\xff\xd9",
+                }, f, indent=1, sort_keys=True)
+            with self.lock:
+                old = None
+                if len(self.bad_frames) == self.bad_frames.maxlen:
+                    old = self.bad_frames[0]
+                self.bad_frames.append({
+                    "file": name, "seq": seq, "where": where,
+                    "bytes": len(frame), "t": round(time.time(), 3),
+                    "error": errstr(exc)[:160]})
+            # The deque bounds the RECORD; the directory needs bounding too, or
+            # the count is a fiction and the card fills anyway.
+            if old:
+                for path in (old["file"], old["file"][:-4] + ".json"):
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+        except Exception:
+            pass
 
     def _score_changes(self, items):
         """How much each frame differs from the one before it.
@@ -2167,7 +2266,7 @@ class VideoCapability(Capability):
                 im = im.convert("L")
                 self._decoded("timeline")
             except Exception as exc:
-                self._decoded("timeline", exc, sq)
+                self._decoded("timeline", exc, sq, frame=f)
                 prev = None
                 with self._chg_lock:
                     cache.setdefault(sq, None)
@@ -2368,7 +2467,7 @@ class VideoCapability(Capability):
                 # the coverage as "all four call sites" while this one was
                 # never wired. It is the path the harness hits on every
                 # mid-cell shot, so it was also the busiest one missing.
-                self._decoded("shot", exc)
+                self._decoded("shot", exc, frame=f)
                 errs.append("%s: %s" % (type(exc).__name__, exc))
                 continue
             if m > best_mean:
@@ -2395,7 +2494,7 @@ class VideoCapability(Capability):
             self._decoded("is_picture")
             return (hi - lo) >= self.MIN_RANGE
         except Exception as exc:
-            self._decoded("is_picture", exc)
+            self._decoded("is_picture", exc, frame=frame)
             return False
 
     def _shot(self, req):
@@ -2452,7 +2551,7 @@ class VideoCapability(Capability):
                 mean = ImageStat.Stat(im.convert("L")).mean[0]
                 self._decoded("lastgood")
             except Exception as exc:
-                self._decoded("lastgood", exc)
+                self._decoded("lastgood", exc, frame=frame)
                 mean = None
         return {"ok": True, "picture": True, "state": state, "stale": True,
                 "mean": mean, "t": t, "age_s": round(time.time() - t, 3),
@@ -2506,6 +2605,11 @@ class VideoCapability(Capability):
                     "decode_attempts": self.decode_attempts,
                     "decode_sites": dict(self.decode_sites),
                     "decode_last": self.decode_last,
+                    # What is actually ON DISK, so nobody has to guess whether
+                    # the keeping worked. Names the files; the bytes are in
+                    # BAD_DIR on the Pi.
+                    "bad_frames_kept": len(self.bad_frames),
+                    "bad_frames": list(self.bad_frames)[-5:],
                     "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
                     if len(self.ring) > 1 else 0.0,
                     # What the buffer is ASKED to keep, beside what it is

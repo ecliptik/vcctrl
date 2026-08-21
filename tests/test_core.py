@@ -3713,3 +3713,80 @@ def test_connection_history_outlives_a_busy_event_log():
     # A day of browsing is dozens, not thousands.
     check("200 entries is days of ordinary use, not seconds",
           cap.ws_log.maxlen == 200, cap.ws_log.maxlen)
+
+
+def test_an_undecodable_frame_is_kept_with_its_provenance():
+    """A counter says a frame broke; the frame itself can be examined.
+
+    2026-08-21 17:29:12 the first real decode failure ever recorded arrived --
+    "broken data stream when reading image file", seq 78658, off the live
+    capture with no stress and no fuzzing involved. By the time anyone asked
+    for that frame it had been evicted: the ring is 31 s deep and the counter
+    took 140 s to be read. Every malformed frame this project has examined
+    until now was one we manufactured, because no real one had ever been kept.
+
+    The sidecar is vcctrl-94's request and it is the GMQ3 lesson applied
+    before it costs anything: a bare .jpg in a directory in three weeks is an
+    orphan. Provenance travels WITH the artifact or it gets reconstructed
+    later, wrongly.
+    """
+    print("\nbad frame retention")
+    import json as _json
+    import shutil
+    import tempfile
+
+    cap = vcctrld.VideoCapability(None, vcctrld.Bus())
+    d = tempfile.mkdtemp(prefix="badframes")
+    try:
+        cap.BAD_DIR = d
+        junk = b"\xff\xd8" + b"\x00" * 300 + b"\xff\xd9"
+        ok = cap._is_picture(junk)
+        check("control: the frame really is undecodable", ok is False, ok)
+
+        jpgs = [f for f in os.listdir(d) if f.endswith(".jpg")]
+        check("the frame itself was written", len(jpgs) == 1, os.listdir(d))
+        with open(os.path.join(d, jpgs[0]), "rb") as f:
+            check("byte for byte, not re-encoded", f.read() == junk, "")
+
+        side = [f for f in os.listdir(d) if f.endswith(".json")]
+        check("with a sidecar beside it", len(side) == 1, os.listdir(d))
+        meta = _json.load(open(os.path.join(d, side[0])))
+        for key in ("seq", "where", "utc", "bytes", "error", "sha256"):
+            check("sidecar carries %s" % key, key in meta, sorted(meta))
+        check("the site that saw it", meta["where"] == "is_picture", meta)
+        check("and the error text, not just a code",
+              "cannot identify" in meta["error"].lower()
+              or "error" in meta["error"].lower(), meta["error"])
+        check("the hash matches the bytes on disk",
+              meta["sha256"] == __import__("hashlib").sha256(junk).hexdigest(),
+              meta["sha256"])
+        check("and it records that the frame passed the daemon's own filter",
+              meta["starts_soi"] and meta["ends_eoi"], meta)
+
+        # THE BOUND IS THE POINT: a degraded cable could produce these
+        # continuously, and this writes to the card from the capture path.
+        for _ in range(cap.BAD_KEEP + 6):
+            cap._is_picture(junk)
+        jpgs = [f for f in os.listdir(d) if f.endswith(".jpg")]
+        sides = [f for f in os.listdir(d) if f.endswith(".json")]
+        check("the directory is bounded, not just the record",
+              len(jpgs) <= cap.BAD_KEEP, len(jpgs))
+        check("and sidecars are reaped with their frames, not orphaned",
+              len(sides) == len(jpgs), (len(sides), len(jpgs)))
+        check("the in-memory record agrees with the disk",
+              len(cap.bad_frames) == len(jpgs),
+              (len(cap.bad_frames), len(jpgs)))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # A capability that cannot write must not take down capture to say so.
+    cap2 = vcctrld.VideoCapability(None, vcctrld.Bus())
+    cap2.BAD_DIR = "/proc/nonexistent/cannot/create"
+    try:
+        cap2._is_picture(b"\xff\xd8" + b"\x00" * 300 + b"\xff\xd9")
+        raised = None
+    except Exception as exc:
+        raised = exc
+    check("an unwritable directory is survivable", raised is None, raised)
+    check("and the failure is still counted even when the frame is not kept",
+          cap2.decode_errs == 1, cap2.decode_errs)
