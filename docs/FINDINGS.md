@@ -1887,3 +1887,43 @@ grab straight from the device: it bypassed the daemon, the ring, the pin and
 the MJPEG path, and reported black when things were genuinely black. When every
 layered instrument agrees, the one that shares no layers with them is worth
 more than another opinion from inside the stack.
+
+## 35. A check may not pass on an empty population  [2026-08-20]
+
+Five instances in one day, in five unrelated checks, written by three
+sessions. The unifying form, which the benchmarking session stated and which
+is worth having as a rule with teeth:
+
+> **A check MUST assert its input set is non-empty before it may return a
+> pass.**
+
+**Because an empty population and a passing population produce the same
+output** unless something explicitly says otherwise. The check does not fail
+to speak — it speaks the reassuring word about nothing, which is strictly
+worse than silence: silence invites a second look, a green tick closes the
+question.
+
+The five:
+
+| check | how it passed on nothing |
+|---|---|
+| sweep preflight | `all({}.values())` is `True`, so a missing field printed `input devices held by USB4VC: ok` |
+| docstring-drift control | deleted row survived as a substring in nearby prose |
+| KVM frame rate | stalled counter, difference of zero, last good figure shown as live |
+| an ASCII check | fired regardless of what `grep` returned |
+| **clip check** | filtered to lit frames, matched **zero**, printed `CLIP HOLDS: margins are black in every lit frame` |
+
+The last is mine, from the MQ5 analysis, and it is the cleanest specimen:
+the sentence names the population — *"in every lit frame"* — and there were
+none. It read exactly like a result.
+
+**Four of the five were caught by whoever wrote the check**, which is the
+only reason none of them cost anything. That is not a system; it is luck
+repeated. The one-line assertion is the system.
+
+    lit = [f for f in frames if mean(f) > 25]
+    assert lit, "no lit frames -- this check examined nothing"
+
+Related: sec. 31 (absence read as a value) is the same failure in data;
+this is it in control flow. And sec. 32's rule — a verdict must name its
+subject — has a sibling here: **a verdict must also name its sample size.**
