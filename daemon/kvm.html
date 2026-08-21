@@ -479,7 +479,7 @@
      question. The readout below the track only updates on a real seek, so
      hovering had the image and no time at all. */
   #scrubtip {
-    position:absolute; bottom:calc(100% + 7px); width:198px;
+    position:absolute; bottom:calc(100% + 4px); width:198px;
     border:1px solid var(--muted); border-radius:5px; background:var(--panel);
     box-shadow:0 8px 22px rgba(0,0,0,.5); pointer-events:none;
     transform:translateX(-50%); overflow:hidden;
@@ -901,9 +901,16 @@
      likely to want them. Now the log absorbs the leftover height and scrolls
      inside itself, and the controls keep a fixed slice at the bottom that no
      amount of log traffic can take. */
+  /* A CARD THAT TAKES ITS SPACE. Settings floats over the picture because you
+     open it, change one thing and leave. These two are watched WHILE working,
+     so they must not cover the screen -- they keep their grid track and the
+     picture narrows, exactly as before. What changes is only the drawing:
+     the same radius, border and shadow as the drawer, held off the edges, so
+     the three panels read as one family instead of two slabs and a card. */
   #body {
     flex:none; height:38vh; display:flex; flex-direction:column; min-height:0;
-    background:var(--panel); border-top:1px solid var(--rule);
+    background:var(--panel); border:1px solid var(--rule); border-radius:9px;
+    box-shadow:0 12px 30px rgba(0,0,0,.28); overflow:hidden;
   }
   #panels {
     flex:0 0 auto; max-height:55%; overflow-y:auto;
@@ -1123,8 +1130,8 @@
     body.nopanel #app, body.fs #app { grid-template-columns:minmax(0,1fr) 0; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
-    #body   { grid-column:2; grid-row:2; height:auto; border-top:0;
-              border-left:1px solid var(--rule); }
+    #body   { grid-column:2; grid-row:2; height:auto;
+              margin:8px 8px 8px 0; }
     #panels { max-height:none; flex:0 1 auto; }
   }
   /* Landscape phone: the screen is 4:3 and the phone is not, so give the
@@ -1221,10 +1228,14 @@
         <div class="markpin" id="markin" hidden></div>
         <div class="markpin" id="markout" hidden></div>
         <div id="scrubhead"></div>
-        <div id="scrubtip" hidden>
-          <img id="scrubtipimg" alt="">
-          <span id="scrubtipt">—</span>
-        </div>
+      </div>
+      <!-- OUTSIDE THE TRACK. The track is overflow:hidden so the canvas takes
+           its rounded corners, and the preview sits ABOVE the track -- so it
+           was clipped away completely and no hover ever produced one. Here it
+           is a child of the panel, which does not clip. -->
+      <div id="scrubtip" hidden>
+        <img id="scrubtipimg" alt="">
+        <span id="scrubtipt">—</span>
       </div>
       <!-- THREE GROUPS, BY WHAT THEY DO TO. The marks change the SELECTION,
            the transport changes WHERE YOU ARE, and the right-hand three
@@ -3000,19 +3011,34 @@ let tl = null, tlAt = 0, bufFrom = null, bufTo = null;
 let reviewing = false, playTimer = null;
 
 async function enterReview() {
+  // OPEN FIRST, FETCH SECOND. The timeline is scored on demand -- measured at
+  // 0.87s cold against a full ring and 0.02s warm, because the daemon caches
+  // per sequence number -- so the button did nothing at all for most of a
+  // second the first time and was instant afterwards. Reported as "sometimes
+  // it does nothing, very inconsistent", which is exactly what a control with
+  // no acknowledgement and a variable delay feels like.
+  //
+  // Claiming `reviewing` up front also stops a second press during the fetch
+  // from starting a second one.
+  if (reviewing) return;
+  reviewing = true;
+  $('scrub').hidden = false;
+  setBufOpen(true);
+  $('scrubpos').textContent = 'reading the buffer…';
   let j;
   try {
     j = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
-  } catch (e) { note('buffer: ' + e); return; }
-  if (!j || !j.frames || !j.frames.length) { note('the buffer is empty'); return; }
+  } catch (e) { note('buffer: ' + e); exitReview(); return; }
+  if (!j || !j.frames || !j.frames.length) {
+    note('the buffer is empty');
+    exitReview();
+    return;
+  }
   tl = j;
-  reviewing = true;
   bufFrom = bufTo = null;
   // Held for the whole session, not just the save: the point of stepping back
   // through it is that it stops changing while you look.
   holdBuffer(true);
-  $('scrub').hidden = false;
-  setBufOpen(true);
   drawMap();
   await seekIdx(tl.frames.length - 1);
 }
@@ -3181,11 +3207,15 @@ function markRange() {
 // deciding WHERE to stop before you stop there.
 let tipSeq = null;
 function showTip(k, cx) {
-  const tip = $('scrubtip'), tr = $('scrubtrack');
+  const tip = $('scrubtip'), tr = $('scrubtrack'), sc = $('scrub');
+  tip.hidden = false;                       // measurable only once shown
   const half = tip.offsetWidth / 2 || 99;
-  tip.style.left = Math.max(half + 2,
-                            Math.min(tr.clientWidth - half - 2, cx)) + 'px';
-  tip.hidden = false;
+  // cx is a position along the TRACK; the tip is positioned against the
+  // PANEL, so carry the track's offset across rather than assuming they
+  // share an origin. They do not -- the panel has padding.
+  const off = tr.getBoundingClientRect().left - sc.getBoundingClientRect().left;
+  tip.style.left = Math.max(half + 4,
+                    Math.min(sc.clientWidth - half - 4, off + cx)) + 'px';
   // Time BEFORE THE END, the same reading the bar below uses, plus the gap
   // that got it here -- a long gap is the buffer having been thinned, and
   // seeing it under the thumbnail is what tells you a jump is the recording
