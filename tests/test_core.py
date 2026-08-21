@@ -3901,3 +3901,49 @@ def test_no_text_is_dimmed_by_transparency():
         if m and float(m.group(1)) < 1 and not EXEMPT.search(sel.strip()):
             seen.append(sel.strip())
     check("control: it catches a planted one", bool(seen), seen[:2])
+
+
+def test_the_glyph_halo_never_lands_on_a_button_box():
+    """A filter applies to the whole element, not to the text inside it.
+
+    Colour emoji carry their own palette and ignore the theme, so the pale
+    ones -- page, keyboard, crescent moon -- need a halo to be seen on a light
+    surface. The first version put that halo on the BUTTONS, and a filter
+    draws around the rendered box: three buttons got a black outline their
+    neighbours did not have, and were reported as looking darker. The grounds
+    were identical the whole time.
+
+    So the halo belongs on a glyph-only wrapper -- `.bi` or `.gly` -- and
+    never on a selector that also paints a background.
+    """
+    print("\nglyph halo scope")
+    import re as _re
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    css = _re.sub(r"/\*.*?\*/", "", page[:page.index("</style>")], flags=_re.S)
+
+    GLYPH_ONLY = ("bi", "gly", "caret", "ret")
+    offenders = []
+    for sel, body in _re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        # ONLY the halo. The first version of this check flagged any filter at
+        # all and caught #stale, which greys the last-good frame -- a picture
+        # treatment on an <img>, with no glyph and no button anywhere near it.
+        # A guard that fires on the thing it was not written about is one
+        # somebody disables rather than reads.
+        if "drop-shadow" not in body:
+            continue
+        s = sel.strip().replace("\n", " ")
+        parts = [p.strip() for p in s.split(",")]
+        for p in parts:
+            last = p.split()[-1] if p.split() else p
+            if not any(("." + g) in last for g in GLYPH_ONLY):
+                offenders.append("%s {filter}" % p[:46])
+    check("no filter is declared on anything but a glyph wrapper",
+          not offenders, "; ".join(offenders[:3]))
+
+    # The wrappers must actually exist in the markup, or the rule styles
+    # nothing and the emoji stay invisible while the test stays green.
+    check("the pale glyphs are wrapped so the halo has something to sit on",
+          page.count('class="gly"') >= 2, page.count('class="gly"'))
+    check("and the theme toggle builds its glyph wrapped too",
+          "className: 'gly'" in page or 'class="gly"' in page, "")

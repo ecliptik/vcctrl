@@ -1084,7 +1084,15 @@
      against. The alpha rides --dark the way the button ground already does:
      1 on a light theme, 0 on a dark one, so this costs dark themes nothing
      and needs no second selector. */
-  .ibtn, .bi, #dbtn, #filebtn, #keysbtn {
+  /* ON THE GLYPH, NOT THE BUTTON. The first version put this on the buttons
+     themselves, and a filter applies to the whole rendered element -- so each
+     one got a black halo around its BOX, and the three that had it looked
+     darker than every button beside them. Reported as exactly that, with the
+     right instinct attached: "are they the same button color?" They were --
+     identical rgba(0,0,0,.06) grounds. It was the halo, on the wrong thing.
+     .bi and .gly are glyph-only wrappers, so a shadow there follows the
+     glyph's own edge and nothing else. */
+  .bi, .gly {
     filter:drop-shadow(0 0 .6px rgba(0,0,0,calc(1 - var(--dark, 1))));
   }
   .ibtn {
@@ -1586,7 +1594,8 @@
            which is the one path every browser agrees on. Stop is a separate
            control, swapped in while a file is going. -->
       <label id="filebtn" for="fileinput"
-             title="Type a text file into the target, line by line">📄</label>
+             title="Type a text file into the target, line by line"><span
+             class="gly">📄</span></label>
       <button id="filestop" hidden title="Stop where it has got to">■</button>
       <!-- THE KEYS THAT BELONG TO THIS FIELD, IN IT. The clip is here on the
            argument that "put a file in" is the same gesture as "put text in";
@@ -1595,7 +1604,8 @@
            the strip it left the command line squeezed into what was left. -->
       <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
               aria-controls="pop-keys"
-              title="Keys this field cannot type — Esc, F-keys, Ctrl-Alt-Del">⌨️</button>
+              title="Keys this field cannot type — Esc, F-keys, Ctrl-Alt-Del"><span
+              class="gly">⌨️</span></button>
       <input id="line" placeholder="type a command"
              autocapitalize="off" autocorrect="off" spellcheck="false">
       <!-- THE WORD IS A LUXURY OF WIDTH. On a desktop the row has room and
@@ -5461,7 +5471,9 @@ function applyTheme(name, remember) {
     b.title = (BY[half] || {}).label || half;
     b.setAttribute('aria-label', b.title);
   }
-  $('dbtn').textContent = DARK.has(name) ? '☀️' : '🌙';
+  // A span, so the halo lands on the glyph rather than the button box.
+  $('dbtn').replaceChildren(Object.assign(document.createElement('span'),
+      {className: 'gly', textContent: DARK.has(name) ? '☀️' : '🌙'}));
   // Say what pressing it does, not what it is. The header keeps the glyph
   // because it has no room for words; the panel has room.
   $('dbtn2').textContent = DARK.has(name) ? 'Switch to light' : 'Switch to dark';
