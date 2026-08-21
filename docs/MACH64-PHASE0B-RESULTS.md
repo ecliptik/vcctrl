@@ -227,3 +227,89 @@ for CPU.
 
 **A 2.35 ms finding from one cell changes the value of twelve tilemap cells**,
 and that is a priority question rather than a measurement one.
+
+---
+
+# The yield pair: where audio's missing 1.7 ms goes
+
+Two cells, adjacent, one sitting, 2026-08-21. `FLIP_BODY_INSTR=1` on both;
+`AUDIO_OFF=1` on YB only. Twelve forbids per cell including all three T1
+levers, because a leaked `AUDIO_OFF` in the **control** arm would have made
+both arms audio-off and voided the pair with no A-to-A logic to catch it.
+
+**Run as a PAIR, not against Phase 0's D2** — that would be a cross-session
+comparison across two daemon redeploys and a splitter fitted and removed.
+"The effect is large enough to survive that" is how the first Round R looked.
+
+## The void row was checked FIRST
+
+Pre-registered: **if YB's frame does not drop ~2.35 ms, the `AUDIO_OFF` effect
+is not reproducing and every `fb_yield` reading is meaningless whichever way it
+moves.**
+
+    YA (audio on)    28.0 fps   35.71 ms
+    YB (audio off)   29.9 fps   33.44 ms
+    frame drop      +2.27 ms    <- TAUD independently measured 2.35
+
+**Reproduces within 0.08 ms of a measurement taken hours earlier, on a
+different daemon, across a splitter fit and removal.** The pair is valid.
+
+The audio gate itself was verified by hand with a positive control, since
+`AUDIO_OFF`'s printed output is unknown:
+
+    "4-state audio"  YA.LOG  count: 1     <- pattern works
+    "4-state audio"  YB.LOG  count: 0     <- genuinely absent
+    "Sound system"   YB.LOG  count: 1     <- pipeline live
+
+## The answer
+
+    phase                YA med   YB med     drop   drop %
+    fb_yield               1.41     0.02    +1.39   +98.6%
+    fb_residual            4.75     4.76    -0.01    -0.2%
+    fb_audit_flushes       0.03     0.03    +0.00     0.0%
+    fb_setup               0.02     0.02    +0.00     0.0%
+    fb_prev_frame_blit     0.02     0.02    +0.00     0.0%
+    fb_diag_logs           0.01     0.01    +0.00     0.0%
+    FLIP BODY TOTAL        6.24     4.86    +1.38   +22.1%
+
+**`fb_yield` collapses by 98.6% and NOTHING ELSE IN THE FLIP BODY MOVES.** The
+VRAM write is identical to within 0.01 ms. This is one bucket, cleanly, not a
+diffuse effect.
+
+**61% of the frame's 2.27 ms audio cost lands in `fb_yield`.**
+
+## What it licenses
+
+Per the pre-registration: **the pump runs at yield points. Audio is
+targetable — pump scheduling and rate, not the mixer.**
+
+Under a cooperative scheduler a yield is where other work is *allowed to run*,
+and at 28 fps the game is nowhere near frame-pacing idle, so that 1.41 ms was
+work rather than waiting. The shipping knobs are the right class of lever:
+`ORG_PUMP_TARGET_MS`, `ORG_PUMP_MAX_CHUNKS`, `PIXTONE_IRQ_RATEDIV`,
+`AUDIO_DEVICE_FRAMES`, `AUDIO_MIDGAP_PUMP`, `FORCE_PUMP_YIELD` — all numeric,
+several of them pump-rate or budget controls.
+
+**An audio round is now designable. It was not before this pair.**
+
+**Still true and unchanged:** audio cannot be removed, so the lever is making
+it cheaper, which is a quality trade. And `27.6 - 2.35` transfers to **29.5 fps
+in the perf configuration, not 30** — audio alone does not reach the target.
+
+## Incidental: the second decode error ever recorded
+
+`bad_frames_kept` fired at 18:57:16, 13 s before YA exited. **The first error
+fired 11 s before S2B exited during T1.** Both at the same point in a cell:
+the game tearing down 640x480 and DOS returning to text.
+
+The artifact is a **short** frame, not a corrupt one — every marker valid, SOF
+correctly declaring 640x480, 23,636 bytes of entropy data, ending RST6 then a
+genuine EOI. Exactly what a capture device produces when it flushes a partial
+frame at a mode change and closes it properly. **The daemon's SOI+EOI+128-byte
+filter cannot catch these**, because a frame missing half its picture satisfies
+all three.
+
+**And the daemon did not fall over** — decoded as far as it could, raised,
+counted, kept the bytes, carried on, with two browser tabs driving
+`/timeline.json` through the same window. See `OPEN-FAULTS.md`: that is
+evidence **against** malformed frames causing the abort.
