@@ -2904,9 +2904,13 @@ addEventListener('keydown', e => {
 // shows up as a keystroke plus two LED reads, several times a minute -- which
 // buries the one line that says what the harness actually typed.
 const PROBE_CMDS = new Set(['leds', 'ledwait', 'level']);
+// Reading the change record is this page looking at itself, not activity on
+// the rig. Without this the activity log fills with a row every fifteen
+// seconds for as long as anyone leaves the Status panel open, and the lamps
+// blink for it -- a readout that reports its own reading as an event.
 const POLL_CMDS  = new Set(['shot', 'lastgood', 'framestats', 'timeline',
                             'frame', 'activity', 'events', 'status', 'caps',
-                            'powerlog']);
+                            'powerlog', 'led_changes']);
 function isProbe(e) {
   if (e.kind !== 'cmd') return false;
   if (PROBE_CMDS.has(e.cmd)) return true;
@@ -3028,13 +3032,73 @@ function applyStale() {
 // KVM showing a held buffer while claiming to be live is the failure this
 // tool exists to prevent. The daemon expires it after 300s on its own.
 let pinned = false;
-function holdBuffer(on) {
+// THE AUTOMATIC HOLD IS BOUNDED, AND IT HAS TO BE.
+//
+// It latches otherwise, and vcctrl-94 measured it twice: the picture is lost
+// so this pins the ring; the daemon drops NEW frames rather than freeing one
+// somebody may be looking at; so when the picture comes back the ring refuses
+// the very frames that would show it, the watchdog goes on judging the old
+// black ones, and `video state` reads `frozen` indefinitely. Two solid
+// minutes with the VGA lead already reconnected and the stick already locked,
+// clearing within seconds of `pin off` with nothing else changed.
+//
+// The condition that engages the hold is the condition that prevents anything
+// observing it end. Neither half is wrong on its own -- the pin does exactly
+// what it says -- and the page cannot detect recovery from inside it either,
+// because the stream it would notice recovery in is fed from the same frozen
+// ring.
+//
+// So the hold gets a deadline. Forty-five seconds is long enough to see the
+// notice and press Save, which is the whole reason it exists, and short
+// enough that a recovery cannot be hidden for long. A hold a HUMAN took by
+// entering the reviewer is not bounded here -- that one has a frame worth
+// protecting and its own exit.
+const HOLD_MAX_MS = 45000;
+let holdTimer = null;
+function holdBuffer(on, why) {
+  clearTimeout(holdTimer);
+  if (on) {
+    holdTimer = setTimeout(() => {
+      if (!reviewing && pinned) {
+        holdBuffer(false);
+        addLine(new Date(), 'buffer',
+                'hold released after 45s — a held ring cannot see the picture '
+                + 'come back', 'k-note');
+      }
+    }, HOLD_MAX_MS);
+  }
   if (on === pinned) return;
   pinned = on;
   post('pin', {action: on ? 'on' : 'off'});
   addLine(new Date(), 'buffer',
           on ? 'holding the buffer — no signal, so nothing is evicted'
              : 'buffer released', 'k-note');
+}
+
+// ── THE LED CHANGE RECORD ────────────────────────────────────────────────
+// What it can and cannot say, because the shape of the answer looks like
+// currency and is not: the byte arrives only when a lock key changes, so an
+// idle machine publishes nothing, indistinguishably from one that has fallen
+// off the wire. A record of CHANGES therefore proves an intermittent left a
+// trace -- which is the thing nothing else on this rig can catch, and which
+// is why it exists -- and proves nothing about whether a quiet reading is
+// current. The daemon says so in its own output and this repeats it rather
+// than presenting the rows as a freshness guarantee.
+//
+// Fetched only while the Status readout is open, and slowly: it is a history,
+// it changes when a lock key is pressed, and polling it at the page's rate
+// would be a request a second for a row that appears twice a day.
+let ledLog = null, ledLogAt = 0, ledLogErr = null;
+function pollLedLog() {
+  if (!$('stats').clientHeight) return;
+  if (Date.now() - ledLogAt < 15000) return;
+  ledLogAt = Date.now();
+  post('led_changes', {n: 6}).then(r => {
+    if (r && r.ok) { ledLog = r; ledLogErr = null; }
+    else ledLogErr = (r && r.error) || 'not available';
+    if ($('stats').clientHeight && lastState)
+      $('stats').innerHTML = statsRows(lastState);
+  }).catch(e => { ledLogErr = String(e); });
 }
 
 // ── REVIEWING THE BUFFER ─────────────────────────────────────────────────
@@ -3724,6 +3788,7 @@ async function pollState() {
   showBoard(j.board);
   showAudioDevice(j.audio);
   noteSourceRate(j.video);
+  pollLedLog();
   showBuffer(j.video);
   showHeat(j);
   lastState = j;
@@ -4069,6 +4134,35 @@ function statsRows(j) {
     else kv(label + ' present', 'could not tell', 'unk');
     if (c.last_error && c.state !== 'locked' && c.state !== 'capturing')
       kv(label + ' error', ffmpegReason(c.last_error), 'bad');
+  }
+
+  // THE RETURN CHANNEL, and when it last spoke. `changed_at` is a summary of
+  // the same record the rows below come from, not a second source.
+  const L2 = j.leds || {};
+  g('Keyboard LEDs');
+  if (L2.available === false) {
+    kv('channel', L2.reason || L2.why || 'not available', 'unk');
+  } else {
+    kv('caps / num / scroll',
+       [L2.capslock, L2.numlock, L2.scrolllock]
+         .map(x => x == null ? '?' : x ? 'on' : 'off').join(' · '));
+    // NOT an age on a value. It is the age of the last CHANGE, and a machine
+    // nobody has typed at has no changes and is not therefore stale.
+    kv('last changed', L2.changed_at
+         ? fmtAge((Date.now() / 1000) - L2.changed_at) + ' ago'
+         : 'not since the daemon started',
+       L2.changed_at ? '' : 'unk');
+    kv('changes seen', L2.changes ?? '—');
+    if (ledLog && ledLog.changes && ledLog.changes.length) {
+      const nm = o => [o.capslock, o.numlock, o.scrolllock]
+        .map(x => x ? '1' : '0').join('');
+      for (const c of ledLog.changes.slice(0, 5))
+        kv(fmtAge((Date.now() / 1000) - c.t) + ' ago',
+           nm(c.from) + ' → ' + nm(c.to)
+           + (c.epoch != null ? ' · epoch ' + c.epoch : ''));
+    } else if (ledLogErr) {
+      kv('record', ledLogErr, 'unk');
+    }
   }
 
   const b = j.board || {};
@@ -4824,6 +4918,12 @@ function lamps(leds, videoState, verified) {
       why   ? (leds.reason || 'no LED reading: ' + why)
       : blind ? 'The daemon is not reporting LED values'
       : (v === 1 ? 'lit' : 'dark')
+        // WHEN IT LAST MOVED, which is the only thing that separates a live
+        // reading from a retained one on a channel with no heartbeat.
+        + (leds.changed_at
+           ? ' · last changed ' + fmtAge((Date.now() / 1000) - leds.changed_at)
+             + ' ago'
+           : ' · unchanged since the daemon started')
         + (unproven ? ' — the input link is unproven, so this describes the '
                     + 'Pi rather than the target'
            : stale ? ' — retained, the target is not showing a picture' : '');

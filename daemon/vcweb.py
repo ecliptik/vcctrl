@@ -527,6 +527,11 @@ class WebCapability(object):
         "level", "powerlog",
         # scrub
         "pin", "timeline", "frame",
+        # The change record. vcctrl-94 shipped this with a CLI verb and no
+        # web allowlist entry -- the same parity gap it spent the evening
+        # closing, in the other consumer. The KVM is where an intermittent
+        # would actually be noticed.
+        "led_changes",
     ])
 
     def __init__(self, registry, bind, port, tls_port=0):
