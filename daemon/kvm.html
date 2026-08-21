@@ -570,6 +570,8 @@
     transform:translateX(-50%); overflow:hidden;
   }
   #scrubtip[hidden] { display:none; }
+  /* Desktop spells it out, so the bar would be clutter beside the word. */
+  .stepbar { display:none; }
   /* TWO IDS. The tip lives inside #stage, so `#stage img` -- which sizes the
      PICTURE at 640x480 -- outranks a bare #scrubtipimg: one id plus an
      element beats one id alone. The preview was rendering full frame size
@@ -584,6 +586,14 @@
   @media (max-width:640px) {
     #scrubtip { width:142px; }
     #stage #scrubtipimg { height:106px; }
+    /* The word costs a whole row of the pill on a phone. The arrows keep
+       their aria-label, so the meaning survives for a screen reader even
+       where there is no room to print it -- and they get their bar back,
+       because a lone ◀ beside ▶ Play reads as rewind. ◀| and |▶ are the
+       frame-step pair; |◀ and ▶|, which is what these used to be, are
+       previous-track and next-track, and that is how they were read. */
+    .steplbl { display:none; }
+    .stepbar { display:inline; }
   }
   /* A grid, not a flex row: the middle group has to be centred on the TRACK
      rather than on whatever is left after the other two, or it drifts every
@@ -1470,12 +1480,34 @@
         </div>
         <!-- The step buttons carry the bar, because on a phone Play collapses
              to a bare triangle and three controls where two look identical is
-             worse than the wrapping it was fixing. -->
+             worse than the wrapping it was fixing.
+
+             THEY SAY "STEP" BECAUSE THEY WERE ASKED ABOUT. |◀ and ▶| are the
+             transport symbols for PREVIOUS TRACK and NEXT TRACK, and read here
+             as jump-to-the-start and jump-to-the-end -- which is a reasonable
+             thing to want from a scrub bar and not what these do. The title
+             attribute said "Back one frame" and a phone has no hover to show
+             it. Every other control in this bar is a word; these two were the
+             exception and the exception is what got misread.
+
+             "Step" rather than "Frame": Capture frame is a button in this same
+             bar that saves a still, and two controls both saying "frame" while
+             doing different things is the confusion this is fixing, moved.
+
+             THE WORD IS DESKTOP-ONLY, and measured rather than assumed. At a
+             true 390 px viewport the six controls above fit on one row at 388
+             px of button plus gaps; the word costs 54 px and spills them onto
+             a third row, which is the pill covering more of the picture --
+             reported once already and fixed once already. Same call as Send
+             in the command bar: the copy is worth a row on a desktop and is
+             not worth one on a phone. -->
         <div class="sg" id="sg-play">
-          <button id="scrubprev" title="Back one frame (←)">|◀</button>
+          <button id="scrubprev" title="Back one frame (←)"
+                  aria-label="Back one frame">◀<span class="stepbar">|</span><span class="steplbl"> Step</span></button>
           <button id="scrubplay"
                   title="Play the capture through">▶ Play</button>
-          <button id="scrubnext" title="Forward one frame (→)">▶|</button>
+          <button id="scrubnext" title="Forward one frame (→)"
+                  aria-label="Forward one frame"><span class="steplbl">Step </span><span class="stepbar">|</span>▶</button>
         </div>
         <div class="sg" id="sg-out">
           <button id="scrubsnap"
