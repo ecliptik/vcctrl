@@ -299,14 +299,16 @@
        welded to the tab strip with square corners, so one of the four tabs
        produced a different KIND of thing. Same radius, border, shadow and
        inset as the popovers, floating clear of the bar that opened it. */
-    /* SITTING ON THE TAB BAR, so only the top corners round and the bottom
-       edge is the bar's own top rule rather than a second line beside it.
-       A card with four rounded corners pressed against a straight edge shows
-       two slivers of background at the join, which is what a bottom sheet
-       exists not to do. */
-    body #cmdbar.open, body #pop-sound, body #pop-power, body #scrub {
-      border-radius:9px 9px 0 0; border-bottom:0;
-    }
+    /* NOT SITTING ON THE BAR AFTER ALL. I squared the bottom corners on the
+       argument that these are bottom sheets pressed against the tab strip --
+       but TYPE never took that rule, a later declaration having already given
+       it a full radius, and TYPE was the one that looked right. Three panels
+       flush against the bar and one floating above it, and the floating one
+       reads better: the gap is what says the panel is a thing ON the page
+       rather than an extension of the bar.
+       So all four float, all four keep four corners, and the gap is one
+       number rather than 11, 2, 2 and 0. */
+    :root { --panel-gap: 11px; }
     /* EDGE TO EDGE, like the strip that opens it. A tab panel inset from the
        sides reads as a floating card that failed to line up with anything;
        these are the phone's four bottom panels and they are one object seen
@@ -314,7 +316,7 @@
     body #cmdbar.open {
       display:flex; position:fixed; z-index:60;
       left:0; right:0;
-      bottom:calc(58px + env(safe-area-inset-bottom, 0px));
+      bottom:calc(var(--tabs-h, 47px) + var(--panel-gap));
       border:1px solid var(--rule); border-radius:9px;
       box-shadow:0 12px 30px rgba(0,0,0,.36);
       padding:8px; border-bottom:1px solid var(--rule);
@@ -604,14 +606,20 @@
      the same panel. */
   #scrubbar button { min-height:34px; padding:0 9px; }
   @media (max-width:640px) {
-    #scrub { left:0; right:0; bottom:0; }
-    /* ONE GROUP PER ROW, FULL WORDS. The three-column grid squeezes each
-       group into a third of a phone and they wrap inside themselves -- "In"
-       and "Save" on one line with "Out" under them, which reads as four
-       controls in no order. Stacked, each group is centred, intact, and says
-       the same thing the desktop says. */
-    #scrubbar { grid-template-columns:1fr; gap:4px; row-gap:6px; }
-    #scrubbar .sg { justify-self:center; }
+    #scrub { left:0; right:0; bottom:var(--panel-gap); }
+    /* PACKED, NOT STACKED. One group per row was right when the panel was
+       inset and narrow; now that it runs edge to edge there is room for two
+       groups on a line, and three rows of buttons plus a track plus a readout
+       pushed the pill off the top of the screen. Flowing them keeps the
+       groups intact -- which is the part that mattered -- and costs a row.
+       The groups stay whole because each is its own flex item; only the gaps
+       between groups absorb the wrap. */
+    #scrubbar {
+      display:flex; flex-wrap:wrap; justify-content:center;
+      gap:4px; row-gap:6px;
+    }
+    #scrubbar .sg { flex:0 0 auto; }
+    #scrubpos { flex:1 0 100%; text-align:center; }
     #scrubbar button { padding:0 7px; min-height:34px; }
     #scrubpos { font-size:10.5px; }
     /* The tip is half the screen on a phone; smaller keeps the frame under
@@ -3126,7 +3134,12 @@ function openPop(name) {
     el.style.width = 'auto';
     el.style.maxWidth = 'none';
     el.style.top = '';
-    el.style.bottom = Math.max(0, Math.round(window.innerHeight - tr.top)) + 'px';
+    // THE SAME EXPRESSION, not the same number arrived at twice. Computing
+    // innerHeight - tabs.top + gap gave 13px against the other panels' 11 --
+    // two pixels of border and rounding that no amount of care in the
+    // arithmetic would have removed, because the arithmetic was the problem.
+    // Handing CSS the identical calc() makes them equal by construction.
+    el.style.bottom = 'calc(var(--tabs-h, 47px) + var(--panel-gap))';
     return;
   }
   el.style.right = '';
@@ -3179,6 +3192,13 @@ function measureBars() {
     if (r.height > 0 && r.top < bot) bot = r.top;
   }
   const st = document.documentElement.style;
+  // The phone's panels sit a fixed gap above the TAB BAR, and its height
+  // moves with the theme's font size and the safe-area inset -- so it is
+  // measured here rather than hardcoded, the way --bar-top and --bar-bottom
+  // already are. A 58px constant was right on this phone and on no promise.
+  const tb = $('tabs');
+  st.setProperty('--tabs-h', (tb && getComputedStyle(tb).display !== 'none'
+    ? Math.round(tb.getBoundingClientRect().height) : 0) + 'px');
   st.setProperty('--bar-top', Math.max(0, Math.round(top)) + 'px');
   st.setProperty('--bar-bottom',
                  Math.max(0, Math.round(window.innerHeight - bot)) + 'px');
