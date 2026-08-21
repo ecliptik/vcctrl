@@ -72,7 +72,7 @@
   header > button, header > .sep { flex:none; }
   /* And the rule between them is drawn like the strip's: proportional to the
      row it divides rather than to the smallest text in it. */
-  header > .sep { font-size:15px; opacity:.6; padding:0 2px; }
+  header > .sep { font-size:15px; padding:0 2px; }
   /* --t-data, not --t-micro. The rail's left half was set a pixel and a half
      smaller than every control beside it, which made the one row you are
      meant to READ the hardest thing on the page to read. Micro is for units
@@ -460,7 +460,13 @@
   /* Group markers: identity | state | what the daemon can reach | what the
      target's own keyboard says. Without them the row is nine words in a
      line and the eye has to work out which belong together. */
-  .sep { color:var(--rule); font:var(--t-micro)/1 var(--mono); flex:none;
+  /* --edge, not --rule, and no opacity over it. These divide groups of
+     controls, so they are structure rather than decoration -- reported as
+     "barely visible" on light themes, where --rule at 1.1-1.7:1 was further
+     cut by an opacity of .6 and landed around 1.2:1. I had exempted them from
+     the contrast pass as decorative and asked whether that was right; this is
+     the answer. */
+  .sep { color:var(--edge); font:var(--t-micro)/1 var(--mono); flex:none;
          user-select:none; }
   /* A flicker, not a state change: it must not disturb the colour the lamp
      is already carrying, so it only brightens and fades. */
@@ -912,7 +918,7 @@
   #cmdbar #sendline:hover { background:var(--rule); }
   #cmdbar #sendline:disabled { color:var(--dim); }
   /* Proportional to the row it divides, like the rail's. */
-  .barsep { font-size:15px; opacity:.6; padding:0 2px; }
+  .barsep { font-size:15px; padding:0 2px; }
   #cmdbar #filebtn:hover, #cmdbar #filestop:hover { background:var(--rule); }
   #cmdbar #filestop { color:var(--green); white-space:nowrap; }
   #cmdbar #filebtn[hidden], #cmdbar #filestop[hidden] { display:none; }
@@ -1070,6 +1076,17 @@
      have had. Emoji presentation is explicit -- ☀ and ⚙ have text-default
      codepoints and rendered as flat outlines beside colour emoji elsewhere on
      the page. */
+  /* COLOUR EMOJI BRING THEIR OWN PALETTE AND IGNORE THE THEME'S. The page,
+     the keyboard and the crescent moon are all pale glyphs, which is fine on
+     a dark surface and nearly invisible on a light one -- and no contrast
+     token can reach them, because the colour is inside the font.
+     A hairline halo in the opposite polarity gives them an edge to be seen
+     against. The alpha rides --dark the way the button ground already does:
+     1 on a light theme, 0 on a dark one, so this costs dark themes nothing
+     and needs no second selector. */
+  .ibtn, .bi, #dbtn, #filebtn, #keysbtn {
+    filter:drop-shadow(0 0 .6px rgba(0,0,0,calc(1 - var(--dark, 1))));
+  }
   .ibtn {
     font-size:17px; line-height:1; padding:0; min-width:38px;
     font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",

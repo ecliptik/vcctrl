@@ -3870,8 +3870,12 @@ def test_no_text_is_dimmed_by_transparency():
     css = _re.sub(r"/\*.*?\*/", "", page[:page.index("</style>")], flags=_re.S)
 
     # Selectors allowed to carry an opacity: nothing here paints a glyph.
+    # `.sep` and `.barsep` came OFF this list. I put them here calling them
+    # decorative, asked whether that was right, and the answer was "the menu
+    # dividers are barely visible" -- they group controls, so they are
+    # structure. They use --edge at 3:1 now with no opacity at all.
     EXEMPT = _re.compile(
-        r"#ghost|#zhint|#scrubsel|\.sep\b|\.barsep|^from$|^to$|^\d+%$"
+        r"#ghost|#zhint|#scrubsel|^from$|^to$|^\d+%$"
         r"|button:disabled|\.split:has|#state > i|#themes button \.b")
 
     offenders = []
