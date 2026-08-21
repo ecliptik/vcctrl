@@ -27,6 +27,12 @@ USAGE = """usage: vcctrl <command> [args]
   mouse click [left|right|middle]
   leds                      read PS/2 LED return channel
   ledwait [timeout_s]       block until LED state changes
+  led-changes [n]           the last n LED transitions, newest first, with a
+                            monotonic clock and the power epoch. Shows that an
+                            intermittent LEFT A TRACE -- it does NOT establish
+                            that a reading is current, because the byte arrives
+                            only on a lock-key change, so an idle machine
+                            publishes nothing.
   power [state|on|off|cycle]  smart-plug mains control for the target
   caps                      capability health (input, leds, power, ...)
   board                     which USB4VC protocol board is installed, and
@@ -660,6 +666,8 @@ def main(argv):
         req = {"cmd": "buffer"}
         if rest:
             req["seconds"] = float(rest[0])
+    elif cmd in ("led-changes", "led_changes"):
+        req = {"cmd": "led_changes", "n": int(rest[0]) if rest else 50}
     elif cmd in ("verify-input", "verify_input"):
         req = {"cmd": "verify_input"}
     elif cmd == "ledwait":
