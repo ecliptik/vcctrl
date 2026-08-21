@@ -1130,6 +1130,15 @@
     body.nopanel #app, body.fs #app { grid-template-columns:minmax(0,1fr) 0; }
     /* Activity is the only unbounded content, so it gets the height; the
        fixed-size controls sit above it rather than competing for scroll. */
+    /* THE GAP HAS TO SHOW SOMETHING. The card was already inset 8px, but the
+       ground behind it is --bg and the card is --panel, and those are a step
+       apart in most of the twenty-two themes -- so the margin existed and was
+       invisible, which reads as a square panel with rounded corners drawn on.
+       Settings looks right because it floats over the STAGE, which is
+       deliberately near-black in every theme including the light ones. Same
+       well here, so the two float over the same ground and read as the same
+       kind of object. */
+    #app { background:#000; }
     #body   { grid-column:2; grid-row:2; height:auto;
               margin:8px 8px 8px 0; }
     #panels { max-height:none; flex:0 1 auto; }
