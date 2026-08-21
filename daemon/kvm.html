@@ -3670,7 +3670,8 @@ async function pollState() {
         ? (uni
            ? 'Receiving uniform ' + uni + ' at '
              + (achievedFps() || 0).toFixed(0)
-             + ' fps — the capture is running; the mode is outside its range.'
+             + ' fps — the capture is running, but the mode is outside the '
+             + 'capture device range.'
            : 'Receiving identical frames, showing buffer.')
       : v.state === 'nosignal' ? 'No frames are arriving at all.' : '';
     poll_render_veil(v.state, uni);
