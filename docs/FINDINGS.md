@@ -1621,6 +1621,43 @@ Related: sec. 24 (the harness cannot see its own cable), sec. 29 (every
 diagnostic healthy, nothing driven). Same family — an instrument reporting its
 own state, or its own ignorance, as the target's.
 
+### The same shape, six hours later, in a control run
+
+Proving the docstring-drift test could fail, I deleted a row from the
+documented table and expected a failure. **It passed.** The word survived in
+the surrounding prose and a substring check accepted it.
+
+The webkvm session made the connection, and it is sharper than either rule we
+had: the control did not merely fail to fail — **it reported success.** That is
+`all({}.values()) is True` in a different costume. The preflight printed `ok`
+about nothing; the control printed `pass` about nothing. Six hours apart, in
+unrelated code, and neither of us would have connected them from the
+descriptions.
+
+Most rules about weak checks assume a check that is SILENT when it should
+speak. Both of these **spoke the reassuring word** when they should have
+objected, which is strictly worse: silence invites a second look and a green
+tick closes the question.
+
+### And the test that matters is for the state you have not thought of
+
+Three times in one day, a correct reading of correct code produced a wrong
+prediction about a seam — in both directions, between two sessions who were
+each reading carefully. The reason is not carelessness:
+
+> Reading code tells you what it does against the inputs you have in mind. It
+> cannot tell you what it does against an input that does not exist yet,
+> because that input is not in the room.
+
+The version that worked was the webkvm session's: assert with a deliberately
+invented value — `why: "martian"` — so the property under test becomes
+**"unknown states degrade correctly"** rather than "these five states work".
+That required imagining no specific future value, only that there would be
+one.
+
+**One such test per seam is worth more than five more specific assertions**,
+because the specific ones are all drawn from the set you already know.
+
 
 ## 32. Two combination rules, and picking the wrong one  [2026-08-20]
 
