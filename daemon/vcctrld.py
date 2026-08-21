@@ -1582,6 +1582,19 @@ class VideoCapability(Capability):
         # state as the target's -- which is the failure this whole tool exists
         # to prevent, and it has caught four of us this evening already.
         self.decode_errs = 0
+        # THE DENOMINATOR. A failure count with nothing counting attempts is
+        # uninterpretable -- "zero failures" and "nothing was tried" are the
+        # same reading, and I quoted the first while the second was closer to
+        # true. It is emphatically not out of `frames`: most captured frames
+        # are never decoded at all. They arrive, sit in the ring, and are
+        # evicted without Pillow ever touching them.
+        #
+        # Per site as well as in total, because coverage is uneven by design:
+        # with no browser connected only the watchdog's _is_picture runs, at
+        # about two decodes a second, while the timeline path does 945 in one
+        # request and only when a tab opens the reviewer.
+        self.decode_attempts = 0
+        self.decode_sites = {}
         self.decode_last = None
         # _chg is read and written by concurrent /timeline.json requests --
         # two open tabs is enough -- and the prune iterates it while another
@@ -2080,15 +2093,30 @@ class VideoCapability(Capability):
                 "ring_frames": frames, "span_s": round(actual, 2),
                 "mem_limited": cap < asked}
 
-    def _note_decode_error(self, where, exc, seq=None):
-        """Record that a frame would not decode. Never raises, never blocks."""
+    def _decoded(self, where, exc=None, seq=None):
+        """Record one decode ATTEMPT and whether it failed.
+
+        Both halves, always. The first version of this counted only failures,
+        and the zero it produced was quoted as "no decode failures across
+        103,657 frames" -- a denominator that was never the denominator. Most
+        frames are never decoded; and with no browser attached only one of the
+        four call sites runs at all. Counting attempts is what turns the zero
+        from a feeling into a measurement.
+        """
         with self.lock:
-            self.decode_errs += 1
-            self.decode_last = {
-                "where": where, "seq": seq,
-                "error": errstr(exc)[:160],
-                "t": round(time.time(), 3),
-            }
+            self.decode_attempts += 1
+            st = self.decode_sites.get(where)
+            if st is None:
+                st = self.decode_sites[where] = {"n": 0, "err": 0}
+            st["n"] += 1
+            if exc is not None:
+                self.decode_errs += 1
+                st["err"] += 1
+                self.decode_last = {
+                    "where": where, "seq": seq,
+                    "error": errstr(exc)[:160],
+                    "t": round(time.time(), 3),
+                }
 
     def _score_changes(self, items):
         """How much each frame differs from the one before it.
@@ -2137,8 +2165,9 @@ class VideoCapability(Capability):
                 im = Image.open(_io.BytesIO(f))
                 im.draft("L", (max(1, im.size[0] // 8), max(1, im.size[1] // 8)))
                 im = im.convert("L")
+                self._decoded("timeline")
             except Exception as exc:
-                self._note_decode_error("timeline", exc, sq)
+                self._decoded("timeline", exc, sq)
                 prev = None
                 with self._chg_lock:
                     cache.setdefault(sq, None)
@@ -2316,6 +2345,7 @@ class VideoCapability(Capability):
                 im.draft("L", (im.size[0] // 8, im.size[1] // 8))
                 g = im.convert("L")
                 lo, hi = g.getextrema()
+                self._decoded("shot")
                 if hi - lo < self.MIN_RANGE:
                     flat += 1          # a constant, not a dark picture
                     continue
@@ -2331,6 +2361,14 @@ class VideoCapability(Capability):
                 # Twice in one file now: an except that discards the reason
                 # turns a bug into a lie. A capability may report failure; it
                 # may not report a different failure than the one it had.
+                #
+                # THREE TIMES. The local `errs` list dies with the call, so
+                # when the decode counter was added this block kept losing the
+                # very thing the counter exists to count -- and I described
+                # the coverage as "all four call sites" while this one was
+                # never wired. It is the path the harness hits on every
+                # mid-cell shot, so it was also the busiest one missing.
+                self._decoded("shot", exc)
                 errs.append("%s: %s" % (type(exc).__name__, exc))
                 continue
             if m > best_mean:
@@ -2354,9 +2392,10 @@ class VideoCapability(Capability):
             im = Image.open(io.BytesIO(frame))
             im.draft("L", (im.size[0] // 8, im.size[1] // 8))
             lo, hi = im.convert("L").getextrema()
+            self._decoded("is_picture")
             return (hi - lo) >= self.MIN_RANGE
         except Exception as exc:
-            self._note_decode_error("is_picture", exc)
+            self._decoded("is_picture", exc)
             return False
 
     def _shot(self, req):
@@ -2411,8 +2450,9 @@ class VideoCapability(Capability):
                 im = Image.open(io.BytesIO(frame))
                 im.draft("L", (im.size[0] // 8, im.size[1] // 8))
                 mean = ImageStat.Stat(im.convert("L")).mean[0]
+                self._decoded("lastgood")
             except Exception as exc:
-                self._note_decode_error("lastgood", exc)
+                self._decoded("lastgood", exc)
                 mean = None
         return {"ok": True, "picture": True, "state": state, "stale": True,
                 "mean": mean, "t": t, "age_s": round(time.time() - t, 3),
@@ -2460,6 +2500,11 @@ class VideoCapability(Capability):
                     # never handed Pillow anything malformed, which is the
                     # standing hypothesis for an abort nobody has explained.
                     "decode_errs": self.decode_errs,
+                    # WITH ITS DENOMINATOR, always, and per site -- because
+                    # coverage is uneven and a total hides that. With no
+                    # browser attached only is_picture runs.
+                    "decode_attempts": self.decode_attempts,
+                    "decode_sites": dict(self.decode_sites),
                     "decode_last": self.decode_last,
                     "span_s": round(self.ring[-1][0] - self.ring[0][0], 2)
                     if len(self.ring) > 1 else 0.0,

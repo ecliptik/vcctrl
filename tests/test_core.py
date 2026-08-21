@@ -3464,22 +3464,23 @@ def test_a_running_total_does_not_lead_a_live_rate():
 
 
 def test_a_frame_that_will_not_decode_is_counted():
-    """Four call sites hand ring bytes to Pillow and all four swallow failure.
+    """A failure count with no attempt count cannot be read at all.
 
-    Swallowing is correct -- one bad frame must not take down a timeline --
-    but swallowed with NO COUNTER means the daemon has never been asked
-    whether malformed frames arrive at all. That question became load-bearing
-    the night vcctrld aborted twice with glibc heap corruption: the classic
-    shape for "double free or corruption" is a decoder overrunning on bad
-    input, and the only validation between the capture pipe and Image.open is
-    "starts FFD8, ends FFD9, at least 128 bytes".
+    The first version of this counter recorded failures only. It read 0, and I
+    quoted that as "no decode failures across 103,657 frames" -- a denominator
+    that was never the denominator. Most captured frames are never decoded:
+    they arrive, sit in the ring, and are evicted without Pillow touching
+    them. And with no browser attached only ONE of the four call sites runs at
+    all, at about two decodes a second.
 
-    Zero is a real answer and an interesting one. Nobody could give it before.
+    vcctrl-94 caught it: "zero failures" and "nothing was tried" were the same
+    reading. Attempts are what make the zero a measurement.
     """
-    print("\ndecode errors")
+    print("\ndecode counters")
     cap = vcctrld.VideoCapability(None, vcctrld.Bus())
-    check("a fresh capability has counted none", cap.decode_errs == 0,
-          cap.decode_errs)
+    check("a fresh capability has attempted none",
+          cap.decode_attempts == 0, cap.decode_attempts)
+    check("and failed none", cap.decode_errs == 0, cap.decode_errs)
     check("and reports no last error rather than a stale one",
           cap.decode_last is None, cap.decode_last)
 
@@ -3492,24 +3493,68 @@ def test_a_frame_that_will_not_decode_is_counted():
 
     ok = cap._is_picture(junk)
     check("an undecodable frame is not called a picture", ok is False, ok)
-    check("and it was counted", cap.decode_errs == 1, cap.decode_errs)
+    check("the attempt was counted", cap.decode_attempts == 1,
+          cap.decode_attempts)
+    check("and so was the failure", cap.decode_errs == 1, cap.decode_errs)
     check("with the site that saw it named",
           (cap.decode_last or {}).get("where") == "is_picture", cap.decode_last)
-    check("and something of the error kept",
-          bool((cap.decode_last or {}).get("error")), cap.decode_last)
 
-    # Control in the other direction: a real frame must not be counted, or the
-    # counter measures traffic instead of faults.
-    import io as _io
+    # THE DENOMINATOR IS THE POINT: a success must move attempts and not errs,
+    # or the two numbers cannot be divided.
     try:
+        import io as _io
         from PIL import Image
         buf = _io.BytesIO()
         Image.new("RGB", (64, 48), (30, 60, 90)).save(buf, "JPEG")
         cap._is_picture(buf.getvalue())
-        check("control: a decodable frame is NOT counted",
-              cap.decode_errs == 1, cap.decode_errs)
+        check("a decodable frame moves ATTEMPTS", cap.decode_attempts == 2,
+              cap.decode_attempts)
+        check("and does not move errors", cap.decode_errs == 1,
+              cap.decode_errs)
+        check("per site, so uneven coverage is visible rather than averaged",
+              cap.decode_sites.get("is_picture") == {"n": 2, "err": 1},
+              cap.decode_sites)
     except ImportError:
         print("  SKIP  no Pillow")
+
+
+def test_every_decode_site_is_counted():
+    """The coverage claim, asserted instead of believed.
+
+    I wrote that "all four call sites now count what they swallow". Three did.
+    `_select` -- the shot path, the one the harness hits on every mid-cell
+    capture -- caught its exceptions into a local list that dies with the
+    call, exactly as it had before the counter existed. vcctrl-94 found it by
+    grepping, which is the check I should have written instead of the claim.
+
+    So: every function that opens an image must also record the attempt. This
+    fails the moment somebody adds a fifth decode site and forgets, which is
+    the only way a coverage claim stays true.
+    """
+    print("\ndecode coverage")
+    import ast as _ast
+    src = open(os.path.join(HERE, os.pardir, "daemon", "vcctrld.py"),
+               encoding="utf-8").read()
+    tree = _ast.parse(src)
+
+    opens, wired = [], []
+    for fn in [n for n in _ast.walk(tree)
+               if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))]:
+        body = _ast.dump(fn)
+        # `Image.open(...)` anywhere inside the function
+        if "attr='open'" in body and "id='Image'" in body:
+            opens.append(fn.name)
+            if "_decoded" in body:
+                wired.append(fn.name)
+
+    check("the file still has decode sites to check at all",
+          len(opens) >= 4, opens)
+    missing = sorted(set(opens) - set(wired))
+    check("every function that decodes an image records the attempt",
+          not missing, "not wired to _decoded: %s" % ", ".join(missing))
+    check("control: and the four known ones are among them",
+          {"_score_changes", "_is_picture", "_select"} <= set(wired),
+          sorted(wired))
 
 
 def test_the_change_cache_survives_two_timelines_at_once():
