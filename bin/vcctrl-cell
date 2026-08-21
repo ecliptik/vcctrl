@@ -61,6 +61,7 @@ PER-CARD DEFAULTS, because a decision that has to be remembered gets forgotten.
 
 import os
 import re
+import signal
 import sys
 import time
 import importlib.util
@@ -346,8 +347,22 @@ def main(argv):
         shot, text = read_env_text()
         print("   screenshot: %s" % shot)
         if text is None:
-            print("   NO OCR -- cannot verify programmatically.")
-            print("   *** LOOK AT %s BEFORE TRUSTING THIS RUN ***" % shot)
+            # REFUSE, do not warn. This used to print a warning and launch
+            # anyway, which is the worst of both: it produced a record that
+            # READS like diligence -- "LOOK AT None BEFORE TRUSTING THIS RUN"
+            # -- while committing the machine to a cell nobody had verified.
+            # A gate that degrades to a printed warning exactly when it cannot
+            # see is not a gate. GMQ3 launched that way; it survived only
+            # because the ENGINE log records its own hints, which is a witness
+            # this tool did not plan for.
+            print("   REFUSED: could not read the environment back.")
+            print("   screenshot=%r -- the capture is not showing the screen," % shot)
+            print("   so the SET output cannot be verified. That is COULD NOT")
+            print("   LOOK, which is not the same as verified-good, and a cell")
+            print("   is too expensive to spend on an unchecked environment.")
+            print("   Fix the capture (vcctrl pin off; vcctrl video state) and")
+            print("   run again.")
+            return 1
         else:
             # OCR on this console font is imperfect -- it reads CLRENV as
             # CLRENU and truncates long names -- so exact value matching would
@@ -520,10 +535,34 @@ def main(argv):
         release()
 
 
+def _bail(signum, _frame):
+    """Drop BOTH locks on a signal, then die.
+
+    GMQ3 was SIGTERMed when the shell that launched it hit a timeout, and
+    SIGTERM's default action does not run `finally` -- so the daemon input
+    lock was left held by a process that no longer existed, and recovering it
+    needed `lock break`, which marks the run tainted.
+
+    The file lock was already released here; the DAEMON lock was not, and it
+    is the one that stops everyone else from typing.
+    """
+    try:
+        drop_lock()
+    except Exception:
+        pass
+    try:
+        release()
+    except Exception:
+        pass
+    sys.stderr.write("\nsignal %d -- released both locks, target left as it "
+                     "was\n" % signum)
+    os._exit(128 + signum)
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, _bail)
+    signal.signal(signal.SIGHUP, _bail)
     try:
         sys.exit(main(sys.argv[1:]))
     except KeyboardInterrupt:
-        release()
-        sys.stderr.write("\ninterrupted -- target left as it was\n")
-        os._exit(130)
+        _bail(signal.SIGINT, None)
