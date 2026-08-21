@@ -62,6 +62,75 @@ controlled test and it should not be presented as one.**
 number** — one did, 122,485 bytes. `roundR/run.sh` pins the daemon's MainPID
 and refuses to continue across a change. Keep that guard in any new runner.
 
+### The hunt of 2026-08-21: four arms, no reproduction
+
+Run against one daemon (214909, `NRestarts 0`, target powered OFF):
+
+    B  well-formed decode   ~3,800 decodes/s from real MJPEG frames   ~85 min
+    A  browser-shaped tabs  video + audio websockets, /state.json,
+                            /shot.jpg, a reviewing tab on /timeline    ~45 min
+    C  input path           56.8 ops/s uinput writes + LED reads,
+                            166,021 ops, 0 errors                     48.6 min
+    D  malformed decode     ~1,500 attempts/s, ~700/s failing,
+                            grow-dominant SOF rewrites                ~35 min
+
+**Not reproduced under any of them, alone or combined. This is a bound, not an
+exoneration.** What it does NOT cover:
+
+- **A live source.** The ring held the stick's uniform 14.7 KB no-lock
+  constant, against 35-54 KB of real game screen. Age eviction was freeing
+  roughly a third of the real churn, thirty times a second.
+- **`/shot.jpg`**, which returns 503 on an all-duplicate window and
+  short-circuits *before* any decode. Never exercised.
+- **A real cell**, as opposed to cell-shaped input load: no mid-cell `shot` on
+  a live frame, no OCR over real screen content.
+
+### The leading hypothesis, and the measurement that will settle it
+
+A glibc double-free is heap **metadata** damage — characteristically a write
+past an allocation. The only third-party C extensions are Pillow's and
+evdev's. **The daemon's entire frame validation is SOI + EOI + 128 bytes**, so
+a garbled frame off the capture stick reaches `Image.open` in four places, and
+**every decode failure is swallowed by a bare `except` with no counter.**
+
+Frames pulled from a recorded AVI are **well-formed by selection** — they
+survived being muxed — so a stress built on them cannot test this however fast
+it runs. Two measurements that shape the fuzzing:
+
+- **Pillow refuses extreme SOF growth** (`DecompressionBombError` above
+  ~178.9M pixels), so those mutants never reach the decoder.
+- **Shrinking a SOF makes the decoder read FEWER MCUs and stop early** — safe.
+  **Growing it moderately (2x-8x) makes it fabricate output while its input
+  runs dry**: a rewrite to 2560x1920 produced 4.9M pixels from entropy data
+  for 307,200. That is the direction worth hammering.
+
+`video state` now carries **`decode_errs`** and **`decode_last`**.
+
+**A zero reading only counts with a LIVE SOURCE.** With the target off the
+stick emits well-formed JPEG for its no-lock constant, so there is nothing
+malformed to count and a clean counter means nothing. **Zero after a week of
+real sessions kills the hypothesis; zero on a dark rig is an artifact.**
+
+### Coordination hazard: a change-detector cannot tell an upgrade from a fault
+
+`pi/inputload.py` and `roundR/run.sh` both halt on a MainPID change and print
+"run pi/core.sh before anything else touches the box". **A deliberate restart
+fires that banner verbatim**, and it lands in the log as a false reproduction
+that outlives everyone's memory of the evening. Stop PID-watching runners
+before any planned restart, and confirm they are down first.
+
+### Ruled out
+
+- **Not a bad deploy.** 167771 is byte-identical to 143721 and ran 73.6 min
+  clean. The code did not change between an aborting run and a clean one.
+- **Not `_read_pcm`/audio, on stack evidence.** There is only ONE stack dump —
+  faulthandler was armed after the first abort — and the PCM reader is a
+  permanent thread that sits in a healthy daemon's stack right now. The audio
+  *streaming* path is still untested; the stack is simply not evidence for it.
+- **Not `self._chg`.** Concurrent `/timeline.json?change=1` could raise
+  `RuntimeError: dictionary changed size during iteration`. Real bug, now
+  locked — but it raises, it does not corrupt.
+
 ---
 
 ## 2. `type_text` cannot produce a requested case  — OPEN
