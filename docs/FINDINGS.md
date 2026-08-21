@@ -2119,3 +2119,106 @@ Same family as sec. 31 (absence read as a value), sec. 35 (a check passing on
 an empty population) and sec. 37 (a pipeline whose silent failure looks like a
 negative answer) — but this is the first where the guard containing the defect
 existed *because of* the others.
+
+## 39. Eight cells compared a condition against itself  [measured 2026-08-21]
+
+Round R ran eight cells, `A B B A A B B A`, to measure the cost of patch 0320.
+Every guard passed. The result looked textbook:
+
+    A cells 26.9 26.9 26.8 26.9    A-to-A spread 0.10
+    block 1 delta +0.05            block 2 delta +0.05
+    >>> PATCH 0320 IS FREE <<<
+
+**All eight cells had 0320 stood down, including the four that were meant to
+be stock.** Every cell's own log says so:
+
+    backdrop thrash centring DISABLED (killswitch)
+
+The round compared arm B against arm B. Two blocks agreeing to two decimal
+places, a spread landing exactly on the pre-registered band — **every summary
+statistic was healthy precisely BECAUSE the comparison was empty.**
+
+### The mechanism
+
+    FIND /I /C "THRASH_CENTRE" CLRENV.BAT  ->  count: 0
+    FIND /I /C "SET "          CLRENV.BAT  ->  count: 205   <- control
+
+`CLRENV.BAT` clears 205 names. The engine has ~164 levers and **97 are not
+among them** — including `SHOT_TICKS`, `BACKDROP_CACHE`, `PIN_NATIVE_MODE` and
+every `TAS_*`. One B cell set `SDL_HINT_DOSKUTSU_THRASH_CENTRE` and it
+persisted for the rest of the sitting.
+
+The contamination even predates the round that was kept: an earlier B cell
+**set its variables and then refused at the profile gate.** Variables are set
+before that gate by design, so a prompt cannot eat a `SET` — a refusal is not
+a rollback.
+
+Round Q escaped only because collection reboots into NET between cells.
+
+### The gate that existed and was pointed the wrong way
+
+A gate had been built that same evening to prove a named variable ABSENT,
+tested in both directions, made non-vacuous with a positive control, and
+written up twice. **It was pointed at `DOSKUTSU_SHOT_TICKS` and never at the
+other arm's lever.**
+
+**A control arm needs the same rigour as the treatment arm.** Arm A is
+*defined* by that variable being absent. What was verified was the variable
+that would spoil the *class* of measurement; what was left unchecked was the
+variable that defined the *comparison*.
+
+### The fix is not an environment check
+
+Enumerating levers is whack-a-mole and `CLRENV` will always lag the source.
+**The engine prints its own effective configuration every run**, and that
+reading is downstream of the environment, the config file, the defaults and
+every killswitch — so a lever nobody enumerated cannot fool it.
+
+Each cell now reads its own log off the card and refuses unless the engine
+reports the arm it was supposed to be (`--expect-log`). Pointed at the invalid
+R1A it returns `count: 1` for DISABLED: it would have refused that cell.
+
+`--forbid` also had to CLEAR as well as verify — verifying alone is a stronger
+statement about history but makes a round un-runnable, since a B cell
+legitimately sets the lever and the next A cell would refuse rather than
+proceed.
+
+### The re-run, and the sign
+
+    A cells 27.6 27.6 27.7 27.6    A-to-A spread 0.10
+    block 1 delta -0.60            block 2 delta -0.70
+
+**Standing 0320 down costs 0.65 fps.** The pre-registered label said "0320 has
+a cost" and assumed the opposite sign; the criteria fixed a threshold and
+sign-agreement, never which side of zero. The label was corrected to match the
+measurement and the change was declared. *Changing a description to match
+reality is not moving a goalpost; changing a threshold would have been.*
+
+The mechanism, from the source: the tile loop bound is in **source space**, so
+both arms blit the same tiles. B (`_cox=0`, no clip) writes every byte into
+the 640x480 surface with nothing to discard the overhang; A's clip throws it
+away. **A writes strictly fewer bytes** — 2.4% for trimming a tile-width off
+two edges.
+
+### The witness nobody designed
+
+Mid-cell brightness, which no scoring depends on:
+
+    A cells  24.7 24.6 24.1 24.6
+    B cells  24.2 23.4 23.4 23.6
+    invalid round, ALL eight cells: 23.4 - 23.7
+
+**The invalid round's uniform readings are the B signature** — independent
+confirmation, from a measurement collected before anyone suspected a problem,
+that those eight really were one arm.
+
+### Rules
+
+- **Verify the arm from the thing that ran it, not from what it was asked to
+  run.** An engine that states its own configuration is a witness; an
+  environment is a request.
+- **A refusal is not a rollback.** Anything set before a gate survives the gate
+  refusing.
+- Agreement between blocks is not evidence of a valid comparison. **A null
+  result is exactly what a comparison of a thing with itself produces**, and
+  it arrives wearing the clothes of a clean measurement.
