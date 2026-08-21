@@ -130,6 +130,36 @@ if [ -f "$FILES/device-pin.conf" ] && \
   echo "pinned capture devices by name (edit the drop-in if the stick changes)"
 fi
 
+# CORES, because an abort that says one line cannot be investigated.
+#
+# vcctrld died once with "double free or corruption (top)" and nothing else --
+# glibc's heap, so a C extension, so not something a Python traceback can
+# reach. faulthandler in the daemon names the Python line each thread was on;
+# only a core names the free() that did it.
+#
+# Two halves, and BOTH are needed. The package replaces kernel.core_pattern
+# with the systemd-coredump pipe, and the drop-in raises vcctrld's SOFT core
+# limit, which Debian ships at 0 -- the kernel writes nothing at all until it
+# is raised, however the handler is configured.
+if ! dpkg -s systemd-coredump >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q systemd-coredump \
+    && echo "installed systemd-coredump (cores land in /var/lib/systemd/coredump)"
+fi
+if [ -f "$FILES/coredump-storage.conf" ]; then
+  sudo mkdir -p /etc/systemd/coredump.conf.d
+  sudo install -m 0644 "$FILES/coredump-storage.conf" \
+    /etc/systemd/coredump.conf.d/vcctrl.conf
+fi
+# Unlike device-pin.conf this one IS overwritten: a core limit is a policy that
+# belongs to the project, not a value that belongs to whichever stick is
+# plugged in, so there is no local edit here worth preserving.
+if [ -f "$FILES/coredump.conf" ]; then
+  sudo mkdir -p /etc/systemd/system/vcctrld.service.d
+  sudo install -m 0644 "$FILES/coredump.conf" \
+    /etc/systemd/system/vcctrld.service.d/coredump.conf
+  sudo systemctl daemon-reload
+fi
+
 # Two LOCAL patches to USB4VC that must not silently disappear under an
 # upstream update. --check only reports; it never modifies.
 if [ -f "$SRC/tools/patch-usb4vc-board.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_ui.py ]; then
