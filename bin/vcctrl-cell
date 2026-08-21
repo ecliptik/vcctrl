@@ -401,9 +401,27 @@ def main(argv):
                     # that is genuinely absent -- a check answering itself.
                     # Only SET's own output carries NAME=, so that is what is
                     # required.
-                    flat = t2.upper().replace(" ", "").replace("_", "")
+                    # PER LINE, stem anywhere and an '=' on the same line.
+                    #
+                    # Appending '=' to the STEM was wrong: the stem is the
+                    # name truncated to 32 chars, so for
+                    # SDL_HINT_DOSKUTSU_FASTPATH_OVERSIZED it built
+                    # ...OVERS= which can never match ...OVERSIZED=0. And
+                    # requiring the full 36-character name assumes OCR reads
+                    # every character of the longest name correctly, which is
+                    # the assumption stems exist to avoid.
+                    #
+                    # The line is the unit that distinguishes SET's output
+                    # from the echoed question: the echo is
+                    # SET | FIND "NAME" with no '=', the output is NAME=value.
                     stem2 = k[:max(12, len(k) - 4)].replace("_", "")
-                    if (stem2 + "=") in flat or (k.replace("_", "") + "=") in flat:
+                    found = False
+                    for line in t2.upper().splitlines():
+                        fl = line.replace(" ", "").replace("_", "")
+                        if stem2 in fl and "=" in fl and "FIND" not in fl:
+                            found = True
+                            break
+                    if found:
                         print("     %-32s found on re-check (had scrolled)" % k)
                     else:
                         still.append(k)
