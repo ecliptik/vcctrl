@@ -3822,3 +3822,55 @@ def test_an_undecodable_frame_is_kept_with_its_provenance():
     check("an unwritable directory is survivable", raised is None, raised)
     check("and the failure is still counted even when the frame is not kept",
           cap2.decode_errs == 1, cap2.decode_errs)
+
+
+def test_no_text_is_dimmed_by_transparency():
+    """A contrast floor cannot see an alpha applied on top of a colour.
+
+    The theme test measures colour TOKENS. The page then put `opacity:.34` on
+    a not-applicable lamp and `opacity:.55` on a stale one, so labels that the
+    generator had fitted to 4.5:1 rendered at 1.5:1 and 2.1:1 -- and every
+    token check stayed green, because the token was never the thing on screen.
+
+    In each case the transparency was saying something the design already said
+    another way: the lamp's underline is the state carrier, solid for
+    applicable and dashed for unproven. The opacity repeated it and charged
+    legibility for the repetition.
+
+    So: no rule may dim TEXT with opacity. Backgrounds, tints, hidden inputs
+    and keyframes are exempt -- they carry no glyphs.
+    """
+    print("\ntext transparency")
+    import re as _re
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    css = _re.sub(r"/\*.*?\*/", "", page[:page.index("</style>")], flags=_re.S)
+
+    # Selectors allowed to carry an opacity: nothing here paints a glyph.
+    EXEMPT = _re.compile(
+        r"#ghost|#zhint|#scrubsel|\.sep\b|\.barsep|^from$|^to$|^\d+%$"
+        r"|button:disabled|\.split:has|#state > i|#themes button \.b")
+
+    offenders = []
+    for sel, body in _re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        m = _re.search(r"opacity:\s*(0?\.\d+)\s*[;}]?", body)
+        if not m or float(m.group(1)) >= 1:
+            continue
+        s = sel.strip().replace("\n", " ")
+        if EXEMPT.search(s):
+            continue
+        offenders.append("%s {opacity:%s}" % (s[:50], m.group(1)))
+
+    check("no non-exempt selector dims text with opacity",
+          not offenders, "; ".join(offenders[:3]))
+
+    # Control: the check must be able to see one. Without this, a green result
+    # says only that the regex found nothing, which is what it said while
+    # .lamp.stale span was sitting there at .55.
+    planted = css + "\n.lamp.stale span { opacity:.55; }"
+    seen = []
+    for sel, body in _re.findall(r"([^{}]+)\{([^{}]*)\}", planted):
+        m = _re.search(r"opacity:\s*(0?\.\d+)\s*[;}]?", body)
+        if m and float(m.group(1)) < 1 and not EXEMPT.search(sel.strip()):
+            seen.append(sel.strip())
+    check("control: it catches a planted one", bool(seen), seen[:2])
