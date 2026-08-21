@@ -393,7 +393,22 @@ def main(argv):
                     # photograph showed plainly set: the reading was real and
                     # was about the wrong moment (FINDINGS sec. 33, in my own
                     # instrument).
+                    # CLS FIRST, so the screen can contain nothing but this
+                    # command and its answer.
+                    #
+                    # The previous version proved "this is the right screen"
+                    # by finding the variable's NAME in the OCR -- which fails
+                    # whenever OCR misreads the name, and it misreads DKTCAP
+                    # consistently in this console font. That is why DKTCAP
+                    # failed in the bulk read AND the re-check, every run,
+                    # while longer names recovered: the check depended on the
+                    # one thing that was broken.
+                    #
+                    # After CLS there is only one count line it could belong
+                    # to, so the answer needs no name matching at all.
                     stem2 = k[:max(12, len(k) - 4)].replace("_", "")
+                    cmd("CLS")
+                    time.sleep(1.0)
                     cmd('SET | FIND "%s" | FIND /C "="' % k)
                     # A GENEROUS BUDGET, because mode 12h text is SLOW.
                     #
@@ -415,10 +430,6 @@ def main(argv):
                         if t2 is None:
                             continue
                         up = t2.upper()
-                        flat = up.replace(" ", "").replace("_", "")
-                        # the echo proves we are looking at this command
-                        if stem2 not in flat:
-                            continue
                         m = re.search(r"COUNT[:\s]+(\d+)", up)
                         if m:
                             verdict = int(m.group(1))
