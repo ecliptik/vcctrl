@@ -66,12 +66,31 @@ becoming a hit-rate number nobody measured.
 
 ## THE LOAD-BEARING ASSUMPTION: is QA.TAS representative?
 
-`stationary_frac` over 18 blocks: **median 0.00, mean 0.11, max 1.00.** Mostly
-scrolling, with occasional fully-stationary blocks — which is what produces the
-100%-hit blocks and the 0-100% swing.
+`stationary_frac` over 18 blocks: **median 0.00**, with rare fully-stationary
+blocks at 1.00 — which is what produces the 100%-hit blocks and the 0-100%
+swing.
 
-**An adaptive gate that caches only while stationary is worth ~0.34 ms on this
-reel — about 0.26 fps. Not worth a patch.**
+**RETRACTED: an earlier version of this section quoted "mean 0.11" and used it
+to size an adaptive gate at ~0.26 fps. Both figures are withdrawn.**
+
+The mean is a **block-size artifact**, not a property of the reel. Both
+counters increment per game tick, so the quantity is hardware-independent — but
+the block boundary is per-100-FLIPS, and the flip:tick ratio is not:
+
+    hardware    18 blocks over ~5140 ticks   ~285 ticks/block   mean 0.11
+    local (DOSBox-X, same reel)
+               505 blocks over ~5140 ticks    ~10 ticks/block   mean 0.004
+
+**A mean of block ratios across a 28x difference in block size is not a
+comparable statistic.** One fully-stationary block contributes 1/18 = 0.056 to
+the hardware mean and 1/505 = 0.002 to the local one. The distribution is
+bimodal — almost all blocks exactly 0.00, rare blocks at 1.00 — and a mean is
+the wrong summary for that shape at any block size.
+
+**The median 0.00 is what both runs agree on and it is the defensible
+statement.** The two means are not fully reconciled and no explanation is
+offered for the residual difference; the comparable quantity would be pooled
+stationary-ticks over total-ticks, which neither run emits.
 
 **But that is a fact about the reel, not about the game.** QA.TAS is a scripted
 run that moves almost continuously. Real play is stationary far more than 11%
