@@ -1464,7 +1464,7 @@
           <button id="scrubin"
                   title="Start the selection here">Mark in</button>
           <button id="scrubsave"
-                  title="Save the selected range as a video">Save range</button>
+                  title="Save the selected range as a video">Save</button>
           <button id="scrubout"
                   title="End the selection here">Mark out</button>
         </div>
@@ -1501,7 +1501,6 @@
              one click apart. The element stays -- the timeline's Save range
              drives it -- it simply is not offered twice. -->
         <button id="reviewbtn" title="Step back through the seconds before it stopped">Review capture</button>
-        <button id="savebuf" hidden title="Download the capture as a video">Save capture</button>
       </div>
     </div>
     <!-- Bring the notice back. Dismissing it is useful -- the last frame is
@@ -3735,7 +3734,7 @@ $('scrubnext').onclick = () => { stopPlay(); seekIdx(tlAt + 1); };
 $('scrubexit').onclick = exitReview;
 $('scrubin').onclick  = () => { bufFrom = tl.frames[tlAt].seq; markRange(); };
 $('scrubout').onclick = () => { bufTo   = tl.frames[tlAt].seq; markRange(); };
-$('scrubsave').onclick = () => $('savebuf').click();
+$('scrubsave').onclick = saveCapture;
 $('scrubsnap').onclick = () => snapshot('scrubbed frame');
 $('scrubplay').onclick = () => {
   if (playTimer) { stopPlay(); return; }
@@ -3878,19 +3877,46 @@ $('veilback').onclick = () => { liveAnyway = false; setVeilHidden(false); };
 // The daemon snapshots the ring under its lock in one list() -- after which
 // nothing can be freed underneath it -- and mux es MJPEG into an AVI with no
 // re-encode, so what plays back is the exact bytes it judged.
-$('savebuf').onclick = async () => {
-  const b = $('savebuf');
+// FEEDBACK ON THE CONTROL THAT WAS PRESSED. This used to live on a hidden
+// #savebuf that Save merely clicked, so every sign of progress -- the
+// disabled state, the "Saving…" label -- was written to an element nobody
+// could see. Twenty seconds of a browser doing nothing visible, then a
+// download prompt out of nowhere. The feedback was not missing; it was
+// addressed to the wrong element.
+//
+// The wait is real: the daemon muxes the whole range into an AVI before it
+// sends a byte, and there is no progress to report from inside a single
+// request. So it reports the one thing it honestly can -- how long it has
+// been going -- which is what tells somebody it is working rather than hung.
+async function saveCapture() {
+  const b = $('scrubsave');
+  if (b.disabled) return;
   const was = b.textContent;
+  const t0 = Date.now();
+  let tick = null;
   try {
     b.disabled = true;
     b.textContent = 'Saving…';
+    // Written once before the interval starts: setInterval does not fire
+    // until its first period has elapsed, so the readout kept the old
+    // position for a quarter second after a press that had already taken
+    // effect. Small, and it is the quarter second in which somebody decides
+    // whether the button worked.
+    const showElapsed = () => {
+      $('scrubpos').textContent = 'building the video · '
+        + ((Date.now() - t0) / 1000).toFixed(0) + 's';
+    };
+    showElapsed();
+    tick = setInterval(showElapsed, 250);
     const q = (bufFrom != null && bufTo != null)
       ? '?from=' + bufFrom + '&to=' + bufTo : '';
     const r = await fetch('/buffer.avi' + q, {cache: 'no-store'});
     if (!r.ok) {
       let why = 'HTTP ' + r.status;
       try { why = (await r.json()).error || why; } catch (e) {}
+      clearInterval(tick); tick = null;
       note('save capture: ' + why);
+      if (reviewing) seekIdx(tlAt);
       return;
     }
     const meta = JSON.parse(r.headers.get('X-Buffer-Meta') || '{}');
@@ -3910,13 +3936,23 @@ $('savebuf').onclick = async () => {
             + (meta.repeated ? ' (' + meta.repeated + ' repeated to cover gaps)' : '')
             + ' at ' + meta.fps + ' fps, '
             + ((meta.bytes || 0) / 1048576).toFixed(1) + ' MB', 'k-vid');
+    clearInterval(tick); tick = null;
+    // Say what landed, then hand the readout back to the playhead. A browser
+    // download gives no visible confirmation of its own, so without this the
+    // only evidence it worked is a file appearing somewhere else.
+    $('scrubpos').textContent = 'saved · '
+      + ((meta.bytes || 0) / 1048576).toFixed(1) + ' MB · '
+      + (meta.span_s || 0).toFixed(1) + 's';
+    setTimeout(() => { if (reviewing) seekIdx(tlAt); }, 3000);
   } catch (e) {
     note('save capture: ' + e);
+    if (reviewing) seekIdx(tlAt);
   } finally {
+    clearInterval(tick);
     b.disabled = false;
     b.textContent = was;
   }
-};
+}
 
 // ONE SNAPSHOT PATH, three buttons. The camera in the strip, "Save this
 // frame" on the No Signal notice, and Snap in the capture menu all want the
