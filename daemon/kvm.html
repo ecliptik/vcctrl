@@ -1919,6 +1919,25 @@ function noteSourceRate(v) {
 // Say nothing rather than something old. A rate nobody has been able to
 // measure for ten seconds is not a rate.
 const srcRate = () => (Date.now() - srcFresh < 10000 && srcFps) ? srcFps : null;
+
+// The same treatment for the websocket counters, and for the same reason:
+// they are totals, they only climb, and a total cannot say whether anything
+// is wrong now. Differenced between polls so the readout can.
+const wsRate = {sent: null, drop: null};
+let wsPrev = null;
+function noteWsRate(w) {
+  const now = Date.now();
+  if (!w || w.sent_frames == null) return;
+  if (wsPrev && now > wsPrev.t) {
+    const dt = (now - wsPrev.t) / 1000;
+    const ds = (w.sent_frames - wsPrev.sent) / dt;
+    const dd = ((w.dropped || 0) - wsPrev.drop) / dt;
+    // A restart resets both to zero, which would read as a large negative.
+    if (ds >= 0 && dd >= 0) { wsRate.sent = ds; wsRate.drop = dd; }
+    else { wsRate.sent = wsRate.drop = null; }
+  }
+  wsPrev = {t: now, sent: w.sent_frames, drop: w.dropped || 0};
+}
 const fpsCeiling = () => {
   // TWELVE WAS INSURANCE AGAINST A CONTROLLER THAT COULD NOT BACK OFF.
   //
@@ -3919,6 +3938,7 @@ async function pollState() {
   showBoard(j.board);
   showAudioDevice(j.audio);
   noteSourceRate(j.video);
+  noteWsRate(j.ws);
   pollLedLog();
   showBuffer(j.video);
   showHeat(j);
@@ -4253,9 +4273,23 @@ function statsRows(j) {
      pollMs ? band(pollMs, 120, 250) : '');
   kv('viewers', j.viewers ?? '—');
   kv('listeners', j.listeners ?? '—');
-  if (w.sent_frames != null) kv('ws frames sent', w.sent_frames.toLocaleString());
-  if (w.dropped) kv('ws frames dropped', w.dropped.toLocaleString(),
-                    'warn');
+  // A LEVEL LIES ABOUT A STREAM. These two are cumulative and DAEMON-WIDE --
+  // every viewer since the process started, not this tab -- so a number like
+  // "70,815 dropped" reads as "your session is broken" when it can equally
+  // mean one abandoned socket has been dropping quietly for an hour while
+  // your own stream is perfect. It was reported exactly that way, next to a
+  // last-frame age of 12 ms.
+  //
+  // So: say whose they are, and show the RATE, which is the only form that
+  // answers "is it bad right now". The colour follows the rate, not the
+  // total; a total can only ever climb.
+  if (w.sent_frames != null)
+    kv('ws sent · all viewers', w.sent_frames.toLocaleString()
+       + (wsRate.sent != null ? '  ·  ' + wsRate.sent.toFixed(1) + '/s' : ''));
+  if (w.dropped)
+    kv('ws dropped · all viewers', w.dropped.toLocaleString()
+       + (wsRate.drop != null ? '  ·  ' + wsRate.drop.toFixed(1) + '/s' : ''),
+       wsRate.drop == null ? '' : wsRate.drop > 2 ? 'warn' : 'good');
 
   g('Devices');
   for (const [label, c] of [['video', v], ['audio', a]]) {
