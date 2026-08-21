@@ -114,6 +114,38 @@ it runs. Two measurements that shape the fuzzing:
 
 `video state` now carries **`decode_errs`** and **`decode_last`**.
 
+**THE PREMISE IS CONFIRMED AND THE MECHANISM IS LOOKING WRONG, 2026-08-21.**
+
+Two malformed frames have now reached the decoder through the real system, and
+both were caught:
+
+    T1 / S2B    17:29:12   11 s before the cell exited
+    YIELD / YA  18:57:16   13 s before the cell exited
+
+**Both at the same point in a cell: the game tearing down 640x480 and DOS
+returning to text.** Not gameplay, not the prompt. A VGA mode change alters
+pixel clock, sync polarity and line count mid-capture.
+
+**The artifact is SHORT, not corrupt.** Every marker valid and in order, SOF
+correctly declaring 640x480, 23,636 bytes of entropy data, ending `ff d6` RST6
+then a genuine `ff d9` EOI. Exactly what a capture device produces when it
+flushes a partial frame at a mode change and terminates it cleanly.
+
+**So the daemon's filter can never catch these.** SOI, EOI and >=128 bytes are
+all satisfied by a frame missing half its picture. The gate is not wrong; it
+checks properties this failure preserves.
+
+**AND THE DAEMON DID NOT FALL OVER — EITHER TIME.** It decoded as far as it
+could, raised, counted it, kept the bytes and carried on. The second time,
+`/timeline.json` — the site that received it — was under continuous load from
+two browser tabs. Together with a fuzz corpus of thousands of far nastier
+mutants surviving the same call sequences without an abort:
+
+**The malformed-frame hypothesis has a confirmed premise and a mechanism that
+is looking wrong.** Malformed frames reach Pillow in normal operation, roughly
+twice per cell, and nothing has ever come apart. **Do not read the confirmed
+premise as support for the crash theory** — it is the opposite.
+
 **FIRST LIVE-SOURCE READING, 2026-08-21.** Snapshotted before a restart
 destroyed it:
 
