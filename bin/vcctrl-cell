@@ -111,6 +111,23 @@ def cmd(line, timeout=60):
     return wait_for_prompt(timeout) is not None
 
 
+def read_env_text_raw():
+    """OCR the current screen without issuing anything.
+
+    Used by the per-variable re-check, which has already run its own filtered
+    command and must not have `SET` typed over the top of it.
+    """
+    shot, _ = grab("cell-env-recheck")
+    if shot is None:
+        return None, None
+    try:
+        from PIL import Image
+        import pytesseract
+        return shot, pytesseract.image_to_string(Image.open(shot))
+    except Exception:
+        return shot, None
+
+
 def read_env_text():
     """Read the machine's environment off the screen and return the raw OCR.
 
@@ -343,6 +360,36 @@ def main(argv):
                 stem = k[:max(12, len(k) - 4)].replace("_", "")
                 if stem.replace("_", "") not in up.replace("_", ""):
                     missing.append(k)
+            # A BULK `SET` CAN SCROLL, AND A SCROLLED VARIABLE LOOKS ABSENT.
+            #
+            # This matters from MQ1 onward: seven SDL_HINT lines on top of the
+            # six the tool already sets is thirteen, plus whatever the profile
+            # carries. DOS prints the whole environment and the screen holds
+            # about 25 lines, so an early variable can scroll off the top and
+            # be reported NOT FOUND while being perfectly set.
+            #
+            # That failure is in the safe direction -- it refuses a good cell
+            # rather than passing a bad one -- but refusing a good cell costs a
+            # run and, worse, invites someone to disable the check. So each
+            # miss is RE-CHECKED individually with a filtered SET, which prints
+            # one line and cannot scroll. Absent after that is really absent.
+            if missing:
+                print("   %d not found in the bulk SET; re-checking each with"
+                      " a filtered read, which cannot scroll" % len(missing))
+                still = []
+                for k in missing:
+                    cmd('SET | FIND "%s"' % k)
+                    _sh, t2 = read_env_text_raw()
+                    if t2 is None:
+                        still.append(k)
+                        continue
+                    stem2 = k[:max(12, len(k) - 4)].replace("_", "")
+                    if stem2 not in t2.upper().replace(" ", "").replace("_", ""):
+                        still.append(k)
+                    else:
+                        print("     %-32s found on re-check (had scrolled)" % k)
+                missing = still
+
             for k in sorted(wanted):
                 print("     %-32s %s" % (k, "ok" if k not in missing else "NOT FOUND"))
 
