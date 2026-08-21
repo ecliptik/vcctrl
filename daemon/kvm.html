@@ -287,7 +287,19 @@
        regardless of where they sit in the file. Without it the base rules
        further down took precedence and every tab showed the key rail. */
     body #cmdbar { display:none; }
-    body #cmdbar.open { display:flex; }
+    /* THE SAME OBJECT AS THE OTHER TAB PANELS. Sound and Power open rounded
+       popovers floating over the picture; this opened as a full-width bar
+       welded to the tab strip with square corners, so one of the four tabs
+       produced a different KIND of thing. Same radius, border, shadow and
+       inset as the popovers, floating clear of the bar that opened it. */
+    body #cmdbar.open {
+      display:flex; position:fixed; z-index:60;
+      left:6px; right:6px;
+      bottom:calc(58px + env(safe-area-inset-bottom, 0px));
+      border:1px solid var(--rule); border-radius:9px;
+      box-shadow:0 12px 30px rgba(0,0,0,.36);
+      padding:8px; border-bottom:1px solid var(--rule);
+    }
 
     body #tabs {
       display:flex; flex:none; border-top:1px solid var(--rule);
@@ -496,7 +508,7 @@
   #scrub {
     position:absolute; left:10px; right:10px; bottom:10px; z-index:60;
     background:var(--panel); border:1px solid var(--rule); border-radius:9px;
-    box-shadow:0 12px 30px rgba(0,0,0,.36); padding:8px 10px;
+    box-shadow:0 12px 30px rgba(0,0,0,.36); padding:8px;
     display:flex; flex-direction:column; gap:7px;
   }
   #scrub[hidden] { display:none; }
@@ -573,7 +585,7 @@
      the same panel. */
   #scrubbar button { min-height:34px; padding:0 9px; }
   @media (max-width:640px) {
-    #scrub { left:6px; right:6px; bottom:6px; padding:7px 8px; }
+    #scrub { left:6px; right:6px; bottom:6px; }
     /* ONE GROUP PER ROW, FULL WORDS. The three-column grid squeezes each
        group into a third of a phone and they wrap inside themselves -- "In"
        and "Save" on one line with "Out" under them, which reads as four
@@ -689,6 +701,12 @@
      visible event of its own, so the button says it happened. */
   #cmdbar .split #snapbtn.flash { background:var(--green); }
   #cmdbar #bufbtn { gap:6px; padding-right:9px; padding-left:8px; }
+  /* A BUTTON THAT RESIZES WHEN PRESSED SHOVES THE ROW IT IS IN. Grab and
+     Release are different lengths, so the four controls to its right moved
+     every time the keyboard was taken or given back -- and moving targets
+     under a pointer that is about to click is worse than the width it costs.
+     Sized for the longer of the two words and held there. */
+  #cmdbar #grabbtn .bl { min-width:52px; text-align:left; }
 
   .popmenu { padding:5px; min-width:150px; }
   /* 500, STATED. `font:` is a shorthand and resets every part it does not
@@ -890,7 +908,7 @@
      -- the function keys -- rather than a number somebody picked, so the
      layout survives a theme with a wider font. */
   #pop-keys {
-    display:flex; flex-direction:column; gap:5px; padding:9px 10px;
+    display:flex; flex-direction:column; gap:5px; padding:8px;
     width:max-content; max-width:calc(100vw - 16px);
   }
   #pop-keys .krow { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
@@ -1133,8 +1151,13 @@
     position:fixed; left:0; right:0; z-index:69; background:transparent;
     top:var(--bar-top, 0px); bottom:var(--bar-bottom, 0px);
   }
+  /* ONE GEOMETRY FOR EVERY FLOATING PANEL. Radius, border, shadow and
+     ground were already shared; the padding was not -- 10/12 here, 9/10 on
+     the key menu, 8/10 on the scrub bar -- which is small enough to read as
+     carelessness rather than difference. The Activity and Status columns are
+     deliberately outside this: they take grid space rather than floating. */
   .pop {
-    position:fixed; z-index:70; background:var(--panel); padding:10px 12px;
+    position:fixed; z-index:70; background:var(--panel); padding:8px;
     border:1px solid var(--rule); border-radius:9px;
     box-shadow:0 12px 30px rgba(0,0,0,.36); max-width:calc(100vw - 16px);
   }
@@ -1377,14 +1400,14 @@
      <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
      <img id="mjpeg" style="display:none" alt="">
      <img id="stale" style="display:none" alt="">
-     <img id="review" style="display:none" alt="a frame from the buffer">
+     <img id="review" style="display:none" alt="a frame from the capture">
     </div>
    </div>
     <!-- THE SCRUB BAR. An overlay rather than a row, for the same reason the
          key rail became a menu: a row would re-fit the picture the moment you
          reached for the timeline. -->
     <div id="scrub" hidden>
-      <div id="scrubtrack" title="Click or drag to move through the buffer">
+      <div id="scrubtrack" title="Click or drag to move through the capture">
         <canvas id="scrubmap"></canvas>
         <div id="scrubsel"></div>
         <div class="markpin" id="markin" hidden></div>
@@ -1419,7 +1442,7 @@
         <div class="sg" id="sg-play">
           <button id="scrubprev" title="Back one frame (←)">|◀</button>
           <button id="scrubplay"
-                  title="Play the buffer through">▶ Play</button>
+                  title="Play the capture through">▶ Play</button>
           <button id="scrubnext" title="Forward one frame (→)">▶|</button>
         </div>
         <div class="sg" id="sg-out">
@@ -1445,8 +1468,8 @@
              buttons on a notice is a menu, and two of them did the same job
              one click apart. The element stays -- the timeline's Save range
              drives it -- it simply is not offered twice. -->
-        <button id="reviewbtn" title="Step back through the seconds before it stopped">Review buffer</button>
-        <button id="savebuf" hidden title="Download the buffer as a video">Save buffer</button>
+        <button id="reviewbtn" title="Step back through the seconds before it stopped">Review capture</button>
+        <button id="savebuf" hidden title="Download the capture as a video">Save capture</button>
       </div>
     </div>
     <!-- Bring the notice back. Dismissing it is useful -- the last frame is
@@ -1608,7 +1631,7 @@
 
       <h2 style="margin-top:14px">Video</h2>
       <div class="row" style="margin-bottom:4px">
-        <span style="flex:1 1 auto">Scrub buffer</span>
+        <span style="flex:1 1 auto">Capture length</span>
         <!-- THE COST IS PART OF THE CHOICE. This is asked for in seconds and
              paid for in Pi memory at about 1.6 MB a second, so ten minutes is
              most of a gigabyte on a four-gigabyte box with no swap. The daemon
@@ -1701,14 +1724,19 @@
 
   <div id="tabs">
     <button data-tab="none" class="on" title="Just the picture">SCREEN</button>
-    <button data-tab="keys" title="The key rail and the command line">KEYS</button>
+    <!-- TYPE, not KEYS. This tab opens the COMMAND LINE -- a field you type
+         into -- and the key menu is a button inside it. Calling it KEYS named
+         the smaller thing behind the bigger one, and on a phone, where the
+         strip is invisible and this tab is the only way to the field, that is
+         the tab most likely to be looked for by what it does. -->
+    <button data-tab="keys" title="Type at the target">TYPE</button>
+    <!-- Beside the thing it records rather than at the far end: what you type
+         and what was captured are two views of the same session. -->
+    <button data-tab="buffer" title="Look back through what the screen did">CAPTURE</button>
     <button data-tab="sound" title="Sound and volume">SOUND</button>
     <button data-tab="power" title="Mains power and the input link">POWER</button>
     <button data-tab="log" title="What the daemon has been doing">LOG</button>
     <button data-tab="stats" title="Measured state of the rig">STATUS</button>
-    <!-- Without this the scrub buffer is desktop-only: the strip button that
-         opens it is hidden on a phone and nothing else reaches it. -->
-    <button data-tab="buffer" title="Look back through what the screen did">BUFFER</button>
   </div>
 
   <div id="body">
@@ -2644,7 +2672,11 @@ function setArmed(v, opts) {
   // control. "Capture" is spoken for by screenshots and recording.
   // The verb says what it does to the KEYBOARD rather than what you then
   // do with it, which is what "Type" left ambiguous.
-  $('grabbtn').querySelector('.bl').textContent = v ? 'Ungrab' : 'Grab';
+  // RELEASE, not Ungrab. "Ungrab" is a word invented for this button; the
+  // thing it does is give the keyboard back, which is what release means
+  // everywhere else on this rig -- the lock has release, the keys have
+  // release-all.
+  $('grabbtn').querySelector('.bl').textContent = v ? 'Release' : 'Grab';
   $('grabbtn').classList.toggle('on', v);
   $('grabbtn').title = v ? 'Keys are going to the target — click, or press '
                            + 'Ctrl+Alt+Shift, to stop'
@@ -3287,7 +3319,7 @@ function holdBuffer(on, why) {
     holdTimer = setTimeout(() => {
       if (!reviewing && pinned) {
         holdBuffer(false);
-        addLine(new Date(), 'buffer',
+        addLine(new Date(), 'capture',
                 'hold released after 45s — a held ring cannot see the picture '
                 + 'come back', 'k-note');
       }
@@ -3296,9 +3328,9 @@ function holdBuffer(on, why) {
   if (on === pinned) return;
   pinned = on;
   post('pin', {action: on ? 'on' : 'off'});
-  addLine(new Date(), 'buffer',
-          on ? 'holding the buffer — no signal, so nothing is evicted'
-             : 'buffer released', 'k-note');
+  addLine(new Date(), 'capture',
+          on ? 'holding the capture — no signal, so nothing is evicted'
+             : 'capture released', 'k-note');
 }
 
 // ── THE LED CHANGE RECORD ────────────────────────────────────────────────
@@ -3349,13 +3381,13 @@ async function enterReview() {
   reviewing = true;
   $('scrub').hidden = false;
   setBufOpen(true);
-  $('scrubpos').textContent = 'reading the buffer…';
+  $('scrubpos').textContent = 'reading the capture…';
   let j;
   try {
     j = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
-  } catch (e) { note('buffer: ' + e); exitReview(); return; }
+  } catch (e) { note('capture: ' + e); exitReview(); return; }
   if (!j || !j.frames || !j.frames.length) {
-    note('the buffer is empty');
+    note('the capture is empty');
     exitReview();
     return;
   }
@@ -3790,7 +3822,7 @@ $('savebuf').onclick = async () => {
     if (!r.ok) {
       let why = 'HTTP ' + r.status;
       try { why = (await r.json()).error || why; } catch (e) {}
-      note('save buffer: ' + why);
+      note('save capture: ' + why);
       return;
     }
     const meta = JSON.parse(r.headers.get('X-Buffer-Meta') || '{}');
@@ -3811,7 +3843,7 @@ $('savebuf').onclick = async () => {
             + ' at ' + meta.fps + ' fps, '
             + ((meta.bytes || 0) / 1048576).toFixed(1) + ' MB', 'k-vid');
   } catch (e) {
-    note('save buffer: ' + e);
+    note('save capture: ' + e);
   } finally {
     b.disabled = false;
     b.textContent = was;
@@ -3834,7 +3866,7 @@ async function snapshot(why) {
     if (reviewing && tl && tl.frames[tlAt]) {
       const k = tl.frames[tlAt];
       const r = await fetch('/frame.jpg?seq=' + k.seq);
-      if (!r.ok) { note('that frame is no longer in the buffer'); return; }
+      if (!r.ok) { note('that frame is no longer in the capture'); return; }
       blob = await r.blob();
       // Named by how far back it is, because "the frame 4.2 seconds before it
       // stopped" is the thing being kept -- a wall-clock stamp alone would
@@ -4343,7 +4375,7 @@ function statsRows(j) {
   kv('frames seen', v.frames != null ? v.frames.toLocaleString() : '—');
   if (v.fast_failures) kv('restarts', v.fast_failures, 'bad');
 
-  g('Buffer');
+  g('Capture');
   // Against what it was ASKED to hold. Short of that means the ring is being
   // squeezed -- by memory, or by frames too large for the span to fit.
   kv('holding', v.span_s != null ? v.span_s.toFixed(1) + ' s' : '—',
