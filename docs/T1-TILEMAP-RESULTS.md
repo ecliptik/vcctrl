@@ -87,16 +87,43 @@ argument.
 
 ---
 
-## A defect-shaped observation, worth chasing before any new gate
+## THE ADAPTIVE SAFETY IS INVERTED, AND COULD NOT HAVE FIRED
 
-The source describes `cache_enabled` as adaptive-alpha state with a
-**"consecutive low-cost misses" counter, sticky per block.** So machinery
-already exists that is meant to notice a cache that keeps missing and stand it
-down.
+Machinery exists that is meant to notice a cache that keeps missing and stand
+it down. **It did not prevent a 9 fps loss, and tracing it shows it never
+could have.** `map.cpp:3094`:
 
-**It did not prevent a 9 fps loss.** Either it is not wired to that decision,
-its threshold is far off, or it works per block and the reel never gives it a
-stable enough signal. **That is a defect to investigate, not a tuning idea.**
+    disable the cache after 10 consecutive frames where
+        miss_render_time_ns < threshold_ns
+
+    BG threshold    8.6 ms      measured BG miss   19.37 ms   (2.25x above)
+    FG threshold   15.4 ms      measured FG miss   24.00 ms   (1.56x above)
+
+**Both measured miss costs sit ABOVE their thresholds, so the condition is
+never true, the counter never increments, and the cache is never stood down.**
+The safety could not have fired during T1 no matter how long the round ran.
+
+**And the logic is backwards for the failure we hit.** Its intent is "if a miss
+is cheap, the cache is not earning its keep, so disable it" — a guard against a
+*mild* loss. But **an expensive miss is precisely when the cache costs the
+most**, and this machinery reads an expensive miss as a reason to keep going.
+It is structurally blind to the catastrophic case and protects only against
+the trivial one.
+
+**Retuning the thresholds cannot fix it.** The cache is a loss when the hit
+rate is below break-even, and break-even depends on the costs *and* the hit
+rate. The gate looks at miss cost alone, so **no threshold value makes it
+correct — it is measuring the wrong quantity.**
+
+That is the same error as a millisecond threshold gating a bandwidth question
+(see `MACH64-PHASE0-RESULTS.md`): a well-formed instrument pointed at the wrong
+subject. Here it is in the source rather than in a spec.
+
+**Whether to patch it depends on whether the cache is worth saving at all** —
+which is the representativeness question below, and it now has a sharper form:
+**at 100% hits the cache alone reaches 30.15 fps.** If real play is materially
+more stationary than this reel's 11%, the lever recorded here as catastrophic
+may be the largest win available.
 
 ---
 
