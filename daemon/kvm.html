@@ -186,6 +186,15 @@
        and a miss on a phone. */
     #themes { grid-template-columns:repeat(auto-fill,minmax(42px,1fr)); }
     #themes button { min-height:42px; }
+    /* GLYPHS ONLY UP HERE. Giving Settings and the zoom control their words
+       was right on a desktop and broke the phone: measured at 500px the
+       header ran to 601px, so Settings, the divider and light/dark were all
+       off the right-hand edge with nothing to say they existed. The emoji is
+       the control on a phone, which is what it was before the labels and is
+       the one thing that always fits. */
+    body #gbtn .bl, body #zoombtn #zoomlabel { display:none; }
+    body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
+    body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
     /* The tab bar already opens and closes the menu here. */
     body #keysbtn { display:none; }
     /* The tab bar is the panel here; there is no column to collapse. */
@@ -420,6 +429,15 @@
   #scrubtip[hidden] { display:none; }
   #scrubbar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   #scrubbar button { min-height:30px; padding:0 9px; }
+  @media (max-width:640px) {
+    #scrub { left:6px; right:6px; bottom:6px; padding:7px 8px; }
+    #scrubbar { gap:4px; }
+    #scrubbar button { padding:0 7px; min-height:34px; }
+    #scrubpos { font-size:10.5px; }
+    /* The tip is half the screen on a phone; smaller keeps the frame under
+       the thumb visible rather than covered by its own preview. */
+    #scrubtip { width:140px; height:105px; }
+  }
   #scrubpos { font:var(--t-micro)/1 var(--mono); color:var(--dim);
               white-space:nowrap; }
   /* A label and a caret, not a form field. The one boxed control in a rail
@@ -1086,13 +1104,20 @@
         <img id="scrubtip" alt="" hidden>
       </div>
       <div id="scrubbar">
-        <button id="scrubprev" title="Back one frame (←)">◀</button>
-        <button id="scrubplay" title="Play the buffer through">▶ Play</button>
-        <button id="scrubnext" title="Forward one frame (→)">▶</button>
+        <!-- The step buttons carry the bar, because on a phone Play collapses
+             to a bare triangle and three controls where two look identical is
+             worse than the wrapping it was fixing. -->
+        <button id="scrubprev" title="Back one frame (←)">|◀</button>
+        <button id="scrubplay" data-short="▶"
+                title="Play the buffer through">▶ Play</button>
+        <button id="scrubnext" title="Forward one frame (→)">▶|</button>
         <span class="sep" aria-hidden="true">|</span>
-        <button id="scrubin" title="Start the selection here">Mark in</button>
-        <button id="scrubout" title="End the selection here">Mark out</button>
-        <button id="scrubsave" title="Save the selected range as a video">Save range</button>
+        <button id="scrubin" data-short="In"
+                title="Start the selection here">Mark in</button>
+        <button id="scrubout" data-short="Out"
+                title="End the selection here">Mark out</button>
+        <button id="scrubsave" data-short="Save"
+                title="Save the selected range as a video">Save range</button>
         <span class="grow"></span>
         <span id="scrubpos">—</span>
         <button id="scrubexit" title="Stop reviewing and go back to live">Live</button>
@@ -1351,6 +1376,9 @@
     <button data-tab="power" title="Mains power and the input link">POWER</button>
     <button data-tab="log" title="What the daemon has been doing">LOG</button>
     <button data-tab="stats" title="Measured state of the rig">STATUS</button>
+    <!-- Without this the scrub buffer is desktop-only: the strip button that
+         opens it is hidden on a phone and nothing else reaches it. -->
+    <button data-tab="buffer" title="Look back through what the screen did">BUFFER</button>
   </div>
 
   <div id="body">
@@ -1583,6 +1611,11 @@ setInterval(() => {
 // converges on the rate the path can actually carry: back off hard when
 // frames are going missing, creep up while they are not.
 const smallScreen = () => Math.min(screen.width, screen.height) < 500;
+// NOT the same question as smallScreen(). That one asks about the DEVICE, to
+// decide what frame rate to ask the daemon for; this one asks about the
+// WINDOW, because a narrow desktop window has the same layout problem as a
+// phone and a phone held sideways does not.
+const narrowUI = () => matchMedia('(max-width:640px)').matches;
 const FPS_MIN = 4;
 // THE CEILING IS MEASURED, NOT WRITTEN DOWN. It used to be 20, "because the
 // stick only produces ~24" -- true of the VGA stick on the Pi 3 and wrong
@@ -2922,10 +2955,14 @@ async function seekIdx(i) {
     Math.round(((k.t - t0) / span) * (tr.clientWidth - 2)) + 'px';
   // Seconds BEFORE THE END, because that is the question being asked -- how
   // long before it stopped did this happen -- not how far into a recording.
-  $('scrubpos').textContent =
-    '−' + (f[f.length - 1].t - k.t).toFixed(2) + 's · frame '
-    + (tlAt + 1) + '/' + f.length + ' · seq ' + k.seq
-    + (k.gap_ms != null ? ' · +' + k.gap_ms.toFixed(0) + 'ms' : '');
+  // The sequence number and the gap are for reading a buffer closely, which
+  // is not what anyone is doing on a phone; there the position and the count
+  // are the whole of it, and the rest would wrap the control row.
+  const back = '−' + (f[f.length - 1].t - k.t).toFixed(2) + 's';
+  $('scrubpos').textContent = narrowUI()
+    ? back + ' · ' + (tlAt + 1) + '/' + f.length
+    : back + ' · frame ' + (tlAt + 1) + '/' + f.length + ' · seq ' + k.seq
+      + (k.gap_ms != null ? ' · +' + k.gap_ms.toFixed(0) + 'ms' : '');
   const img = $('review');
   img.src = '/frame.jpg?seq=' + k.seq;
   img.style.display = '';
@@ -3017,6 +3054,16 @@ $('scrubtrack').addEventListener('pointermove', e => {
 $('scrubtrack').addEventListener('pointerleave', hideTip);
 $('scrubprev').onclick = () => { stopPlay(); seekIdx(tlAt - 1); };
 $('scrubnext').onclick = () => { stopPlay(); seekIdx(tlAt + 1); };
+// Swapped on a media query rather than baked into the markup, so rotating a
+// phone or dragging a desktop window narrow gets the right one either way.
+function fitScrubLabels() {
+  for (const b of document.querySelectorAll('#scrubbar [data-short]')) {
+    if (!b.dataset.long) b.dataset.long = b.textContent;
+    b.textContent = narrowUI() ? b.dataset.short : b.dataset.long;
+  }
+}
+fitScrubLabels();
+addEventListener('resize', fitScrubLabels);
 $('scrubexit').onclick = exitReview;
 $('scrubin').onclick  = () => { bufFrom = tl.frames[tlAt].seq; markRange(); };
 $('scrubout').onclick = () => { bufTo   = tl.frames[tlAt].seq; markRange(); };
@@ -3750,6 +3797,9 @@ function setTab(name) {
   // the button that owns it.
   if (name !== 'set') showSettings(false);
   if (name !== 'sound' && name !== 'power' && name !== 'keys') closePop();
+  // Leaving the BUFFER tab has to release the ring, or a phone that wandered
+  // off to another tab would hold it until the daemon's 300s backstop.
+  if (name !== 'buffer' && reviewing) exitReview();
   // The long panels open as a full-screen sheet; the short ones stay a strip
   // at the bottom. Reading a log through a 150px window is not reading.
   // Settings is a drawer of its own now, not one of these panels.
@@ -3772,6 +3822,7 @@ function setTab(name) {
   // Sound and power are popovers in the rail now, not panels down here. The
   // tab still opens them; it just opens the same thing the header does,
   // rather than a second copy that can disagree with it.
+  else if (name === 'buffer') { body.classList.add('closed'); enterReview(); }
   else if (name === 'keys') { openPop('keys'); body.classList.add('closed'); }
   else if (name === 'sound') { openPop('sound'); body.classList.add('closed'); }
   else if (name === 'power') { openPop('power'); body.classList.add('closed'); }
