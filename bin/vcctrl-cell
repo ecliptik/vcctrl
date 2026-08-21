@@ -31,7 +31,15 @@ WHAT WENT WRONG, AND WHAT EACH GUARD ANSWERS
 
 Usage:
   vcctrl-cell <TAG> --card mach64|virge|cirrus [--set VAR=VAL]...
-                    [--ticks N] [--cfg NAME] [--shot-at S] [--hw LIST]
+                    [--forbid VAR]... [--ticks N] [--cfg NAME]
+                    [--shot-at S] [--hw LIST]
+
+  --forbid  a variable that MUST NOT be set. Verified POSITIVELY by reading
+            a count of 0 back off the screen -- an unreadable answer refuses,
+            because could-not-look is not absence. The presence gate counts
+            variables and so can never establish this: "all 8 present" passes
+            just as happily when a forbidden one is set and a wanted one is
+            missing. Round R turns on DOSKUTSU_SHOT_TICKS being absent.
 
   --hw   what is PHYSICALLY FITTED, as an operator declaration. Written to
          <TAG>.HW beside the collected logs and labelled `declared`, because
@@ -253,6 +261,7 @@ def main(argv):
         return 2
     tag = argv[0].upper()
     sets, ticks, cfg, shot_at, card = [], "30000", "OPL3.CFG", 45, None
+    forbid = []
     hw = STANDING_HW
     i = 1
     while i < len(argv):
@@ -262,6 +271,8 @@ def main(argv):
             hw = argv[i + 1]; i += 2
         elif argv[i] == "--set":
             sets.append(argv[i + 1]); i += 2
+        elif argv[i] == "--forbid":
+            forbid.append(argv[i + 1]); i += 2
         elif argv[i] == "--ticks":
             ticks = argv[i + 1]; i += 2
         elif argv[i] == "--cfg":
@@ -307,6 +318,33 @@ def main(argv):
         for s in sets:
             k, _, v = s.partition("=")
             wanted[k.upper()] = v
+
+        # VARIABLES THAT MUST BE ABSENT.
+        #
+        # Round R turns on one: DOSKUTSU_SHOT_TICKS stalls the frame each dump
+        # lands on, so a single stray dump turns a `perf` cell into `diag`
+        # noise. The rule that decides the round is therefore an ABSENCE, and
+        # until now this gate could not check one.
+        #
+        # THE COUNT GATE BELOW CANNOT VERIFY ABSENCE. It proves HOW MANY
+        # variables are set, never WHICH. "all 8 variables present" passes
+        # identically when SHOT_TICKS is set and something else is missing --
+        # the totals match and the cell is silently the wrong class. That is
+        # FINDINGS sec. 31, absence read as a value, sitting inside the gate
+        # written to prevent it.
+        #
+        # So each forbidden name is asked about POSITIVELY, using the same
+        # `FIND /C "="` primitive as the re-check: it answers 0 or 1, the
+        # echoed question cannot manufacture a count line, and CLS means only
+        # one count line can be on screen. An unreadable answer REFUSES --
+        # could-not-look is not absence, and treating it as absence is exactly
+        # how a two-valued check reports the instrument's state as the
+        # target's.
+        forbidden = [k.upper() for k in (forbid or [])]
+        for k in forbidden:
+            if k in wanted:
+                print("REFUSED: %s is both required and forbidden." % k)
+                return 2
 
         # OPERATOR DECISION 2026-08-19: on the Mach64, 640x480 is the ONLY
         # permitted mode. 512x384 was previously kept as an opt-in because it
@@ -493,6 +531,72 @@ def main(argv):
                 print("   a prompt ate the SET and the prompt still came back.")
                 return 1
             print("   all %d variables present" % len(wanted))
+
+            if forbidden:
+                print("   -- and %d that must be ABSENT --" % len(forbidden))
+                # ASKED POSITIVELY, WITH NO VARIABLE EXPANSION ANYWHERE.
+                #
+                # The obvious design -- and the one a peer proposed -- is to
+                # have DOS itself assert the state:
+                #     IF "%VAR%"=="" ECHO ABSENT
+                #     IF NOT "%VAR%"=="" ECHO PRESENT
+                # so that both states emit a token and silence is a third
+                # outcome. It is a good shape and it DOES NOT WORK HERE.
+                # MS-DOS 6.22 expands %VAR% in BATCH FILES, not at the
+                # interactive prompt. Measured on the target 2026-08-20:
+                #     IF "%ZZNOSUCHVAR%"=="" ECHO EXPANSION_WORKS   -> nothing
+                #     ECHO [%VCQ%]                                  -> [%VCQ%]
+                # The literal `"%VAR%"` never equals `""`, so `IF NOT` fires
+                # unconditionally and every variable reads PRESENT forever.
+                # It fails closed rather than open, so it would have refused
+                # all eight cells instead of passing a bad one -- but a gate
+                # that always refuses is not a gate either.
+                #
+                # `SET | FIND "NAME" | FIND /C "="` needs no expansion at all:
+                # it is pure text processing, which is why it has worked every
+                # run. Measured the same evening:
+                #     ZZPROBE set     -> count: 1
+                #     SHOT_TICKS unset-> count: 0
+                # The echoed question contains no `count:` line, so the check
+                # cannot be satisfied by its own echo, and a screen that never
+                # produces one is a THIRD outcome -- refused, not read as
+                # absence.
+                bad, unreadable = [], []
+                for k in forbidden:
+                    cmd("CLS")
+                    time.sleep(1.0)
+                    cmd('SET | FIND "%s" | FIND /C "="' % k)
+                    verdict = None
+                    for _try in range(20):
+                        time.sleep(1.5)
+                        _sh, t3 = read_env_text_raw()
+                        if t3 is None:
+                            continue
+                        m = re.search(r"COUNT[:\s]+(\d+)", t3.upper())
+                        if m:
+                            verdict = int(m.group(1))
+                            break
+                    if verdict is None:
+                        print("     %-32s COULD NOT READ -- NOT the same as absent" % k)
+                        unreadable.append(k)
+                    elif verdict > 0:
+                        print("     %-32s *** SET, AND MUST NOT BE ***" % k)
+                        bad.append(k)
+                    else:
+                        print("     %-32s absent (count 0, read back)" % k)
+                if bad:
+                    print("   REFUSED: %d forbidden variable(s) are set: %s"
+                          % (len(bad), " ".join(bad)))
+                    print("   This cell would be measuring something other than")
+                    print("   what it claims. CLRENV should have cleared it.")
+                    return 1
+                if unreadable:
+                    print("   REFUSED: could not read %d forbidden variable(s)"
+                          " back: %s" % (len(unreadable), " ".join(unreadable)))
+                    print("   An unreadable answer is COULD NOT LOOK, not")
+                    print("   absence. Passing here would launch a cell whose")
+                    print("   validity rule was never actually checked.")
+                    return 2
 
         print("-- launch --")
         t0 = time.time()
