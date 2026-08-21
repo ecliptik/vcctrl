@@ -1927,3 +1927,76 @@ repeated. The one-line assertion is the system.
 Related: sec. 31 (absence read as a value) is the same failure in data;
 this is it in control flow. And sec. 32's rule — a verdict must name its
 subject — has a sibling here: **a verdict must also name its sample size.**
+
+## 36. Two recordings, one ring: 94.5% of a cell's "glass" was the previous cell's  [measured 2026-08-20]
+
+`GMQ3-glass.avi` is 815 MB and looks like a recording of cell MQ3. It is not.
+**18,871 of its 19,976 frame packets are byte-identical to frames in
+`GMQ2-glass.avi`** — 94.5%, checked by hashing the MJPEG packets on both
+sides without re-encoding. Its own unique content is the last ~78 s.
+
+The metadata says so plainly and nobody read it:
+
+    cell   first_seq   last_seq   window          real_span   avi_dur   thinned
+    GMQ2     128800     146848    21:29:27..21:39:29   602.5s    602.5s   no
+    GMQ3     129163     148485    21:29:39..21:48:08  1108.6s    665.9s   YES
+
+`first_seq` is the daemon's **global** frame counter. GMQ3's window opens
+twelve seconds after GMQ2's, so the two files necessarily contain the same
+frames. A dump names the cell that requested it; it does not bound itself to
+that cell.
+
+### How it produced a confident, wrong refutation
+
+A peer session sampled the AVIs to check my claim that no Mach64 glass had
+locked since MQ2, found clean 640x480 game frames in `GMQ3-glass.avi` at
+t=533 s, and reported the claim refuted. **The frames are real, correctly
+identified, and MQ2's** — t=533 s falls in the shared region, which runs
+0..~590 s of that file. Sampling MQ3's unique tail at 2 Hz gives 156 samples,
+max colour saturation **0.0%**, zero game frames.
+
+So the refutation was the same shape as the error it corrected: a sample
+generalised past what it covered. Mine trusted one frame to speak for a cell;
+theirs trusted one file to belong to a cell.
+
+### The cause is the ring bug that was already fixed
+
+The ring was holding far more than `target_span_s` asked for — 480 s asked,
+1193 s held — because eviction was running on bytes and not on age. A ring
+that overruns its window by 2x guarantees that consecutive dumps overlap.
+**Only the three thinned files can overlap** (`avi_dur` well under `span_s`
+means the ring was over-full and thinning); of those, only GMQ2/GMQ3 actually
+do, because the other gaps were long enough. The age-eviction fix closes this
+as a side effect nobody was aiming at.
+
+### What the corrected record says
+
+    MQ0  game frames present     capture worked
+    MQ1  game frames present     capture worked
+    MQ2  game frames present     capture worked
+    MQ3  NO game frames          (own content only, 156 samples, 0.0% colour)
+    MQ4  NO RECORDING AT ALL     unknown -- not a finding
+    MQ5  NO game frames          (104 samples, 0.0% colour, real console text)
+
+MQ5 is console text and not a black recording: 102 of 104 samples carry lit
+pixels, max lit fraction 10.0%. "Console-only" is a positive observation, not
+an absence.
+
+**MQ4 is the part my own table got wrong**, and in the way I have written
+three memories about: it had no recording, and I reported `NO LOCK` — the
+instrument's state published as the target's. Two cells failed to show game
+glass and one was never looked at.
+
+### Rules
+
+- **A dump is bounded by the ring, not by the cell that asked for it.** Read
+  `first_seq`/`first_t` before treating a recording as evidence about a run,
+  and check it against the neighbouring cells' ranges.
+- **Overlap is detectable for free** — compare `first_seq`/`last_seq` across
+  the archive. It costs one pass over the `.meta` files and would have caught
+  this before the analysis, not after.
+- `written`/`fps` well under `span_s` means the ring **thinned**, so AVI time
+  is not proportional to wall time in that file and any t-to-wall arithmetic
+  on it is wrong.
+- A recording should carry the cell's own start time and be clipped to it.
+  Until it is, the filename is a label and not a provenance claim.
