@@ -57,6 +57,19 @@ Usage:
          configuration (picogus,video,nic) -- pass it when that is not true,
          most importantly when the Vibra16S is back in for an audio test.
 
+DO NOT ATTACH A STREAMING CLIENT DURING A CELL.
+
+  The daemon streams a NEW websocket at 20 fps until the client's own rate
+  message lands -- so a page that intends to watch at 8 fps still pulls 20 fps
+  of ~35 KB frames for the first moment of its connection. Harmless for a
+  browser on an idle rig; during a 150 s timed cell it is ~700 KB/s of
+  unbudgeted work on the machine doing the measuring.
+  (Measured by the webkvm session 2026-08-21, along with two clamps that used
+  to be silent: asked 40 -> 30, asked 0.2 -> 1.0.)
+
+  The same applies to leaving a KVM tab open. It is not just a ring-pin
+  hazard; it is load.
+
 PER-CARD DEFAULTS, because a decision that has to be remembered gets forgotten.
 
   mach64  sets DOSKUTSU_PIN_NATIVE_MODE=0, which is REQUIRED on this card,
