@@ -178,23 +178,60 @@ def cmd(line, timeout=60):
 # is the whole point of the three-state contract. Widening these sets to
 # make a stubborn cell pass would be the same mistake as widening the
 # brightness threshold to make the capture regression go away.
-ZERO_LIKE = set("0OoQ@©")
-ONE_LIKE = set("1lI|i!")
+# Per-digit OCR confusion classes. `0` is the only glyph this font reliably
+# mangles -- it comes back as `@` every time -- but the others are listed
+# because a multi-digit count reads them all and one bad character must not
+# silently become a different number.
+DIGIT_LIKE = {
+    "0": "0OoQ@\u00a9", "1": "1lI|i!", "2": "2Zz", "3": "3",
+    "4": "4", "5": "5Ss", "6": "6", "7": "7", "8": "8B", "9": "9",
+}
+_GLYPH = {}
+for _d, _gs in DIGIT_LIKE.items():
+    for _g in _gs:
+        _GLYPH[_g] = _d
+        _GLYPH[_g.upper()] = _d
+
+# Kept for the two-valued callers that predate multi-digit counts.
+ZERO_LIKE = set(DIGIT_LIKE["0"])
+ONE_LIKE = set(DIGIT_LIKE["1"])
 
 
 def read_count(text):
-    """0, 1, or None for could-not-read. Never guesses."""
+    """The integer after `count:`, or None for could-not-read. Never guesses.
+
+    ORIGINALLY THIS ONLY UNDERSTOOD 0 AND 1, and that was a real defect rather
+    than a simplification. `SET | FIND "NAME" | FIND /C "="` can only answer 0
+    or 1, so a single-digit classifier was sufficient for the forbidden-
+    variable gate it was written for. Then the same function was pointed at a
+    LOG FILE, where a marker can appear any number of times -- and Phase 0 cell
+    D3 refused with COULD NOT READ on a perfectly good cell because its
+    instrument had emitted `count: 27` and `2` was in neither class.
+
+    The cell was fine. The instrument had a two-valued answer space and met a
+    multi-valued question, which is the same shape as an outcome table that
+    omits a third state.
+
+    Every character of the token must map to a digit. One unrecognised glyph
+    returns None for the whole reading rather than a plausible wrong number --
+    a misread count is worse than no count, because it is actionable.
+    """
     if not text:
         return None
-    m = re.search(r"COUNT\s*[:;.]?\s*(\S)", text.upper().replace(" ", " "))
+    m = re.search(r"COUNT\s*[:;.]?\s*(\S{1,6})", text.upper())
     if not m:
         return None
-    ch = m.group(1)
-    if ch in ZERO_LIKE or ch.lower() in ZERO_LIKE:
-        return 0
-    if ch in ONE_LIKE or ch.lower() in ONE_LIKE:
-        return 1
-    return None
+    tok = m.group(1)
+    out = ""
+    for ch in tok:
+        d = _GLYPH.get(ch)
+        if d is None:
+            return None
+        out += d
+    try:
+        return int(out)
+    except ValueError:
+        return None
 
 
 def read_env_text_raw():
