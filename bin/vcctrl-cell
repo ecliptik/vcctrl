@@ -34,6 +34,16 @@ Usage:
                     [--forbid VAR]... [--ticks N] [--cfg NAME]
                     [--shot-at S] [--hw LIST]
 
+  --expect-log STR
+            a string the ENGINE must have written to its own log for this
+            cell. Checked on the card after the run. This is the only guard
+            that survives a lever nobody enumerated: the engine prints its
+            effective configuration, which is downstream of the environment,
+            the config file, the defaults and every killswitch. Round R ran
+            eight cells with patch 0320 stood down in BOTH arms because a
+            leaked variable was invisible to every check pointed at the
+            environment.
+
   --forbid  a variable that MUST NOT be set. Verified POSITIVELY by reading
             a count of 0 back off the screen -- an unreadable answer refuses,
             because could-not-look is not absence. The presence gate counts
@@ -316,6 +326,7 @@ def main(argv):
     tag = argv[0].upper()
     sets, ticks, cfg, shot_at, card = [], "30000", "OPL3.CFG", 45, None
     forbid = []
+    expect_log = []
     hw = STANDING_HW
     i = 1
     while i < len(argv):
@@ -327,6 +338,8 @@ def main(argv):
             sets.append(argv[i + 1]); i += 2
         elif argv[i] == "--forbid":
             forbid.append(argv[i + 1]); i += 2
+        elif argv[i] == "--expect-log":
+            expect_log.append(argv[i + 1]); i += 2
         elif argv[i] == "--ticks":
             ticks = argv[i + 1]; i += 2
         elif argv[i] == "--cfg":
@@ -420,6 +433,26 @@ def main(argv):
         print("-- clearing and setting environment --")
         if not cmd("CALL CLRENV", 90):
             print("REFUSED: CLRENV did not finish."); return 2
+
+        # CLRENV IS NOT ENOUGH, AND IT IS NOT CLOSE.
+        #
+        # It clears 205 names; the engine has ~164 levers of which **97 are
+        # not on that list** -- including SHOT_TICKS, BACKDROP_CACHE,
+        # PIN_NATIVE_MODE and every TAS_*. Enumerating them here would lag the
+        # source exactly the way CLRENV already does.
+        #
+        # So each --forbid name is CLEARED here as well as verified later.
+        # Verifying alone is a stronger statement about history, but it makes
+        # a round un-runnable: a B cell legitimately sets the lever, and the
+        # next A cell would refuse rather than proceed. Clearing makes the arm
+        # correct; the later check proves the clear took. Same shape as
+        # setting the wanted variables and reading them back.
+        for k in forbidden:
+            if not cmd("SET %s=" % k):
+                print("REFUSED: no prompt after clearing %s" % k); return 2
+        if forbidden:
+            print("   cleared %d forbidden name(s) that CLRENV does not cover"
+                  % len(forbidden))
         for k, v in wanted.items():
             if not cmd("SET %s=%s" % (k, v)):
                 print("REFUSED: no prompt after SET %s" % k); return 2
@@ -744,6 +777,54 @@ def main(argv):
         if w is None:
             print("   NO PROMPT after %.0fs -- cell may be stuck." % (time.time() - t0))
             return 1
+        # ATTEST THE ARM FROM THE ENGINE'S OWN LOG, NOT FROM THE ENVIRONMENT.
+        #
+        # Round R ran eight cells and ALL EIGHT had patch 0320 stood down,
+        # including the four that were supposed to be stock. `CLRENV.BAT`
+        # clears 205 variables and **97 of the engine's 164 levers are not
+        # among them**, so one B cell setting SDL_HINT_DOSKUTSU_THRASH_CENTRE
+        # leaked it into every later cell in the sitting. The round compared a
+        # condition against itself and every summary statistic looked healthy:
+        # A-to-A spread 0.10, two blocks agreeing to two decimals.
+        #
+        # NO ENVIRONMENT CHECK WOULD HAVE BEEN ENOUGH. Enumerating levers is
+        # whack-a-mole and CLRENV lags the source by however many have been
+        # added since anyone last touched it. But the engine PRINTS its own
+        # effective configuration every run, and that reading is downstream of
+        # every mechanism -- environment, config file, defaults, killswitch --
+        # so it cannot be fooled by a lever nobody thought to enumerate.
+        #
+        # Read straight off the card with the pipeline BLASTER proves, and it
+        # answers 0 or 1 so the digit classifier handles it.
+        if expect_log:
+            print("-- attesting the arm from %s.LOG on the card --" % tag)
+            for want in expect_log:
+                cmd("CLS")
+                time.sleep(1.0)
+                cmd('FIND /I /C "%s" LOGS\\%s.LOG' % (want, tag))
+                v = None
+                for _try in range(20):
+                    time.sleep(1.5)
+                    _sh, t5 = read_env_text_raw()
+                    if t5 is None:
+                        continue
+                    v = read_count(t5)
+                    if v is not None:
+                        break
+                if v is None:
+                    print("     %-40s COULD NOT READ" % want[:40])
+                    print("   REFUSED: could not attest the arm from the engine")
+                    print("   log. That is COULD NOT LOOK, not a pass.")
+                    return 2
+                if v < 1:
+                    print("     %-40s *** NOT PRESENT ***" % want[:40])
+                    print("   REFUSED: the engine did not report this. The cell")
+                    print("   ran, but NOT in the configuration this arm means.")
+                    print("   A leaked lever from an earlier cell is the usual")
+                    print("   cause -- CLRENV does not clear most of them.")
+                    return 1
+                print("     %-40s attested by the engine" % want[:40])
+
         print("== done in %.0fs ==" % (time.time() - t0))
         return 0
     finally:
