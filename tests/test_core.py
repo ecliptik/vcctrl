@@ -1531,13 +1531,16 @@ HARNESS = r"""
     const froz = db.textContent;
     poll_render_veil('nosignal', null);
     const nosig = db.textContent;
-    // A THIRD CASE. Frames arriving and UNIFORM is not a picture at all, so
-    // offering "show the live picture" would promise something never sampled.
+    // UNIFORM OFFERS THE KEPT FRAME, NOT THE BLANK ONE. There is still a
+    // picture on screen when the stream goes flat -- the last good frame,
+    // dimmed under the notice -- and that undimmed is what anybody wants.
+    // Showing the live uniform field put a black rectangle where a readable
+    // frame had been.
     poll_render_veil('frozen', '#000000');
     const blank = db.textContent;
-    emit(`veiluniform ${/blank/i.test(blank) ? 1 : 0} `
-       + `${blank !== froz && blank !== nosig ? 1 : 0}`);
-    emit(`veilbtn ${/live/i.test(froz) && /last frame/i.test(nosig) ? 1 : 0} `
+    emit(`veiluniform ${!/blank/i.test(blank) && /show frame/i.test(blank) ? 1 : 0} `
+       + `${blank === nosig && blank !== froz ? 1 : 0}`);
+    emit(`veilbtn ${/live/i.test(froz) && /show frame/i.test(nosig) ? 1 : 0} `
        + `${froz !== nosig ? 1 : 0}`);
     // And choosing live must uncover the canvas, not merely hide the notice.
     lastState = {video: {state: 'frozen'}};
@@ -1906,11 +1909,13 @@ def test_zoom_layout_in_a_browser():
           got["cadcolour"][0] == 1.0, got["cadcolour"])
     check("Refresh video is in the screen menu, not the power menu",
           got["cadcolour"][1] == 1.0, got["cadcolour"])
-    check("a uniform frame is offered as blank, not as a picture",
+    check("a uniform stream offers the kept frame, not the blank live one",
           got["veiluniform"][0] == 1.0, got["veiluniform"])
-    check("control: three states, three labels",
+    # It should read the same as no-signal (both offer the kept frame) and
+    # differently from a frozen REAL picture, which offers the live stream.
+    check("control: and it says what no-signal says, not what frozen says",
           got["veiluniform"][1] == 1.0, got["veiluniform"])
-    check("frozen offers the live picture, no-signal offers the last frame",
+    check("frozen offers the live picture, no-signal offers the kept frame",
           got["veilbtn"][0] == 1.0, got["veilbtn"])
     check("control: and the two states do not share a label",
           got["veilbtn"][1] == 1.0, got["veilbtn"])
