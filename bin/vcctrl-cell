@@ -120,6 +120,24 @@ def cmd(line, timeout=60):
     return wait_for_prompt(timeout) is not None
 
 
+# EVERY `FIND` PATTERN HERE IS `/I`, AND THAT IS LOAD-BEARING.
+#
+# `vcctrl type` produces uppercase by holding SHIFT -- and CAPS LOCK INVERTS
+# SHIFT. `at_prompt()` toggles Caps Lock as its probe, several times a second,
+# so the case of everything this harness types depends on a bit its own prompt
+# detector is flipping. Measured on the target 2026-08-20:
+#     capslock=1  ->  `set | find "blaster" | find /c "="`  -> count: 0
+#     capslock=0  ->  `SET | FIND "BLASTER" | FIND /C "="`  -> count: 1
+# DOS does not care about the case of `SET` or `FIND`, but **FIND's search
+# string is case-sensitive by default**, so the pattern silently matches
+# nothing and the pipeline answers 0.
+#
+# 0 IS ALSO WHAT "ABSENT" LOOKS LIKE. That made the forbidden-variable gate
+# vacuous exactly when Caps Lock happened to be on -- it would report
+# `absent (count 0, read back)` for a variable that was set, which is
+# absence-read-as-a-value INSIDE the gate written to prevent it. R1A passed
+# that gate only by luck. `/I` removes the dependency entirely.
+#
 # OCR DOES NOT READ DIGITS RELIABLY IN THIS CONSOLE FONT.
 #
 # Measured on the target 2026-08-20: `count: 0` OCRs as `count: @`, every
@@ -498,7 +516,7 @@ def main(argv):
                     stem2 = k[:max(12, len(k) - 4)].replace("_", "")
                     cmd("CLS")
                     time.sleep(1.0)
-                    cmd('SET | FIND "%s" | FIND /C "="' % k)
+                    cmd('SET | FIND /I "%s" | FIND /C "="' % k)
                     # A GENEROUS BUDGET, because mode 12h text is SLOW.
                     #
                     # DKTCAP=1 keeps the console in mode 12h between cells and
@@ -568,8 +586,58 @@ def main(argv):
                 return 1
             print("   all %d variables present" % len(wanted))
 
+            # ORDER IS DELIBERATE: THE POSITIVE CONTROL RUNS FIRST.
+            #
+            # The forbidden-variable check below proves a variable is ABSENT by
+            # reading `count: 0`. But 0 is also what a BROKEN pipeline returns
+            # -- a mistyped pattern, a case mismatch, a `FIND` that never
+            # matched anything. An absence check that cannot tell "not there"
+            # from "did not look" is the failure this whole gate exists to
+            # prevent, and it shipped with exactly that hole in it.
+            #
+            # BLASTER fixes that for free. It is known to be set on the sound
+            # profile, it goes through the IDENTICAL pipeline, and it is
+            # checked FIRST. A `count: 1` from it proves SET, the pipe, FIND,
+            # the typing and the OCR all work end to end. Only then does a 0
+            # from the forbidden check mean the variable is absent rather than
+            # the instrument being broken.
+            #
+            # So this is two things at once: a boot-profile guard, and the
+            # control that makes every absence below meaningful.
+            print("   -- profile witness --")
+            cmd("CLS")
+            time.sleep(1.0)
+            cmd('SET | FIND /I "BLASTER" | FIND /C "="')
+            wv = None
+            for _try in range(20):
+                time.sleep(1.5)
+                _sh, t4 = read_env_text_raw()
+                if t4 is None:
+                    continue
+                wv = read_count(t4)
+                if wv is not None:
+                    break
+            if wv is None:
+                print("     BLASTER                          COULD NOT READ")
+                print("   REFUSED: could not establish which boot profile is")
+                print("   running. That is COULD NOT LOOK, not a pass.")
+                return 2
+            if wv == 0:
+                print("     BLASTER                          *** NOT SET ***")
+                print("   REFUSED: the machine is not on the sound profile.")
+                print("   Almost certainly still in NET from a collect or a")
+                print("   hand-run FTP session. sdl_init will fail and the cell")
+                print("   will die in seconds. Reboot to the menu default")
+                print("   (ctrl-alt-del, let the 5s timeout land on PGSB).")
+                return 1
+            print("     BLASTER                          set (profile is PGSB)")
+
+
             if forbidden:
-                print("   -- and %d that must be ABSENT --" % len(forbidden))
+                # The witness above returned 1 through this exact pipeline, so
+                # a 0 here is a real absence and not a broken instrument.
+                print("   -- and %d that must be ABSENT"
+                      " (pipeline proven by BLASTER above) --" % len(forbidden))
                 # ASKED POSITIVELY, WITH NO VARIABLE EXPANSION ANYWHERE.
                 #
                 # The obvious design -- and the one a peer proposed -- is to
@@ -601,7 +669,7 @@ def main(argv):
                 for k in forbidden:
                     cmd("CLS")
                     time.sleep(1.0)
-                    cmd('SET | FIND "%s" | FIND /C "="' % k)
+                    cmd('SET | FIND /I "%s" | FIND /C "="' % k)
                     verdict = None
                     for _try in range(20):
                         time.sleep(1.5)
@@ -655,34 +723,6 @@ def main(argv):
             # in NET, so it is a witness to the whole boot path rather than a
             # declaration about it. Checked with the same count primitive, and
             # unreadable REFUSES.
-            print("   -- profile witness --")
-            cmd("CLS")
-            time.sleep(1.0)
-            cmd('SET | FIND "BLASTER" | FIND /C "="')
-            wv = None
-            for _try in range(20):
-                time.sleep(1.5)
-                _sh, t4 = read_env_text_raw()
-                if t4 is None:
-                    continue
-                wv = read_count(t4)
-                if wv is not None:
-                    break
-            if wv is None:
-                print("     BLASTER                          COULD NOT READ")
-                print("   REFUSED: could not establish which boot profile is")
-                print("   running. That is COULD NOT LOOK, not a pass.")
-                return 2
-            if wv == 0:
-                print("     BLASTER                          *** NOT SET ***")
-                print("   REFUSED: the machine is not on the sound profile.")
-                print("   Almost certainly still in NET from a collect or a")
-                print("   hand-run FTP session. sdl_init will fail and the cell")
-                print("   will die in seconds. Reboot to the menu default")
-                print("   (ctrl-alt-del, let the 5s timeout land on PGSB).")
-                return 1
-            print("     BLASTER                          set (profile is PGSB)")
-
         print("-- launch --")
         t0 = time.time()
         vc("type", "DOSKUTSU.EXE")
