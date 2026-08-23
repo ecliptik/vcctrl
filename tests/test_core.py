@@ -4292,10 +4292,17 @@ def test_every_commit_cited_in_docs_still_resolves():
         if not f.endswith(".md"):
             continue
         body = open(os.path.join("docs", f), encoding="utf-8", errors="replace").read()
-        # Backticked hex of commit length. Loose enough to catch a citation,
-        # tight enough not to sweep every hash in the file -- and anything it
-        # catches that is NOT a commit is skipped below rather than failed.
-        for s in set(_re.findall(r"`([0-9a-f]{7,12})`", body)):
+        # ANY hex of commit length, backticked or not. The first version of
+        # this only matched backticked hex and reported green while missing
+        # `commit 340b16d` written as plain prose in WEBKVM.md -- a guard that
+        # covers a subset of the ways in, which is the shape it exists to
+        # catch. A peer counting independently found more citations than this
+        # test did, and that discrepancy was the only reason it surfaced.
+        #
+        # Widening is safe because nothing is FAILED for matching: a candidate
+        # is only judged if it resolves as an object here, so a stray hex word
+        # is skipped rather than reported.
+        for s in set(_re.findall(r"\b([0-9a-f]{7,12})\b", body)):
             cited.setdefault(s, set()).add(f)
 
     # A guard over an empty set is not a passing guard.
