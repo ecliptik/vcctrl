@@ -4207,3 +4207,37 @@ def test_cfclean_never_deletes_what_it_cannot_prove():
     rc = cf.main(["--tags", "D1"])
     check("the CLI refuses at the top rather than half-driving a delete",
           rc == 2, rc)
+
+
+def test_the_docs_index_cannot_rot_silently():
+    """docs/README.md routes a cold reader to the current answer.
+
+    It exists because several documents carry a live figure and a RETRACTED one
+    in the same section -- 30.2 fps, stationary_frac 0.11, "no glass since MQ2"
+    -- and every one of those was live in a pushed document before it was
+    caught. An index that quietly stops covering the directory sends the next
+    reader to the wrong half.
+
+    So the index is checked against the filesystem rather than trusted: a doc
+    added without being indexed fails here, which is the only thing that makes
+    an index a guarantee rather than a good intention.
+    """
+    print("\ndocs index")
+    import re as _re
+    d = "docs"
+    if not os.path.isdir(d):
+        print("  SKIP  no docs/")
+        return
+    idx_path = os.path.join(d, "README.md")
+    check("the index exists at all", os.path.exists(idx_path))
+    if not os.path.exists(idx_path):
+        return
+    idx = open(idx_path).read()
+    named = set(_re.findall(r"`([A-Za-z0-9][A-Za-z0-9._-]*\.md)`", idx))
+    on_disk = {f for f in os.listdir(d) if f.endswith(".md") and f != "README.md"}
+    check("the docs directory is not empty -- an index over nothing is not a "
+          "passing index", bool(on_disk), on_disk)
+    check("every doc on disk is named in the index",
+          not (on_disk - named), sorted(on_disk - named))
+    check("the index names no file that does not exist",
+          not (named - on_disk - {"README.md"}), sorted(named - on_disk))
