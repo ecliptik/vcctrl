@@ -4234,7 +4234,18 @@ def test_the_docs_index_cannot_rot_silently():
         return
     idx = open(idx_path).read()
     named = set(_re.findall(r"`([A-Za-z0-9][A-Za-z0-9._-]*\.md)`", idx))
-    on_disk = {f for f in os.listdir(d) if f.endswith(".md") and f != "README.md"}
+
+    # TRACKED files, not everything on disk. The tree is shared between
+    # sessions and an untracked draft is somebody's work in progress -- failing
+    # the whole suite on it makes this guard a nuisance that gets disabled,
+    # which is worse than not having it. A doc is indexed when it is committed.
+    import subprocess as _sp
+    r = _sp.run(("git", "ls-files", "docs/*.md"), capture_output=True, text=True)
+    if r.returncode != 0:
+        print("  SKIP  not a git checkout")
+        return
+    on_disk = {os.path.basename(l) for l in r.stdout.split()
+               if l.endswith(".md") and os.path.basename(l) != "README.md"}
     check("the docs directory is not empty -- an index over nothing is not a "
           "passing index", bool(on_disk), on_disk)
     check("every doc on disk is named in the index",
