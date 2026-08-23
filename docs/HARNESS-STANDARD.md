@@ -4,17 +4,25 @@ A contract for running measured tests on constrained or vintage hardware
 when the thing reading the run sheet is a software agent rather than a
 person.
 
-**Status:** draft, kept internal during incubation. Intended for public
-release and reuse; it will move to its own repository once a second
-project adopts it. Nothing in the normative text should assume any
-particular project -- project-specific requirements belong in a *profile*
-(sec. 12).
+**Status:** in use, and still short of a second independent adopter. It
+lives in the vcctrl repository because vcctrl is its reference harness
+implementation (sec. 15), not because it is about vcctrl -- nothing in
+the normative text may assume a particular project or rig, and
+project-specific requirements belong in a *profile* (sec. 12). It will
+move to a repository of its own when a second project adopts it.
 
 **Origin:** extracted from a Cave Story port to MS-DOS 6.22 (NXEngine-evo
 / SDL3 / DJGPP) driven by an agent over a VGA capture card, injected
 keystrokes, and an FTP return channel. The failures cited throughout are
 real and were expensive; a rule stated without its failure tends to get
 optimised away by whoever next finds it inconvenient.
+
+**On the numbers in this document.** Concrete figures appear throughout --
+a band of 0.85, a gate going from 534 findings to 25, a round-trip check
+at ~0.1 s. **Every one is a worked example from a named context, never a
+default to adopt.** They are here because a rule that asserts a hazard
+without ever showing it happening is a rule nobody acts on; the rule above
+each number is always stated independently of it. Measure your own.
 
 ---
 
@@ -920,8 +928,10 @@ comparison is being read against.
 
 In the originating project the within-session band was 0.0-0.1 on two
 separate occasions, while the same configuration measured a day apart
-differed by 0.85 -- over four times the profile's stated band. The cause
-was not established, and the operational rule does not need it: **an
+differed by 0.85 -- over four times the profile's stated band. That figure
+is one rig's example, not a threshold to copy; what transfers is that the
+two bands differed by a factor nobody predicted. The cause was not
+established, and the operational rule does not need it: **an
 effect smaller than the across-session band cannot be attributed to
 anything changed between sessions**, however tight the within-session
 figures look.
@@ -1079,3 +1089,44 @@ orders of magnitude depending on the code path.
 - **Emulator parity gates.** See sec. 13.
 - **Prescribing a transport.** Serial, network, or physical media are all
   compatible; only the witnesses matter.
+
+---
+
+## 15. Reference implementation
+
+One implementation exists: **vcctrl**, the harness this document ships
+with. It is listed here so the requirements above can be read against
+something real, and because an unimplemented standard tends to contain
+requirements that cannot be met.
+
+vcctrl drives a vintage target over an agent-controlled KVM -- injected
+keyboard and mouse across a PS/2 bridge, screen over a capture stick,
+mains power over a smart plug. Where the standard names a requirement, it
+names the mechanism that satisfies it:
+
+| Requirement | Mechanism |
+|---|---|
+| 7.1 states have witnesses | a keyboard-lock return channel the target itself drives; read it, or block until it changes |
+| 7.2.3a prove the path at the FAR end | one command whose four exit codes are exactly the four states that section demands: answered, did not answer, could not look, tool failed |
+| 7.2.3b preflight is ONE command | one gate over every readiness check, one exit code, `FAULT` outranking `UNKNOWN` outranking `PASS` |
+| 7.2.3b name which check decided | the verdict carries `decided_by`, and lists `unknowns` separately so an earlier could-not-look is not masked by a later fault |
+| 7.2.2e state your scope in the output | that verdict carries `scope` and a `does_not_cover` note naming the adjacent question -- fitness of the *target* -- that it does not answer |
+| 7.2.2f readings belong to an epoch | the LED reading reports `unproven` when power changed and the target has not published since, rather than returning the retained level |
+| 7.2.2c absence is a third state | "no picture" is an explicit answer distinct from a frame, and the last positively-picture frame is retrievable with its age |
+| 7.2 capture is lossy | duplicate-hash statistics over a frame window, raw frames by sequence number, and a ring that can be pinned while it is examined |
+| 6.4 declared versus detected | the installed protocol board is detected and reported, with `unknown` as a real answer that never defaults |
+| 7.4 classify from a WINDOW | a rolling scrub ring, recordable to a file, rather than a single still |
+| 6.3 completion witness | an append-only record of every mains action taken, and an activity log |
+
+**What it does not provide, stated because 7.2.2e applies to this section
+too.** vcctrl is the transport and witness layer. **P1-P5 in section 8 are
+the project's obligations and no harness can supply them** -- a bounded run
+with an observable end, a machine-readable manifest, start and end banners,
+decomposed metrics, and configuration from a shippable artifact all live in
+the software under test. A conforming harness driving a project that has
+not done P1-P5 will run it, and will not be able to measure it.
+
+The same boundary applies to the preflight gate: it answers whether the
+apparatus can drive the machine, never whether the machine is fit to be
+measured. A fully green harness has driven a misconfigured target for an
+entire round, which is the incident 7.2.2e records.
