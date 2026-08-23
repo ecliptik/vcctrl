@@ -4024,3 +4024,116 @@ def test_a_recording_refuses_a_window_that_predates_its_caller():
     blob, meta = cap.buffer_avi()
     check("clipped_frames is reported even when nothing was clipped",
           meta.get("clipped_frames") == 0, meta)
+
+
+def test_arm_leds_survives_a_settling_read():
+    """arm_leds() decided and confirmed from BARE reads of a settling value.
+
+    Measured 2026-08-20: four refusals in one evening, four immediate retries
+    that succeeded. `stable_led()` exists because at_prompt() lost a run to
+    exactly this -- an LED takes ~48 ms to settle and a single sample can catch
+    it mid-flight -- and arm_leds() was never converted.
+
+    THE FAILURE IS NOT A NUISANCE, IT IS INVERTED. Suppose caps lock is ALREADY
+    armed high and one read catches it settling low. The old code concludes it
+    needs setting, presses the key, and drives a correctly-armed LED to the
+    WRONG state -- then waits for it to reach the right one and times out. So a
+    machine that was ready is reported as unable to arm, and the boot that
+    depended on it is refused.
+
+    Also: three states. An unreadable return channel is COULD NOT LOOK, which
+    on ADB is permanent and on a booting machine is transient. Collapsing that
+    into False tells the caller a healthy Macintosh failed to arm.
+    """
+    common = _load("bin/vcctrl_common.py", "vcc_common_arm")
+
+    class Rig(object):
+        """capslock is genuinely True; ONE specific read of it lies.
+
+        The lie is pinned to a CALL INDEX rather than a count, because
+        leds_available() calls leds() before any decision is made -- a
+        "lie on the first read" rig has its lie eaten by the availability
+        check and never reaches the code under test. That is what the control
+        caught on the first run of this test.
+        """
+        def __init__(self, lie_on=(), available=True, why=None):
+            self.state = {"capslock": True, "scrolllock": False}
+            self.lie_on = set(lie_on)
+            self.calls = 0
+            self.available = available
+            self.why = why
+            self.keys = []
+
+        def leds(self):
+            if not self.available:
+                return {"available": False, "why": self.why, "reason": "x"}
+            self.calls += 1
+            v = dict(self.state)
+            if self.calls in self.lie_on:
+                v["capslock"] = not v["capslock"]      # caught mid-settle
+            v["available"] = True
+            return v
+
+        def key(self, *a):
+            self.keys.append(a[-1])
+            if a[-1] in self.state:
+                self.state[a[-1]] = not self.state[a[-1]]
+
+    def run(rig, use_stable):
+        common.leds = rig.leds
+        common.vc = lambda *a, **k: rig.key(*a)
+        common.LED_POLL_S = 0
+        def wait_led(name, want, timeout=15):
+            return 0.0 if bool(rig.state.get(name)) is want else None
+        common.wait_led = wait_led
+        if not use_stable:
+            # THE CONTROL: put the old bare-read behaviour back.
+            common.stable_led = lambda name, tries=6: bool(rig.leds().get(name))
+        else:
+            common.stable_led = common.__dict__["stable_led_real"]
+        return common.arm_leds()
+
+    common.__dict__["stable_led_real"] = common.stable_led
+
+    # 1. THE DEFECT. One settling read, machine already correctly armed.
+    rig = Rig(lie_on=(2,))
+    got = run(rig, use_stable=False)
+    check("CONTROL: a bare read on a settling LED refuses a machine that was "
+          "already armed", got is False, "got %r, keys=%r" % (got, rig.keys))
+    check("CONTROL: and it pressed the key it should not have",
+          rig.keys == ["capslock"], rig.keys)
+
+    # 2. THE FIX. Same rig, same lie, stable_led in the decision.
+    rig = Rig(lie_on=(2,))
+    got = run(rig, use_stable=True)
+    check("stable_led in the decision arms the same rig",
+          got is True, "got %r, keys=%r" % (got, rig.keys))
+    check("and presses nothing, because it was already armed",
+          rig.keys == [], rig.keys)
+
+    # 3. A REAL failure must still be False, not None -- the guard must not
+    #    turn every negative into could-not-look.
+    rig = Rig()
+    rig.state["capslock"] = False
+    rig.key_broken = True
+    common.leds = rig.leds
+    common.vc = lambda *a, **k: None          # the key press does nothing
+    common.wait_led = lambda name, want, timeout=15: None
+    common.stable_led = common.__dict__["stable_led_real"]
+    got = common.arm_leds()
+    check("an LED that will not take the state is FALSE, not None",
+          got is False, got)
+
+    # 4. THREE STATES. Unreadable is could-not-look, not failure.
+    for why in ("unknown", "unpowered", "error"):
+        rig = Rig(available=False, why=why)
+        common.leds = rig.leds
+        got = common.arm_leds()
+        check("why=%s is None (could not look), not False" % why, got is None, got)
+
+    # 5. ...but a board that genuinely HAS no return channel is a real False.
+    rig = Rig(available=False, why="unsupported")
+    common.leds = rig.leds
+    got = common.arm_leds()
+    check("why=unsupported is False -- ADB has no channel, that is a fact",
+          got is False, got)

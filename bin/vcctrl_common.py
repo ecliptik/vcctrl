@@ -300,20 +300,52 @@ def arm_leds():
     Scroll Lock ARMED LOW: RDYPULSE sets it, so scroll 0 -> 1 is readiness.
     Either one armed the wrong way makes its transition invisible, and the
     harness then waits for an event that has already happened.
+
+    THREE RETURNS, because there are three outcomes:
+
+        True   armed and confirmed
+        False  a real failure -- the LED would not take the state
+        None   COULD NOT LOOK. The return channel is unreadable, which on ADB
+               is permanent and on a booting machine is transient. The caller
+               acts differently on each, and collapsing None into False tells
+               it a healthy Macintosh failed to arm.
+
+    Every existing caller uses `if not arm_leds()` or `if arm_leds()`, so None
+    is falsy and their behaviour is unchanged. The distinction is available to
+    anyone who wants it, and nothing is forced to take it.
+
+    BOTH READS GO THROUGH stable_led(). They used to be bare `leds()` calls --
+    one to decide whether to press the key, one to confirm the result -- and
+    that is exactly the single-sample failure stable_led() was written for
+    after at_prompt() lost a run to it. Measured 2026-08-20: four refusals in
+    one evening, four immediate retries that succeeded. A settling race in the
+    function that arms the boot edges every reboot depends on.
+
+    The false-negative direction is the dangerous one and it is not symmetric.
+    A false "could not arm" refuses a boot that would have worked -- annoying.
+    A false "armed" lets a reboot proceed with an edge that cannot be detected,
+    and the harness then waits for an event that has already happened.
     """
     ok, why, reason = leds_available()
     if not ok:
         print("  cannot arm the LEDs: %s (%s)" % (reason, why))
-        return False
+        return None if why in ("unknown", "unpowered", "error") else False
     for name, want in (("capslock", True), ("scrolllock", False)):
-        if bool(leds().get(name)) is want:
+        cur = stable_led(name)
+        if cur is None:
+            print("  could not read %s to decide -- not the same as wrong" % name)
+            return None
+        if cur is want:
             continue
         vc("key", name)
         if wait_led(name, want, 15) is None:
             print("  could not set %s to %s" % (name, want))
             return False
-    st = leds()
-    return bool(st.get("capslock")) and not st.get("scrolllock")
+    caps, scroll = stable_led("capslock"), stable_led("scrolllock")
+    if caps is None or scroll is None:
+        print("  could not read the LEDs back to confirm arming")
+        return None
+    return caps is True and scroll is False
 
 
 def wait_cold_boot(timeout=240):
