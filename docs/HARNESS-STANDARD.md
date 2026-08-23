@@ -407,6 +407,31 @@ including the exact geometry and the reason the fast present path had
 stood down. The correct conclusion was one grep away and was reached only
 after someone read the file.
 
+### 7.2.1a Prove the pipeline with a known presence before believing an absence
+
+7.2.1 says a failed search is not evidence of absence. This is its
+constructive form, and it is mechanical.
+
+**Never prove an absence on a pipeline that has not just proved a
+presence.** Run a probe you know is there through the *identical* path
+first. Only after that returns a hit does a miss mean anything.
+
+    -- witness --
+      KNOWN_PRESENT_KEY     found        <- the pipeline is proven HERE
+    -- and the one that must be ABSENT --
+      FORBIDDEN_KEY         absent       <- only now believable
+
+Why it works is worth stating, because it explains where to apply it. In
+the originating incident the same broken pipeline was asked two questions.
+One was about a value known to be set, where a false negative **refuses
+loudly**. The other was about a value required to be absent, where a false
+negative **passes silently**. The check that could only fail safely is what
+exposed the bug in the check that could fail dangerously.
+
+**So the rule generalises: pair every dangerous check with a safe one on
+the same path.** A pipeline carrying only questions whose wrong answer is
+silence has no way to tell you it is broken.
+
 ### 7.2.2 A check that cannot distinguish success from failure is not a check
 
 Every verification MUST be able to return *both* answers. A check whose
@@ -450,6 +475,35 @@ assignment also does. Setting it by hand and reading the shell's own
 variable listing worked immediately. Ninety seconds of looking at state
 beat three automated runs that could only ever have returned one answer.
 
+### 7.2.2g An output gated separately from its collection can print a lie
+
+The worst instrument failure in the originating project did not fail. It
+emitted a complete, well-formed statistic -- correct field names, correct
+block count, a number in every slot -- whose actual meaning was *nothing
+was sampled*.
+
+The cause: **the gate that permits the OUTPUT and the gate that permits the
+COLLECTION were different flags.** Opening the first alone produced a row
+of zeros. Every other failure in that codebase announced itself by absence
+-- a missing line, a refused cell, a silent skip. An absence invites a
+second look. **A zero closes the question.**
+
+It was quoted as evidence that a subsystem was free. That subsystem later
+measured as the largest unbucketed cost in the frame.
+
+**Requirements.**
+
+- An emitter MUST check the gate that controls its own data, not merely
+  the gate that controls its printing.
+- When collection is off, it MUST say so in the output, and MUST name the
+  flag that would enable it.
+- A zero MUST be distinguishable, in the log alone, from *not sampled*. The
+  reader will not have the source in front of them.
+
+**Where to look for this:** any instrument whose counters live in one
+module and whose emit lives in another, and any marker whose name resembles
+a flag it is not actually gated by. A shared prefix is not a shared gate.
+
 ### 7.2.2a Having just named a hazard is when it is most likely to recur
 
 Naming a failure shape does not confer immunity to it. The shape describes
@@ -471,6 +525,32 @@ twenty minutes edited a staging copy of a file tracked elsewhere. Separately,
 the same person wrote a comment quoting a redirect defect to explain it,
 while knowing that comments on that platform redirect. Both were caught by
 checking, neither by knowing.
+
+### 7.2.2h A check must assert its input set is non-empty before it may pass
+
+An empty population and a passing population produce identical output
+unless something explicitly distinguishes them.
+
+Observed five times in one day across three subsystems, in checks written
+by people who had spent that day cataloguing this exact hazard: a margin
+check that examined **zero frames** and reported that the margins were
+clean; a preflight that printed `ok` because every field of an empty
+structure satisfied the test; a percentile computed over a population that
+contained no samples.
+
+**Requirement: a check MUST assert its input set is non-empty before
+returning a pass, and MUST report the surviving count alongside the
+verdict.** `refused: 0 of 46 judged` is a different object from `PASS`.
+
+This is one line in most checks. It would have caught all five.
+
+**Corollary for counted populations.** A count of N observations is only N
+observations if they are independent. Where a capture path can repeat an
+identical sample, deduplicate before counting -- but only for questions
+about the SUBJECT. A repeat is still a member of a population that asks
+about ARRIVAL (rate, bandwidth, timing), because it still consumed a slot.
+**It depends on what the population is a sample OF**, and a rule applied
+uniformly across a round will be wrong for half of it.
 
 ### 7.2.2b Verification must be routine, not reserved for doubtful claims
 
@@ -495,6 +575,36 @@ either direction was in something that looked entirely fine at the time --
 a plausible mechanism, a consistent convention, a number in the expected
 range, a field with a sensible value. None would have been selected for
 scrutiny by a policy of checking suspicious things.
+
+### 7.2.2i A pre-registered outcome table must enumerate a third state
+
+Pre-registration protects against choosing the analysis once the data is
+visible. It introduces its own hazard, and it is worse than the one it
+replaces.
+
+A check was registered in advance with two outcomes: marker present meant
+the instrument ran; marker absent meant the code path was never entered.
+Reality was a third state neither branch covered -- **the marker was absent
+because the OPPOSITE marker was present**, and the run had silently used
+the wrong configuration. Followed literally, the table would have returned
+its "vacuous" verdict: a wrong conclusion, authorised in writing, with no
+reason to interrogate it.
+
+**A pre-registered wrong answer is more dangerous than an unplanned one,
+because the plan supplies the permission not to look again.**
+
+**Requirements when writing an outcome table.**
+
+- Ask what a THIRD state would look like, and whether it is distinguishable
+  from the two written down. **"Absent" is the usual place two meanings
+  hide** -- *not there*, and *could not look*.
+- Verify a search pattern against something known present before trusting
+  its null (7.2.1a).
+- **A threshold must name the quantity it measures AND the decision it
+  gates**, side by side. A threshold in milliseconds gating a question
+  about whether a cost is bandwidth-bound or overhead-bound is well-formed
+  and cannot answer the question it was written for. Naming both makes the
+  mismatch visible before the data rather than after.
 
 ### 7.2.2c The watch is a check, and can be blind to its own event
 
@@ -719,6 +829,41 @@ estimates the premise of another's threshold: there the combination is
 conditional, not a precedence order. **Independent checks take a
 precedence; dependent ones take a condition.** Determining which applies
 is part of specifying the verdict.
+
+### 7.2.3c The harness may mutate the channel it measures through **[L2]**
+
+An input harness typed uppercase by holding SHIFT. Caps Lock inverts SHIFT.
+And the liveness probe -- the thing that decided whether the target was at
+a prompt -- worked by toggling Caps Lock, several times a second, for the
+life of every cell.
+
+**So the case of every character the harness typed was decided by a bit its
+own prompt detector was flipping.** Measured, same command, one second
+apart:
+
+    capslock=1  ->  set | find "name" | find /c "="   ->  count: 0
+    capslock=0  ->  SET | FIND "NAME" | FIND /C "="   ->  count: 1
+
+It hid because the platform ignored the case of command *names*, so
+everything ran. Only the search string was case-sensitive, and a
+case-mismatched search returns *no match* -- which is indistinguishable
+from a true absence.
+
+**It therefore failed toward false confidence**, in exactly the direction
+7.2.1a exists to catch: a gate built to prove a variable was absent
+reported absence for a variable that was set.
+
+**Requirements.**
+
+- A liveness or readiness probe MUST NOT mutate shared state that other
+  operations depend on. Where it must, that coupling MUST be documented at
+  both ends.
+- Any case-sensitive matcher driven through a synthetic input path MUST be
+  made case-insensitive, or the case MUST be asserted before use.
+
+**The general form: a probe that writes is part of the system under test.**
+Look for this wherever readiness is established by doing something rather
+than by reading something.
 
 ### 7.3 Measurement preconditions **[L2]**
 
@@ -967,6 +1112,67 @@ Validate on, in order of sensitivity:
 Pick a workload that is already gated end to end, so apparatus effects are
 not confounded with envelope or precondition failures.
 
+### 10.0b A repeatability figure can be an artifact of its own binning
+
+10.0 requires two bands. This is a named way one of them can be neither a
+band nor a property of the subject.
+
+A stationarity statistic was emitted as a within-block ratio. Both its
+counters incremented per logic tick, so the *quantity* was
+platform-independent. **But the block boundary was per rendered frame**,
+and the frame-to-tick ratio is a property of the machine. The same reel,
+same build, same counters:
+
+    machine A    ~18 blocks over ~5140 ticks   ~285 ticks/block   mean 0.11
+    machine B   ~505 blocks over ~5140 ticks    ~10 ticks/block   mean 0.004
+
+Neither is wrong. **They are different statistics wearing one name.** The
+distribution was bimodal, so a single extreme block contributes 1/18 to one
+mean and 1/505 to the other.
+
+**Requirements.**
+
+- **A mean of per-block ratios MUST NOT be compared across configurations
+  whose block sizes differ.** Emit the raw numerator and denominator so a
+  pooled figure can be computed, and pool before comparing.
+- Where a distribution is bimodal, report the median and the extremes. A
+  mean summarises a shape it does not have.
+
+This does not explain every across-session gap, and it should not be
+offered as one. It is one mechanism, now named, by which a figure that
+looks like repeatability is a fact about the apparatus.
+
+**Corollary -- threshold constants do not transfer between content
+classes.** A luminance threshold swept for stability sat on a plateau of
+50-80 for one content class and 4-24 for another, on the same capture path.
+Neither plateau contained the other. **A threshold must be swept on the
+content class actually being measured, and its content class must be
+recorded beside the value.** A bare constant is a measurement of whatever
+its author happened to be looking at.
+
+### 10.0c The control arm needs the same rigour as the treatment arm
+
+A round compared a lever against stock across eight counterbalanced cells.
+Every cell silently inherited the lever from an earlier cell, so both arms
+ran the same configuration. **It looked exemplary**: deltas agreed to two
+decimal places across independent blocks, and the control-to-control spread
+was well inside its pre-registered limit. A condition compared against
+itself is extremely consistent.
+
+A guard existed and had been tested in both directions. **It was pointed at
+the variable that would spoil the CLASS of measurement, while the variable
+that DEFINED the comparison went unchecked.**
+
+**Requirement: where an arm is defined by a setting's ABSENCE, that absence
+MUST be asserted per cell, positively, through a pipeline proven per
+7.2.1a.** Asserting the treatment and assuming the control is half a test.
+
+**And verify the whole environment, not the fields you expect.** A gate
+that confirms the wanted settings are present will never notice an extra
+one. Comparing the total count against an expected value refuses any stray
+inheritance, whatever it is called -- which matters because the leaked
+setting is rarely the one anybody thought to name.
+
 ### L1 -- Reproducible
 
 - A result MUST carry the build identity and configuration that produced
@@ -1050,6 +1256,35 @@ Profiles keep project specifics out of the standard, so the standard can
 move between repositories without dragging them along.
 
 ---
+
+### 12.1 A derived value must not be presented as configuration
+
+A profile field invites editing. Some values are measurements of the rig
+and belong there. Some are *derived* from two or more of them and do not.
+
+A keypress budget was published as an editable field. It was really the
+smaller of what a target's menu required and what the platform's input
+buffer could hold without overflowing into the next command. **Placed in
+either file, one of its two constraints becomes invisible to whoever tunes
+it** -- and it was tuned, past the buffer depth, flushing stray input into
+a later command line.
+
+**A derived value presented as configuration is a value with its reasoning
+deleted.**
+
+**Requirements.**
+
+- Publish the measured inputs. **Compute the derived value**, and refuse to
+  start if a supplied one violates the constraint it was derived from.
+- A cost that varies by installation -- a round-trip time, a transfer rate
+  -- SHOULD be measured at startup and logged rather than configured. A
+  stale constant mis-sizes every budget derived from it with no symptom,
+  because the budgets still look like budgets.
+
+**The test for whether a thing belongs in a profile at all: if disabling or
+mis-setting it produces plausible output rather than an error, it is not
+configuration.** Checks that establish trust in a result are not settings,
+however inconvenient they are to whoever hits them first.
 
 ## 13. Adopting the standard on a new project
 
