@@ -194,11 +194,25 @@ what is safe to delete is complete and tested
    default. `--logs` opts text in.
 4. **Free-space warning** — 100 MB, in the tool.
 
-**What remains is one function**: issue the DIR, OCR the listing, return
-`[(name, size)]` with size `None` on any line that could not be read — so
-`classify()` returns REFUSE rather than guessing. **Do not wire it to a delete
-until that read has been exercised against a real listing, including a
-truncated one.**
+**THE DESIGN CHANGED once the parser met real OCR.** DOS `DIR` output reads
+back with the SIZES right and the NAMES wrong:
+
+    real   R1A  LOG  1,102  08-20-26  10:58p
+    OCR    RIA  LOG  1,102  88-20-26  18:58p
+
+`R1A` -> `RIA`, `08` -> `88`, `10` -> `18`. **PPM filenames are `S<tick>.PPM`,
+all digits**, so per-file name matching is one glyph from selecting the wrong
+file — and a delete tool cannot carry that. Sizes, counts and totals OCR
+correctly in every captured sample.
+
+**So the card is asked for two numbers only — how many files and how many
+bytes — and a count-and-total match over a tag's directory is the proof.**
+`parse_dir_summary()` and `classify_tag()` are tested against OCR captured
+from the rig, including `1 filets)` and `file<s)`.
+
+**What remains is one call**: issue `DIR LOGS\<TAG>\*.PPM`, hand the OCR to
+`parse_dir_summary()`, pass the result to `classify_tag()`. A `None` from the
+parser must stay `None` — `File not found` must not become `(0, 0)`.
 
 
 
