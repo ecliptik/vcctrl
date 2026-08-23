@@ -70,15 +70,42 @@ try:
 except Exception:
     print(""); raise SystemExit
 now = time.time()
-who = {str(e.get("by")) for e in evs
-       if e.get("kind") == "cmd" and e.get("by") != "browser"
-       and now - e.get("t", 0) < 45}
-print(",".join(sorted(w for w in who if w and w != "None")) or ("harness" if who else ""))
+# NAME WHO IT WAS, OR SAY THAT YOU CANNOT.
+#
+# This used to print the literal string "harness" whenever there was recent
+# non-browser traffic it could not name -- and `by` is None for every call
+# that did not pass --as, which is most of them, including the verification
+# reads a deploying session makes a minute earlier. So the guard accused a
+# specific party by name on evidence that only supported "an unidentified
+# client".
+#
+# It cost a real exchange: the refusal named harness, that session was asked,
+# and it had issued no command at all. The traffic was this side own config
+# show / board / power state reads. A guard that fabricates an attribution
+# sends people to ask the wrong person, and the next step after being told
+# "not me" is to force -- which is the guard defeating itself.
+#
+# NOTE the quoting: this block lives inside a single-quoted shell string, so
+# it must contain no apostrophes at all. One turns the refusal into a syntax
+# error at exactly the moment somebody is trying to deploy.
+recent = [e for e in evs if e.get("kind") == "cmd"
+          and e.get("by") != "browser" and now - e.get("t", 0) < 45]
+named = sorted({str(e.get("by")) for e in recent
+                if e.get("by") not in (None, "", "None")})
+if named:
+    print(",".join(named))
+elif recent:
+    print("an unidentified client (%d call(s) with no --as)" % len(recent))
+else:
+    print("")
 ' 2>/dev/null || true)"
   if [ -n "$busy" ]; then
-    echo "REFUSING TO DEPLOY: the daemon has served commands from '$busy'" >&2
-    echo "in the last 45 seconds -- something is driving the target." >&2
-    echo "Ask them, or set VCCTRL_FORCE=1 if you know it is safe." >&2
+    echo "REFUSING TO DEPLOY: the daemon has served commands from $busy" >&2
+    echo "in the last 45 seconds -- something may be driving the target." >&2
+    echo "If that is unidentified traffic it may well be YOUR OWN reads from" >&2
+    echo "a minute ago; \`vcctrl activity\` shows whether anything is actually" >&2
+    echo "in flight or holding the lock. Ask whoever it is, or set" >&2
+    echo "VCCTRL_FORCE=1 if you know it is safe." >&2
     return 1
   fi
 
