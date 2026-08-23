@@ -1,0 +1,2 @@
+# vcctrl, control host. The daemon host installs these via pi/install.sh.
+PyYAML>=5.1

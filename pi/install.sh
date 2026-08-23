@@ -141,6 +141,18 @@ fi
 # with the systemd-coredump pipe, and the drop-in raises vcctrld's SOFT core
 # limit, which Debian ships at 0 -- the kernel writes nothing at all until it
 # is raised, however the handler is configured.
+# PyYAML, for common/vcconfig.py. It is the one runtime dependency this
+# project adds beyond the stdlib, and it is load-bearing rather than
+# convenient: without it vcctrld cannot read vcctrl.yaml at all and falls back
+# to built-in defaults, which on a rig whose plug or capture device is not at
+# the default address means power and capture silently do not work. The loader
+# says so in one actionable sentence rather than raising from inside a
+# capability, but the sentence is easier to never see than this line is to run.
+if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-yaml \
+    && echo "installed python3-yaml (required to read vcctrl.yaml)"
+fi
+
 if ! dpkg -s systemd-coredump >/dev/null 2>&1; then
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q systemd-coredump \
     && echo "installed systemd-coredump (cores land in /var/lib/systemd/coredump)"

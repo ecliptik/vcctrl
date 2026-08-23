@@ -1,0 +1,190 @@
+# vcctrl configuration -- EXAMPLE.
+#
+# Copy to vcctrl.yaml (which is gitignored) and edit. vcctrl runs without this
+# file at all, on built-in defaults; every key below is optional, and what you
+# leave out keeps its default.
+#
+# Precedence:   built-in defaults  <  this file  <  VCCTRL_* env  <  CLI flag
+#
+# Search order, first hit wins:
+#   $VCCTRL_CONFIG
+#   ./vcctrl.yaml            (repo root)
+#   ~/.config/vcctrl/vcctrl.yaml
+#   /opt/vcctrl/vcctrl.yaml  (on the daemon host, installed by pi/deploy.sh)
+#
+# Unknown keys are an ERROR, not a shrug. A typo'd key that silently leaves a
+# subsystem unconfigured is worse than a refusal that names the typo.
+#
+# `vcctrl config check` validates this file. `vcctrl config show` asks the
+# RUNNING DAEMON what it actually resolved, which is a different question and
+# the one worth asking when something is behaving oddly.
+
+version: 1
+
+rig:
+  name: example-rig
+
+# ---------------------------------------------------------------------------
+# The control host: the machine you run bin/vcctrl from.
+# ---------------------------------------------------------------------------
+control:
+  # ssh destination for the daemon host. A Host entry in ~/.ssh/config is the
+  # tidiest way to carry the user and key.
+  daemon_host: vcctrl-pi
+
+  # Base URL of the daemon's web UI. Must be the HTTPS name: the daemon binds
+  # loopback only and is reached through a proxy, so plain http is not merely
+  # discouraged, it is unreachable.
+  web: https://vcctrl-pi.example.ts.net
+
+  shots_dir: /tmp/vcctrl-shots
+
+  # Optional. How the TARGET pulls files from you -- for a DOS target this is
+  # usually FTP, because the client fits on a floppy and is already there.
+  fileserver:
+    kind: ftp
+    host: 192.0.2.10
+    port: 2121
+    user: EXAMPLE_USER
+    # NEVER a literal password. This names an environment variable, which is
+    # read at the moment it is needed. A password in this file is a password in
+    # your shell history, your backups, and eventually your public repository.
+    password_env: VCCTRL_FTP_PASSWORD
+
+# ---------------------------------------------------------------------------
+# The daemon host: paths and listeners on the machine running vcctrld.
+# ---------------------------------------------------------------------------
+daemon:
+  prefix: /opt/vcctrl
+  state_dir: /var/lib/vcctrl
+  socket: /run/vcctrl.sock
+
+  # Where the USB4VC application lives, if you use one. These are read, never
+  # written, except by the two patches in tools/ which are applied explicitly.
+  usb4vc:
+    app_dir: /home/pi/usb4vc/rpi_app
+    debug_log: /home/pi/usb4vc/usb4vc_debug_log.txt
+    board_file: /run/usb4vc/board.json
+
+  web:
+    # LOOPBACK ONLY, and this is a security property rather than a default.
+    # Nothing listens on the network directly; a proxy terminates TLS and
+    # forwards here, so the proxy remains the authentication boundary.
+    bind: 127.0.0.1
+    port: 8080
+    # The daemon's own TLS listener, advertising http/1.1 only. A WebSocket
+    # does not survive an HTTP/2 negotiation, which is why this exists
+    # separately from the proxied port.
+    tls_port: 8443
+    tls:
+      # tailscale | files | none
+      #   tailscale -- `tailscale serve` terminates TLS with a real cert for
+      #                the machine's MagicDNS name. NOTE this publishes that
+      #                name to public Certificate Transparency logs. That is
+      #                inherent to any publicly-trusted certificate, not a
+      #                choice this project makes, and it is not reversible.
+      #   files     -- your own cert and key at the paths below
+      #   none      -- plain http. AudioWorklet, clipboard write and WebRTC do
+      #                not exist on a non-secure origin, in any browser, and
+      #                each reads as "broken in Safari" when the real cause is
+      #                the scheme.
+      provider: tailscale
+      cert: /var/lib/vcctrl/tls.crt
+      key: /var/lib/vcctrl/tls.key
+
+# ---------------------------------------------------------------------------
+# Capabilities. Each names a backend; `none` is always available and always
+# honest -- a `none` backend answers "not configured", never a zero, never a
+# false, and never a plausible default.
+#
+# Per-backend `settings` are not schema-checked yet. That is a known gap, it is
+# closed when the backends land, and it is written down rather than left for
+# someone to discover by typo.
+# ---------------------------------------------------------------------------
+capabilities:
+  input:
+    backend: usb4vc-uinput        # usb4vc-uinput | uinput | none
+    settings:
+      # USB4VC classifies a uinput device by what it advertises; these are
+      # protocol facts about that bridge, not preferences.
+      vendor: 0x1209
+      keyboard_product: 0xDEA1
+      mouse_product: 0xDEA2
+      pace_s: 0.012
+
+  leds:
+    backend: ps2-sysfs            # ps2-sysfs | none
+    settings:
+      # Boards that have a PS/2 LED return channel at all. A board not listed
+      # here reports `unsupported`, which is working hardware, not a fault.
+      boards_with_channel: [1]
+
+  power:
+    backend: kasa-legacy          # kasa-legacy | shell | none
+    settings:
+      host: 192.0.2.20
+      port: 9999
+      alias: example-plug
+      # How long mains stays off during a power cycle.
+      cycle_off_s: 15.0
+
+  video:
+    backend: v4l2-ffmpeg          # v4l2-ffmpeg | none
+    settings:
+      # BY NAME, never by index. Both defaults happened to be right once, and
+      # that was luck: a different enumeration order can put an HDMI OUTPUT at
+      # the index you expected, and the daemon would capture silence from it
+      # without ever saying anything was wrong.
+      device: /dev/v4l/by-id/usb-EXAMPLE_CAPTURE-video-index0
+
+  audio:
+    backend: alsa-ffmpeg          # alsa-ffmpeg | none
+    settings:
+      device: hw:CARD=EXAMPLE,DEV=0
+      channels: 2
+      rate: 48000
+
+  board:
+    backend: usb4vc-runfile       # usb4vc-runfile | static | none
+    settings:
+      # /run is tmpfs, which is why this file is trusted: the record cannot
+      # outlive the boot that wrote it, so a stale value reading as current is
+      # structurally impossible rather than merely unlikely.
+      file: /run/usb4vc/board.json
+
+# ---------------------------------------------------------------------------
+# Targets: which machine each protocol board implies.
+#
+# `unknown` must stay a real answer. A rig that cannot tell which board is
+# installed says so; it does not fall back to the most likely one.
+# ---------------------------------------------------------------------------
+targets:
+  - board_id: 1
+    name: Example PC
+    native: {width: 640, height: 480}
+    # supported | unsupported | unknown -- a WORD, not a boolean. `false`
+    # collapses "this machine has no such channel" into "the channel is
+    # broken", and those need different responses from a person.
+    leds: supported
+
+  - board_id: 3
+    name: Example Macintosh
+    native: {width: 512, height: 342}
+    leds: unsupported
+
+# ---------------------------------------------------------------------------
+# Harness. See docs/HARNESS-STANDARD.md; project-specific parameters belong in
+# a profile, not here.
+# ---------------------------------------------------------------------------
+harness:
+  profile: profiles/example.yaml
+  timing:
+    # RIG physics: how many keystrokes the target's BIOS buffer holds. Measure
+    # yours; overflowing it does not merely drop keys, it flushes the surplus
+    # into whatever command line is typed next, minutes later.
+    #
+    # Deliberately NOT here: the boot-menu window, which is target physics and
+    # belongs in the profile; and the menu keystroke budget, which is DERIVED
+    # from both and is computed and asserted rather than configured. A derived
+    # value presented as configuration is a value with its reasoning deleted.
+    kbd_buffer_keys: 15

@@ -3,3 +3,6 @@ __pycache__/
 *.jpg
 *.wav
 *.log
+
+# The operator's real configuration. The tracked example is vcctrl.example.yaml.
+/vcctrl.yaml

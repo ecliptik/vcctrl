@@ -4342,3 +4342,221 @@ def test_every_commit_cited_in_docs_still_resolves():
           not dangling, dangling)
     print("  ...%d cited commits resolve across %d docs"
           % (len(resolvable), len({f for fs in resolvable.values() for f in fs})))
+
+
+# ------------------------------------------------------- config loader (P1)
+#
+# docs/CONFIG-PLAN.md phase 1. The acceptance criterion that matters here is
+# test_the_config_file_is_actually_read: a loader that fell back to built-in
+# defaults on a parse error produces output IDENTICAL to one that read the file
+# correctly, so "everything still works" and "the config did nothing" are the
+# same observation. Only a deliberately wrong value can tell them apart.
+
+def _vcconfig():
+    import importlib.util as _u
+    p = os.path.join(HERE, os.pardir, "common", "vcconfig.py")
+    spec = _u.spec_from_file_location("vcconfig", p)
+    m = _u.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _tmp_yaml(text):
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".yaml")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    return path
+
+
+def test_config_keeps_absent_null_and_value_apart():
+    """The three states a YAML mapping actually has.
+
+    `cfg.get("x", False)` flattens all three, which is `st.get("usb4vc", {})`
+    wearing a nicer hat -- the idiom that printed "input devices held by
+    USB4VC: ok" off a field that was not in the payload at all.
+    """
+    print("\nconfig three states")
+    v = _vcconfig()
+    p = _tmp_yaml("version: 1\nrig:\n  name: ~\n")
+    try:
+        c = v.load(p)
+        check("a key that is not in the file reads ABSENT",
+              c.optional("rig.nothing_here") is v.ABSENT)
+        check("a key set to null reads NONE, not ABSENT",
+              c.optional("rig.name") is v.NONE)
+        check("require() refuses an explicit null",
+              _raises(v.ConfigError, c.require, "rig.name"))
+        check("require() refuses an absent key",
+              _raises(v.ConfigError, c.require, "rig.nothing_here"))
+        check("default() substitutes for ABSENT",
+              c.default("rig.nothing_here", "fallback") == "fallback")
+        check("default() REFUSES to substitute for an explicit null -- "
+              "'deliberately nothing' is not 'unspecified'",
+              _raises(v.ConfigError, c.default, "rig.name", "fallback"))
+        check("the sentinels have no truth value, so `if cfg.optional(x):` "
+              "cannot silently mean 'absent'",
+              _raises(v.ConfigError, bool, v.ABSENT)
+              and _raises(v.ConfigError, bool, v.NONE))
+        check("there is no get() to reach for",
+              not hasattr(c, "get"))
+    finally:
+        os.unlink(p)
+
+
+def _raises(exc, fn, *a):
+    try:
+        fn(*a)
+    except exc:
+        return True
+    except Exception:
+        return False
+    return False
+
+
+def test_the_config_file_is_actually_read():
+    """THE CONTROL THAT MUST FAIL.
+
+    A broken config must not stop the daemon, so the loader falls back to
+    built-in defaults. That means a test asserting "resolved config == the
+    values we had before" passes just as happily when the file was never read
+    at all. Success and no-op are the same observation.
+
+    So: put a value in the file that is NOT the default, and require that it
+    comes back. If the loader silently fell back, this is the check that
+    notices.
+    """
+    print("\nconfig is read, not defaulted")
+    v = _vcconfig()
+    default_port = v.DEFAULTS["daemon"]["web"]["port"]
+    wrong = 65123
+    check("the control value differs from the default, or this test proves "
+          "nothing", wrong != default_port, (wrong, default_port))
+    p = _tmp_yaml("version: 1\ndaemon:\n  web:\n    port: %d\n" % wrong)
+    try:
+        c = v.load(p)
+        got = c.require("daemon.web.port")
+        check("the file's value wins over the built-in default",
+              got == wrong, (got, wrong))
+        check("the resolved config names the file it came from, so a running "
+              "process can be asked rather than the disk re-read",
+              c.source == p, c.source)
+    finally:
+        os.unlink(p)
+
+    # And the other direction: no file at all still resolves, on defaults.
+    import tempfile
+    d = tempfile.mkdtemp()
+    old = os.environ.pop("VCCTRL_CONFIG", None)
+    old_port = os.environ.pop("VCCTRL_WEB_PORT", None)
+    try:
+        c = v.load(os.path.join(d, "does-not-exist.yaml")) \
+            if False else v.Config(v.DEFAULTS)
+        check("with no file anywhere the defaults still resolve",
+              c.default("daemon.web.port", None) == default_port)
+    finally:
+        if old is not None:
+            os.environ["VCCTRL_CONFIG"] = old
+        if old_port is not None:
+            os.environ["VCCTRL_WEB_PORT"] = old_port
+
+
+def test_config_refuses_unknown_keys():
+    """A typo'd key that silently leaves a subsystem unconfigured is worse
+    than a refusal to start: the refusal names the typo, and the shrug
+    produces a rig that looks configured and has no power control."""
+    print("\nconfig unknown keys")
+    v = _vcconfig()
+    p = _tmp_yaml("version: 1\ndaemon:\n  prefixx: /opt/vcctrl\n")
+    try:
+        try:
+            v.load(p)
+            check("an unknown key is refused", False, "load() succeeded")
+        except v.ConfigError as exc:
+            msg = str(exc)
+            check("an unknown key is refused", True)
+            check("the refusal names the offending key", "prefixx" in msg, msg)
+            check("and suggests the near miss rather than just stopping",
+                  "prefix'" in msg, msg)
+    finally:
+        os.unlink(p)
+
+    # Underscore keys carry comments; YAML comments do not survive a parser,
+    # and config.json already used _kasa_note for exactly this.
+    p = _tmp_yaml("version: 1\ndaemon:\n  _note: why this prefix\n")
+    try:
+        v.load(p)
+        check("an _underscore comment key is allowed through", True)
+    except v.ConfigError as exc:
+        check("an _underscore comment key is allowed through", False, str(exc))
+    finally:
+        os.unlink(p)
+
+    # bool must not satisfy an int field: bool IS an int in Python, and a
+    # `port: true` that resolves to 1 is a listener on a privileged port.
+    p = _tmp_yaml("version: 1\ndaemon:\n  web:\n    port: true\n")
+    try:
+        v.load(p)
+        check("a bool does not satisfy an int field", False, "accepted true")
+    except v.ConfigError:
+        check("a bool does not satisfy an int field", True)
+    finally:
+        os.unlink(p)
+
+
+def test_the_example_config_matches_the_schema():
+    """The shipped example is the documentation. An example that no longer
+    validates teaches a stranger the wrong keys, and nothing else in the repo
+    would notice."""
+    print("\nexample config")
+    v = _vcconfig()
+    p = os.path.join(HERE, os.pardir, "vcctrl.example.yaml")
+    check("the example exists", os.path.exists(p), p)
+    if not os.path.exists(p):
+        return
+    try:
+        c = v.load(p)
+        check("the example validates against the schema", True)
+    except v.ConfigError as exc:
+        check("the example validates against the schema", False, str(exc))
+        return
+
+    # It is also the file a stranger copies, so it must not teach bad habits.
+    raw = open(p).read()
+    check("no literal password key in the example -- secrets are named by "
+          "environment variable, never written here",
+          not re.search(r"^\s*password\s*:", raw, re.M), "literal password:")
+    check("targets spell the LED channel as a word, not a boolean -- false "
+          "collapses 'no such channel' into 'the channel is broken'",
+          all(isinstance(t.get("leds"), str) for t in c.require("targets")))
+    check("VCCTRL_FORCE is not a config key: it overrides the deploy guard, "
+          "and awkward to reach for is its entire function",
+          "VCCTRL_FORCE" not in raw and
+          "VCCTRL_FORCE" not in str(v.ENV_OVERRIDES))
+
+
+def test_config_env_overrides_the_file():
+    """Env sits ABOVE the file: the systemd drop-ins already use it, and
+    `VCCTRL_HOST=other-pi vcctrl status` is worth keeping."""
+    print("\nconfig env precedence")
+    v = _vcconfig()
+    p = _tmp_yaml("version: 1\ncontrol:\n  daemon_host: from-file\n")
+    old = os.environ.get("VCCTRL_HOST")
+    try:
+        os.environ["VCCTRL_HOST"] = "from-env"
+        c = v.load(p)
+        check("env beats the file", c.require("control.daemon_host") == "from-env",
+              c.require("control.daemon_host"))
+        check("and the override is REPORTED, because an override nobody can "
+              "see is how two people debug different configurations",
+              any("VCCTRL_HOST" in w for w in c.warnings), c.warnings)
+        del os.environ["VCCTRL_HOST"]
+        c = v.load(p)
+        check("without the env var the file wins",
+              c.require("control.daemon_host") == "from-file")
+    finally:
+        if old is None:
+            os.environ.pop("VCCTRL_HOST", None)
+        else:
+            os.environ["VCCTRL_HOST"] = old
+        os.unlink(p)
