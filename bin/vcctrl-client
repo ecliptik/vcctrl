@@ -37,6 +37,11 @@ USAGE = """usage: vcctrl <command> [args]
                             publishes nothing.
   power [state|on|off|cycle]  smart-plug mains control for the target
   caps                      capability health (input, leds, power, ...)
+  config [show|check [F]]   show: what the RUNNING daemon resolved at start,
+                            with its source and any VCCTRL_* overrides.
+                            check: validate a config FILE on disk. These are
+                            different questions and disagree exactly when the
+                            file was edited without restarting the daemon.
   board                     which USB4VC protocol board is installed, and
                             therefore which machine input reaches. Reports
                             unknown rather than guessing; never defaults to
@@ -404,6 +409,27 @@ def fetch_avi(first, last, since=None, clip=False):
 # a check that cannot distinguish "this is broken" from "I could not tell" will
 # eventually report one as the other, and the two demand opposite responses.
 
+def config_check(path=None):
+    """Validate a config file. Exit codes match verify-input's vocabulary:
+    0 fine, 1 a real fault (the file is wrong), 3 the tool could not run."""
+    try:
+        import vcconfig
+    except ImportError:
+        try:
+            import importlib.util as _ilu
+            here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            spec = _ilu.spec_from_file_location(
+                "vcconfig", os.path.join(here, "common", "vcconfig.py"))
+            vcconfig = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(vcconfig)
+        except Exception as exc:
+            sys.stderr.write("config check: cannot load the config module: "
+                             "%s\n" % exc)
+            return 3
+    return vcconfig.main(["config", "check", path] if path
+                         else ["config", "check"])
+
+
 OK, FAULT, UNKNOWN = "ok", "fault", "unknown"
 
 
@@ -681,6 +707,18 @@ def main(argv):
         req = {"cmd": "release_all"}
     elif cmd == "caps":
         req = {"cmd": "caps"}
+    elif cmd == "config":
+        # `config show` asks the RUNNING DAEMON what it resolved. `config
+        # check` parses the file on disk, which is a different question --
+        # they disagree exactly when someone edited the file without
+        # restarting, which is the moment the difference matters most.
+        sub = rest[0] if rest else "show"
+        if sub == "check":
+            return config_check(rest[1] if len(rest) > 1 else None)
+        if sub != "show":
+            sys.stderr.write("usage: vcctrl config [show|check [FILE]]\n")
+            return 3
+        req = {"cmd": "config"}
     elif cmd == "board":
         req = {"cmd": "board"}
     elif cmd == "events":

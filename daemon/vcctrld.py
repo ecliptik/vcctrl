@@ -36,9 +36,45 @@ import time
 
 from evdev import UInput, ecodes as e
 
-SOCKET_PATH = "/run/vcctrl.sock"
-USB4VC_LOG = "/home/pi/usb4vc/usb4vc_debug_log.txt"
-CONFIG_PATH = "/opt/vcctrl/config.json"
+# The configuration loader. Deployed beside this file on the daemon host; in a
+# source checkout it is one directory up. Imported by path rather than by
+# package so neither layout needs a sys.path entry set by whoever launched us.
+try:
+    import vcconfig
+except ImportError:                                        # source checkout
+    import importlib.util as _ilu
+    _vc = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "common", "vcconfig.py")
+    _spec = _ilu.spec_from_file_location("vcconfig", _vc)
+    vcconfig = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(vcconfig)
+
+# READ ONCE, AND NEVER FATAL.
+#
+# A malformed config must not stop the daemon: that is the same rule as Rule 2
+# for capabilities, and for the same reason -- a rig that will not start cannot
+# be looked at, and looking at it is the whole point of this program. So a
+# broken file degrades to built-in defaults and the reason is recorded where
+# `caps` and `status` will show it, rather than raising out of main().
+#
+# The consequence is the reason phase 1 of docs/CONFIG-PLAN.md shipped with a
+# control that must fail: THIS FALLBACK MAKES A WORKING LOADER AND A BROKEN ONE
+# PRODUCE IDENTICAL OUTPUT on a rig whose values happen to match the defaults.
+CFG_ERROR = None
+try:
+    CFG = vcconfig.load()
+except vcconfig.ConfigError as _exc:
+    CFG_ERROR = str(_exc)
+    CFG = vcconfig.Config(vcconfig.DEFAULTS, source=None)
+    sys.stderr.write("config: %s\n  -- continuing on built-in defaults\n"
+                     % CFG_ERROR)
+
+SOCKET_PATH = CFG.default("daemon.socket", "/run/vcctrl.sock")
+USB4VC_LOG = CFG.default("daemon.usb4vc.debug_log",
+                         "/home/pi/usb4vc/usb4vc_debug_log.txt")
+STATE_DIR = CFG.default("daemon.state_dir", "/var/lib/vcctrl")
+CONFIG_PATH = os.path.join(CFG.default("daemon.prefix", "/opt/vcctrl"),
+                           "config.json")
 
 # Seconds the rails stay down during a power cycle. The g2k is an AT-style
 # PicoRC setup with no soft-off, so it boots as soon as power returns; the delay
@@ -48,15 +84,19 @@ CONFIG_PATH = "/opt/vcctrl/config.json"
 # a 6 s cycle -- most likely the 12 V brick and picoPSU had not fully
 # discharged. This is the recovery path of last resort, so it should be the
 # most reliable thing in the system rather than the fastest.
-POWER_CYCLE_OFF_S = 15.0
+POWER_CYCLE_OFF_S = float(CFG.default(
+    "capabilities.power.settings.cycle_off_s", 15.0))
 
-VENDOR = 0x1209
-KBD_PRODUCT = 0xDEA1
-MOUSE_PRODUCT = 0xDEA2
+VENDOR = int(CFG.default("capabilities.input.settings.vendor", 0x1209))
+KBD_PRODUCT = int(CFG.default(
+    "capabilities.input.settings.keyboard_product", 0xDEA1))
+MOUSE_PRODUCT = int(CFG.default(
+    "capabilities.input.settings.mouse_product", 0xDEA2))
 
 # Minimum gap between input events. USB4VC drains one event per device per
 # loop pass and sleeps 5 ms when idle; PS/2 wire time adds ~1 ms per byte.
-DEFAULT_PACE_S = 0.012
+DEFAULT_PACE_S = float(CFG.default(
+    "capabilities.input.settings.pace_s", 0.012))
 
 # ---------------------------------------------------------------- key tables
 
@@ -159,12 +199,49 @@ MOUSE_BUTTONS = {
 
 # ---------------------------------------------------------------- power
 
+_LEGACY_WARNED = [False]
+
+
 def load_config():
+    """The pre-YAML config.json, kept readable for one release.
+
+    Superseded by vcctrl.yaml and common/vcconfig.py. It is still read so an
+    existing rig keeps working across the upgrade without a flag day, but it
+    now LOSES to the YAML file rather than winning, and it says once that it
+    is deprecated. Removing it silently would take out power control on any
+    rig that had not migrated, at the moment of deploying -- which is exactly
+    when nobody is looking at stderr.
+    """
     try:
         with open(CONFIG_PATH) as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception:
         return {}
+    if data and not _LEGACY_WARNED[0]:
+        _LEGACY_WARNED[0] = True
+        sys.stderr.write(
+            "config: %s is DEPRECATED and will be removed. Move its values "
+            "into vcctrl.yaml (see vcctrl.example.yaml); the YAML file wins "
+            "where both are set.\n" % CONFIG_PATH)
+    return data
+
+
+def kasa_host():
+    """Where the smart plug is, YAML first and legacy JSON second.
+
+    Returns None when neither names one, and None must stay a real answer:
+    a rig with no plug configured has NO POWER CONTROL, and reporting that
+    honestly is the difference between "go and configure it" and a power
+    command that quietly does nothing.
+    """
+    host = CFG.optional("capabilities.power.settings.host")
+    if host is not vcconfig.ABSENT and host is not vcconfig.NONE:
+        return host
+    return load_config().get("kasa_host") or None
+
+
+def kasa_port():
+    return int(CFG.default("capabilities.power.settings.port", 9999))
 
 
 def _kasa_encrypt(text):
@@ -185,7 +262,7 @@ def _kasa_decrypt(data):
     return out.decode(errors="replace")
 
 
-def kasa_send(host, payload, timeout=5.0):
+def kasa_send(host, payload, timeout=5.0, port=None):
     """Legacy TP-Link smart-home protocol on port 9999.
 
     4-byte big-endian length prefix plus an XOR-autokey cipher seeded at 171.
@@ -193,7 +270,7 @@ def kasa_send(host, payload, timeout=5.0):
     LAN. Newer Kasa firmware may move to KLAP on port 80, in which case this
     stops working and needs the python-kasa library instead.
     """
-    sock = socket.create_connection((host, 9999), timeout)
+    sock = socket.create_connection((host, port or kasa_port()), timeout)
     try:
         sock.sendall(_kasa_encrypt(json.dumps(payload)))
         hdr = b""
@@ -777,10 +854,56 @@ TARGET = TargetEpoch()
 DAEMON_START_T = time.time()
 
 
+def _configured_targets():
+    """The `targets:` list from config as {board_id: name}, or None if absent.
+
+    None means "not configured", which is why this returns None rather than an
+    empty dict: an empty mapping would read as "configured, and no board maps
+    to anything", and the caller must be able to tell those apart.
+    """
+    t = CFG.optional("targets")
+    if t is vcconfig.ABSENT or t is vcconfig.NONE:
+        return None
+    out = {}
+    for row in t:
+        try:
+            out[int(row["board_id"])] = row.get("name")
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+def _configured_led_boards():
+    """Board ids whose target declares `leds: supported`, or None if absent.
+
+    The word matters. `unsupported` is a fact about the protocol -- a
+    Macintosh has no message in which it reports lock-key state back to a
+    keyboard -- and it is NOT a fault. Anything that is not the literal word
+    `supported` is treated as not-supported here, so a typo fails closed: the
+    channel reports unsupported rather than being trusted and returning
+    nothing.
+    """
+    t = CFG.optional("targets")
+    if t is vcconfig.ABSENT or t is vcconfig.NONE:
+        return None
+    out = []
+    for row in t:
+        try:
+            if row.get("leds") == "supported":
+                out.append(int(row["board_id"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return tuple(out)
+
+
 # Boards that have a PS/2 LED return channel. PBID 1 is the IBM PC board; 2
 # and 3 are ADB, which has no equivalent -- there is no protocol message in
 # which a Macintosh reports its lock-key state back to a keyboard.
-LED_BOARDS = (1,)
+#
+# The built-in is the reference rig's; a configured `targets:` list replaces it.
+LED_BOARDS = _configured_led_boards()
+if LED_BOARDS is None:
+    LED_BOARDS = (1,)
 
 
 def installed_board_id():
@@ -1164,7 +1287,7 @@ class PowerCapability(Capability):
     # "did anything here turn it off" required reasoning from absence rather
     # than reading a line. An append-only file survives restarts, reboots and
     # the ring wrapping.
-    AUDIT = "/var/lib/vcctrl/power.log"
+    AUDIT = os.path.join(STATE_DIR, "power.log")
 
     # A cached reading older than this is reported as stale. The plug only
     # changes when something acts on it, so an old reading is usually still
@@ -1201,7 +1324,7 @@ class PowerCapability(Capability):
 
     def _refresh(self):
         try:
-            host = load_config().get("kasa_host")
+            host = kasa_host()
             if host:
                 self._remember(host, power_state(host))
                 self._fail = None
@@ -1231,7 +1354,7 @@ class PowerCapability(Capability):
         """
         cfg_host = None
         try:
-            cfg_host = load_config().get("kasa_host")
+            cfg_host = kasa_host()
         except Exception:
             pass
         st, t = self._seen, self._seen_t
@@ -1284,11 +1407,12 @@ class PowerCapability(Capability):
         return {"ok": True, "entries": lines[-n:], "total": len(lines)}
 
     def _power(self, req):
-        cfg = load_config()
-        host = req.get("host") or cfg.get("kasa_host")
+        host = req.get("host") or kasa_host()
         if not host:
             return {"ok": False, "error":
-                    "no kasa_host configured (set it in %s)" % CONFIG_PATH}
+                    "no power host configured -- set "
+                    "capabilities.power.settings.host in %s"
+                    % (CFG.source or "vcctrl.yaml (see vcctrl.example.yaml)")}
         action = req.get("action", "state")
         if action == "state":
             st = power_state(host)
@@ -1486,7 +1610,7 @@ class VideoCapability(Capability):
     # edit to this file on the box, at the point in a migration where editing
     # source on hardware is the last thing anyone should be doing.
     # /dev/v4l/by-id/... is the stable name if the index ever moves.
-    DEVICE = os.environ.get("VCCTRL_VIDEO", "/dev/video0")
+    DEVICE = CFG.default("capabilities.video.settings.device", "/dev/video0")
     # 48 MB. 30 s at 30 fps is 900 frames: 13.5 MB of text console but 63 MB of
     # a dense screen, a 4.7x spread. A buffer sized in seconds has no fixed
     # cost and one sized in bytes has no fixed duration, so this is capped in
@@ -1522,7 +1646,7 @@ class VideoCapability(Capability):
     # attempts, so a dozen is many days of ordinary operation, and a degraded
     # cable producing a steady stream still cannot fill the card.
     BAD_KEEP = 12
-    BAD_DIR = "/var/lib/vcctrl/badframes"
+    BAD_DIR = os.path.join(STATE_DIR, "badframes")
     NOSIGNAL_AFTER_S = 2.0
     # How many recent frames must be bit-identical before the stream is called
     # frozen. Eight is ~0.27 s at 30 fps -- long enough that a genuinely static
@@ -2732,7 +2856,7 @@ class AudioCapability(Capability):
 
     name = "audio"
 
-    DEVICE = os.environ.get("VCCTRL_ALSA", "hw:1,0")
+    DEVICE = CFG.default("capabilities.audio.settings.device", "hw:1,0")
     RATE = 48000
     CHANNELS = 2
     SAMPLE_BYTES = 2
@@ -3072,11 +3196,17 @@ class BoardCapability(Capability):
 
     name = "board"
 
-    FILE = "/run/usb4vc/board.json"
+    FILE = CFG.default("daemon.usb4vc.board_file", "/run/usb4vc/board.json")
 
-    # Rig-specific: which computer each board implies. Lives here rather than
-    # in the page so there is one table instead of two that drift. Override
-    # with "board_targets": {"1": "..."} in the daemon config.
+    # Which computer each board implies. Lives in ONE place so there is not a
+    # second table in the page to drift against this one; the page is fed from
+    # state.json rather than carrying its own.
+    #
+    # These built-ins are the reference rig's and are a FALLBACK, not a
+    # default to rely on: a `targets:` list in vcctrl.yaml replaces them
+    # wholesale. Note 2 maps to None deliberately -- a board that exists and
+    # implies no known machine is a different answer from a board that is not
+    # installed, and both are different from "we could not look".
     TARGETS = {1: "Gateway 2000", 2: None, 3: "Macintosh Plus"}
 
     def __init__(self, *a, **kw):
@@ -3090,6 +3220,17 @@ class BoardCapability(Capability):
         self.snapshot()          # publishes board.changed on first read
 
     def _targets(self):
+        """board id -> machine name, from config where configured.
+
+        A configured `targets:` list REPLACES the built-in table rather than
+        merging into it. Merging would mean a rig that configures board 1
+        silently inherits this rig's board 3, and would then report a
+        Macintosh Plus that is not in the building.
+        """
+        cfgd = _configured_targets()
+        if cfgd is not None:
+            return dict(cfgd)
+        # Legacy JSON override, one release only.
         try:
             over = load_config().get("board_targets") or {}
         except Exception:
@@ -3186,6 +3327,25 @@ class BoardCapability(Capability):
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 VideoCapability, AudioCapability, BoardCapability]
 
+# vcweb holds the TLS paths as class attributes; the resolved config lives
+# here. Pushed rather than pulled so there is exactly one loader in the
+# process and therefore exactly one answer to "which cert is being served".
+def _push_tls_paths():
+    try:
+        import vcweb as _w
+        _w.TLSServer.CERT = os.path.join(STATE_DIR, "tls.crt")
+        _w.TLSServer.KEY = os.path.join(STATE_DIR, "tls.key")
+        cert = CFG.optional("daemon.web.tls.cert")
+        key = CFG.optional("daemon.web.tls.key")
+        if cert not in (vcconfig.ABSENT, vcconfig.NONE):
+            _w.TLSServer.CERT = cert
+        if key not in (vcconfig.ABSENT, vcconfig.NONE):
+            _w.TLSServer.KEY = key
+    except Exception as exc:
+        # Not fatal: the daemon's plain-http listener is the recovery path,
+        # and losing TLS must not lose the whole KVM.
+        sys.stderr.write("config: could not set TLS paths: %s\n" % exc)
+
 # Bind address for the web UI: LOOPBACK ONLY.
 #
 # Nothing listens on the tailnet directly. `tailscale serve` terminates TLS for
@@ -3202,11 +3362,11 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
 # bin/vcctrl-sweep and bin/vcctrl-audio were updated with it. If the KVM
 # becomes unreachable, `vcctrl` over the unix socket still works -- the
 # recovery path does not route through the web server.
-WEB_BIND = os.environ.get("VCCTRL_WEB_BIND", "127.0.0.1")
-WEB_PORT = int(os.environ.get("VCCTRL_WEB_PORT", "8080"))
+WEB_BIND = CFG.default("daemon.web.bind", "127.0.0.1")
+WEB_PORT = int(CFG.default("daemon.web.port", 8080))
 # HTTPS served by the daemon itself, so browsers get HTTP/1.1 and WebSocket
 # works. `tailscale serve --tcp` forwards this port as raw TCP. See TLSServer.
-WEB_TLS_PORT = int(os.environ.get("VCCTRL_WEB_TLS_PORT", "8443"))
+WEB_TLS_PORT = int(CFG.default("daemon.web.tls_port", 8443))
 
 
 def _pace(req):
@@ -3367,6 +3527,29 @@ def handle(devs, registry, req):
     if cmd == "caps":
         return {"ok": True, "capabilities": registry.report()}
 
+    if cmd == "config":
+        # ATTEST FROM THE THING THAT RAN IT.
+        #
+        # This reports what THIS PROCESS resolved at start, not what the file
+        # on disk says now. Those differ whenever the file was edited without a
+        # restart, which is the exact moment somebody is trying to work out why
+        # a setting "is not taking effect" -- and re-reading the file to answer
+        # that question tells them what they already believe rather than what
+        # is running. A config file is not the configuration.
+        #
+        # `error` is present and null on a clean load rather than omitted: a
+        # missing key would let a reader conclude "no error" from a payload
+        # that never carried the field, which is the same shape as a plausible
+        # set of retained zeroes.
+        return {"ok": True,
+                "config": {
+                    "source": CFG.source,
+                    "error": CFG_ERROR,
+                    "on_defaults": CFG_ERROR is not None or CFG.source is None,
+                    "overrides": list(CFG.warnings),
+                    "resolved": CFG.as_dict(),
+                }}
+
     if cmd == "events":
         return dict({"ok": True},
                     **registry.bus.since(int(req.get("since", 0)),
@@ -3495,6 +3678,15 @@ def main():
     # each thread when it happened, and with a capture thread, a watchdog and
     # several web threads all touching Pillow that is most of the answer.
     faulthandler.enable(file=sys.stderr, all_threads=True)
+    _push_tls_paths()
+    if CFG_ERROR:
+        sys.stderr.write("config: RUNNING ON BUILT-IN DEFAULTS -- %s\n"
+                         % CFG_ERROR)
+    else:
+        sys.stderr.write("config: %s\n" % (CFG.source or
+                                            "none found, built-in defaults"))
+        for w in CFG.warnings:
+            sys.stderr.write("config: override %s\n" % w)
     if os.geteuid() != 0:
         sys.stderr.write("vcctrld must run as root (needs /dev/uinput)\n")
         return 1

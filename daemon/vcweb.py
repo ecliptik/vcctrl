@@ -464,6 +464,9 @@ class TLSServer(Server):
     would connect back to this line.
     """
 
+    # Paths come from the daemon, which holds the resolved config. vcweb does
+    # not load configuration itself: two loaders means two answers, and the
+    # question "which cert is this process actually serving" must have one.
     CERT = "/var/lib/vcctrl/tls.crt"
     KEY = "/var/lib/vcctrl/tls.key"
 

@@ -190,19 +190,32 @@ if [ -f "$SRC/tools/patch-usb4vc-64bit.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb
 fi
 
 
-# Config. Written only if absent, so a local edit survives re-installs.
-# NOTE the plug's Kasa alias is "retro-rig-plug" -- it is not renamed, so anyone
-# looking at the Kasa app will not obviously connect it to the g2k. That is
-# recorded here rather than fixed because the operator wants the name kept.
-if [ ! -f "$PREFIX/config.json" ]; then
-  sudo tee "$PREFIX/config.json" >/dev/null <<'CONF'
-{
-  "kasa_host": "192.0.2.46",
-  "_kasa_note": "TP-Link EP10, alias 'retro-rig-plug', MAC 00:00:5E:00:53:01. Legacy port-9999 protocol; if a firmware update moves it to KLAP on port 80 this stops working and needs python-kasa."
-}
-CONF
-  echo "wrote default $PREFIX/config.json"
+# Config.
+#
+# The heredoc that used to live here wrote one rig's smart-plug address into
+# every install, which is exactly the thing docs/CONFIG-PLAN.md exists to
+# remove: an installer that hardcodes an address makes a fresh clone look
+# configured while pointing at hardware on somebody else's LAN.
+#
+# Now: install the operator's vcctrl.yaml if deploy.sh shipped one, and
+# install nothing at all if it did not. Running on built-in defaults is a
+# supported state and it is honest about itself -- `vcctrl config show` says
+# which file the daemon resolved, or says there was none.
+#
+# The library goes to $PREFIX so vcctrld imports it as a sibling.
+sudo install -m 0644 -T "$SRC/common/vcconfig.py" "$PREFIX/vcconfig.py"
+if [ -f "$SRC/vcctrl.yaml" ]; then
+  sudo install -m 0644 -T "$SRC/vcctrl.yaml" "$PREFIX/vcctrl.yaml"
+  echo "installed $PREFIX/vcctrl.yaml"
+else
+  echo "no vcctrl.yaml shipped -- the daemon will run on built-in defaults."
+  echo "  cp vcctrl.example.yaml vcctrl.yaml and edit it to change that."
 fi
+
+# The legacy config.json is NOT written any more and NOT removed either. It is
+# still read as a fallback for one release so an existing rig does not lose
+# power control at the moment of upgrading, which is the moment nobody is
+# reading stderr. vcctrld prints a deprecation line when it finds one.
 
 # HTTPS over the tailnet, via Tailscale's own cert.
 #

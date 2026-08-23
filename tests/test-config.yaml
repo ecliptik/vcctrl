@@ -1,0 +1,29 @@
+# The configuration the test suite runs against. Tracked, and deliberately
+# boring.
+#
+# WHY THIS EXISTS. Until phase 2 of docs/CONFIG-PLAN.md the tests ran with no
+# configuration at all on the control host, because the only config file lived
+# on the Pi. Giving the daemon a vcctrl.yaml in the repo root handed the SUITE
+# a real, reachable smart-plug address -- and the power watchdog then contacted
+# the actual plug, read "off", published powered=False, and three LED tests
+# started reporting `unpowered` instead of the state they were asserting.
+#
+# They were right to fail. A suite whose verdict depends on whether a plug in
+# another room is switched on is reporting the rig's state as the code's state,
+# and it would have flipped back to green the moment somebody powered the
+# Gateway on -- which is the worst possible way for it to be wrong.
+#
+# So the tests declare their configuration instead of inheriting the
+# operator's. NOTHING HERE MAY NAME REAL HARDWARE. No plug host, no capture
+# device that exists, no address that resolves.
+
+version: 1
+
+rig:
+  name: test-suite
+
+# No `capabilities.power.settings.host`, deliberately and permanently. With no
+# host the power path stays inert, which is what makes the suite hermetic.
+capabilities:
+  power:
+    backend: none

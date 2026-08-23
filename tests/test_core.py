@@ -37,6 +37,24 @@ from importlib.machinery import SourceFileLoader
 HERE = os.path.dirname(os.path.abspath(__file__))
 DAEMON = os.path.join(HERE, os.pardir, "daemon", "vcctrld.py")
 
+# PIN THE CONFIGURATION BEFORE vcctrld IS IMPORTED.
+#
+# vcctrld resolves its configuration once, at import, and its search order ends
+# at ./vcctrl.yaml in the repo root -- the operator's real file. That handed the
+# suite a live smart-plug address, the power watchdog contacted the actual plug,
+# read "off", published powered=False, and three LED tests began reporting
+# `unpowered` instead of the state they were asserting.
+#
+# They were right to fail, and the failure was the useful kind: a suite whose
+# verdict depends on whether a plug in another room is switched on is reporting
+# the RIG's state as the CODE's state. It would have gone green again the
+# moment somebody powered the target on, which is worse than staying red.
+#
+# Set before the import below, rather than in a fixture, so `python3
+# tests/test_core.py` gets it too -- a hermetic suite under pytest and an
+# ambient one under python3 is the same defect wearing a different hat.
+os.environ.setdefault("VCCTRL_CONFIG", os.path.join(HERE, "test-config.yaml"))
+
 _loader = SourceFileLoader("vcctrld", DAEMON)
 _spec = importlib.util.spec_from_loader("vcctrld", _loader)
 vcctrld = importlib.util.module_from_spec(_spec)
@@ -4560,3 +4578,140 @@ def test_config_env_overrides_the_file():
         else:
             os.environ["VCCTRL_HOST"] = old
         os.unlink(p)
+
+
+def test_the_daemon_takes_its_constants_from_config():
+    """Phase 2 acceptance: the values really come from the file.
+
+    Same trap as test_the_config_file_is_actually_read, one level up. Every
+    constant migrated in phase 2 still has its old literal as the fallback, so
+    a daemon that ignored the config entirely would produce exactly the values
+    this rig expects. The only way to tell is to give it values it could not
+    have guessed and require them back.
+    """
+    print("\ndaemon constants from config")
+    import importlib.util as _u
+    p = _tmp_yaml(
+        "version: 1\n"
+        "daemon:\n"
+        "  socket: /run/not-the-default.sock\n"
+        "  state_dir: /var/lib/elsewhere\n"
+        "  web: {port: 65001, tls_port: 65002, bind: 10.9.9.9}\n"
+        "capabilities:\n"
+        "  power: {backend: kasa-legacy, settings: {host: 203.0.113.7,\n"
+        "          port: 9998, cycle_off_s: 3.5}}\n"
+        "  video: {backend: v4l2-ffmpeg, settings: {device: /dev/video99}}\n"
+        "  audio: {backend: alsa-ffmpeg, settings: {device: 'hw:CARD=NOPE,DEV=9'}}\n"
+        "targets:\n"
+        "  - {board_id: 7, name: Invented Machine, leds: supported}\n"
+        "  - {board_id: 8, name: Other Machine, leds: unsupported}\n")
+    old = os.environ.get("VCCTRL_CONFIG")
+    # The env overrides would beat the file and hide the very thing under test.
+    stash = {k: os.environ.pop(k) for k in
+             ("VCCTRL_WEB_PORT", "VCCTRL_WEB_TLS_PORT", "VCCTRL_WEB_BIND",
+              "VCCTRL_ALSA", "VCCTRL_VIDEO") if k in os.environ}
+    try:
+        os.environ["VCCTRL_CONFIG"] = p
+        spec = _u.spec_from_file_location("vcctrld_cfgtest", DAEMON)
+        m = _u.module_from_spec(spec)
+        spec.loader.exec_module(m)
+
+        check("socket path comes from config",
+              m.SOCKET_PATH == "/run/not-the-default.sock", m.SOCKET_PATH)
+        check("web port comes from config", m.WEB_PORT == 65001, m.WEB_PORT)
+        check("tls port comes from config", m.WEB_TLS_PORT == 65002,
+              m.WEB_TLS_PORT)
+        check("bind comes from config", m.WEB_BIND == "10.9.9.9", m.WEB_BIND)
+        check("power cycle duration comes from config",
+              m.POWER_CYCLE_OFF_S == 3.5, m.POWER_CYCLE_OFF_S)
+        check("the plug host comes from config",
+              m.kasa_host() == "203.0.113.7", m.kasa_host())
+        check("the plug PORT comes from config -- it was buried in "
+              "kasa_send() as a literal 9999", m.kasa_port() == 9998,
+              m.kasa_port())
+        check("video device comes from config",
+              m.VideoCapability.DEVICE == "/dev/video99",
+              m.VideoCapability.DEVICE)
+        check("audio device comes from config",
+              m.AudioCapability.DEVICE == "hw:CARD=NOPE,DEV=9",
+              m.AudioCapability.DEVICE)
+        check("state_dir moves the power audit log with it",
+              m.PowerCapability.AUDIT == "/var/lib/elsewhere/power.log",
+              m.PowerCapability.AUDIT)
+
+        # The board table REPLACES rather than merges. A rig that configures
+        # its own boards must not inherit this rig's Macintosh.
+        t = m.BoardCapability(None)._targets()
+        check("configured targets replace the built-in table",
+              t == {7: "Invented Machine", 8: "Other Machine"}, t)
+        check("and nothing of the reference rig survives into it",
+              "Gateway 2000" not in t.values()
+              and "Macintosh Plus" not in t.values(), t)
+        check("LED support follows the configured word, not the built-in "
+              "board list", m.LED_BOARDS == (7,), m.LED_BOARDS)
+    finally:
+        if old is None:
+            os.environ.pop("VCCTRL_CONFIG", None)
+        else:
+            os.environ["VCCTRL_CONFIG"] = old
+        os.environ.update(stash)
+        os.unlink(p)
+
+
+def test_a_broken_config_degrades_rather_than_killing_the_daemon():
+    """Rule 2 applied to configuration.
+
+    A rig that will not start cannot be looked at, and looking at it is what
+    this program is for. So a malformed file degrades to built-in defaults --
+    and the degradation must be VISIBLE, because it is otherwise identical to
+    a clean start on a rig whose values match the defaults.
+    """
+    print("\nbroken config degrades")
+    import importlib.util as _u
+    p = _tmp_yaml("version: 1\ndaemon:\n  nonsense_key: 1\n")
+    old = os.environ.get("VCCTRL_CONFIG")
+    try:
+        os.environ["VCCTRL_CONFIG"] = p
+        spec = _u.spec_from_file_location("vcctrld_badcfg", DAEMON)
+        m = _u.module_from_spec(spec)
+        spec.loader.exec_module(m)          # must NOT raise
+        check("the daemon module still imports on a bad config", True)
+        check("and it says so, rather than looking like a clean start",
+              m.CFG_ERROR is not None and "nonsense_key" in m.CFG_ERROR,
+              m.CFG_ERROR)
+        check("falling back means the old literal is still in force",
+              m.WEB_PORT == 8080, m.WEB_PORT)
+    except Exception as exc:
+        check("the daemon module still imports on a bad config", False,
+              "%s: %s" % (type(exc).__name__, exc))
+    finally:
+        if old is None:
+            os.environ.pop("VCCTRL_CONFIG", None)
+        else:
+            os.environ["VCCTRL_CONFIG"] = old
+        os.unlink(p)
+
+
+def test_the_suite_does_not_read_the_operators_config():
+    """The suite must declare its configuration, not inherit it.
+
+    This is the guard on the trap above. Without it the pin is a line of code
+    that keeps working until somebody moves the import, and the symptom when it
+    breaks is not an error -- it is three unrelated tests changing their verdict
+    according to whether a plug in another room is switched on.
+    """
+    print("\nsuite is hermetic")
+    v = _vcconfig()
+    check("the suite's config is pinned to its own file",
+          os.environ.get("VCCTRL_CONFIG", "").endswith("tests/test-config.yaml"),
+          os.environ.get("VCCTRL_CONFIG"))
+    check("and the daemon under test resolved that file, not the repo root's",
+          (vcctrld.CFG.source or "").endswith("test-config.yaml"),
+          vcctrld.CFG.source)
+    check("the test config names NO power host, which is what keeps the "
+          "suite off the real plug", vcctrld.kasa_host() is None,
+          vcctrld.kasa_host())
+
+    raw = open(os.path.join(HERE, "test-config.yaml")).read()
+    check("and it names no routable address at all",
+          not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", raw), "an IP literal")

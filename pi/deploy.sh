@@ -180,5 +180,22 @@ ssh "$HOST" 'rm -rf ~/vcctrl-src && mkdir -p ~/vcctrl-src'
 # tools/ ships too: install.sh runs patch-usb4vc-board.py --check from it,
 # and a check that cannot find its own script reports a missing patch that
 # is actually applied -- a false alarm is still a wrong answer.
-tar -C "$SRC" -cf - daemon bin pi tools | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+# common/ ships because vcctrld imports vcconfig from it, and the operator's
+# vcctrl.yaml ships because the daemon host is where it is read. The YAML is
+# sent ONLY IF IT EXISTS: a rig configured entirely by built-in defaults is a
+# supported state, and shipping the example in its place would install a
+# configuration nobody wrote, pointing at hardware nobody has.
+tar -C "$SRC" -cf - daemon bin pi tools common | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+if [ -f "$SRC/vcctrl.yaml" ]; then
+  # Validate BEFORE shipping. An invalid file does not stop the daemon -- it
+  # degrades to built-in defaults, which on this rig means no power control and
+  # capture bound to whatever /dev/video0 happens to be. That degradation is
+  # deliberate and it is also silent from the outside, so the refusal belongs
+  # here, where somebody is watching, rather than in the journal at 3am.
+  if ! python3 "$SRC/common/vcconfig.py" check "$SRC/vcctrl.yaml" >/dev/null; then
+    echo "refusing: vcctrl.yaml does not validate (run: python3 common/vcconfig.py check vcctrl.yaml)" >&2
+    exit 1
+  fi
+  tar -C "$SRC" -cf - vcctrl.yaml | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+fi
 ssh "$HOST" 'bash ~/vcctrl-src/pi/install.sh'
