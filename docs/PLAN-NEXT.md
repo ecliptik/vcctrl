@@ -132,7 +132,14 @@ the sample luckier hides it better.
 
 ---
 
-## 2. `arm_leds` has no `stable_led` guard
+## 2. `arm_leds` has no `stable_led` guard  — DONE 2026-08-23
+
+**Fixed and tested.** Both reads go through `stable_led()`; returns three
+states (True / False / None for could-not-look); `why=unsupported` stays a
+real False because ADB genuinely has no return channel. Test carries its own
+control — the old bare-read behaviour is reinstated in-run and required to
+fail. See `test_arm_leds_survives_a_settling_read`.
+
 
 **Four refusals tonight, four immediate retries that succeeded.** It is a
 settling race in the function that arms the boot edges every reboot depends
