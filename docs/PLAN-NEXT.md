@@ -175,7 +175,32 @@ control that removes the guard and shows the test going red.
 
 ---
 
-## 3. Round self-cleanup of the CF card
+## 3. Round self-cleanup of the CF card  — DECISION HALF DONE 2026-08-23
+
+**`bin/vcctrl-cfclean` exists and REFUSES AT THE TOP.** The half that decides
+what is safe to delete is complete and tested
+(`test_cfclean_never_deletes_what_it_cannot_prove`); the half that reads
+`DIR LOGS\<TAG>\` off the screen needs the Gateway and is not written.
+
+**The four open questions below are answered, three of them structurally:**
+
+1. **Historical debris** — answered by patch 0322. A round's output is now a
+   DIRECTORY, so a directory-scoped cleanup cannot touch the flat backlog even
+   by accident. The backlog stays a separate deliberate act.
+2. **Abandoned rounds** — protect themselves. A file never collected has no
+   local copy, so it never verifies, so it is never deleted. The rule that
+   makes deletion safe is the rule that makes abandonment safe.
+3. **Same rules for both types** — same verification, but PPMs only by
+   default. `--logs` opts text in.
+4. **Free-space warning** — 100 MB, in the tool.
+
+**What remains is one function**: issue the DIR, OCR the listing, return
+`[(name, size)]` with size `None` on any line that could not be read — so
+`classify()` returns REFUSE rather than guessing. **Do not wire it to a delete
+until that read has been exercised against a real listing, including a
+truncated one.**
+
+
 
 **Shape settled by the operator: automatic, round-scoped, gated on
 proven-collected.** The benchmarking session supplied the doskutsu-side facts.
