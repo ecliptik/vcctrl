@@ -102,7 +102,7 @@ USAGE = """usage: vcctrl <command> [args]
                             sound mode, boot profile. A fully green harness
                             has driven a misconfigured target for a whole
                             round. Passing this says nothing about that.
-  record --out F.avi [a] [b]
+  record --out F.avi [a] [b] [--since T|now] [--clip]
                             the scrub buffer as an AVI, optionally from seq a
                             to seq b. Takes the pin for the copy and releases
                             it. Two-valued: either F is this run's buffer or F
@@ -112,6 +112,27 @@ USAGE = """usage: vcctrl <command> [args]
                             from `frames` (frames the ring held); the muxer
                             repeats a frame across a gap to preserve timing,
                             so they differ by exactly the stalls.
+
+                            --since T  IS THE CALLER'S OWN START TIME, and it
+                            is the difference between a dump of whatever the
+                            ring holds and a recording of YOUR run. Pass
+                            `--since now` at the start of a run and keep the
+                            value, or a unix time. Without it, a dump is
+                            bounded by the RING, not by the thing that asked
+                            for it -- GMQ3-glass.avi was 94.5% byte-identical
+                            to the PREVIOUS cell's frames, and an analysis of
+                            it produced a confident wrong conclusion three
+                            cells later. `first_seq` and `first_t` were in the
+                            meta the whole time; nothing refused on them.
+
+                            REFUSES with exit 4 when the window opens before
+                            --since, naming how many frames are foreign and by
+                            how long, rather than writing a file that looks
+                            like yours.
+
+                            --clip  take only your own frames instead of
+                            refusing. Reports `clipped_frames` so a shortened
+                            recording says so rather than quietly being short.
   events [since]            activity log since a sequence number
   activity                  what is running, for how long, and who holds input
   lock [status|acquire|release|break] --as NAME
