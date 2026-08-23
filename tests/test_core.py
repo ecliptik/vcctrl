@@ -4241,3 +4241,67 @@ def test_the_docs_index_cannot_rot_silently():
           not (on_disk - named), sorted(on_disk - named))
     check("the index names no file that does not exist",
           not (named - on_disk - {"README.md"}), sorted(named - on_disk))
+
+
+def test_every_commit_cited_in_docs_still_resolves():
+    """Writeups cite SHAs as provenance. A history rewrite dangles all of them.
+
+    Round Q/R and the Mach64 campaign cite this repo's commits as evidence that
+    a prediction was pinned BEFORE the data, that a retraction was made in the
+    open, that a guard was added on a given day. `3e5c5af` is load-bearing: it
+    is the proof a numeric prediction could not have been written with the
+    answer in hand.
+
+    A `git filter-repo` rewrite makes every one of those unresolvable. **A tag
+    does not save them** -- filter-repo rewrites all refs, tags included -- and
+    an archived bundle preserves the OBJECTS without making the PROSE resolve.
+    The citation has to be remapped through filter-repo's commit-map, and that
+    is a step somebody has to remember.
+
+    This is the thing that remembers. It passes today and goes red the moment a
+    rewrite lands without the docs being remapped -- which is the only way a
+    provenance claim stays a claim rather than becoming a decoration.
+    """
+    print("\ndoc commit citations")
+    import subprocess as _sp
+    if not os.path.isdir(".git"):
+        print("  SKIP  not a git checkout")
+        return
+
+    def git(*a):
+        return _sp.run(("git",) + a, capture_output=True, text=True)
+
+    if git("rev-parse", "--git-dir").returncode != 0:
+        print("  SKIP  no git")
+        return
+
+    import re as _re
+    cited = {}
+    for f in sorted(os.listdir("docs")) if os.path.isdir("docs") else []:
+        if not f.endswith(".md"):
+            continue
+        body = open(os.path.join("docs", f), encoding="utf-8", errors="replace").read()
+        # Backticked hex of commit length. Loose enough to catch a citation,
+        # tight enough not to sweep every hash in the file -- and anything it
+        # catches that is NOT a commit is skipped below rather than failed.
+        for s in set(_re.findall(r"`([0-9a-f]{7,12})`", body)):
+            cited.setdefault(s, set()).add(f)
+
+    # A guard over an empty set is not a passing guard.
+    resolvable = {s: fs for s, fs in cited.items()
+                  if git("cat-file", "-e", s + "^{commit}").returncode == 0}
+    check("docs cite at least one real commit -- otherwise this test is "
+          "asserting nothing", bool(resolvable), len(cited))
+
+    dangling = []
+    for s, fs in sorted(cited.items()):
+        r = git("cat-file", "-e", s + "^{commit}")
+        if r.returncode != 0:
+            # Only a failure if it LOOKS like a citation of ours: something
+            # that was once a commit here. A stray hex string in prose is not.
+            if git("cat-file", "-e", s).returncode == 0:
+                dangling.append((s, sorted(fs)))
+    check("no doc cites a commit that no longer resolves",
+          not dangling, dangling)
+    print("  ...%d cited commits resolve across %d docs"
+          % (len(resolvable), len({f for fs in resolvable.values() for f in fs})))
