@@ -64,6 +64,15 @@ condition with itself.
 - **`MOUSE.md`**, **`TIMING-FIXES.md`** — input path and settling races.
 - **`PI5-MIGRATION.md`** — the Pi 3 → Pi 5 move, closed.
 
+## The standard
+
+**`HARNESS-STANDARD.md`** — the contract for running measured tests on
+constrained hardware when an agent, not a person, is reading the run sheet.
+Target-agnostic: it states requirements, and the project-specific parameters
+live in a profile rather than in the standard. Imported 2026-08-23 from the
+doskutsu campaign, where it was written; vcctrl is its reference harness
+implementation. **Read it before adding a measurement to anything here.**
+
 ## The KVM (webkvm session's component)
 
 `WEBKVM.md` is the main one. `WEBKVM-DESIGN.md`, `WEBKVM-AUDIO.md`,
