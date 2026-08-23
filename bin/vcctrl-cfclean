@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""vcctrl-cfclean -- decide what may be deleted from the CF card, and refuse
+to delete anything not PROVEN collected.
+
+STATUS: THE DECISION HALF IS COMPLETE AND TESTED. THE CARD-DRIVING HALF IS NOT
+WRITTEN, and this tool refuses at the top rather than pretending otherwise.
+Reading `DIR LOGS\\<TAG>\\` back off the screen needs the Gateway, which was
+not available when this was written. `plan()` below is the part that decides
+what is safe, it is pure, and `test_cfclean_never_deletes_what_it_cannot_prove`
+covers it. Wiring the DOS read is mechanical; the dangerous half is done.
+
+WHY THIS EXISTS. Frame dumps are 230,415 bytes each, four per cell, and they
+are in neither glob:
+
+    logback-qa.sh collects   *.LOG *.TXT *.CFG *.NFO      no *.PPM
+    install-qa.sh clears     *.LOG *.TXT *.CFG            no *.PPM
+
+Not collected, not cleared, invisible to both halves of the tooling meant to
+manage exactly this. Nothing has been lost only because they have been pulled
+by hand after every cell.
+
+THE ONE HARD CONSTRAINT: NEVER DELETE ANYTHING NOT PROVEN COLLECTED.
+
+Not "the copy returned success" -- PROVEN, by comparing CONTENT, per file.
+This is destructive and irreversible on a machine that is a card swap away, and
+the failure mode writes itself: A COLLECTION CHECK THAT CAN RETURN A FALSE YES
+DELETES THE ONLY COPY. Every shape that produces a false yes has already
+happened on this rig:
+
+    all({}.values()) is True              a preflight passed on a missing field
+    a clip check matched zero frames      and printed CLIP HOLDS
+    count: 0 from a case-mismatched FIND  absence indistinguishable from a typo
+    print gate open, collect gate shut    a well-formed zero meaning "not measured"
+
+So `plan()` asserts its population is non-empty before reporting anything,
+compares content rather than status, and carries THREE outcomes per file --
+never two.
+
+DESIGN DECISIONS:
+
+1. ROUND-SCOPED, BY DIRECTORY. Patch 0322 made a round's output a DIRECTORY
+   (`LOGS\\<TAG>\\S<tick>.PPM`). So a directory-scoped cleanup CANNOT touch the
+   historical flat `LOGS\\*.PPM` backlog even by accident. The backlog stays a
+   separate, deliberate act -- answered structurally rather than by policy.
+
+2. ABANDONED ROUNDS PROTECT THEMSELVES. From the card, uncollected and stale
+   look identical. This tool never has to tell them apart: a file never
+   collected has no local copy, so it never verifies, so it is never deleted.
+   The rule that makes deletion safe is the rule that makes abandonment safe.
+
+3. PPMs ONLY BY DEFAULT. Dumps are 230 KB and pure diagnostic. Text logs are
+   ~150 KB per round and occasionally save a trip. `--logs` includes them under
+   identical verification.
+
+4. REFUSES UNLESS TOLD TWICE. Dry run is the default.
+"""
+import argparse
+import os
+import sys
+
+KEEP, DELETE, REFUSE = "KEEP", "DELETE", "REFUSE"
+
+
+def local_index(incoming):
+    """{BASENAME: [paths]} for everything that could serve as proof."""
+    idx = {}
+    for root, _dirs, files in os.walk(incoming):
+        for f in files:
+            idx.setdefault(f.upper(), []).append(os.path.join(root, f))
+    return idx
+
+
+def classify(name, card_size, idx):
+    """(verdict, reason) for ONE card file. Three outcomes, never two.
+
+    DELETE  a local file of exactly this size exists -- proven collected
+    KEEP    no local copy, or none of the right size -- NOT collected
+    REFUSE  we could not tell. Never authorises a deletion.
+
+    `card_size` of None means the listing did not give us a size, which is
+    COULD NOT LOOK and must not read as a match.
+    """
+    paths = idx.get(name.upper(), [])
+    if card_size is None:
+        return REFUSE, "no size read back for %s -- could not look" % name
+    if not paths:
+        return KEEP, "no local copy -- never collected, or an abandoned round"
+    for p in paths:
+        try:
+            if os.path.getsize(p) == card_size:
+                return DELETE, "content size matches %s" % p
+        except OSError as e:
+            return REFUSE, "could not stat %s: %s" % (p, e)
+    sizes = []
+    for p in paths:
+        try:
+            sizes.append(os.path.getsize(p))
+        except OSError:
+            return REFUSE, "could not stat %s" % p
+    return KEEP, "local copies exist but none is %d bytes (found %s)" % (
+        card_size, sizes)
+
+
+def plan(listing, idx):
+    """Decide over a whole listing. Returns (rows, summary).
+
+    `listing` is [(name, size_or_None)] as read off the card.
+
+    A PLAN OVER AN EMPTY LISTING IS NOT AN EMPTY PLAN, IT IS A REFUSAL. An
+    empty population and a fully-collected one produce the same "nothing to
+    keep" output, and that is the shape that has cost this project a whole
+    round more than once.
+    """
+    if not listing:
+        return [], {"refused": "empty listing -- nothing was examined, which "
+                                "is not the same as nothing being there"}
+    if not idx:
+        return [], {"refused": "no local files indexed at all -- nothing could "
+                               "be verified, so nothing may be deleted"}
+    rows = [(n, s) + classify(n, s, idx) for n, s in listing]
+    summary = {v: sum(1 for r in rows if r[2] == v) for v in (KEEP, DELETE, REFUSE)}
+    summary["examined"] = len(rows)
+    return rows, summary
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tags", required=True)
+    ap.add_argument("--incoming",
+                    default=os.path.expanduser("~/doskutsu-netiter/incoming"))
+    ap.add_argument("--logs", action="store_true")
+    ap.add_argument("--delete", action="store_true")
+    a = ap.parse_args(argv)
+
+    # REFUSE AT THE TOP. A tool that half-drives a destructive operation is
+    # worse than one that declines: the operator reads a partial run as a
+    # completed one. See docs/OPEN-FAULTS.md.
+    print("REFUSED: the card-reading half of this tool is not written.")
+    print()
+    print("  `plan()` decides what is safe and is tested, but reading")
+    print("  `DIR LOGS\\<TAG>\\` back off the screen needs the Gateway, which")
+    print("  was unavailable when this was written.")
+    print()
+    print("  What is missing is ONE function: issue the DIR, OCR the listing,")
+    print("  and return [(name, size)] -- with size None on any line that could")
+    print("  not be read, so classify() returns REFUSE rather than guessing.")
+    print()
+    print("  Do NOT wire it to a delete until that read has been exercised")
+    print("  against a real card listing, including a truncated one.")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

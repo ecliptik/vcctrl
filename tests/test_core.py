@@ -4137,3 +4137,73 @@ def test_arm_leds_survives_a_settling_read():
     got = common.arm_leds()
     check("why=unsupported is False -- ADB has no channel, that is a fact",
           got is False, got)
+
+
+def test_cfclean_never_deletes_what_it_cannot_prove():
+    """The decision half of the CF cleanup, which is the half that can lose data.
+
+    `cf-clean` deletes frame dumps off a card that is a swap away, so the
+    failure mode is not a wasted run -- it is the only copy. Every shape that
+    produces a false yes has already happened on this rig: all({}.values())
+    passing a preflight, a clip check matching zero frames and printing CLIP
+    HOLDS, a case-mismatched FIND returning count: 0, a print gate open with
+    the collect gate shut emitting a well-formed zero.
+
+    So the properties under test are: content decides rather than status; an
+    unreadable answer REFUSES rather than guessing; and a plan over an empty
+    listing is a REFUSAL rather than an empty plan -- because "nothing to keep"
+    and "nothing was examined" produce identical output.
+    """
+    print("\ncfclean decision half")
+    cf = _load("bin/vcctrl-cfclean", "vcc_cfclean_t")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        # A collected file (right size) and a decoy with the same name at the
+        # wrong size -- the case where a local copy EXISTS but is not proof.
+        sub = os.path.join(d, "D1"); os.makedirs(sub)
+        with open(os.path.join(sub, "S00300.PPM"), "wb") as f:
+            f.write(b"x" * 230415)
+        with open(os.path.join(sub, "S00600.PPM"), "wb") as f:
+            f.write(b"x" * 999)             # truncated local copy
+        idx = cf.local_index(d)
+        check("index finds both by basename", len(idx) == 2, sorted(idx))
+
+        v, why = cf.classify("S00300.PPM", 230415, idx)
+        check("a size match is DELETE", v == cf.DELETE, (v, why))
+
+        v, why = cf.classify("S00600.PPM", 230415, idx)
+        check("a local copy of the WRONG size is KEEP, not DELETE",
+              v == cf.KEEP, (v, why))
+
+        v, why = cf.classify("S09999.PPM", 230415, idx)
+        check("no local copy at all is KEEP -- this is what protects an "
+              "abandoned round", v == cf.KEEP, (v, why))
+
+        v, why = cf.classify("S00300.PPM", None, idx)
+        check("an unread size REFUSES rather than matching",
+              v == cf.REFUSE, (v, why))
+
+        # THE ONE THAT MATTERS MOST: an empty listing must not read as done.
+        rows, summ = cf.plan([], idx)
+        check("a plan over an EMPTY listing is a refusal, not an empty plan",
+              "refused" in summ and not rows, summ)
+
+        rows, summ = cf.plan([("S00300.PPM", 230415)], {})
+        check("a plan with NO local index is a refusal -- nothing could be "
+              "verified", "refused" in summ, summ)
+
+        rows, summ = cf.plan(
+            [("S00300.PPM", 230415), ("S00600.PPM", 230415),
+             ("S09999.PPM", 230415), ("S00300.PPM", None)], idx)
+        check("a real plan reports its sample size beside its verdict",
+              summ.get("examined") == 4, summ)
+        check("and exactly one of four is deletable",
+              summ.get(cf.DELETE) == 1, summ)
+        check("two are kept", summ.get(cf.KEEP) == 2, summ)
+        check("one refuses", summ.get(cf.REFUSE) == 1, summ)
+
+    # The tool itself must refuse to run, because its card half is unwritten.
+    rc = cf.main(["--tags", "D1"])
+    check("the CLI refuses at the top rather than half-driving a delete",
+          rc == 2, rc)
