@@ -4140,70 +4140,89 @@ def test_arm_leds_survives_a_settling_read():
 
 
 def test_cfclean_never_deletes_what_it_cannot_prove():
-    """The decision half of the CF cleanup, which is the half that can lose data.
+    """The decision half of the CF cleanup, against REAL OCR from the rig.
 
-    `cf-clean` deletes frame dumps off a card that is a swap away, so the
-    failure mode is not a wasted run -- it is the only copy. Every shape that
-    produces a false yes has already happened on this rig: all({}.values())
-    passing a preflight, a clip check matching zero frames and printing CLIP
-    HOLDS, a case-mismatched FIND returning count: 0, a print gate open with
-    the collect gate shut emitting a well-formed zero.
+    This tool deletes frame dumps off a card that is a swap away, so the
+    failure mode is not a wasted run -- it is the only copy.
 
-    So the properties under test are: content decides rather than status; an
-    unreadable answer REFUSES rather than guessing; and a plan over an empty
-    listing is a REFUSAL rather than an empty plan -- because "nothing to keep"
-    and "nothing was examined" produce identical output.
+    THE DESIGN CHANGED BECAUSE OF THIS TEST. The first version matched card
+    files to local ones BY NAME. Then the parser was pointed at real captures
+    and OCR turned out to read DOS `DIR` output with the sizes right and the
+    names wrong:
+
+        real   R1A  LOG  1,102  08-20-26  10:58p
+        OCR    RIA  LOG  1,102  88-20-26  18:58p
+
+    `R1A` -> `RIA`, `08` -> `88`, `10` -> `18`. PPM filenames are `S<tick>.PPM`
+    -- all digits -- so a name match is one glyph from selecting the wrong
+    file. Sizes, counts and totals read correctly in every sample.
+
+    So the card is asked for two numbers and the local side supplies the rest.
     """
     print("\ncfclean decision half")
     cf = _load("bin/vcctrl-cfclean", "vcc_cfclean_t")
     import tempfile
 
+    # 1. THE PARSER, against OCR captured from the real console. Not a
+    #    hand-written approximation of what DOS prints -- what pytesseract
+    #    actually returned, mangled words and all.
+    real = [
+        ("'1 filets) 1,102 bytes'", "1 filets)      1,102 bytes", (1, 1102)),
+        ("file(s) intact", "        1 file(s)    122,485 bytes", (1, 122485)),
+        ("multi-megabyte", "  1 filets)     7,816,241 bytes", (1, 7816241)),
+        ("many files", "   27 file<s)      6,221,205 bytes", (27, 6221205)),
+    ]
+    for label, line, want in real:
+        got = cf.parse_dir_summary("Directory of C:\\DOSKUTSU\\LOGS\n" + line)
+        check("parses a real DIR summary (%s)" % label, got == want, (got, want))
+
+    check("an unreadable screen is None, not zero",
+          cf.parse_dir_summary("") is None)
+    check("a screen with no summary line at all is None",
+          cf.parse_dir_summary("Volume in drive C is DOS") is None)
+
+    # A DOS "File not found" has no summary line -- it must NOT read as
+    # "zero files", because zero files would mean nothing to delete AND
+    # nothing to keep, and the two are different.
+    check("File not found is None, not (0, 0)",
+          cf.parse_dir_summary("File not found") is None)
+
+    # 2. THE VERDICT. Totals, not names.
     with tempfile.TemporaryDirectory() as d:
-        # A collected file (right size) and a decoy with the same name at the
-        # wrong size -- the case where a local copy EXISTS but is not proof.
         sub = os.path.join(d, "D1"); os.makedirs(sub)
-        with open(os.path.join(sub, "S00300.PPM"), "wb") as f:
-            f.write(b"x" * 230415)
-        with open(os.path.join(sub, "S00600.PPM"), "wb") as f:
-            f.write(b"x" * 999)             # truncated local copy
-        idx = cf.local_index(d)
-        check("index finds both by basename", len(idx) == 2, sorted(idx))
+        for n in ("S00300.PPM", "S00600.PPM"):
+            with open(os.path.join(sub, n), "wb") as f:
+                f.write(b"x" * 230415)
+        local = cf.local_tag_totals(d, "D1")
+        check("local totals count the tag's files", local == (2, 460830), local)
 
-        v, why = cf.classify("S00300.PPM", 230415, idx)
-        check("a size match is DELETE", v == cf.DELETE, (v, why))
+        v, why = cf.classify_tag((2, 460830), local)
+        check("count AND bytes matching is DELETE", v == cf.DELETE, (v, why))
 
-        v, why = cf.classify("S00600.PPM", 230415, idx)
-        check("a local copy of the WRONG size is KEEP, not DELETE",
+        v, why = cf.classify_tag((3, 691245), local)
+        check("a card with MORE files than were collected is KEEP",
               v == cf.KEEP, (v, why))
 
-        v, why = cf.classify("S09999.PPM", 230415, idx)
-        check("no local copy at all is KEEP -- this is what protects an "
-              "abandoned round", v == cf.KEEP, (v, why))
+        v, why = cf.classify_tag((2, 460831), local)
+        check("one byte different is KEEP -- totals must match exactly",
+              v == cf.KEEP, (v, why))
 
-        v, why = cf.classify("S00300.PPM", None, idx)
-        check("an unread size REFUSES rather than matching",
+        v, why = cf.classify_tag(None, local)
+        check("an unread card summary REFUSES, it does not delete",
               v == cf.REFUSE, (v, why))
 
-        # THE ONE THAT MATTERS MOST: an empty listing must not read as done.
-        rows, summ = cf.plan([], idx)
-        check("a plan over an EMPTY listing is a refusal, not an empty plan",
-              "refused" in summ and not rows, summ)
+        v, why = cf.classify_tag((2, 460830), None)
+        check("an unreadable local side REFUSES too", v == cf.REFUSE, (v, why))
 
-        rows, summ = cf.plan([("S00300.PPM", 230415)], {})
-        check("a plan with NO local index is a refusal -- nothing could be "
-              "verified", "refused" in summ, summ)
+        v, why = cf.classify_tag((4, 921660), (0, 0))
+        check("nothing collected locally is KEEP -- this is what protects an "
+              "abandoned round", v == cf.KEEP, (v, why))
 
-        rows, summ = cf.plan(
-            [("S00300.PPM", 230415), ("S00600.PPM", 230415),
-             ("S09999.PPM", 230415), ("S00300.PPM", None)], idx)
-        check("a real plan reports its sample size beside its verdict",
-              summ.get("examined") == 4, summ)
-        check("and exactly one of four is deletable",
-              summ.get(cf.DELETE) == 1, summ)
-        check("two are kept", summ.get(cf.KEEP) == 2, summ)
-        check("one refuses", summ.get(cf.REFUSE) == 1, summ)
+        v, why = cf.classify_tag((0, 0), local)
+        check("nothing on the card is KEEP, not a spurious delete",
+              v == cf.KEEP, (v, why))
 
-    # The tool itself must refuse to run, because its card half is unwritten.
+    # 3. The tool refuses to run, because its card half is unwritten.
     rc = cf.main(["--tags", "D1"])
     check("the CLI refuses at the top rather than half-driving a delete",
           rc == 2, rc)

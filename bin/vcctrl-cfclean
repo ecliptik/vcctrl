@@ -5,9 +5,11 @@ to delete anything not PROVEN collected.
 STATUS: THE DECISION HALF IS COMPLETE AND TESTED. THE CARD-DRIVING HALF IS NOT
 WRITTEN, and this tool refuses at the top rather than pretending otherwise.
 Reading `DIR LOGS\\<TAG>\\` back off the screen needs the Gateway, which was
-not available when this was written. `plan()` below is the part that decides
-what is safe, it is pure, and `test_cfclean_never_deletes_what_it_cannot_prove`
-covers it. Wiring the DOS read is mechanical; the dangerous half is done.
+not available when this was written. `parse_dir_summary()` and `classify_tag()`
+below are the parts that decide what is safe, they are pure, and
+`test_cfclean_never_deletes_what_it_cannot_prove` covers them -- including
+against REAL OCR captured from the rig. What is missing is only issuing the
+`DIR` and handing its OCR to the parser.
 
 WHY THIS EXISTS. Frame dumps are 230,415 bytes each, four per cell, and they
 are in neither glob:
@@ -32,9 +34,17 @@ happened on this rig:
     count: 0 from a case-mismatched FIND  absence indistinguishable from a typo
     print gate open, collect gate shut    a well-formed zero meaning "not measured"
 
-So `plan()` asserts its population is non-empty before reporting anything,
-compares content rather than status, and carries THREE outcomes per file --
-never two.
+AND ONE MORE, FOUND BY TESTING THIS TOOL'S OWN INPUT: OCR reads DOS `DIR`
+output with the SIZES right and the NAMES WRONG.
+
+    real   R1A  LOG  1,102  08-20-26  10:58p
+    OCR    RIA  LOG  1,102  88-20-26  18:58p
+
+PPM filenames are `S<tick>.PPM` -- all digits -- so per-file name matching off
+a listing cannot be made safe. **The card is therefore asked only for two
+numbers: how many files, and how many bytes.** Both OCR correctly in every
+sample. The local side supplies everything else, and a count-and-total match
+over a directory is the proof. Three outcomes, never two.
 
 DESIGN DECISIONS:
 
@@ -56,6 +66,7 @@ DESIGN DECISIONS:
 """
 import argparse
 import os
+import re
 import sys
 
 KEEP, DELETE, REFUSE = "KEEP", "DELETE", "REFUSE"
@@ -70,57 +81,92 @@ def local_index(incoming):
     return idx
 
 
-def classify(name, card_size, idx):
-    """(verdict, reason) for ONE card file. Three outcomes, never two.
+def parse_dir_summary(ocr):
+    """(count, total_bytes) from a DOS DIR summary, or None if unreadable.
 
-    DELETE  a local file of exactly this size exists -- proven collected
-    KEEP    no local copy, or none of the right size -- NOT collected
-    REFUSE  we could not tell. Never authorises a deletion.
+    THIS IS THE ONLY THING WE READ OFF THE SCREEN, AND THAT IS DELIBERATE.
 
-    `card_size` of None means the listing did not give us a size, which is
-    COULD NOT LOOK and must not read as a match.
+    Measured against real captures 2026-08-20: OCR reads DOS `DIR` output with
+    the SIZES correct and the NAMES wrong.
+
+        real   R1A  LOG  1,102  08-20-26  10:58p
+        OCR    RIA  LOG  1,102  88-20-26  18:58p
+
+    `R1A` -> `RIA`, `08` -> `88`, `10` -> `18`. The digit glyphs this console
+    font produces are not reliably distinguishable -- the same defect that had
+    `count: 0` reading as `count: @`.
+
+    **PPM filenames are `S<tick>.PPM` -- ALL DIGITS.** So matching per-file by
+    name off an OCR'd listing cannot be made safe, and a delete tool that does
+    it is one glyph away from matching the wrong file. Sizes, counts and totals
+    OCR correctly in every sample; names and dates do not.
+
+    So the card is asked only for two numbers -- how many files and how many
+    bytes -- and the local side supplies everything else.
     """
-    paths = idx.get(name.upper(), [])
-    if card_size is None:
-        return REFUSE, "no size read back for %s -- could not look" % name
-    if not paths:
-        return KEEP, "no local copy -- never collected, or an abandoned round"
-    for p in paths:
-        try:
-            if os.path.getsize(p) == card_size:
-                return DELETE, "content size matches %s" % p
-        except OSError as e:
-            return REFUSE, "could not stat %s: %s" % (p, e)
-    sizes = []
-    for p in paths:
-        try:
-            sizes.append(os.path.getsize(p))
-        except OSError:
-            return REFUSE, "could not stat %s" % p
-    return KEEP, "local copies exist but none is %d bytes (found %s)" % (
-        card_size, sizes)
+    if not ocr:
+        return None
+    # "  1 file(s)     122,485 bytes"  -- and OCR renders file(s) as filets),
+    # fitets), file<s), so the word is not matched at all. The shape is:
+    # <count> ... <bytes> bytes, on one line, and that is what is anchored on.
+    for line in ocr.splitlines():
+        m = re.search(r"(\d[\d,]*)\s+f\S*\s+([\d,]+)\s+bytes", line, re.I)
+        if m:
+            try:
+                return (int(m.group(1).replace(",", "")),
+                        int(m.group(2).replace(",", "")))
+            except ValueError:
+                return None
+    return None
 
 
-def plan(listing, idx):
-    """Decide over a whole listing. Returns (rows, summary).
+def local_tag_totals(incoming, tag, suffix=".PPM"):
+    """(count, total_bytes) for a tag's collected files, or (0, 0)."""
+    n = tot = 0
+    for root, _dirs, files in os.walk(incoming):
+        for f in files:
+            if not f.upper().endswith(suffix.upper()):
+                continue
+            # 0322 puts a round's output in LOGS\<TAG>\, and the collect
+            # mirrors that, so the tag is a path component. Fall back to a
+            # prefix match for the pre-0322 flat layout.
+            if tag.upper() in [p.upper() for p in root.split(os.sep)] \
+               or f.upper().startswith(tag.upper()):
+                try:
+                    tot += os.path.getsize(os.path.join(root, f))
+                    n += 1
+                except OSError:
+                    return None
+    return (n, tot)
 
-    `listing` is [(name, size_or_None)] as read off the card.
 
-    A PLAN OVER AN EMPTY LISTING IS NOT AN EMPTY PLAN, IT IS A REFUSAL. An
-    empty population and a fully-collected one produce the same "nothing to
-    keep" output, and that is the shape that has cost this project a whole
-    round more than once.
+def classify_tag(card, local):
+    """(verdict, reason) for a whole tag directory. Three outcomes, never two.
+
+    DELETE  count AND total bytes both match -- the directory is collected
+    KEEP    they differ, or nothing was collected
+    REFUSE  either side could not be read
+
+    Compares TOTALS rather than filenames because filenames are the part OCR
+    gets wrong. A count-and-bytes match over a directory is strong evidence
+    every file arrived; a per-name match built on misread digits is not
+    evidence at all.
     """
-    if not listing:
-        return [], {"refused": "empty listing -- nothing was examined, which "
-                                "is not the same as nothing being there"}
-    if not idx:
-        return [], {"refused": "no local files indexed at all -- nothing could "
-                               "be verified, so nothing may be deleted"}
-    rows = [(n, s) + classify(n, s, idx) for n, s in listing]
-    summary = {v: sum(1 for r in rows if r[2] == v) for v in (KEEP, DELETE, REFUSE)}
-    summary["examined"] = len(rows)
-    return rows, summary
+    if card is None:
+        return REFUSE, "could not read the card's DIR summary"
+    if local is None:
+        return REFUSE, "could not stat the local copies"
+    cn, cb = card
+    ln, lb = local
+    if cn == 0:
+        return KEEP, "nothing on the card for this tag"
+    if ln == 0:
+        return KEEP, "nothing collected locally -- never collected, or an " \
+                     "abandoned round"
+    if (cn, cb) == (ln, lb):
+        return DELETE, "%d files / %d bytes match exactly" % (cn, cb)
+    return KEEP, "card has %d/%d bytes, local has %d/%d -- NOT proven" % (
+        cn, cb, ln, lb)
 
 
 def main(argv=None):
@@ -137,13 +183,14 @@ def main(argv=None):
     # completed one. See docs/OPEN-FAULTS.md.
     print("REFUSED: the card-reading half of this tool is not written.")
     print()
-    print("  `plan()` decides what is safe and is tested, but reading")
+    print("  parse_dir_summary() and classify_tag() decide what is safe and")
+    print("  are tested against real OCR, but issuing the DIR and reading it")
     print("  `DIR LOGS\\<TAG>\\` back off the screen needs the Gateway, which")
     print("  was unavailable when this was written.")
     print()
-    print("  What is missing is ONE function: issue the DIR, OCR the listing,")
-    print("  and return [(name, size)] -- with size None on any line that could")
-    print("  not be read, so classify() returns REFUSE rather than guessing.")
+    print("  What is missing is ONE call: issue `DIR LOGS\\<TAG>\\*.PPM`, hand")
+    print("  the OCR to parse_dir_summary(), and pass its result to")
+    print("  classify_tag(). A None from the parser must stay None.")
     print()
     print("  Do NOT wire it to a delete until that read has been exercised")
     print("  against a real card listing, including a truncated one.")
