@@ -3349,7 +3349,7 @@ def _push_tls_paths():
 # Bind address for the web UI: LOOPBACK ONLY.
 #
 # Nothing listens on the tailnet directly. `tailscale serve` terminates TLS for
-# vcctrl-pi.example.ts.net and proxies here, so the only way in is over HTTPS,
+# the machine's MagicDNS name and proxies here, so the only way in is HTTPS,
 # and that is the operator's decision -- plain http is not merely discouraged,
 # it is unreachable.
 #

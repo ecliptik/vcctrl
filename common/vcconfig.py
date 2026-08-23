@@ -227,7 +227,11 @@ DEFAULTS = {
         },
     },
     "control": {
-        "daemon_host": "usb4vc",
+        # NO DEFAULT daemon_host. There is no sensible one: a hostname here
+        # means a fresh clone silently tries to ssh to the machine name of
+        # whoever wrote it, and the failure reads as a network problem rather
+        # than as missing configuration. Absent is the honest answer, and the
+        # callers say what to set.
         "shots_dir": "/tmp/vcctrl-shots",
     },
     "harness": {
@@ -585,7 +589,35 @@ def _report(cfg):
 
 def main(argv):
     args = [a for a in argv[1:] if not a.startswith("-")]
-    path = args[1] if len(args) > 1 else None
+
+    # `get PATH [FALLBACK]` -- one value, for shell callers.
+    #
+    # Exit 0 and print the value; exit 1 and print nothing when the key is
+    # absent and no fallback was given. A shell caller cannot tell an empty
+    # string from a missing key, so the EXIT CODE carries that distinction and
+    # the caller is expected to check it. Printing a fallback on stdout and
+    # also exiting 0 would make "unset" and "set to the fallback"
+    # indistinguishable, which is the collapse this module exists to prevent.
+    if args and args[0] == "get":
+        if len(args) < 2:
+            sys.stderr.write("usage: vcconfig.py get PATH [FALLBACK]\n")
+            return 2
+        try:
+            cfg = load(strict=False)
+        except ConfigError as exc:
+            sys.stderr.write("vcctrl config: %s\n" % exc)
+            return 2
+        v = cfg.optional(args[1])
+        if v is ABSENT or v is NONE:
+            if len(args) > 2:
+                sys.stdout.write(args[2])
+                return 0
+            return 1
+        sys.stdout.write(str(v))
+        return 0
+
+    args = [a for a in args if a != "check"]
+    path = args[0] if args else None
     try:
         cfg = load(path)
     except ConfigError as exc:

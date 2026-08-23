@@ -4715,3 +4715,50 @@ def test_the_suite_does_not_read_the_operators_config():
     raw = open(os.path.join(HERE, "test-config.yaml")).read()
     check("and it names no routable address at all",
           not re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", raw), "an IP literal")
+
+
+def test_no_rig_identifiers_in_the_code():
+    """Phase 3 acceptance, and a down payment on phase 7.
+
+    Every hostname, address and plug name belongs in vcctrl.yaml, which is not
+    tracked. A literal that creeps back into the code does not fail anything --
+    it just works, on one rig, and makes a fresh clone look configured while
+    pointing at hardware in somebody else's building. Nothing but a guard
+    notices that.
+
+    Deliberately NOT matched: the string "usb4vc" on its own. That is the name
+    of the PRODUCT -- the protocol board, the systemd unit, the status field --
+    and sweeping it up here would force a rename of things that are not
+    configuration at all.
+    """
+    print("\nno rig identifiers in code")
+    import subprocess
+    root = os.path.join(HERE, os.pardir)
+    pats = {
+        "the rig's MagicDNS name": r"example-tailnet",
+        "the lab subnet": r"192\.168\.7\.",
+        "the plug's MAC": r"00:00:5E",
+        "the plug's alias": r"retro-rig-plug",
+        "a hostname as an ssh default": r':-usb4vc\}|"VCCTRL_HOST", "usb4vc"',
+    }
+    tracked = subprocess.run(["git", "-C", root, "ls-files",
+                              "bin", "pi", "daemon", "common", "tools"],
+                             capture_output=True, text=True).stdout.split()
+    check("control: there were tracked files to read", len(tracked) > 10,
+          len(tracked))
+    for label, pat in pats.items():
+        hits = []
+        for rel in tracked:
+            p = os.path.join(root, rel)
+            try:
+                body = open(p, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            for i, line in enumerate(body.splitlines(), 1):
+                if re.search(pat, line):
+                    hits.append("%s:%d" % (rel, i))
+        check("no %s in tracked code" % label, not hits, hits[:4])
+
+    # A control: the guard must be capable of finding something.
+    check("control: the patterns do match when present",
+          bool(re.search(pats["the lab subnet"], "addr 192.0.2.46 here")))

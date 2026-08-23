@@ -50,7 +50,32 @@ try:
 except ImportError:
     sys.exit("needs python3-websockets (pip install websockets)")
 
-HOST = "vcctrl-pi.example.ts.net"
+# Load generators run on the daemon host. Take the name from
+# config so a clone does not point at somebody else's tailnet.
+def _host_from_config(default="127.0.0.1"):
+    """The daemon web host, without its scheme. Falls back to loopback:
+    these tools load-test the daemon they run beside, so loopback is the
+    honest default rather than a hostname belonging to another rig."""
+    try:
+        import vcconfig
+    except ImportError:
+        try:
+            import importlib.util as _u
+            _p = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "common", "vcconfig.py")
+            _s = _u.spec_from_file_location("vcconfig", _p)
+            vcconfig = _u.module_from_spec(_s)
+            _s.loader.exec_module(vcconfig)
+        except Exception:
+            return default
+    try:
+        web = vcconfig.load(strict=False).default("control.web", "") or ""
+    except Exception:
+        return default
+    return web.split("://", 1)[-1].split("/", 1)[0] or default
+
+
+HOST = os.environ.get("VCCTRL_WS_HOST") or _host_from_config()
 URL = "wss://%s/ws" % HOST
 CTX = ssl.create_default_context()
 CTX.check_hostname = False

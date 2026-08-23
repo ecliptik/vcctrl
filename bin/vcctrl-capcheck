@@ -41,10 +41,13 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from vcctrl_common import vc, vc_json, wait_for_prompt  # noqa: E402
+from vcctrl_common import (  # noqa: E402
+    vc, vc_json, wait_for_prompt, cfg_get)
 
-SHOTS = os.environ.get("VCCTRL_SHOTS", "/tmp/vcctrl-shots")
-HOST = os.environ.get("VCCTRL_HOST", "usb4vc")
+SHOTS = os.environ.get("VCCTRL_SHOTS",
+                       cfg_get("control.shots_dir", "/tmp/vcctrl-shots"))
+HOST = os.environ.get("VCCTRL_HOST",
+                      cfg_get("control.daemon_host", "") or "")
 
 
 def profile(n=16):

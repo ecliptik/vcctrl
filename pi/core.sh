@@ -24,7 +24,14 @@
 #   input poller and a web thread per request -- and the interesting question
 #   is usually what the OTHER threads were doing at the same instant.
 set -euo pipefail
-PI="${VCCTRL_PI:-usb4vc}"
+# No hardcoded hostname: see bin/vcctrl. VCCTRL_PI still wins, so a
+# one-off against another machine needs no config edit.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/common/config.sh"
+PI="${VCCTRL_PI:-${VCCTRL_HOST:-$(vc_cfg control.daemon_host "")}}"
+if [ -z "$PI" ]; then
+  echo "core.sh: no daemon host configured (control.daemon_host, or VCCTRL_PI)" >&2
+  exit 3
+fi
 case "${1:-bt}" in
   list) ssh "$PI" "sudo coredumpctl list --no-pager" ;;
   *)

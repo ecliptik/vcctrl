@@ -36,8 +36,17 @@ import subprocess
 import sys
 import time
 
-HOST = os.environ.get("VCCTRL_HOST", "usb4vc")
-DEV = os.environ.get("VCCTRL_ALSA", "hw:1,0")
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from vcctrl_common import cfg_get  # noqa: E402
+
+HOST = os.environ.get("VCCTRL_HOST",
+                      cfg_get("control.daemon_host", "") or "")
+# hw:1,0 is an INDEX and is kept only as a last resort. Config names the
+# device, which is the point: an index can land on an HDMI output and
+# capture silence from it while reporting healthy.
+DEV = os.environ.get("VCCTRL_ALSA",
+                     cfg_get("capabilities.audio.settings.device", "hw:1,0"))
 
 # Below this, treat as no signal rather than quiet. Chosen well under the
 # -65.6 dB noise floor so a genuinely idle-but-connected path reads as
@@ -51,8 +60,12 @@ FLOOR_DB = -80.0
 # defining property intact: it still touches neither the keyboard nor
 # /dev/video0, and now it touches no hardware at all, so it remains the one
 # check that is safe to run DURING a measured cell.
+# No hardcoded hostname. Env first, then control.web from
+# vcctrl.yaml. Empty is a supported answer and the callers below
+# treat it as "no daemon reachable" rather than curling a name that
+# belongs to a different rig.
 VCCTRL_WEB = os.environ.get(
-    "VCCTRL_WEB", "https://vcctrl-pi.example.ts.net")
+    "VCCTRL_WEB", cfg_get("control.web", "") or "")
 
 
 def _daemon_alive(timeout=2.0):

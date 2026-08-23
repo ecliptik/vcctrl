@@ -42,7 +42,8 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
-    vc, vc_json, at_prompt, ensure_powered, set_lock_owner, get_lock_owner)
+    vc, vc_json, at_prompt, ensure_powered, set_lock_owner, get_lock_owner,
+    cfg_get)
 
 CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
 
@@ -61,8 +62,18 @@ POLL_SECONDS = 15
 # a caller cannot open the device itself -- it would get EBUSY. It also means a
 # frame is already captured before anyone asks for one, which is why this went
 # from ~40 s to well under a second.
+# No hardcoded hostname. Env first, then control.web from
+# vcctrl.yaml. Empty is a supported answer and the callers below
+# treat it as "no daemon reachable" rather than curling a name that
+# belongs to a different rig.
 VCCTRL_WEB = os.environ.get(
-    "VCCTRL_WEB", "https://vcctrl-pi.example.ts.net")
+    "VCCTRL_WEB", cfg_get("control.web", "") or "")
+
+
+def _daemon_host():
+    """The ssh destination, env first then config. Empty is a real answer and
+    the ssh below will fail loudly rather than silently reaching another rig."""
+    return os.environ.get("VCCTRL_HOST") or cfg_get("control.daemon_host", "") or ""
 
 
 def _daemon_alive(timeout=2.0):
@@ -178,7 +189,7 @@ def _grab_ffmpeg(tag, sp, dest):
     Costs ~40 s: device open, lock acquisition, settle frames, then scp.
     """
     subprocess.run(
-        ["ssh", os.environ.get("VCCTRL_HOST", "usb4vc"),
+        ["ssh", _daemon_host(),
          "rm -f /tmp/vcraw*.jpg; timeout 60 ffmpeg -hide_banner -loglevel error "
          "-f v4l2 -input_format mjpeg -video_size 640x480 -i /dev/video0 "
          "-frames:v 16 -vf fps=8 -y /tmp/vcraw%02d.jpg"],
@@ -187,7 +198,7 @@ def _grab_ffmpeg(tag, sp, dest):
     for old_raw in glob.glob(os.path.join(sp, "vcraw*.jpg")):
         os.unlink(old_raw)
     subprocess.run(["scp", "-q",
-                    "%s:/tmp/vcraw*.jpg" % os.environ.get("VCCTRL_HOST", "usb4vc"),
+                    "%s:/tmp/vcraw*.jpg" % _daemon_host(),
                     sp], capture_output=True)
     try:
         import hashlib

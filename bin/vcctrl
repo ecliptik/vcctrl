@@ -5,7 +5,18 @@
 # Claude Code ever runs on the Pi itself (call `vcctrl` there directly).
 set -euo pipefail
 
-VCCTRL_HOST="${VCCTRL_HOST:-usb4vc}"
+# The daemon host. Env wins, then vcctrl.yaml, and there is deliberately no
+# hardcoded hostname left here: a wrapper that defaults to one rig's machine
+# name makes a fresh clone look configured while talking to nothing.
+# shellcheck source=../common/config.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/common/config.sh"
+VCCTRL_HOST="${VCCTRL_HOST:-$(vc_cfg control.daemon_host "")}"
+if [ -z "$VCCTRL_HOST" ]; then
+  echo "vcctrl: no daemon host configured." >&2
+  echo "  Set control.daemon_host in vcctrl.yaml (see vcctrl.example.yaml)," >&2
+  echo "  or export VCCTRL_HOST=<ssh-destination>." >&2
+  exit 3
+fi
 
 # ---------------------------------------------------------------------------
 # CONNECTION MULTIPLEXING -- this is not a speed tweak, it is a fix for an

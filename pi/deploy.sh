@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 # Push vcctrl from the VM to the Pi and install it there.
 set -euo pipefail
-HOST="${VCCTRL_HOST:-usb4vc}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/common/config.sh"
+HOST="${VCCTRL_HOST:-$(vc_cfg control.daemon_host "")}"
+if [ -z "$HOST" ]; then
+  echo "deploy: no daemon host configured. Set control.daemon_host in" >&2
+  echo "  vcctrl.yaml (see vcctrl.example.yaml) or export VCCTRL_HOST." >&2
+  exit 3
+fi
+# The daemon web base, for the busy guard and the hang explainer. An
+# empty value is a supported answer: those checks then skip rather than
+# curl a hostname that belongs to a different rig.
+WEB="${VCCTRL_WEB:-$(vc_cfg control.web "")}"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ---------------------------------------------------------------------------
@@ -38,7 +48,7 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guard_busy() {
   local state owner inflight
   state="$(curl -fsS --max-time 5 \
-      "${VCCTRL_WEB:-https://vcctrl-pi.example.ts.net}/state.json" 2>/dev/null || true)"
+      "$WEB/state.json" 2>/dev/null || true)"
   [ -n "$state" ] || return 0        # daemon down: nothing to interrupt
   owner="$(printf '%s' "$state" | python3 -c \
       'import json,sys; print((json.load(sys.stdin).get("lock") or {}).get("owner") or "")' 2>/dev/null || true)"
@@ -62,7 +72,7 @@ print(sum(1 for i in d if i.get("by") not in ("browser", None)))' 2>/dev/null ||
   # activity from anyone who is not a browser is the better signal.
   local busy
   busy="$(curl -fsS --max-time 5 \
-      "${VCCTRL_WEB:-https://vcctrl-pi.example.ts.net}/events?since=0" 2>/dev/null \
+      "$WEB/events?since=0" 2>/dev/null \
       | python3 -c '
 import json, sys, time
 try:
@@ -147,7 +157,7 @@ SCP="timeout 45 scp -q -o BatchMode=yes -o ConnectTimeout=10"
 explain_hang() {
   echo "ssh to $HOST did not complete." >&2
   if curl -fsS --max-time 5 \
-      "${VCCTRL_WEB:-https://vcctrl-pi.example.ts.net}/state.json" \
+      "$WEB/state.json" \
       >/dev/null 2>&1; then
     echo "The daemon IS answering over HTTP, so the Pi is up and the network" >&2
     echo "is fine -- this is the console wedge: journald blocked on tty1 takes" >&2

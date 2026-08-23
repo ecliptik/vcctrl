@@ -27,6 +27,42 @@ VCCTRL = os.path.join(HERE, "vcctrl")
 # Measured 2026-08-19 at an idle prompt. NOT measured during POST, where calls
 # were observed to block substantially longer -- a spam loop budgeted at 40 s
 # ran 71 s. Treat this as a floor, not a bound.
+def _cfg():
+    """The resolved configuration, or None when it cannot be loaded.
+
+    None is a real answer and callers must handle it. A tool that cannot read
+    the config still runs; it simply has no defaults to offer, and saying so
+    beats inventing a hostname that belongs to somebody else.
+    """
+    try:
+        import vcconfig
+    except ImportError:
+        try:
+            import importlib.util as _u
+            _p = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "common", "vcconfig.py")
+            _s = _u.spec_from_file_location("vcconfig", _p)
+            vcconfig = _u.module_from_spec(_s)
+            _s.loader.exec_module(vcconfig)
+        except Exception:
+            return None
+    try:
+        return vcconfig.load(strict=False)
+    except Exception:
+        return None
+
+
+def cfg_get(path, fallback=None):
+    """One setting, with a fallback. Never raises."""
+    c = _cfg()
+    if c is None:
+        return fallback
+    try:
+        return c.default(path, fallback)
+    except Exception:
+        return fallback
+
+
 CALL_COST_S = 1.5
 
 # The CONFIG.SYS menu appears within a few seconds of the POST edge and times
