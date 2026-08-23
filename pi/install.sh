@@ -212,6 +212,49 @@ else
   echo "  cp vcctrl.example.yaml vcctrl.yaml and edit it to change that."
 fi
 
+# THE CAPTURE DEVICE DROP-IN IS A SECOND COPY, AND SECOND COPIES DRIFT.
+#
+# device-pin.conf sets VCCTRL_ALSA and VCCTRL_VIDEO in the unit's environment.
+# Env outranks the config file, so once vcctrl.yaml names the same devices the
+# drop-in is not merely redundant -- it is authoritative, and it is the copy
+# nobody edits. Change the device in vcctrl.yaml, forget the drop-in, and the
+# daemon captures from the old one while the file you edited says otherwise.
+# That failure has no symptom: capture binds SOMETHING and looks healthy.
+#
+# So: where the config names both devices, the drop-in is REMOVED rather than
+# regenerated. Regenerating would keep two files that must agree; removing
+# leaves one that cannot disagree with itself.
+#
+# Conditional on the config actually naming them. A rig running on built-in
+# defaults still needs the pin, because the built-in default is /dev/video0 --
+# an index, and this machine has vc4hdmi outputs that can take it.
+if [ -f "$PREFIX/vcctrl.yaml" ] \
+   && python3 - "$PREFIX/vcctrl.yaml" <<'PY'
+import sys
+sys.path.insert(0, "/opt/vcctrl")
+import vcconfig
+try:
+    c = vcconfig.load(sys.argv[1])
+    v = c.optional("capabilities.video.settings.device")
+    a = c.optional("capabilities.audio.settings.device")
+    bad = (vcconfig.ABSENT, vcconfig.NONE)
+    sys.exit(0 if (v not in bad and a not in bad) else 1)
+except Exception:
+    sys.exit(1)
+PY
+then
+  if [ -f /etc/systemd/system/vcctrld.service.d/device-pin.conf ]; then
+    sudo rm -f /etc/systemd/system/vcctrld.service.d/device-pin.conf
+    sudo systemctl daemon-reload
+    echo "removed device-pin.conf -- vcctrl.yaml now names both capture devices,"
+    echo "  and one source that cannot disagree with itself beats two that must agree"
+  fi
+else
+  echo "NOTE: vcctrl.yaml does not name both capture devices, so the"
+  echo "  device-pin.conf drop-in is being kept. The built-in fallback is"
+  echo "  /dev/video0, which is an INDEX and can land on an HDMI output."
+fi
+
 # The legacy config.json is NOT written any more and NOT removed either. It is
 # still read as a fallback for one release so an existing rig does not lose
 # power control at the moment of upgrading, which is the moment nobody is
