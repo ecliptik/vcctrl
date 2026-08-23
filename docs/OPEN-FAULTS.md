@@ -326,9 +326,20 @@ matters:
   not wall time in that file and any t-to-wall arithmetic on it is wrong.
   (A good file looks like `RGA-glass.avi`: 11 repeats in 6,301 frames.)
 
-**Not yet built:** a `buffer_avi` refusal when the window starts before the
-caller's own start time. That would make provenance structural instead of
-careful.
+**BUILT AND WIRED, 2026-08-23.** `buffer_avi(since=, clip=)` refuses a window
+that opens before the caller's own start time, naming how many frames are
+foreign and by how long; `--clip` takes only your own and reports
+`clipped_frames` so a shortened recording says so. Exposed as
+`vcctrl record --out F.avi [--since T|now] [--clip]`, refusing with exit 4.
+
+**It shipped undiscoverable.** The daemon had it, the client parsed it, a test
+covered it — and the usage text mentioned neither flag, so nobody reading
+`vcctrl` help would learn the guard existed. **A guard nobody is told about is
+a guard nobody uses**, which is the same family as a check whose output nothing
+consumes. Documented 2026-08-23.
+
+**USE IT.** `--since now` at the start of a run, keep the value, pass it to
+`record`. Without it a dump is bounded by the ring, not by the run.
 
 ---
 
