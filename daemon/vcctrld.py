@@ -3785,6 +3785,28 @@ class Registry(object):
                             WEB_TLS_PORT if web.tls_up else "unavailable"))
         return web
 
+    def configured_targets(self):
+        """The `targets:` list as the page needs it, or [] when unconfigured.
+
+        [] rather than a built-in table: a page that falls back to this rig's
+        machines would name a Gateway 2000 to somebody who has never owned
+        one. The consumer says "not configured" instead, which is true.
+        """
+        t = CFG.optional("targets")
+        if t is vcconfig.ABSENT or t is vcconfig.NONE:
+            return []
+        out = []
+        for row in t:
+            if not isinstance(row, dict):
+                continue
+            nat = row.get("native") or {}
+            out.append({"board_id": row.get("board_id"),
+                        "name": row.get("name"),
+                        "width": nat.get("width"),
+                        "height": nat.get("height"),
+                        "leds": row.get("leds")})
+        return out
+
     def report(self):
         """Three states, never two.
 

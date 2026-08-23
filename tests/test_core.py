@@ -5017,3 +5017,64 @@ def test_backend_name_is_the_configured_name_not_the_class_name():
         else:
             os.environ["VCCTRL_CONFIG"] = old
         os.unlink(p)
+
+
+def test_the_page_gets_its_targets_from_the_daemon():
+    """Phase 5: one table, not two.
+
+    The page carried "640x480 on the Gateway, 512x342 on the Macintosh" in a
+    tooltip -- one rig's two machines, hardcoded, and the copy nobody would
+    think to edit when a board changed. The daemon already knows which board
+    maps to which machine at what geometry, so the page asking beats the page
+    remembering.
+    """
+    print("\npage targets from state.json")
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+
+    # Strip line comments before searching: a comment explaining that a
+    # Macintosh has no LED channel is documentation, not a hardcoded table,
+    # and forcing those out would make the file worse.
+    def _decomment(line):
+        """Drop a trailing // comment. Crude on purpose.
+
+        `://` is skipped so a URL survives, which is the only case in this
+        file that matters. This is a guard against a hardcoded table creeping
+        back, not a JavaScript parser -- if it ever needs to be one, the check
+        is wrong rather than the tool.
+        """
+        i, n = 0, len(line)
+        while True:
+            i = line.find("//", i)
+            if i < 0:
+                return line
+            if i > 0 and line[i - 1] == ":":
+                i += 2
+                continue
+            return line[:i]
+
+    code = "\n".join(_decomment(ln) for ln in page.splitlines()
+                     if not ln.lstrip().startswith(("//", "*", "/*")))
+    for name in ("Gateway", "Macintosh"):
+        hits = [ln.strip()[:70] for ln in code.splitlines() if name in ln]
+        check("no %r outside comments in the page" % name, not hits, hits[:2])
+    check("no native-resolution literal outside comments",
+          "512x342" not in code, "512x342")
+    # Control: the search must be able to find the thing it looks for.
+    check("control: the stripper keeps real code and drops trailing comments",
+          _decomment("btn.title = x; // a Gateway thing").strip()
+          == "btn.title = x;"
+          and _decomment("const u = 'https://x/y';") == "const u = 'https://x/y';")
+
+    check("the page builds the tooltip from j.targets",
+          "j.targets" in page, "j.targets missing")
+    check("and it degrades to the bare sentence when nothing is configured",
+          "parts.length ?" in page or "parts.length?" in page)
+
+    # The daemon end: it must actually serve them.
+    check("state.json carries targets", '"targets": self.registry'
+          in open(os.path.join(HERE, os.pardir, "daemon", "vcweb.py"),
+                  encoding="utf-8").read())
+    reg_src = open(DAEMON, encoding="utf-8").read()
+    check("configured_targets returns [] rather than a built-in table",
+          "def configured_targets" in reg_src and "return []" in reg_src)

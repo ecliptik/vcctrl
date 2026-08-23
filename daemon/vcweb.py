@@ -715,6 +715,17 @@ class WebCapability(object):
                 # The page uses this to open its WebSocket against the port
                 # that speaks HTTP/1.1, rather than the h2 proxy on 443.
                 "tls_port": self.tls_port if self.tls_up else 0,
+                # THE CONFIGURED TARGETS, so the page has no table of its own.
+                #
+                # The page used to name both machines and their native
+                # resolutions in a tooltip. Two tables that must agree is one
+                # table too many: the daemon knows which boards map to which
+                # machines and at what geometry, and the page asking is
+                # strictly better than the page remembering. Empty list is a
+                # real answer -- a rig that configures no targets gets a
+                # tooltip that says so rather than one naming somebody else's
+                # hardware.
+                "targets": self.registry.configured_targets(),
                 # Plug identity so a consumer can say WHICH plug it is about
                 # -- "power: on" is not actionable when the rig has one plug
                 # that serves whichever machine is currently connected to it.

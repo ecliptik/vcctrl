@@ -1821,8 +1821,8 @@
 
 <div id="pop-zoom" class="pop popmenu" role="dialog" aria-label="Zoom" hidden>
   <button data-zoom="fit" title="The whole screen, as large as it fits">Fit to Screen</button>
-  <button data-zoom="1"
-          title="One capture pixel per screen pixel — 640x480 on the Gateway, 512x342 on the Macintosh">Original — actual resolution</button>
+  <button data-zoom="1" id="zoom-1"
+          title="One capture pixel per screen pixel">Original — actual resolution</button>
   <button data-zoom="2" title="Twice the captured size">200% Original</button>
   <button data-zoom="4" title="Four times the captured size">400% Original</button>
   <hr>
@@ -4448,6 +4448,24 @@ async function pollState() {
   // this rig that is the difference between a smooth picture and a stuttering
   // one -- worth being able to see rather than guess at.
   const got = achievedFps();
+
+  // ZOOM TOOLTIP, FROM THE DAEMON'S TARGET TABLE.
+  //
+  // This used to read "640x480 on the Gateway, 512x342 on the Macintosh" --
+  // one rig's two machines, hardcoded in the page. Two tables that must agree
+  // is one table too many, and this was the copy nobody would think to edit
+  // when a board changed. An empty list is a real answer and says so, rather
+  // than naming hardware the viewer does not own.
+  if (Array.isArray(j.targets)) {
+    const btn = document.getElementById('zoom-1');
+    if (btn) {
+      const parts = j.targets
+        .filter(t => t && t.width && t.height && t.name)
+        .map(t => `${t.width}x${t.height} on the ${t.name}`);
+      btn.title = 'One capture pixel per screen pixel'
+        + (parts.length ? ' — ' + parts.join(', ') : '');
+    }
+  }
 
   if (j.tls_port !== undefined && j.tls_port !== tlsPort) {
     tlsPort = j.tls_port;
