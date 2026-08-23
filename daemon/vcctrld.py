@@ -332,6 +332,91 @@ def power_set(host, on):
     return err
 
 
+# --------------------------------------------------------------- power backends
+#
+# Two real implementations, not one plus an interface. An interface with a
+# single implementation is a guess about what varies, and this one was wrong
+# twice before it was written down: `kasa_send` had the port as a literal, and
+# `power_state` is shaped like the Kasa reply rather than like a plug.
+#
+# Both return the SAME three-valued `on`: True, False, or None for "answered
+# without saying". None must survive to the caller -- bool(None) is False,
+# which reports "the machine is off" on the word of a reply that never
+# mentioned it.
+
+
+class KasaLegacyPower(object):
+    """TP-Link's pre-KLAP LAN protocol. No cloud account, no dependency."""
+
+    name = "kasa-legacy"
+
+    def __init__(self, settings):
+        self.settings = settings or {}
+
+    def host(self):
+        return self.settings.get("host") or kasa_host()
+
+    def state(self):
+        return power_state(self.host())
+
+    def set(self, on):
+        return power_set(self.host(), on)
+
+
+class ShellPower(object):
+    """Run the operator's own commands.
+
+    The escape hatch for every plug this project will never support: a Zigbee
+    bridge, a relay board, a PDU with a web form, a person with a switch and a
+    script. Settings are `on_cmd`, `off_cmd` and `state_cmd`; state_cmd must
+    print `on` or `off`.
+
+    ANYTHING ELSE ON STDOUT IS `None`, NOT AN ERROR AND NOT `off`. A script
+    that prints nothing, or prints a warning, has failed to answer -- and
+    "failed to answer" is a different fact from "the plug is off". Collapsing
+    them here would hand a confident False to the LED epoch logic, which would
+    then report every reading as belonging to a powered-down machine.
+    """
+
+    name = "shell"
+
+    def __init__(self, settings):
+        self.settings = settings or {}
+
+    def host(self):
+        # There is no host; the commands are the mechanism. Returned so the
+        # capability's "is anything configured at all" check still works.
+        return self.settings.get("state_cmd") or self.settings.get("on_cmd")
+
+    def _run(self, key):
+        cmd = self.settings.get(key)
+        if not cmd:
+            raise IOError("power backend 'shell' has no %s configured" % key)
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                              timeout=float(self.settings.get("timeout_s", 20)))
+
+    def state(self):
+        p = self._run("state_cmd")
+        word = (p.stdout or "").strip().lower()
+        on = True if word == "on" else False if word == "off" else None
+        return {"on": on, "alias": self.settings.get("alias"),
+                "model": "shell", "on_time_s": None, "rssi": None,
+                "reason": None if on is not None else
+                          ("state_cmd printed %r, which is neither 'on' nor "
+                           "'off'" % word[:40])}
+
+    def set(self, on):
+        p = self._run("on_cmd" if on else "off_cmd")
+        if p.returncode != 0:
+            raise IOError("power %s_cmd exited %d: %s"
+                          % ("on" if on else "off", p.returncode,
+                             (p.stderr or "").strip()[:200]))
+        return 0
+
+
+POWER_BACKENDS = {"kasa-legacy": KasaLegacyPower, "shell": ShellPower}
+
+
 class Devices(object):
     """Owns the two uinput devices for the life of the process."""
 
@@ -720,6 +805,31 @@ class Capability(object):
 
     name = None
     bus = None
+
+    # {config name: implementation}. Empty means this capability has exactly
+    # one implementation and `backend:` may only be omitted or set to `none`.
+    # `none` is never listed here -- it is handled by the registry, because a
+    # not-configured capability must not be an object that could accidentally
+    # answer.
+    BACKENDS = {}
+
+    # The implementation used when `backend:` is absent. Named so a config
+    # that says nothing behaves exactly as the code did before backends
+    # existed, rather than becoming unconfigured by omission.
+    DEFAULT_BACKEND = None
+
+    # The NAME of that default. Separate from the class because several
+    # backends share one class -- power's kasa-legacy and shell are the same
+    # capability with a different protocol object -- so the class cannot say
+    # which one was chosen. Reporting the class's own name here is what broke
+    # power on the rig: `backend_name` came back as "power", and the protocol
+    # lookup for "power" found nothing.
+    DEFAULT_BACKEND_NAME = None
+
+    # Set by the registry after construction: which backend was chosen, and
+    # that backend's `settings` mapping from config.
+    backend_name = None
+    settings = None
 
     def __init__(self, devs):
         self.devs = devs
@@ -1270,13 +1380,19 @@ class LedsCapability(Capability):
 
 
 class PowerCapability(Capability):
-    """Mains control for the target, via the Kasa EP10.
+    """Mains control for the target.
 
     Touches no device and holds no lock, so it runs fully concurrently with
     input -- which matters, because `cycle` blocks for 15 s.
+
+    The PROTOCOL is pluggable; the capability is not. Both entries below map to
+    this same class, and `self.backend_name` selects which protocol object it
+    builds. That is the honest factoring: switching from a Kasa plug to a shell
+    command changes how a relay is toggled, not what mains control means.
     """
 
     name = "power"
+    BACKENDS = {"kasa-legacy": None, "shell": None}   # filled in below
 
     # Mains control is the most consequential thing this rig can do, and the
     # event bus is in MEMORY. A daemon restart erases it -- and a restart is
@@ -1311,6 +1427,19 @@ class PowerCapability(Capability):
     # "unknown" during exactly the quiet periods when someone glances at it.
     REFRESH_S = 60.0
 
+    def _protocol(self):
+        """The protocol object for the chosen backend.
+
+        Built lazily and not cached, so a settings change takes effect on the
+        next call rather than at the next daemon restart -- these objects hold
+        no connection and cost nothing to make.
+        """
+        impl = POWER_BACKENDS.get(self.backend_name or "kasa-legacy")
+        if impl is None:
+            raise IOError("power backend %r is not implemented"
+                          % (self.backend_name,))
+        return impl(self.settings or _cap_settings("power"))
+
     def start(self):
         # Off the main thread: the plug is on the LAN and a dead plug must not
         # delay or fail daemon startup.
@@ -1326,7 +1455,7 @@ class PowerCapability(Capability):
         try:
             host = kasa_host()
             if host:
-                self._remember(host, power_state(host))
+                self._remember(host, self._protocol().state())
                 self._fail = None
         except Exception as exc:
             # Record WHY, and let snapshot() turn `on` into null. A plug that
@@ -1415,26 +1544,26 @@ class PowerCapability(Capability):
                     % (CFG.source or "vcctrl.yaml (see vcctrl.example.yaml)")}
         action = req.get("action", "state")
         if action == "state":
-            st = power_state(host)
+            st = self._protocol().state()
             self._remember(host, st)
             return {"ok": True, "power": st}
         # Reads are not audited -- they happen on a timer from every open
         # browser tab and would bury the two lines that matter.
         self._audit(action, req.get("as"), "requested")
         if action == "on":
-            power_set(host, True)
+            self._protocol().set(True)
         elif action == "off":
-            power_set(host, False)
+            self._protocol().set(False)
         elif action == "cycle":
             # Deliberately unconditional: a wedged machine may report on while
             # being useless, so cycle means cycle rather than "on if off".
-            power_set(host, False)
+            self._protocol().set(False)
             time.sleep(float(req.get("off_seconds", POWER_CYCLE_OFF_S)))
-            power_set(host, True)
+            self._protocol().set(True)
         else:
             return {"ok": False, "error": "unknown power action: %r" % action}
         time.sleep(0.5)
-        st = power_state(host)
+        st = self._protocol().state()
         self._remember(host, st)
         self._audit(action, req.get("as"), "done on=%s" % st.get("on"))
         return {"ok": True, "power": st}
@@ -3283,6 +3412,33 @@ class BoardCapability(Capability):
         not collapse into one value, because the caller acts differently on
         each.
         """
+        # STATIC BACKEND: the operator asserts which board is installed.
+        #
+        # Reported with source "configured" and stale=None, and NEVER as
+        # "status-file". This is a DECLARED fact in the sense of the harness
+        # standard sec. 6.4 -- a human said so, the machine did not observe it,
+        # and it goes stale the moment somebody swaps a board without editing
+        # the config. Dressing an assertion up as a detection is worse than
+        # having no detection, because it resembles evidence.
+        #
+        # It exists for rigs with one permanently-installed board and no
+        # USB4VC to ask, where the alternative is `unknown` forever.
+        if self.backend_name == "static":
+            bid = (self.settings or {}).get("board_id")
+            if bid is None:
+                out = {"id": None, "name": None, "target": None,
+                       "source": "configured", "stale": None,
+                       "reason": "backend is `static` but no board_id is set"}
+            else:
+                bid = int(bid)
+                out = {"id": bid, "name": (self.settings or {}).get("name"),
+                       "target": self._targets().get(bid),
+                       "source": "configured", "stale": None,
+                       "reason": "asserted by configuration, not detected -- "
+                                 "it cannot notice a board swap"}
+            self._publish_if_changed(out)
+            return out
+
         rec = src_name = None
         reason = None
         for reader in (self._from_file, self._from_journal):
@@ -3312,11 +3468,21 @@ class BoardCapability(Capability):
                    "reason": None}
             if age is not None:
                 out["age_s"] = age
+        self._publish_if_changed(out)
+        return out
+
+    def _publish_if_changed(self, out):
+        """Emit board.changed on a transition, never on the first reading.
+
+        Extracted so the static backend uses the SAME transition logic rather
+        than a second copy of it -- two copies of "has this changed" is how a
+        board swap gets announced twice on one path and not at all on the
+        other.
+        """
         if out["id"] != self._last_id:
             if self._last_id is not _UNSET and self.bus:
                 self.bus.publish("board.changed", **out)
             self._last_id = out["id"]
-        return out
 
     def _board(self, req):
         return {"ok": True, "board": self.snapshot()}
@@ -3324,6 +3490,66 @@ class BoardCapability(Capability):
 
 # The registry. A table in the source, in load order. Video, web, audio, reset
 # and files join this list; each is one entry and touches nothing above it.
+class _Disabled(object):
+    def __repr__(self):
+        return "DISABLED"
+
+
+_DISABLED = _Disabled()
+
+
+def _cap_settings(name):
+    """A capability's `settings` mapping, or {} when there is none.
+
+    {} rather than None because every consumer indexes it, and a None here
+    would turn "no settings" into an AttributeError at the first read -- in a
+    constructor, which Rule 2 would then record as the capability having
+    failed to start.
+    """
+    v = CFG.optional("capabilities.%s.settings" % name)
+    if v is vcconfig.ABSENT or v is vcconfig.NONE or not isinstance(v, dict):
+        return {}
+    return v
+
+
+# Both protocol backends are served by the one capability class; the registry
+# only needs to know the NAMES are valid, so a typo is refused rather than
+# silently falling back to the default.
+PowerCapability.BACKENDS = {k: PowerCapability for k in POWER_BACKENDS}
+PowerCapability.DEFAULT_BACKEND = PowerCapability
+PowerCapability.DEFAULT_BACKEND_NAME = "kasa-legacy"
+
+# Board identity has two genuinely different implementations, below.
+BoardCapability.BACKENDS = {"usb4vc-runfile": BoardCapability,
+                            "static": BoardCapability}
+BoardCapability.DEFAULT_BACKEND = BoardCapability
+BoardCapability.DEFAULT_BACKEND_NAME = 'usb4vc-runfile'
+
+# THE REST HAVE ONE IMPLEMENTATION AND STILL MUST NAME IT.
+#
+# Every capability that a config can name needs its canonical backend name
+# registered here, even where there is only one. Without this the registry
+# reads `backend: v4l2-ffmpeg` as a typo and refuses to start the capability
+# -- which is the correct treatment of an unknown name, and would have taken
+# input, leds, video and audio down together on the reference rig. Caught by
+# resolving every capability against the real config before deploying rather
+# than after.
+#
+# The single-name maps are also the extension point: a second implementation
+# is one more entry, and `none` already works for all of them.
+InputCapability.BACKENDS = {"usb4vc-uinput": InputCapability}
+InputCapability.DEFAULT_BACKEND = InputCapability
+InputCapability.DEFAULT_BACKEND_NAME = 'usb4vc-uinput'
+LedsCapability.BACKENDS = {"ps2-sysfs": LedsCapability}
+LedsCapability.DEFAULT_BACKEND = LedsCapability
+LedsCapability.DEFAULT_BACKEND_NAME = 'ps2-sysfs'
+VideoCapability.BACKENDS = {"v4l2-ffmpeg": VideoCapability}
+VideoCapability.DEFAULT_BACKEND = VideoCapability
+VideoCapability.DEFAULT_BACKEND_NAME = 'v4l2-ffmpeg'
+AudioCapability.BACKENDS = {"alsa-ffmpeg": AudioCapability}
+AudioCapability.DEFAULT_BACKEND = AudioCapability
+AudioCapability.DEFAULT_BACKEND_NAME = 'alsa-ffmpeg'
+
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 VideoCapability, AudioCapability, BoardCapability]
 
@@ -3387,16 +3613,41 @@ class Registry(object):
         self.arbiter = Arbiter(self.bus)
         self.caps = {}
         self.failed = {}
+        # THE THIRD STATE. A capability whose backend is `none` is NOT failed
+        # and NOT working -- it is not configured, and merging it into either
+        # of the other two is the collapse this whole plan exists to prevent.
+        # Failed means "it should work and does not, go and fix it"; not
+        # configured means "nobody asked for it", and they need different
+        # responses from a person.
+        self.disabled = {}
         self.routes = {}
         for cls in CAPABILITIES:
+            chosen, chosen_name, why = self._resolve_backend(cls)
+            if chosen is _DISABLED:
+                self.disabled[cls.name] = why
+                self._register_refusals(cls, why)
+                sys.stderr.write("capability %s: %s\n" % (cls.name, why))
+                continue
+            if chosen is None:
+                # An unknown backend NAME. Deliberately a failure and not a
+                # fallback to the default: silently substituting would give a
+                # rig that reports healthy while running something other than
+                # what its config asked for, and the typo would never surface.
+                self.failed[cls.name] = why
+                sys.stderr.write("capability %s: %s\n" % (cls.name, why))
+                continue
             try:
                 try:
-                    cap = cls(devs, self.bus)
+                    cap = chosen(devs, self.bus)
                 except TypeError:
-                    cap = cls(devs)
+                    cap = chosen(devs)
                 # Set unconditionally, so every capability has one whether or
                 # not its constructor asked for it.
                 cap.bus = self.bus
+                # The CONFIGURED name, not the class's. See
+                # DEFAULT_BACKEND_NAME above for why those differ.
+                cap.backend_name = chosen_name
+                cap.settings = _cap_settings(cls.name)
                 cap.start()
             except Exception as exc:
                 self.failed[cls.name] = "%s: %s" % (type(exc).__name__, exc)
@@ -3406,6 +3657,68 @@ class Registry(object):
             self.caps[cls.name] = cap
             for cmd, fn in cap.commands().items():
                 self.routes[cmd] = (cls.name, fn)
+
+    @staticmethod
+    def _resolve_backend(cls):
+        """(implementation, name, None) | (_DISABLED, None, why)
+        | (None, None, why-it-failed).
+
+        The NAME is returned alongside the implementation because they are not
+        recoverable from each other: several backend names can map to one
+        class.
+        """
+        want = CFG.optional("capabilities.%s.backend" % cls.name)
+        if want is vcconfig.ABSENT:
+            return ((cls.DEFAULT_BACKEND or cls),
+                    cls.DEFAULT_BACKEND_NAME, None)
+        if want is vcconfig.NONE or want == "none":
+            return _DISABLED, None, (
+                "backend is `none` -- not configured, so it will answer "
+                "'not configured' rather than a default")
+        if not cls.BACKENDS:
+            return None, None, (
+                "no backend names are registered for this capability, so "
+                "%r cannot be honoured; use `none` to switch it off" % (want,))
+        impl = cls.BACKENDS.get(want)
+        if impl is None:
+            return None, None, ("unknown backend %r -- valid: %s, or `none`"
+                                % (want, ", ".join(sorted(cls.BACKENDS))))
+        return impl, want, None
+
+    def _register_refusals(self, cls, why):
+        """A disabled capability still OWNS its verbs.
+
+        Without this its commands simply do not exist, and the daemon answers
+        "unknown command" -- which reads as a broken client or a typo. The
+        honest answer is that the verb is real and this rig has not configured
+        it.
+        """
+        try:
+            try:
+                probe = cls(self.devs, self.bus)
+            except TypeError:
+                probe = cls(self.devs)
+            names = list(probe.commands())
+        except Exception:
+            # Cannot enumerate without constructing, and constructing failed.
+            # Say so rather than guessing a command list.
+            self.disabled[cls.name] = (why + " (its verbs could not be "
+                                       "enumerated, so they will report as "
+                                       "unknown commands)")
+            return
+        for cmd in names:
+            self.routes[cmd] = (cls.name, self._refusal(cls.name, cmd, why))
+
+    @staticmethod
+    def _refusal(name, cmd, why):
+        def fn(_req):
+            return {"ok": False,
+                    "error": "%s is not configured on this rig" % name,
+                    "why": "not_configured",
+                    "detail": why,
+                    "hint": "set capabilities.%s.backend in %s"
+                            % (name, CFG.source or "vcctrl.yaml")}
+        return fn
 
     def dispatch(self, cmd, req):
         route = self.routes.get(cmd)
@@ -3473,9 +3786,22 @@ class Registry(object):
         return web
 
     def report(self):
-        out = {name: {"ok": True} for name in self.caps}
+        """Three states, never two.
+
+        `ok: False` alone cannot distinguish "broken" from "not asked for",
+        and a reader who sees only the boolean will treat an unconfigured plug
+        as a fault to chase. `configured` carries that, and `ok` is False for
+        both so nothing that currently checks it starts passing by accident.
+        """
+        out = {}
+        for name, cap in self.caps.items():
+            out[name] = {"ok": True, "configured": True,
+                         "backend": getattr(cap, "backend_name", None)}
         for name, err in self.failed.items():
-            out[name] = {"ok": False, "error": err}
+            out[name] = {"ok": False, "configured": True, "error": err}
+        for name, why in self.disabled.items():
+            out[name] = {"ok": False, "configured": False, "error": None,
+                         "why": "not_configured", "detail": why}
         return out
 
 

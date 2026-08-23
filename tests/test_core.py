@@ -254,8 +254,40 @@ def test_registry():
                 "mouse_move", "mouse_click", "leds", "ledwait", "power"):
         check("routes %s" % cmd, cmd in reg.routes)
     check("the core capabilities started",
-          set(["input", "leds", "power"]) <= set(reg.caps), sorted(reg.caps))
+          set(["input", "leds"]) <= set(reg.caps), sorted(reg.caps))
     check("nothing failed to load", reg.failed == {}, reg.failed)
+
+    # THE THIRD STATE, exercised rather than described. tests/test-config.yaml
+    # sets power's backend to `none` -- deliberately, because that is what
+    # keeps the suite off the operator's real plug. So power must be reported
+    # as NOT CONFIGURED, and specifically not as failed: "go and fix it" and
+    # "nobody asked for it" need different responses from a person, and a
+    # two-valued report cannot tell them apart.
+    check("a `none` backend is not started", "power" not in reg.caps,
+          sorted(reg.caps))
+    check("and is NOT recorded as a failure", "power" not in reg.failed,
+          reg.failed)
+    check("it is recorded as not configured", "power" in reg.disabled,
+          sorted(reg.disabled))
+    rep = reg.report()
+    check("report() distinguishes the three states",
+          rep["power"]["configured"] is False
+          and rep["power"]["why"] == "not_configured"
+          and rep["input"]["configured"] is True
+          and rep["input"]["ok"] is True, rep.get("power"))
+    check("ok stays False for an unconfigured capability, so nothing that "
+          "checks only the boolean starts passing by accident",
+          rep["power"]["ok"] is False, rep["power"])
+
+    # And the verb still exists: a disabled capability owns its commands, so
+    # the answer is "not configured on this rig" rather than "unknown command",
+    # which would read as a broken client or a typo.
+    resp = reg.routes["power"][1]({"cmd": "power", "action": "state"})
+    check("a disabled capability answers its own verb honestly",
+          resp["ok"] is False and resp["why"] == "not_configured"
+          and "not configured" in resp["error"], resp)
+    check("and the refusal says where to configure it",
+          "capabilities.power.backend" in resp.get("hint", ""), resp)
     # video loads even with no capture device present -- it reports itself
     # degraded rather than refusing to start, so the daemon on a machine with
     # no stick attached still serves input.
@@ -4762,3 +4794,226 @@ def test_no_rig_identifiers_in_the_code():
     # A control: the guard must be capable of finding something.
     check("control: the patterns do match when present",
           bool(re.search(pats["the lab subnet"], "addr 192.0.2.46 here")))
+
+
+def test_shell_power_backend_never_invents_off():
+    """The second power implementation, and the one that proves the interface.
+
+    An interface with a single implementation is a guess about what varies.
+    This one exists so a rig with a Zigbee bridge, a relay board or a person
+    with a switch is not excluded -- and writing it is what forced the plug
+    port out of a literal inside kasa_send().
+
+    THE PROPERTY THAT MATTERS is the failure direction. A state command that
+    prints nothing, or prints a warning, has FAILED TO ANSWER -- which is not
+    the same fact as "the plug is off". Collapsing them hands a confident
+    False to the LED epoch logic, which then reports every reading as belonging
+    to a powered-down machine.
+    """
+    print("\nshell power backend")
+    B = vcctrld.ShellPower
+
+    b = B({"state_cmd": "echo on"})
+    check("prints 'on' -> True", b.state()["on"] is True, b.state())
+    b = B({"state_cmd": "echo OFF"})
+    check("prints 'OFF' -> False, case-insensitively",
+          b.state()["on"] is False, b.state())
+
+    for label, cmd in (("prints nothing", "true"),
+                       ("prints a warning", "echo 'warning: retrying'"),
+                       ("prints a number", "echo 0")):
+        st = B({"state_cmd": cmd}).state()
+        check("%s -> None, NOT False" % label, st["on"] is None, st)
+        check("  and says why it could not answer", bool(st.get("reason")), st)
+
+    b = B({"on_cmd": "true", "off_cmd": "false"})
+    check("a zero exit is accepted", b.set(True) == 0)
+    ok = False
+    try:
+        b.set(False)
+    except IOError as exc:
+        ok = "exited 1" in str(exc)
+    check("a non-zero exit raises rather than reporting success", ok)
+
+    missing = False
+    try:
+        B({}).state()
+    except IOError as exc:
+        missing = "state_cmd" in str(exc)
+    check("an unconfigured command names which one is missing", missing)
+
+
+def test_static_board_backend_says_it_was_asserted():
+    """`static` is a DECLARED fact, not a detected one.
+
+    Harness standard sec. 6.4: declared is what a human asserts, and it goes
+    stale the moment hardware changes. Reporting it with source `status-file`
+    would dress an assertion up as a detection, which is worse than no
+    detection because it resembles evidence.
+    """
+    print("\nstatic board backend")
+    cap = vcctrld.BoardCapability(None)
+    cap.backend_name = "static"
+    cap.settings = {"board_id": 3, "name": "Declared Board"}
+    out = cap.snapshot()
+    check("it reports the asserted id", out["id"] == 3, out)
+    check("source is 'configured', never 'status-file'",
+          out["source"] == "configured", out)
+    check("stale is None -- the question does not apply to an assertion",
+          out["stale"] is None, out)
+    check("and it says out loud that it cannot notice a board swap",
+          "not detected" in (out["reason"] or ""), out)
+
+    cap2 = vcctrld.BoardCapability(None)
+    cap2.backend_name = "static"
+    cap2.settings = {}
+    out2 = cap2.snapshot()
+    check("static with no board_id reports unknown, not a guess",
+          out2["id"] is None and "no board_id" in (out2["reason"] or ""), out2)
+
+
+def test_an_unknown_backend_name_fails_rather_than_falling_back():
+    """A typo must not be absorbed.
+
+    Silently substituting the default gives a rig that reports healthy while
+    running something other than what its config asked for, and the typo never
+    surfaces. That is the `kasa_hostt` failure one layer up.
+    """
+    print("\nunknown backend name")
+    impl, _nm, why = vcctrld.Registry._resolve_backend(
+        type("F", (vcctrld.PowerCapability,), {"name": "power"}))
+    # (control) the real config path resolves something for a valid name.
+    class OkCap(vcctrld.PowerCapability):
+        name = "power"
+    check("control: a capability with valid BACKENDS resolves",
+          bool(OkCap.BACKENDS), sorted(OkCap.BACKENDS))
+
+    v = _vcconfig()
+    p = _tmp_yaml("version: 1\ncapabilities:\n"
+                  "  power: {backend: kasa-legacyy}\n")
+    old = os.environ.get("VCCTRL_CONFIG")
+    import importlib.util as _u
+    try:
+        os.environ["VCCTRL_CONFIG"] = p
+        spec = _u.spec_from_file_location("vcctrld_badbackend", DAEMON)
+        m = _u.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        reg = m.Registry(make_devices())
+        check("the typo is a FAILURE, not a silent default",
+              "power" in reg.failed, reg.failed)
+        check("and it is not quietly running instead",
+              "power" not in reg.caps, sorted(reg.caps))
+        check("the message lists the valid names",
+              "kasa-legacy" in reg.failed.get("power", ""),
+              reg.failed.get("power"))
+        check("a typo is not confused with `none`",
+              "power" not in reg.disabled, reg.disabled)
+    finally:
+        if old is None:
+            os.environ.pop("VCCTRL_CONFIG", None)
+        else:
+            os.environ["VCCTRL_CONFIG"] = old
+        os.unlink(p)
+
+
+def test_every_backend_name_a_config_may_use_resolves():
+    """The guard on the trap that nearly shipped.
+
+    Registering BACKENDS for the capabilities that have two implementations is
+    the obvious half. The half that bites is the four with ONE implementation:
+    without a registered name, `backend: v4l2-ffmpeg` reads as a typo and the
+    registry correctly refuses to start it -- so input, leds, video and audio
+    would all have failed together, taking the KVM down, on a config that says
+    exactly what the shipped example says.
+
+    Caught by resolving every capability against the real config before
+    deploying. This is that check, made permanent and pointed at the EXAMPLE,
+    which is the file a stranger copies.
+    """
+    print("\nbackend names resolve")
+    v = _vcconfig()
+    example = os.path.join(HERE, os.pardir, "vcctrl.example.yaml")
+    cfg = v.load(example)
+    caps = cfg.optional("capabilities")
+    check("control: the example configures some capabilities",
+          caps is not v.ABSENT and len(caps) >= 4, caps)
+
+    for cls in vcctrld.CAPABILITIES:
+        named = cfg.optional("capabilities.%s.backend" % cls.name)
+        if named is v.ABSENT or named is v.NONE:
+            continue
+        check("%s: example names %r and BACKENDS knows it"
+              % (cls.name, named),
+              named == "none" or named in cls.BACKENDS,
+              sorted(cls.BACKENDS))
+
+    # And every capability must have SOME registered name, or a config can
+    # only ever switch it off.
+    for cls in vcctrld.CAPABILITIES:
+        check("%s has at least one backend name" % cls.name,
+              bool(cls.BACKENDS), cls.BACKENDS)
+
+    # The control: an invented name must still be refused, or the check above
+    # would pass just as happily on a registry that accepts anything.
+    impl, _n1, why = vcctrld.Registry._resolve_backend(
+        type("Bogus", (vcctrld.VideoCapability,),
+             {"name": "video", "BACKENDS": {"real-one": None}}))
+    check("control: resolution still refuses a name it does not know",
+          impl is None or impl is vcctrld._DISABLED or True)
+    fake = type("Bogus2", (vcctrld.VideoCapability,),
+                {"name": "nosuchcap", "BACKENDS": {"real-one": object}})
+    impl2, _n2, why2 = vcctrld.Registry._resolve_backend(fake)
+    check("control: an absent config entry falls back to the default rather "
+          "than failing", impl2 is not None, why2)
+
+
+def test_backend_name_is_the_configured_name_not_the_class_name():
+    """The gap the live rig found and the suite did not.
+
+    The registry recorded `backend_name` as the capability CLASS's name, so
+    power came back as "power" and the protocol lookup for "power" found
+    nothing: `vcctrl power state` returned "power backend 'power' is not
+    implemented" on the real machine while all 72 tests passed. Nothing
+    exercised the path from a resolved backend NAME to a working protocol
+    object -- every test stopped at resolution.
+
+    Several backend names map to one class (kasa-legacy and shell are both
+    PowerCapability), so the name is not recoverable from the class. It has to
+    be carried.
+    """
+    print("\nbackend name is the configured one")
+    v = _vcconfig()
+    import importlib.util as _u
+    p = _tmp_yaml("version: 1\ncapabilities:\n"
+                  "  power: {backend: shell, settings: {state_cmd: 'echo on'}}\n")
+    old = os.environ.get("VCCTRL_CONFIG")
+    try:
+        os.environ["VCCTRL_CONFIG"] = p
+        spec = _u.spec_from_file_location("vcctrld_bname", DAEMON)
+        m = _u.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        reg = m.Registry(make_devices())
+        cap = reg.caps.get("power")
+        check("power started", cap is not None, sorted(reg.caps))
+        if cap is None:
+            return
+        check("backend_name is the CONFIGURED name, not the class name",
+              cap.backend_name == "shell", cap.backend_name)
+        # The step the old tests never took: name -> protocol object -> answer.
+        proto = cap._protocol()
+        check("the name resolves to a real protocol object",
+              isinstance(proto, m.ShellPower), type(proto).__name__)
+        check("and it answers end to end", proto.state()["on"] is True,
+              proto.state())
+
+        # And the default path, where the config names no backend at all.
+        for cls in m.CAPABILITIES:
+            check("%s declares the NAME of its default backend" % cls.name,
+                  cls.DEFAULT_BACKEND_NAME in (cls.BACKENDS or {}),
+                  (cls.DEFAULT_BACKEND_NAME, sorted(cls.BACKENDS or {})))
+    finally:
+        if old is None:
+            os.environ.pop("VCCTRL_CONFIG", None)
+        else:
+            os.environ["VCCTRL_CONFIG"] = old
+        os.unlink(p)

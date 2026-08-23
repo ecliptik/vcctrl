@@ -127,6 +127,22 @@ capabilities:
       alias: example-plug
       # How long mains stays off during a power cycle.
       cycle_off_s: 15.0
+    #
+    # The `shell` backend runs your own commands instead, for any plug this
+    # project will never support -- a Zigbee bridge, a relay board, a PDU with
+    # a web form, a person with a switch:
+    #
+    #   backend: shell
+    #   settings:
+    #     on_cmd:    my-plug on
+    #     off_cmd:   my-plug off
+    #     state_cmd: my-plug state     # MUST print exactly `on` or `off`
+    #     timeout_s: 20
+    #
+    # Anything else on stdout is read as "could not answer", NOT as off.
+    # Those are different facts: "off" makes the harness treat every LED
+    # reading as belonging to a powered-down machine, and a script that
+    # printed a warning has not told you the plug is off.
 
   video:
     backend: v4l2-ffmpeg          # v4l2-ffmpeg | none
@@ -151,6 +167,17 @@ capabilities:
       # outlive the boot that wrote it, so a stale value reading as current is
       # structurally impossible rather than merely unlikely.
       file: /run/usb4vc/board.json
+    #
+    # `static` is for a rig with one permanently-installed board and nothing
+    # to ask, where the alternative is `unknown` forever:
+    #
+    #   backend: static
+    #   settings: {board_id: 1, name: My Board}
+    #
+    # It reports source `configured`, never `status-file`, and says in its own
+    # reason field that it cannot notice a board swap. That distinction is the
+    # point: an assertion dressed up as a detection is worse than no detection,
+    # because it resembles evidence.
 
 # ---------------------------------------------------------------------------
 # Targets: which machine each protocol board implies.
