@@ -6278,3 +6278,53 @@ def test_profile_reading_is_forgotten_by_a_reboot_not_aged():
           P.from_blaster("", "test") is None, P.snapshot())
     check("and neither does a missing one",
           P.from_blaster(None, "test") is None, P.snapshot())
+
+
+def test_scroll_lock_closes_the_undriven_reboot_hole():
+    """A front-panel reset invalidates the profile, without anything driving it.
+
+    `power` and ctrl-alt-del only see reboots the daemon CAUSED. The hole was
+    a reset from the target's own front panel, or a crash-and-reboot, leaving
+    the header displaying a profile from a boot that is no longer running --
+    which is the exact failure the display exists to make visible.
+
+    POST clears the LEDs whatever caused the reset, and RDYPULSE is the last
+    line of every boot path in AUTOEXEC, so the two edges arrive either way.
+
+    The video lock was the alternative and is wrong: the capture loses lock on
+    every 640x480-to-text transition, so a game starting is indistinguishable
+    from a reboot.
+    """
+    P = vcctrld.TargetProfile()
+    P.establish("PGSB", "SET at a prompt")
+
+    P.reset_seen()
+    s = P.snapshot()
+    check("a reset seen on the LED channel voids the reading",
+          s["name"] is None, s)
+    # A DISTINCT MESSAGE, because RDYPULSE is `IF EXIST`-guarded: a missing
+    # COM file makes that line a silent no-op, Scroll never returns to 1, and
+    # the reading is permanently invalid. That is the safe direction, but it
+    # reads as a bug rather than as a missing file unless it says so.
+    check("and it names the missing pulse rather than saying merely unknown",
+          "readiness pulse" in s["reason"], s["reason"])
+
+    P.ready_pulse()
+    s = P.snapshot()
+    check("a completed boot is a different fact from a reset",
+          "booted" in s["reason"] and s["name"] is None, s)
+
+    # THE ORDER THAT MATTERS. A pulse must never resurrect a reading -- the
+    # machine came back, but nothing has read what it came back AS.
+    P.establish("NET", "SET at a prompt")
+    P.reset_seen()
+    P.ready_pulse()
+    check("a boot completing does not restore the profile that preceded it",
+          P.snapshot()["name"] is None, P.snapshot())
+
+    # And a pulse on a machine whose profile IS known must not overwrite it:
+    # re-reading is what establishes a name, not the pulse.
+    P.establish("PGSB", "SET at a prompt")
+    P.ready_pulse()
+    check("a pulse leaves an established reading alone",
+          P.snapshot()["name"] == "PGSB", P.snapshot())

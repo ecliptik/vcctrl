@@ -1182,6 +1182,25 @@ class LedsCapability(Capability):
                     "from": prev,
                     "to": dict(values),
                 })
+                # THE UNDRIVEN-REBOOT SIGNAL. POST clears the LEDs whatever
+                # caused the reset, and RDYPULSE is the last line of every
+                # boot path in AUTOEXEC -- so a front-panel reset and a crash
+                # reboot produce the same two edges as a driven one, which
+                # `power` and ctrl-alt-del alone could never see.
+                #
+                #     scroll 1 -> 0    a reset HAPPENED
+                #     scroll 0 -> 1    a boot COMPLETED  (~16.4 s later)
+                #
+                # The video lock was the obvious alternative and is wrong: the
+                # capture loses lock on every 640x480-to-text transition, so a
+                # game starting looks exactly like a reboot (OPEN-FAULTS
+                # sec. 9). Scroll Lock has one other cause and it means the
+                # same thing.
+                was, now = prev.get("scrolllock"), values.get("scrolllock")
+                if was and not now:
+                    PROFILE.reset_seen()
+                elif now and not was:
+                    PROFILE.ready_pulse()
         return values
 
     def _led_changes(self, req):
@@ -3809,6 +3828,51 @@ class TargetProfile(object):
             if self._name is not None:
                 self._name = self._at = self._how = None
             self._reason = why
+
+    def reset_seen(self):
+        """Scroll Lock went 1 -> 0: the target reset, however it was caused.
+
+        DELIBERATELY NOT ATTRIBUTED, and that is the design rather than a
+        shortcut. The instinct is that this is a shared flag with several
+        writers -- `arm_leds()` clears Scroll, `verify_input` leaves it set,
+        POST clears it, `RDYPULSE` sets it -- and that the daemon must know
+        which transitions it caused.
+
+        It does not, because **every writer that clears Scroll Lock is either
+        a reboot or a prelude to one.** `arm_leds()` clears it BECAUSE it is
+        about to reboot. So `1 -> 0` means invalidate whoever did it: a driven
+        reboot invalidates, an undriven one invalidates, and an arming that is
+        not followed by a reboot invalidates a reading that was still
+        technically good -- a false positive in the safe direction.
+
+        That is what separates this from a shared flag with no owner, where
+        two writers mean different things and every release is locally right
+        and globally wrong. Here both writers mean the same thing, so
+        attribution machinery would buy a way to be wrong in exchange for
+        suppressing a conservative refusal.
+        """
+        self.invalidate("the target reset, and no readiness pulse since POST")
+
+    def ready_pulse(self):
+        """Scroll Lock went 0 -> 1: RDYPULSE ran, so AUTOEXEC completed.
+
+        A DIFFERENT FACT FROM THE RESET, and it gets its own words. The reset
+        edge says the reading is void; this one says the machine is back and
+        the profile can be read again. Without the distinction, a boot that
+        never completes and a boot that completed but was never read look
+        identical to somebody reading the header.
+
+        RDYPULSE is guarded by `IF EXIST C:\\DRIVERS\\RDYPULSE.COM` in
+        AUTOEXEC, so a missing file makes that line a silent no-op: Scroll
+        stays at 0 and this never fires. The failure is a permanently
+        invalidated reading rather than a falsely valid one -- the right
+        direction -- but it reads as a bug rather than as a missing file,
+        which is why reset_seen() names the pulse in its own message.
+        """
+        with self._lock:
+            if self._name is None:
+                self._reason = ("booted, and the profile has not been read "
+                                "since")
 
     def from_blaster(self, value, how):
         """A BLASTER string -> a profile name, or None.
