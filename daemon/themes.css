@@ -32,7 +32,7 @@
   --rule: #CFC6B4;
   --edge: #7c776c;
   --dim: #686054;
-  --muted: #544C41;
+  --muted: #4c443a;
   --text: #241F19;
   --bright: #000000;
   --red: #900000;
@@ -47,7 +47,7 @@
   --dark: 0;
   --pair: "vga";
 }
-/* vga-light fitted: dim #6E6558->#686054; orange #A05000->#984c00; yellow #7A6000->#745b00; cyan #006E75->#00686f; green #00701C->#004e14 (state floor); yellow #745b00->#514000 (state floor); red #AA0000->#900000 (state floor); green/yellow dE37; green/red dE88; yellow/red dE52 */
+/* vga-light fitted: dim #6E6558->#686054; orange #A05000->#984c00; yellow #7A6000->#745b00; cyan #006E75->#00686f; muted #544C41->#4c443a (light floor); green #00701C->#004e14 (state floor); yellow #745b00->#514000 (state floor); red #AA0000->#900000 (state floor); green/yellow dE37; green/red dE88; yellow/red dE52; muted>=dim */
 
 [data-theme="tokyo-night"] {
   --bg: #1a1b26;
@@ -78,8 +78,8 @@
   --rule: #c4c8da;
   --edge: #767883;
   --dim: #555972;
-  --muted: #4c5182;
-  --text: #343b58;
+  --muted: #393d62;
+  --text: #272c41;
   --bright: #1a1b26;
   --red: #622f39;
   --orange: #8e4c25;
@@ -93,7 +93,7 @@
   --dark: 0;
   --pair: "tokyo-night";
 }
-/* tokyo-night-light fitted: dim #6a6f8e->#555972; orange #965027->#8e4c25; yellow #8f5e15->#7a5012; green #485e30->#364624 (state floor); yellow #7a5012->#55380d (state floor); red #8c4351->#622f39 (state floor); green/yellow dE25; green/red dE40; yellow/red dE30 */
+/* tokyo-night-light fitted: dim #6a6f8e->#555972; orange #965027->#8e4c25; yellow #8f5e15->#7a5012; muted #4c5182->#393d62 (light floor); green #485e30->#364624 (state floor); yellow #7a5012->#55380d (state floor); red #8c4351->#622f39 (state floor); green/yellow dE25; green/red dE40; yellow/red dE30; muted>=dim; text>=muted */
 
 [data-theme="solarized-dark"] {
   --bg: #002b36;
@@ -124,7 +124,7 @@
   --rule: #d9d2c0;
   --edge: #827e73;
   --dim: #606969;
-  --muted: #56696f;
+  --muted: #3c4a4e;
   --text: #073642;
   --bright: #002b36;
   --red: #8c201e;
@@ -139,7 +139,7 @@
   --dark: 0;
   --pair: "solarized-dark";
 }
-/* solarized-light fitted: muted #657b83->#56696f; dim #93a1a1->#606969; red #dc322f->#bb2a28; orange #cb4b16->#ad4013; yellow #b58900->#7f6000; green #859900->#5d6b00; cyan #2aa198->#1d716a; blue #268bd2->#1c689e; magenta #d33682->#b32e6e; green #5d6b00->#465000 (state floor); yellow #7f6000->#5f4800 (state floor); red #bb2a28->#8c201e (state floor); green/yellow dE25; green/red dE60; yellow/red dE46; muted>=dim */
+/* solarized-light fitted: muted #657b83->#56696f; dim #93a1a1->#606969; red #dc322f->#bb2a28; orange #cb4b16->#ad4013; yellow #b58900->#7f6000; green #859900->#5d6b00; cyan #2aa198->#1d716a; blue #268bd2->#1c689e; magenta #d33682->#b32e6e; muted #56696f->#3c4a4e (light floor); green #5d6b00->#465000 (state floor); yellow #7f6000->#5f4800 (state floor); red #bb2a28->#8c201e (state floor); green/yellow dE25; green/red dE60; yellow/red dE46; muted>=dim */
 
 [data-theme="gruvbox-dark"] {
   --bg: #282828;
@@ -170,8 +170,8 @@
   --rule: #d5c4a1;
   --edge: #8a7f69;
   --dim: #70645a;
-  --muted: #665c54;
-  --text: #3c3836;
+  --muted: #4c453f;
+  --text: #393533;
   --bright: #282828;
   --red: #950006;
   --orange: #af3a03;
@@ -185,7 +185,7 @@
   --dark: 0;
   --pair: "gruvbox-dark";
 }
-/* gruvbox-light fitted: dim #7c6f64->#70645a; yellow #b57614->#88580f; green #79740e->#6d680d; cyan #427b58->#3b6f4f; green #6d680d->#4c4909 (state floor); yellow #88580f->#66420b (state floor); red #9d0006->#950006 (state floor); green/yellow dE26; green/red dE61; yellow/red dE56 */
+/* gruvbox-light fitted: dim #7c6f64->#70645a; yellow #b57614->#88580f; green #79740e->#6d680d; cyan #427b58->#3b6f4f; muted #665c54->#4c453f (light floor); green #6d680d->#4c4909 (state floor); yellow #88580f->#66420b (state floor); red #9d0006->#950006 (state floor); green/yellow dE26; green/red dE61; yellow/red dE56; muted>=dim; text>=muted */
 
 [data-theme="nord"] {
   --bg: #2e3440;
@@ -262,8 +262,8 @@
   --rule: #ccd0da;
   --edge: #7a7d83;
   --dim: #616478;
-  --muted: #5c5f77;
-  --text: #4c4f69;
+  --muted: #454759;
+  --text: #35374a;
   --bright: #1e1e2e;
   --red: #960a28;
   --orange: #b24608;
@@ -277,7 +277,7 @@
   --dark: 0;
   --pair: "catppuccin-mocha";
 }
-/* catppuccin-latte fitted: dim #6c6f85->#616478; red #d20f39->#c80e36; orange #fe640b->#b24608; yellow #8c6a00->#7e5f00; green #40a02b->#307820; cyan #179299->#116e73; blue #1e66f5->#1b5cdc; magenta #8839ef->#8136e3; green #307820->#225416 (state floor); yellow #7e5f00->#5e4700 (state floor); red #c80e36->#960a28 (state floor); green/yellow dE35; green/red dE84; yellow/red dE53 */
+/* catppuccin-latte fitted: dim #6c6f85->#616478; red #d20f39->#c80e36; orange #fe640b->#b24608; yellow #8c6a00->#7e5f00; green #40a02b->#307820; cyan #179299->#116e73; blue #1e66f5->#1b5cdc; magenta #8839ef->#8136e3; muted #5c5f77->#454759 (light floor); green #307820->#225416 (state floor); yellow #7e5f00->#5e4700 (state floor); red #c80e36->#960a28 (state floor); green/yellow dE35; green/red dE84; yellow/red dE53; muted>=dim; text>=muted */
 
 [data-theme="dracula"] {
   --bg: #282a36;
@@ -354,8 +354,8 @@
   --rule: #ddd8be;
   --edge: #858272;
   --dim: #626d61;
-  --muted: #5c6a72;
-  --text: #4f585e;
+  --muted: #455056;
+  --text: #3a4145;
   --bright: #2d353b;
   --red: #8c302e;
   --orange: #9f5119;
@@ -369,7 +369,7 @@
   --dark: 0;
   --pair: "everforest-dark";
 }
-/* everforest-light fitted: dim #829181->#626d61; red #f85552->#ba403e; orange #f57d26->#9f5119; yellow #8f6f00->#886900; green #8da101->#637101; cyan #35a77c->#257557; blue #3a94c5->#2c6f94; magenta #df69ba->#9c4a82; green #637101->#4a5501 (state floor); yellow #886900->#5f4a00 (state floor); red #ba403e->#8c302e (state floor); green/yellow dE25; green/red dE57; yellow/red dE41 */
+/* everforest-light fitted: dim #829181->#626d61; red #f85552->#ba403e; orange #f57d26->#9f5119; yellow #8f6f00->#886900; green #8da101->#637101; cyan #35a77c->#257557; blue #3a94c5->#2c6f94; magenta #df69ba->#9c4a82; muted #5c6a72->#455056 (light floor); green #637101->#4a5501 (state floor); yellow #886900->#5f4a00 (state floor); red #ba403e->#8c302e (state floor); green/yellow dE25; green/red dE57; yellow/red dE41; muted>=dim; text>=muted */
 
 [data-theme="ibm-5151"] {
   --bg: #0b0f00;

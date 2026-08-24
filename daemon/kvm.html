@@ -79,7 +79,7 @@
      and group labels inside panels, not for the status line itself. */
   h1 {
     font:600 var(--t-data)/1 var(--mono); letter-spacing:.12em;
-    text-transform:uppercase; color:var(--dim); margin:0; flex:none;
+    text-transform:uppercase; color:var(--muted); margin:0; flex:none;
   }
   .grow { flex:1 1 auto; min-width:4px; }
 
@@ -120,7 +120,7 @@
      a reader with reduced motion turned on. */
   @keyframes beat {
     0%, 100% { color:var(--green); }
-    50%      { color:var(--dim); }
+    50%      { color:var(--muted); }
   }
   /* The phone dot is the same heartbeat on a filled shape, so it animates
      `background` and needs its own keyframes. One rule cannot drive both
@@ -145,9 +145,13 @@
   }
   .chip {
     font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
-    text-transform:uppercase; color:var(--dim); white-space:nowrap; flex:none;
+    text-transform:uppercase; color:var(--muted); white-space:nowrap; flex:none;
   }
-  .chip b { color:var(--muted); font-weight:500; }
+  /* The VALUE steps up with the label. These were --dim/--muted; both
+     moved, and leaving b behind would have made a chip one flat
+     colour -- the label and the number it labels are different things
+     and the row says so by weight and by level. */
+  .chip b { color:var(--text); font-weight:500; }
   /* On a phone the rail scrolled sideways and cut "LINK MJP..." in half, which
      is a status bar you have to operate rather than read. The words are for
      desktop; the values carry the meaning on their own. */
@@ -461,8 +465,15 @@
      saying the same thing a second time and charging legibility for it. */
   .lamp.na > span { border-bottom-color:currentColor; }
   .lamp i { display:none; }
+  /* --muted, not --dim: this row is the primary state display and
+     was the most de-emphasised text on the page. --dim sits at
+     4.6:1 on light themes at 10px, which is why raising --green
+     changed nothing a reader could see -- only the handful of
+     lamps actually `on` are green, and everything else in the row
+     is this. --muted is fitted to 7:1 on light themes and --dim
+     keeps meaning genuinely faint. */
   .lamp span {
-    font:var(--t-data)/1 var(--mono); color:var(--dim); letter-spacing:.04em;
+    font:var(--t-data)/1 var(--mono); color:var(--muted); letter-spacing:.04em;
     border-bottom:1px solid transparent; padding-bottom:2px;
   }
   .lamp.on span {

@@ -293,6 +293,35 @@ STATE_SEPARATION = 25.0
 STATE_FLOOR = 7.0
 STATE_ROLES = ("green", "yellow", "red")
 
+# ...and the TEXT roles the status row is actually made of.
+#
+# Raising only the state colours fixed the handful of lamps that happen to be
+# `on` and left the rest of the row exactly as it was -- which is what the
+# operator saw when they said it looked the same as before any of this started.
+# `.lamp span` is --dim for every lamp NOT on, `#state` (ACTIVE) is --dim, and
+# every .chip is --dim. That is most of the row, and it sat at 4.57-5.19:1
+# throughout.
+#
+# Same floor, same reason, same scope: 4.5 is AA for 16px text and this row is
+# 10px. Light themes only, for the same measured reason as STATE_FLOOR.
+#
+# ONLY `muted`, and that is the second thing measurement changed. Applying the
+# floor to dim, muted AND text collapsed the three emphasis levels into one:
+# everforest-light came out 7.06 / 7.22 / 7.27, and eight other light themes
+# were within 0.4 of flat. text > muted > dim is a contract this file already
+# enforces by name, and buying contrast by destroying it is the same trade the
+# state floor refused to make on the dark themes.
+#
+# So `muted` rises to 7.0 and the status row moves onto it in kvm.html. `dim`
+# stays where it is and keeps being the genuinely faint level -- there is
+# still something for it to mean.
+ROW_ROLES = ("muted",)
+
+# A ceiling on how far the text/muted gap enforcement will push. Without it a
+# palette with very soft text chases its own tail toward black and stops being
+# the palette anyone chose.
+T_CONTRAST_CEIL = 12.0
+
 # The pairs the status lamps actually rely on. Not every accent pair: `blue`
 # and `cyan` sitting close costs nothing, because nothing reads a machine's
 # state from them.
@@ -378,6 +407,29 @@ def fitted(name):
     # separation pass, so separation is enforced on the final colours rather
     # than on ones a later step would move.
     if not dark:
+        for role in ROW_ROLES:
+            new_c, changed = fit(roles[role], surfaces, STATE_FLOOR, toward)
+            if changed and new_c != roles[role]:
+                notes.append("%s %s->%s (light floor)"
+                             % (role, roles[role], new_c))
+                roles[role] = new_c
+        # Raising `muted` closes the gap ABOVE it as well as the one below.
+        # catppuccin-latte and everforest-light author unusually soft text, and
+        # after the floor their muted and text landed 0.09 and 0.18 apart --
+        # so the fix for one level quietly flattened the next one up. Keep a
+        # proportional gap rather than the bare `>=` the ordering pass
+        # enforces: `>=` is satisfied by three hundredths, which is an
+        # inversion nobody can see and a hierarchy nobody can read.
+        want = min(T_ for T_ in (
+            T_CONTRAST_CEIL,
+            max(contrast(roles["muted"], s) for s in surfaces) * 1.15))
+        for _ in range(40):
+            if min(contrast(roles["text"], s) for s in surfaces) >= want:
+                break
+            before = roles["text"]
+            roles["text"] = _mix(roles["text"], toward, 0.05)
+            if roles["text"] == before:
+                break
         for role in STATE_ROLES:
             new_c, changed = fit(roles[role], surfaces, STATE_FLOOR, toward)
             if changed and new_c != roles[role]:
