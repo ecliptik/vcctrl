@@ -4802,6 +4802,23 @@ def test_no_rig_identifiers_in_the_code():
     print("\nno rig identifiers in code")
     import subprocess
     root = os.path.join(HERE, os.pardir)
+    # DELIBERATELY NOT IN THIS LIST: `ecliptik`, and the commit author
+    # identities.
+    #
+    # `ecliptik` is the operator's own namespace -- forgejo.example.com, the
+    # org this repo lives under, and the domain in every commit's author
+    # trailer. The one tracked mention is docs/FINDINGS.md naming a sibling
+    # repo as `ecliptik/g2k`. Decided 2026-08-24: it stays. Scrubbing one prose
+    # mention of the operator's own repo while their email is on all 406
+    # commits would be inconsistent and buy nothing, and the repository is
+    # private and staying private.
+    #
+    # Also not detectable here even if it were wanted: commit metadata. This
+    # guard reads FILES and `git grep` searches BLOBS -- neither can see an
+    # author trailer. "No identifiers in tracked content" is a true statement
+    # about a smaller set than it sounds, and that limit is worth knowing
+    # rather than discovering.
+    #
     # ASSEMBLED FROM PARTS, so no literal replacement can reach them.
     #
     # These patterns are the only thing that detects the identifiers, and a
