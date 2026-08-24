@@ -53,7 +53,49 @@ from vcctrl_common import (  # noqa: E402
     cfg_get, grab, VCCTRL_WEB, _daemon_alive, _daemon_host, _has_variance,
     _grab_ffmpeg)
 
-CONF = os.path.join(HERE, "sweeps.json")
+# THE PROFILE, not sweeps.json. Phase 6 moved the machine table and the
+# per-sweep budgets into profiles/doskutsu.yaml alongside the target facts they
+# belong with -- the DOS working directory, the env-var names the program
+# consults, and the boot-profile witness. One file describing one target beats
+# a data file here and prose about the same target in three other places.
+#
+# Located through vcctrl.yaml's `harness.profile` so a different port points at
+# a different profile without editing the runner. Falls back to the doskutsu
+# profile beside this file, which is what a checkout with no config has.
+def _profile_path():
+    try:
+        p = cfg_get("harness.profile", "") or ""
+    except Exception:
+        p = ""
+    if p and not os.path.isabs(p):
+        p = os.path.join(os.path.dirname(HERE), p)
+    return p or os.path.join(os.path.dirname(HERE), "profiles", "doskutsu.yaml")
+
+
+CONF = _profile_path()
+
+
+def _load_profile():
+    """The profile as a dict. Raises with the path in the message: a runner that
+    cannot find its profile must say which one it looked for, or the operator
+    debugs the wrong file."""
+    try:
+        import yaml
+    except ImportError:
+        raise SystemExit(
+            "REFUSED: PyYAML is needed to read %s (apt install python3-yaml)"
+            % CONF)
+    try:
+        with open(CONF) as f:
+            d = yaml.safe_load(f) or {}
+    except OSError as exc:
+        raise SystemExit("REFUSED: cannot read the harness profile %s: %s"
+                         % (CONF, exc))
+    if not d.get("sweeps") or not d.get("machines"):
+        raise SystemExit(
+            "REFUSED: %s has no sweeps/machines -- it is not a harness profile"
+            % CONF)
+    return d
 
 # Screen must be still for this long before the runner will believe a sweep has
 # ended. During a cell the game renders continuously; at a prompt the screen is
@@ -209,8 +251,7 @@ def drop_lock(why):
 
 
 def load_conf():
-    with open(CONF) as f:
-        return json.load(f)
+    return _load_profile()
 
 
 def preflight(conf, sweep, machine, allow_power_on=False):

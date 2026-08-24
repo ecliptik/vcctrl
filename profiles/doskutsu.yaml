@@ -1,0 +1,109 @@
+# doskutsu -- the target-software profile for the vcctrl harness.
+#
+# docs/HARNESS-STANDARD.md sec. 12: a profile records ONE project's
+# adoption -- its parameters and its platform facts -- so the standard and
+# the harness stay target-agnostic. Everything here is a fact about the
+# DOS program and the machine it runs on. Nothing here is a fact about
+# vcctrl.
+#
+# Rig physics live in vcctrl.yaml under harness.timing, NOT here: the
+# BIOS keyboard buffer depth belongs to the machine, not to this port.
+
+version: 1
+name: doskutsu
+
+# ------------------------------------------------------------------ target
+target:
+  # Where the program lives and is run from.
+  dir: "C:\\DOSKUTSU"
+  configs: "CFGS"
+  ftp_put: "C:\\MTCP\\PUT.BAT"
+
+  # THE BOOT-PROFILE WITNESS. Which string proves which profile is DATA;
+  # that a cell must verify its profile before its results are trusted is
+  # the CHECK, and the check is not configurable. See
+  # docs/HARNESS-STANDARD.md sec. 12 and the note in harness/vcctrl-cell:
+  # a stranger whose rig has no sound card will switch a check off within
+  # an hour of it inconveniencing them, and then get results from an
+  # unverified configuration that look entirely normal.
+  profile_witness:
+    variable: BLASTER
+    proves: "the sound profile is loaded (PGSB), not the NET profile"
+
+  # The names the program itself consults. Inventing one here would set a
+  # variable on the target that nothing reads.
+  env:
+    replay: DOSKUTSU_TAS_REPLAY
+    seed: DOSKUTSU_TAS_PRNG_SEED
+    auto_exit_tick: DOSKUTSU_TAS_AUTO_EXIT_TICK
+    log_tag: DOSKUTSU_LOG_TAG
+    pin_native_mode: DOSKUTSU_PIN_NATIVE_MODE
+    shot_ticks: DOSKUTSU_SHOT_TICKS
+
+timing:
+  # TARGET physics: the CONFIG.SYS menu times out this long after the POST
+  # edge, so selection is blind and has to cover a window. The keystroke
+  # BUDGET is not here -- it is derived from this and the rig's buffer
+  # depth, and a derived value presented as configuration is a value with
+  # its reasoning deleted.
+  menu_window_s: 14
+
+# ----------------------------------------------------------------- machines
+# Tag and name per CPU. Was sweeps.json.
+machines:
+  "1": {tag: "G", name: "Pentium OverDrive 83"}
+  "2": {tag: "A", name: "Am5x86-133"}
+  "3": {tag: "6", name: "486DX2-66"}
+  "4": {tag: "5", name: "486DX2-50"}
+
+# ------------------------------------------------------------------- sweeps
+# Per-sweep wall-clock budgets. 
+#
+# 
+# Per-sweep wall-clock budgets. Spans measured by the doskutsu session from rounds M/N/O (POD-83, Am5x86, DX2-66, DX2-50) and I/J/K (DX2-66). Timeouts are ~2x the slowest machine. Duration is a function of cell count and CPU, near-independent of what the cells do: cells are tick-driven against a fixed QA.TAS reel, so wall-clock is set by tick count, not by the code under test.
+sweeps:
+  ADIAG:
+    cells: 4
+    timeout_min: 22
+    measured: "10m16s DX2-66"
+    tags: ["A0", "AM", "AS", "AX"]
+  DEEP:
+    cells: 2
+    timeout_min: 17
+    measured: "6m40s POD"
+    tags: ["C4D", "51D"]
+  FINE:
+    cells: 2
+    timeout_min: 12
+    measured: "5m25s DX2-66"
+    tags: ["C4F", "51F"]
+  LEV:
+    cells: 3
+    timeout_min: 17
+    measured: "6m54s POD"
+    tags: ["L0", "LA", "LP"]
+  MINE:
+    cells: 2
+    timeout_min: 12
+    measured: "4m49s POD"
+    tags: ["MN", "MF"]
+  PUMP:
+    cells: 4
+    timeout_min: 23
+    measured: "not yet measured -- budget taken from RB, same 4-cell shape"
+    tags: ["PU0", "PUA", "PU0B", "PUAB"]
+  RB:
+    cells: 4
+    timeout_min: 23
+    measured: "9m11s POD / 11m31s DX2-50"
+    tags: ["R4", "R4B", "R3", "R5"]
+  TAB:
+    cells: 3
+    timeout_min: 18
+    measured: "7m59s DX2-66"
+    tags: ["T0", "TB", "TC"]
+  WC:
+    cells: 3
+    timeout_min: 18
+    measured: "7m11s POD"
+    tags: ["W0", "WA", "WB"]

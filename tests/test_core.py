@@ -5736,3 +5736,77 @@ def test_the_engine_names_its_own_dumps_and_that_beats_reading_the_screen():
         v, why = cf.classify_dump("S03000.PPM", 230415,
                                   os.path.join(d, "incoming"))
         check("a file with no local copy at all KEEPs", v == cf.KEEP, why)
+
+
+def test_the_harness_profile_carries_what_sweeps_json_did():
+    """Phase 6: sweeps.json became profiles/doskutsu.yaml.
+
+    A format conversion is exactly where data goes missing quietly -- the file
+    parses, the runner starts, and a sweep discovers at cell four that its
+    timeout is gone. So this asserts the SHAPE the runners actually index into,
+    against the values that were in the JSON, rather than merely that the YAML
+    loads.
+
+    It also asserts the profile carries the target facts the standard says
+    belong in a profile rather than in the harness: the working directory, the
+    env names the program consults, and the boot-profile witness.
+    """
+    print("\nharness profile")
+    import importlib.util as _u
+    from importlib.machinery import SourceFileLoader
+    root = os.path.join(HERE, os.pardir)
+
+    try:
+        import yaml
+    except ImportError:
+        print("  SKIP  no PyYAML")
+        return
+    prof = yaml.safe_load(open(os.path.join(root, "profiles",
+                                            "doskutsu.yaml")))
+
+    check("sweeps.json is gone -- one source, not two",
+          not os.path.exists(os.path.join(root, "harness", "sweeps.json")))
+
+    # The runners must find and accept it.
+    ldr = SourceFileLoader("sw_prof", os.path.join(root, "harness",
+                                                   "vcctrl-sweep"))
+    spec = _u.spec_from_loader("sw_prof", ldr)
+    m = _u.module_from_spec(spec)
+    sys.path.insert(0, os.path.join(root, "bin"))
+    ldr.exec_module(m)
+    conf = m.load_conf()
+    check("the sweep runner loads the profile", bool(conf))
+    check("and it resolves to the profile, not a stale json",
+          m.CONF.endswith(".yaml"), m.CONF)
+
+    # The values the runners index, spot-checked against the JSON that was.
+    check("machine digits are strings, as the runner indexes them",
+          all(isinstance(k, str) for k in conf["machines"]),
+          list(conf["machines"])[:2])
+    check("machine 1 survived the conversion intact",
+          conf["machines"]["1"] == {"tag": "G",
+                                    "name": "Pentium OverDrive 83"},
+          conf["machines"].get("1"))
+    rb = conf["sweeps"].get("RB") or {}
+    check("RB kept its cell count, timeout and tag ORDER -- order is "
+          "load-bearing, and a reordered sweep destroys its control",
+          rb.get("cells") == 4 and rb.get("timeout_min") == 23
+          and rb.get("tags") == ["R4", "R4B", "R3", "R5"], rb)
+    check("every sweep has a timeout -- a sweep with none runs until someone "
+          "notices",
+          all(s.get("timeout_min") for s in conf["sweeps"].values()),
+          [k for k, s in conf["sweeps"].items() if not s.get("timeout_min")])
+
+    # The target facts, which are the reason it is a profile and not a table.
+    t = prof.get("target") or {}
+    check("the profile names the target's working directory",
+          "DOSKUTSU" in (t.get("dir") or ""), t.get("dir"))
+    check("and the boot-profile witness, which is DATA",
+          (t.get("profile_witness") or {}).get("variable") == "BLASTER",
+          t.get("profile_witness"))
+    check("and the env names the program consults",
+          (t.get("env") or {}).get("replay") == "DOSKUTSU_TAS_REPLAY",
+          t.get("env"))
+    check("menu window is TARGET physics and lives here",
+          (prof.get("timing") or {}).get("menu_window_s") == 14,
+          prof.get("timing"))
