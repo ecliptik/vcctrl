@@ -7135,14 +7135,16 @@ class FakeTarget(object):
     def type_line(self, text):
         self.typed.append(text)
         parts = text.split()
+        # VCCHK is the NET proof only. The payload's return leg rides inside
+        # VCGET.BAT, because typing it as a second command meant deciding when
+        # DOS was ready for one -- and the answer cost a command truncated to
+        # the BIOS buffer depth.
         if "VCCHK.BAT" in text and len(parts) >= 3:
-            src, dest = parts[1], parts[2]
-            if dest == vcctrld.TransferJob.PROOF_NAME:
-                if self.net:
-                    self._incoming(dest, b"packetint 0x7E\r\n")
-                return
-            # The verification leg: hand back what the target "holds".
-            base = src.rsplit("\\", 1)[-1]
+            if parts[2] == vcctrld.TransferJob.PROOF_NAME and self.net:
+                self._incoming(parts[2], b"packetint 0x7E\r\n")
+            return
+        if "VCGET.BAT" in text and len(parts) >= 2:
+            base = parts[1]
             stage = self.cap._dirs()[0]
             try:
                 body = open(os.path.join(stage, base), "rb").read()
@@ -7150,7 +7152,7 @@ class FakeTarget(object):
                 return
             if base in self.corrupt:
                 body = body + b"tampered"
-            self._incoming(dest, body)
+            self._incoming(base + ".CHK", body)
 
 
 def test_the_transfer_refuses_before_it_reboots_anything():
@@ -7293,7 +7295,12 @@ def test_a_missing_prompt_stops_the_run_and_a_bad_file_does_not():
     cap.support = lambda: (True, None)
     cap._reachable = lambda timeout=None: (True, None)
 
+    # `net=False` for the payload: the proof still lands, the file does not
+    # come back, and the readiness probe then decides which failure it was.
     d = FakeTarget(cap, prompt=False)
+    d.corrupt = set()
+    orig = d.type_line
+    d.type_line = lambda t: None if "VCGET.BAT" in t else orig(t)
     r = vcctrld.TransferJob(cap, d).run()
     check("the run stops at the first missing prompt",
           len(r["files"]) == 1, r["files"])

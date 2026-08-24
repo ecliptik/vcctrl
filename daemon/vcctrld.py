@@ -4460,24 +4460,40 @@ class TransferJob(object):
     def _send_one(self, rec):
         name = rec["name"]
         self._say("send", "sending %s" % name, name=name)
-        self.d.type_line("C:\\MTCP\\VCGET.BAT %s %s" % (name, self.dest))
-        if not self.d.wait_prompt():
-            return {"name": name, "ok": False, "why": "no-prompt",
-                    "reason": "the prompt did not come back after VCGET"}
 
-        # ARRIVAL PROVED THE TRANSFER; IT SAYS NOTHING ABOUT THE PAYLOAD.
-        # The round trip is what closes that: pull the file back off the target
-        # and compare bytes here. And it only means anything because the staged
-        # copy was sha-verified when it landed -- otherwise this compares a
-        # wrong file against itself and passes.
+        # ONE TYPED COMMAND. The BAT fetches and then sends the file straight
+        # back, so nothing here has to decide when DOS is ready for a second
+        # one -- a question with no honest answer on this machine, since the
+        # only non-OCR readiness signal tests whether the BIOS keyboard ISR is
+        # alive and that is true all the way through FTP.EXE. Asking it cost a
+        # command truncated to fifteen characters, the BIOS buffer depth.
+        #
+        # ARRIVAL PROVES THE TRANSFER AND SAYS NOTHING ABOUT THE PAYLOAD. What
+        # closes that is the bytes coming back and matching -- and that only
+        # means anything because the staged copy was sha-verified when it
+        # landed, or this would compare a wrong file against itself and pass.
         back = name + ".CHK"
         before = time.time()
-        self.d.type_line("C:\\MTCP\\VCCHK.BAT %s\\%s %s" % (self.dest, name, back))
+        self.d.type_line("C:\\MTCP\\VCGET.BAT %s %s" % (name, self.dest))
         if not self.cap._await_incoming(back, before,
                                         self.d.transfer_timeout()):
-            return {"name": name, "ok": False, "why": "no-return",
-                    "reason": "%s did not come back, so whether it arrived on "
-                              "the target is unknown" % name}
+            # NOTHING CAME BACK, AND THAT IS TWO DIFFERENT FACTS: the
+            # transfer failed, or the machine is wedged. Only the second one
+            # means the next file would be typed into the dark.
+            #
+            # So the readiness probe is used HERE and nowhere else -- as a
+            # tiebreaker after something has already gone wrong, never as a
+            # gate in the happy path. It is a weak signal (it tests whether
+            # the BIOS keyboard ISR is alive, not whether DOS is reading), and
+            # a weak signal is worth having when the alternative is guessing
+            # between two very different situations.
+            alive = self.d.wait_prompt()
+            return {"name": name, "ok": False,
+                    "why": "no-return" if alive else "no-prompt",
+                    "reason": ("%s did not come back, so whether it arrived on "
+                               "the target is unknown" % name) if alive else
+                              ("%s did not come back and the machine is not "
+                               "responding to a keystroke either" % name)}
         got = self.cap._incoming_sha(back)
         if got != rec.get("sha256"):
             return {"name": name, "ok": False, "why": "sha-mismatch",
@@ -4638,6 +4654,24 @@ ECHO cd stage>> C:\\MTCP\\VCGET.RSP
 ECHO get %VGF% %VGD%\\%VGF%>> C:\\MTCP\\VCGET.RSP
 ECHO quit>> C:\\MTCP\\VCGET.RSP
 C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET.RSP
+REM THE VERIFICATION RIDES IN THE SAME BAT, AND THAT IS THE POINT.
+REM Typing it as a SECOND command needed the harness to know DOS was back at
+REM a prompt, and the only non-OCR readiness signal available tests whether
+REM the BIOS keyboard ISR is alive -- which it is, all the way through
+REM FTP.EXE. So a 50-character command went into a machine that was not
+REM reading, fifteen characters fit in the BIOS buffer, and what executed was
+REM C:\\MTCP\\VCCHK.B
+REM
+REM DOS runs the lines of a batch file in order and needs no help doing it.
+REM One typed command, one arrival to wait for, and the readiness question
+REM does not arise.
+ECHO @@USER@@> C:\\MTCP\\VCGET2.RSP
+ECHO @@PASS@@>> C:\\MTCP\\VCGET2.RSP
+ECHO binary>> C:\\MTCP\\VCGET2.RSP
+ECHO cd incoming>> C:\\MTCP\\VCGET2.RSP
+ECHO put %VGD%\\%VGF% %VGF%.CHK>> C:\\MTCP\\VCGET2.RSP
+ECHO quit>> C:\\MTCP\\VCGET2.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET2.RSP
 ECHO.
 ECHO VCGET attempted: %VGD%\\%VGF%
 GOTO END
