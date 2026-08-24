@@ -4003,14 +4003,43 @@ class FilesCapability(Capability):
     # -- the server the target would pull FROM --------------------------------
 
     def _server(self):
-        """(host, port) from `control.fileserver`, or None if not configured."""
-        host = CFG.optional("control.fileserver.host")
-        port = CFG.optional("control.fileserver.port")
-        if host in (vcconfig.ABSENT, vcconfig.NONE, None, ""):
+        """(host, port) THE CARD WILL DIAL, or None if not configured.
+
+        NOT `control.fileserver`, and the difference is the whole point of
+        this docstring. That block is the control host's server, which is
+        what `GET.BAT` and `PUT.BAT` on the card already name and what
+        collects every log. This capability's server is a DIFFERENT one, on
+        the Pi, named by the `VCGET.BAT` this feature pushes.
+
+        THE ADDRESS IS A LITERAL STRING BAKED INTO A BATCH FILE ON A CF CARD.
+        Nothing the daemon can see makes that string true. So a check that
+        dials `127.0.0.1`, or the socket the daemon itself opened, or "the
+        server I started", proves a server is up and proves NOTHING about the
+        address the g2k will call -- and it fails in the worst possible place,
+        after the confirmation and after the reboot, with the environment
+        already gone.
+
+        `target_host` therefore has exactly one meaning: **the string that
+        goes into the BAT**. The generator that writes the BAT and the check
+        that dials it read the same key, so they cannot drift apart. Absent is
+        `not_configured` rather than a fallback to `control.fileserver` --
+        falling back would silently reinstate the drift this exists to
+        prevent, by testing the control host's server and reporting on the
+        Pi's.
+
+        WHICH INTERFACE, DELIBERATELY. The Pi has two addresses on the same
+        /24 -- eth0 and wlan0, both DHCP, both up. Whichever one this names,
+        the other is an address the card will not be dialling, and a Pi that
+        comes up on the other one is perfectly healthy and completely
+        unreachable from the card. That is a choice to record, not a default
+        to inherit from whatever `ip addr` printed first.
+        """
+        st = self.settings or {}
+        host = st.get("target_host")
+        if not host:
             return None
         try:
-            return str(host), int(port) if port not in (
-                vcconfig.ABSENT, vcconfig.NONE, None) else 21
+            return str(host), int(st.get("target_port") or 2121)
         except (TypeError, ValueError):
             return None
 
@@ -4025,10 +4054,19 @@ class FilesCapability(Capability):
         The third value exists because a timeout is a statement about this
         probe, not about the far end, and reporting it as `False` would turn
         a slow network into a machine that "cannot receive files".
+
+        WHAT THIS STILL CANNOT PROVE, stated because the gap is narrow enough
+        to be forgotten. It dials the address the card dials, which catches
+        the failure that matters -- a moved lease, the wrong interface, a
+        server that is not running. It does NOT dial it from the g2k's side of
+        the network, so a route that is broken only between the card and this
+        host still passes. There is no way to test that without the target,
+        and the target is what the test exists to avoid rebooting.
         """
         srv = self._server()
         if srv is None:
-            return None, "no control.fileserver is configured"
+            return None, ("no capabilities.files.settings.target_host is set, "
+                          "so there is no address to check")
         host, port = srv
         s = None
         try:
@@ -4097,8 +4135,11 @@ class FilesCapability(Capability):
             # by the `why` guard only after that guard was rebuilt to see
             # assignment forms -- the old one could not read this line at all.
             out["why"] = "not_configured"
-            out["reason"] = ("no control.fileserver is configured, so there is "
-                             "nothing for the target to pull from")
+            out["reason"] = ("no capabilities.files.settings.target_host is "
+                             "set. That key is the address baked into the "
+                             "card's VCGET.BAT, and without it there is "
+                             "nothing to write into the BAT and nothing to "
+                             "check")
             return out
         live, why = self._reachable()
         if live is False:

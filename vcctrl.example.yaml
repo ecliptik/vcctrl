@@ -169,6 +169,27 @@ capabilities:
   files:
     backend: mtcp-ftp             # mtcp-ftp | none
     settings:
+      # THE ADDRESS BAKED INTO THE CARD'S BAT. Not "where the server is" --
+      # the literal string a batch file on a CF card will dial. The generator
+      # that writes that BAT and the liveness check that probes it read THIS
+      # key, so the two cannot drift; a check that dialled anything else would
+      # prove a server is up and prove nothing about the address the target
+      # calls, and would fail after the confirmation and after the reboot.
+      #
+      # NOTE this is NOT `control.fileserver`. That block is the CONTROL
+      # host's server, which the card's GET.BAT and PUT.BAT already name and
+      # which collects every log. This is a second server, on the daemon host,
+      # so a file picked in the browser never crosses a host boundary.
+      # Keeping them separate is also the recovery path: if this address goes
+      # stale, the control host's endpoint is still how you fix the card.
+      #
+      # PICK THE INTERFACE DELIBERATELY. A host with two addresses on one
+      # subnet -- a wired and a wireless one, both DHCP -- has two candidates,
+      # and the one not named here is an address the target will never dial.
+      # A machine that comes up on the other is entirely healthy and entirely
+      # unreachable from the card. Record which, and why.
+      target_host: 192.0.2.11     # the daemon host, on the target's subnet
+      target_port: 2121
       # Where files land on the target. Deliberately NOT the directory the
       # program under test lives in: a staged file that collides with a name
       # in there replaces it silently, and that directory holds the batch

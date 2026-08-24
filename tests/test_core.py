@@ -6196,8 +6196,10 @@ def test_files_snapshot_separates_the_five_refusals():
     check("unknown short-circuits too", s["why"] == "unknown", s)
 
     s = snap((True, None), None, (True, None))
-    check("no fileserver configured is not_configured",
+    check("no target address configured is not_configured",
           s["why"] == "not_configured", s)
+    check("and it names the key, because that key is what goes in the BAT",
+          "target_host" in s["reason"], s["reason"])
 
     s = snap((True, None), ("h", 21), (False, "refused"))
     check("a dead server is unreachable", s["why"] == "unreachable", s)
@@ -6328,3 +6330,45 @@ def test_scroll_lock_closes_the_undriven_reboot_hole():
     P.ready_pulse()
     check("a pulse leaves an established reading alone",
           P.snapshot()["name"] == "PGSB", P.snapshot())
+
+
+def test_the_liveness_check_dials_the_address_the_card_dials():
+    """A check aimed at the wrong server passes and proves nothing.
+
+    The card reaches the file server by a LITERAL STRING baked into a batch
+    file on a CF volume. Nothing the daemon can observe makes that string
+    true. So a probe that dials loopback, or the socket the daemon opened, or
+    `control.fileserver` -- which is a DIFFERENT server, on the control host,
+    the one GET.BAT and PUT.BAT already name -- would report ready for a
+    machine whose lease had moved, and would do it right up until the transfer
+    failed after the confirmation and after the reboot.
+
+    So `target_host` has exactly one meaning: the string that goes into the
+    BAT. One key, two consumers, no drift. Absent is `not_configured`, NOT a
+    fallback to `control.fileserver` -- a fallback would silently reinstate
+    the drift by testing one server and reporting on the other.
+    """
+    cap = vcctrld.FilesCapability(None)
+
+    cap.settings = {"target_host": "192.0.2.11", "target_port": 2121}
+    check("the probe target comes from the capability's own settings",
+          cap._server() == ("192.0.2.11", 2121), cap._server())
+
+    cap.settings = {"target_host": "192.0.2.11"}
+    check("the port defaults to mTCP's", cap._server() == ("192.0.2.11", 2121),
+          cap._server())
+
+    # THE ONE THAT MATTERS. control.fileserver is the control host's server.
+    # If it were consulted here, a rig with that block configured would report
+    # ready while the card dialled an address nobody had checked.
+    cap.settings = {}
+    check("with no target_host it refuses rather than borrowing "
+          "control.fileserver", cap._server() is None, cap._server())
+
+    cap.settings = {"target_host": "", "target_port": 2121}
+    check("an empty target_host is absent, not a host named ''",
+          cap._server() is None, cap._server())
+
+    cap.settings = {"target_host": "192.0.2.11", "target_port": "not-a-port"}
+    check("an unparseable port is absent rather than silently 2121",
+          cap._server() is None, cap._server())
