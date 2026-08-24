@@ -6734,3 +6734,50 @@ def test_a_refused_gate_says_when_the_command_simply_did_not_run():
           why("some future firmware chattering") is None)
     check("and a successful scan needs no reason at all",
           why(PKTTOOL_FOUND) is None)
+
+
+def test_the_cheap_probe_is_cached_and_the_expensive_one_is_not():
+    """The button's check runs from every tab; the pre-reboot check must not.
+
+    A 1.5 s state poll from four tabs would otherwise be four TCP connects a
+    second at a machine whose only job is to sit there. But `file_check` runs
+    after the operator confirms and BEFORE anything reboots -- it is the
+    expensive check guarding the expensive action, and answering it from a
+    five-second-old cache would put the staleness back exactly where the
+    design removed it.
+    """
+    cap = vcctrld.FilesCapability(None)
+    cap.settings = {"target_host": "192.0.2.11", "target_port": 2121}
+    vcctrld.FilesCapability._probe_cache = (0.0, None)
+
+    calls = []
+    real = vcctrld.socket.create_connection
+
+    class _Boom(OSError):
+        pass
+
+    def fake(addr, timeout):
+        calls.append(timeout)
+        raise OSError(111, "Connection refused")
+
+    vcctrld.socket.create_connection = fake
+    try:
+        a = cap._reachable()
+        b = cap._reachable()
+        check("the background probe dials once and caches",
+              len(calls) == 1, calls)
+        check("and both callers get the same verdict", a == b, (a, b))
+
+        cap._reachable(timeout=5.0)
+        check("an explicit timeout always dials -- never served from cache",
+              len(calls) == 2, calls)
+        check("and it uses the timeout it was given", calls[1] == 5.0, calls)
+
+        # THE EXPENSIVE ANSWER MUST NOT POISON THE CHEAP ONE EITHER.
+        stamp = vcctrld.FilesCapability._probe_cache[0]
+        cap._reachable(timeout=5.0)
+        check("an explicit check does not refill the background cache",
+              vcctrld.FilesCapability._probe_cache[0] == stamp)
+    finally:
+        vcctrld.socket.create_connection = real
+        vcctrld.FilesCapability._probe_cache = (0.0, None)

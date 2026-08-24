@@ -4188,6 +4188,15 @@ class FilesCapability(Capability):
         except (TypeError, ValueError):
             return None
 
+    # The cheap probe runs on every state poll, from every open tab. Cached
+    # for a few seconds for the same reason host_facts() is: a 1.5 s poll from
+    # four tabs must not become four TCP connects a second at a machine whose
+    # only job is to sit there. Short enough that a server coming up is
+    # noticed within a few seconds, which is the timescale a person starting
+    # serve.sh is working on.
+    _probe_cache = (0.0, None)
+    PROBE_CACHE_S = 5.0
+
     def _reachable(self, timeout=None):
         """(True|False|None, reason). None means the CHECK failed, not the server.
 
@@ -4213,26 +4222,43 @@ class FilesCapability(Capability):
             return None, ("no capabilities.files.settings.target_host is set, "
                           "so there is no address to check")
         host, port = srv
+        # An explicit timeout is a CALLER asking a real question -- file_check
+        # before a reboot -- and must never be served from a cache filled by a
+        # background poll. That is the expensive check guarding the expensive
+        # action; answering it with a five-second-old result would put the
+        # staleness back exactly where it was designed out.
+        if timeout is None:
+            ts, cached = FilesCapability._probe_cache
+            if cached and time.time() - ts < self.PROBE_CACHE_S:
+                return cached
+        wait = timeout or self.PROBE_TIMEOUT_S
         s = None
         try:
-            s = socket.create_connection(
-                (host, port), timeout or self.PROBE_TIMEOUT_S)
-            return True, None
+            s = socket.create_connection((host, port), wait)
+            verdict = (True, None)
         except socket.timeout:
-            return None, ("the file server at %s:%d did not answer within %.1fs"
-                          " -- this says the check timed out, not that the "
-                          "server is down" % (host, port,
-                                              timeout or self.PROBE_TIMEOUT_S))
+            verdict = (None,
+                       "the file server at %s:%d did not answer within %.1fs "
+                       "-- this says the check timed out, not that the server "
+                       "is down" % (host, port, wait))
         except OSError as exc:
-            return False, ("the file server at %s:%d is not answering (%s). "
-                           "Start it with serve.sh on the control host."
-                           % (host, port, exc.strerror or exc))
+            verdict = (False,
+                       "the file server at %s:%d is not answering (%s). Start "
+                       "it on the daemon host."
+                       % (host, port, exc.strerror or exc))
         finally:
             if s is not None:
                 try:
                     s.close()
                 except OSError:
                     pass
+        # ONLY THE BACKGROUND PROBE FILLS THE CACHE. A caller that passed a
+        # timeout asked a real question and its answer is about that moment,
+        # not about the next five seconds -- storing it would let the cheap
+        # poll serve a stale copy of an expensive check.
+        if timeout is None:
+            FilesCapability._probe_cache = (time.time(), verdict)
+        return verdict
 
     # -- staging --------------------------------------------------------------
     #
