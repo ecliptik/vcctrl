@@ -267,6 +267,32 @@ ACCENTS = ("red", "orange", "yellow", "green", "cyan", "blue", "magenta")
 # them anyway.
 STATE_SEPARATION = 25.0
 
+# The state roles carry more weight than an accent in a wall of code, so they
+# get a higher contrast floor than the rest.
+#
+# 4.5:1 is the WCAG AA floor for NORMAL text, and it assumes something near
+# 16px. The lamp labels are 10px bold mono. Fitted to 4.5 the light-theme
+# greens landed at 4.50-4.96 -- clearing the standard and still reported from
+# the rig as hard to read. Worse, the separation nudge above had pushed several
+# yellows to 7.3-7.7 as a side effect, so `warn` read BETTER than `on` and made
+# green look weaker by comparison.
+#
+# 7.0 is AA for small text and AAA for normal.
+#
+# LIGHT THEMES ONLY, and that is a measurement rather than a preference.
+# Applying it to all 22 cost separation on the dark ones: nord lost green from
+# both yellow and red, and everforest-dark lost yellow from red, going from
+# comfortably separated to below the floor. On a light background the state
+# colours are dark and have room to go darker; on a dark background they are
+# light and converge on white quickly, so buying contrast there is paid for in
+# the very distinguishability this file spent the previous change enforcing.
+#
+# The dark themes were not the complaint and are not near the edge -- their
+# greens sit at 4.6-5.4 with separation intact -- so they keep the ordinary
+# accent floor.
+STATE_FLOOR = 7.0
+STATE_ROLES = ("green", "yellow", "red")
+
 # The pairs the status lamps actually rely on. Not every accent pair: `blue`
 # and `cyan` sitting close costs nothing, because nothing reads a machine's
 # state from them.
@@ -347,6 +373,17 @@ def fitted(name):
         if changed:
             notes.append("%s %s->%s" % (role, roles[role], new))
             roles[role] = new
+
+    # The state roles are re-fitted to their own, higher floor before the
+    # separation pass, so separation is enforced on the final colours rather
+    # than on ones a later step would move.
+    if not dark:
+        for role in STATE_ROLES:
+            new_c, changed = fit(roles[role], surfaces, STATE_FLOOR, toward)
+            if changed and new_c != roles[role]:
+                notes.append("%s %s->%s (state floor)"
+                             % (role, roles[role], new_c))
+                roles[role] = new_c
 
     # STATE COLOURS MUST BE TELLABLE APART, not merely legible.
     #

@@ -472,6 +472,18 @@
      in the browsers this runs in. */
   .lamp.warn span::after { content:"?"; margin-left:1px; font-weight:700; }
   .lamp.bad  span::after { content:"!"; margin-left:1px; font-weight:700; }
+  /* EXCEPT WHEN THE STATE IS "SOMEBODY ELSE HAS IT", which is not a fault.
+     KBD and MOS go `warn` while another session holds the input lock -- which
+     is the normal, correct state during a measured round, and the operator
+     asked why KBD and MOS had suddenly grown question marks. The answer was
+     that they had been yellow all along and the marker made it legible; but
+     `?` reads as "unknown", and this is precisely known: the tooltip names the
+     holder.
+     It also already HAS a non-colour carrier -- the doubled underline on
+     .locked -- so the marker here would be a second one saying something less
+     accurate than the first. A held lamp keeps the double rule and drops the
+     glyph. */
+  .lamp.warn.locked span::after { content:none; }
   /* COLOUR IS STILL NOT THE ONLY CARRIER -- it just stopped being a padlock.
      The glyphs cost 38px of a status row that is 100px over on a phone, and
      a lamp row that has to scroll is one nobody reads. A doubled underline

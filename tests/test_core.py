@@ -5136,6 +5136,31 @@ def test_lamp_states_are_tellable_apart():
           % (worst[1], worst[0], T.STATE_SEPARATION),
           worst[0] >= T.STATE_SEPARATION - 0.05, worst)
 
+    # THE LIGHT-THEME STATE FLOOR. 4.5:1 is WCAG AA for NORMAL text and
+    # assumes something near 16px; these labels are 10px bold mono, and at 4.5
+    # they were reported from the rig as hard to read even though they cleared
+    # the standard. Light themes only -- applying it to the dark ones bought
+    # contrast by destroying separation on nord and everforest-dark, which is
+    # paying for one property of this row with the other.
+    worst_light = (99.0, None)
+    for name in T.THEMES:
+        if T.THEMES[name][2]:
+            continue                      # dark: ordinary accent floor
+        roles, _n = T.fitted(name)
+        for role in T.STATE_ROLES:
+            c = min(T.contrast(roles[role], roles[s]) for s in ("bg", "panel"))
+            if c < worst_light[0]:
+                worst_light = (c, "%s %s" % (name, role))
+    check("worst light-theme state colour is %s at %.2f:1 (floor %.1f)"
+          % (worst_light[1], worst_light[0], T.STATE_FLOOR),
+          worst_light[0] >= T.STATE_FLOOR - 0.01, worst_light)
+    check("control: dark themes are NOT held to it, so the check is measuring "
+          "the scoping rather than passing vacuously",
+          any(T.THEMES[n][2] and
+              min(T.contrast(T.fitted(n)[0][r], T.fitted(n)[0][s])
+                  for s in ("bg", "panel") for r in ("green",))
+              < T.STATE_FLOOR for n in T.THEMES))
+
     # THE NON-COLOUR MARKER. Without it the exemption above is a hole: on a
     # single-phosphor theme `on` and `bad` would render identically.
     page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
@@ -5153,6 +5178,13 @@ def test_lamp_states_are_tellable_apart():
           (warn_c and warn_c.group(1), bad_c and bad_c.group(1)))
     check("`on` carries NO marker, so the row costs nothing in its normal "
           "state", re.search(r"\.lamp\.on\s+span::after", page) is None)
+    # "Somebody else holds the input lock" is not a fault, and it already has
+    # its own carrier -- the doubled underline on .locked. A `?` there says
+    # "unknown" about a state whose tooltip names the holder.
+    check("a lamp held by another session drops the marker and keeps its "
+          "doubled rule",
+          re.search(r"\.lamp\.warn\.locked\s+span::after\s*\{[^}]*content:\s*none",
+                    page) is not None)
 
 
 def test_a_crop_needs_two_agreeing_samples():
