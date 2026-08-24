@@ -121,3 +121,5 @@ arm B.
 **A large bucket licenses a characterisation, not an optimisation.** Milliseconds
 cannot distinguish bandwidth-bound from overhead-bound, which is how a cleanly
 measured 4.77 ms left a decision unmade.
+
+# Planning docs live in internal/, which is gitignored. See CLAUDE.md.

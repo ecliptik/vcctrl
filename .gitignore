@@ -6,3 +6,18 @@ __pycache__/
 
 # The operator's real configuration. The tracked example is vcctrl.example.yaml.
 /vcctrl.yaml
+
+# PLANNING WORK THAT MUST NEVER REACH THE REPOSITORY.
+#
+# Plans, drafts, scratch analysis, anything written to think with rather than
+# to ship. Ignored as a DIRECTORY, deliberately: an untracked single file is
+# one `git add -A docs` away from being committed, and that is not
+# hypothetical -- docs/CONFIG-PLAN.md was swept into a commit that way during
+# the phase-7 rewrite and had to be amended out before the push. A directory
+# cannot be caught by a path-scoped add.
+#
+# It also survives a history scrub without needing an exemption: nothing in
+# here is tracked, so nothing in here is in any blob, and a rewrite cannot
+# reach it. The cost is the other half of that -- NO BUNDLE CONTAINS IT
+# EITHER. Anything here that matters wants a copy outside the tree.
+/internal/
