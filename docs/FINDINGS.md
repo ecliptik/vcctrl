@@ -2296,3 +2296,40 @@ because the margin came from the archive's own pair spread rather than from the
 metric's resolution.
 `T1-CONFIRM-RESULTS.md` has the round; `HARNESS-STANDARD.md` 10.0e is the
 design-time gate that prevents the next one.
+
+### And the band that replaced it is a PAIR spread, quoted as a population
+
+`FRS1` — a cell run from a **freshly cloned, post-rewrite** repo, exercising the
+full chain from the clone's `harness/`: profile read, env clear, config copy,
+launch, engine attestation, prompt return — read **2858 flips, 27.8 fps**. The
+rewrite is therefore transparent to the measurement, which is what it was run to
+show. It also completes a stock population:
+
+    banked six, pre-move        2842 2842 2840 2839 2844 2849
+    ACC1 / ACC2, post-move      2827 / 2840
+    FRS1, post-rewrite          2858
+
+    nine cells, three sittings  2827 .. 2858   range 31 flips = 0.30 fps
+
+**The archive's `0 1 2 5 12 15 16` are same-config PAIRS. Two stock cells in the
+accumulated population differ by 31** — roughly double the figure now being
+quoted as "the rig's repeatability", including in this file above.
+
+This is not a contradiction and the 16 is not retracted: range grows with `n`,
+and these two numbers are the two bands `HARNESS-STANDARD.md` 10.0 already
+requires to be measured and published separately. **The defect is that only one
+of them is in circulation**, so a comparison across sittings gets read against
+the within-pair figure. `PI5-MIGRATION.md` sec. 6 was exactly that case — its
+restated criterion, `~16 flips is not evidence`, is applied to a test that is
+across machines and across sittings, where `FRS1` alone would clear it by 9.
+
+**A margin narrower than the noise tests the sample size rather than the
+subject** — §40's own conclusion, arriving a second time because the replacement
+margin was taken from a narrower statistic than the comparison it now gates.
+Re-derive the band from the accumulated population whenever the population
+grows, and name which band a criterion is quoting.
+
+`FRS1` and the pre-rewrite cells were run by the peer session that owns the
+benchmarking chain; the flip counts above are as reported by it. The fps
+conversions are checked here against `_flips * 500 / _reel_ticks` at
+`reel_ticks = 5140`.

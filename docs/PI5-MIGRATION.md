@@ -400,6 +400,26 @@ changed between them.
 > is not evidence of anything**, and a real regression must clear that
 > comfortably. `fps_true_flips` and `reel_ticks` are already in every manifest,
 > so no rebuild is needed to work in the exact unit.
+>
+> **AMENDED 2026-08-24 — the ~16 is a PAIR spread, and phase 6 is an
+> ACROSS-SESSION comparison.** The `0 1 2 5 12 15 16` figures are same-config
+> pairs from the archive. The accumulated stock population is now **nine cells
+> across three sittings** — pre-move, post-move, and post-rewrite — and it
+> spans **2827 to 2858: 31 flips, 0.30 fps**, with the two extremes being
+> `ACC1` and `FRS1`. Two identically-configured stock cells therefore differ by
+> **31**, not 16.
+>
+> This is not a contradiction — range grows with `n`, and
+> `HARNESS-STANDARD.md` 10.0 already requires the within-session and
+> across-session bands to be measured, published, and named separately. It is
+> the **wrong one being quoted**: a Pi 5 comparison is across machines and
+> across sittings, so it must be read against the across-session figure.
+> **Against a band of 16, an ordinary stock cell like `FRS1` sits 31 from
+> `ACC1` and phase 6 reports a regression that is not there** — the same
+> failure §40 already recorded, one level up.
+>
+> Take the band from the accumulated population, not from the pair list, and
+> re-derive it when the population grows.
 
 Measured, not assumed: Pi 5 run 1 gave +1.30 and run 2 gave +1.20, thirty
 minutes apart, same hardware, same declared configuration, manifests identical.

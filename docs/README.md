@@ -40,6 +40,12 @@ Each answers the question the previous one raised.
   the repeatability it was gating.** See `T1-CONFIRM-RESULTS.md` and
   `HARNESS-STANDARD.md` 10.0e. Express a band in counted units and check it
   against the archive before running.
+  **And do not quote the 16 as the rig's repeatability either** — it is a
+  *pair* spread. The accumulated stock population, nine cells over three
+  sittings, spans **31 flips (0.30 fps)**, `ACC1` 2827 to `FRS1` 2858. Pair
+  spread and population range are the two bands of `HARNESS-STANDARD.md` 10.0;
+  say which one you are reading against. `PI5-MIGRATION.md` sec. 6 carries the
+  amendment.
 - **`ASM_BLIT` "+0.50"** (`T1-TILEMAP-RESULTS.md`). It did not reproduce: the
   confirming round gives **+0.389** against T1's **+0.486**. The lever is real
   (2.5x the noise floor) but its **magnitude is unpinned**, and it adds at most
