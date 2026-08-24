@@ -240,7 +240,11 @@ ssh "$HOST" 'rm -rf ~/vcctrl-src && mkdir -p ~/vcctrl-src'
 # sent ONLY IF IT EXISTS: a rig configured entirely by built-in defaults is a
 # supported state, and shipping the example in its place would install a
 # configuration nobody wrote, pointing at hardware nobody has.
-tar -C "$SRC" -cf - daemon bin pi tools common | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+# harness/ and profiles/ ship too: the cell and sweep runners moved out of
+# bin/ in phase 6, and a deploy that still sent only bin/ would leave a Pi
+# with the client and no runners -- working for every verb anyone tests by
+# hand, and missing exactly the ones a round needs.
+tar -C "$SRC" -cf - daemon bin pi tools common harness profiles | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
 if [ -f "$SRC/vcctrl.yaml" ]; then
   # Validate BEFORE shipping. An invalid file does not stop the daemon -- it
   # degrades to built-in defaults, which on this rig means no power control and

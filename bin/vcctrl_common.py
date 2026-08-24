@@ -574,9 +574,15 @@ def _screen_text():
         from importlib.machinery import SourceFileLoader
         from PIL import Image
         import pytesseract
+# vcctrl-sweep moved to harness/ (docs/CONFIG-PLAN.md sec. 6). This is a
+        # DOCUMENTED boundary crossing: a general tool reaching into the
+        # harness for the settle-frame logic rather than duplicating it a third
+        # time. Recorded here so it is a known exception rather than something
+        # that silently works.
+        _HARNESS = os.path.join(os.path.dirname(HERE), "harness")
         spec = importlib.util.spec_from_loader(
             "vcsweep", SourceFileLoader("vcsweep",
-                                        os.path.join(HERE, "vcctrl-sweep")))
+                                        os.path.join(_HARNESS, "vcctrl-sweep")))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         shot, _ = mod.grab("cmdcheck")

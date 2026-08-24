@@ -99,6 +99,13 @@ import importlib.util
 from importlib.machinery import SourceFileLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The shared library stayed in bin/ when the harness moved to harness/.
+# vcctrl_common is NOT harness code -- vcctrl-audio, -capcheck and -cfclean all
+# import it, and moving it here would have made the general capture tools
+# depend on the doskutsu harness, which is the coupling this split exists to
+# remove. See docs/CONFIG-PLAN.md sec. 6.
+BIN = os.path.join(os.path.dirname(HERE), "bin")
+sys.path.insert(0, BIN)
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, at_prompt, wait_for_prompt, set_lock_owner, get_lock_owner,

@@ -56,7 +56,11 @@ def grab(tag):
     duplicating the settle-frame logic a third time."""
     import importlib.util
     from importlib.machinery import SourceFileLoader
-    loader = SourceFileLoader("sweepmod", os.path.join(HERE, "vcctrl-sweep"))
+    # Same documented crossing as vcctrl_common.grab(): the sweep runner is in
+    # harness/ now, and uvconfig borrows its settle-frame logic rather than
+    # keeping a third copy. docs/CONFIG-PLAN.md sec. 6.
+    _harness = os.path.join(os.path.dirname(HERE), "harness")
+    loader = SourceFileLoader("sweepmod", os.path.join(_harness, "vcctrl-sweep"))
     spec = importlib.util.spec_from_loader("sweepmod", loader)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["sweepmod"] = mod

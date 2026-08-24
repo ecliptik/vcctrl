@@ -40,12 +40,19 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The shared library stayed in bin/ when the harness moved to harness/.
+# vcctrl_common is NOT harness code -- vcctrl-audio, -capcheck and -cfclean all
+# import it, and moving it here would have made the general capture tools
+# depend on the doskutsu harness, which is the coupling this split exists to
+# remove. See docs/CONFIG-PLAN.md sec. 6.
+BIN = os.path.join(os.path.dirname(HERE), "bin")
+sys.path.insert(0, BIN)
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, vc_json, at_prompt, ensure_powered, set_lock_owner, get_lock_owner,
     cfg_get)
 
-CONF = os.path.join(os.path.dirname(HERE), "sweep", "sweeps.json")
+CONF = os.path.join(HERE, "sweeps.json")
 
 # Screen must be still for this long before the runner will believe a sweep has
 # ended. During a cell the game renders continuously; at a prompt the screen is

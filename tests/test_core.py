@@ -2418,7 +2418,7 @@ def test_stall_tracker_three_states():
     import importlib.util
     from importlib.machinery import SourceFileLoader
 
-    path = os.path.join(HERE, os.pardir, "bin", "vcctrl-sweep")
+    path = os.path.join(HERE, os.pardir, "harness", "vcctrl-sweep")
     loader = SourceFileLoader("vcctrl_sweep", path)
     spec = importlib.util.spec_from_loader("vcctrl_sweep", loader)
     mod = importlib.util.module_from_spec(spec)
@@ -2914,7 +2914,7 @@ def test_absent_key_is_not_a_value():
     because then the check produces the same output as a real pass.
     """
     common = _load("bin/vcctrl_common.py", "vcc_common_t")
-    sweep = _load("bin/vcctrl-sweep", "vcc_sweep_t")
+    sweep = _load("harness/vcctrl-sweep", "vcc_sweep_t")
 
     # 1. THE VACUOUS CHECK. all({}.values()) is True, so `st.get("usb4vc", {})`
     # passed the preflight whenever the field was missing -- an absent answer
@@ -5659,7 +5659,7 @@ def test_psm3_drops_the_count_line_and_psm6_recovers_it():
     check("PSM 6 recovers the count line", "count" in psm6.lower(),
           psm6.strip()[:70])
 
-    cell = _load("bin/vcctrl-cell", "cell_psm")
+    cell = _load("harness/vcctrl-cell", "cell_psm")
     line = [l for l in psm6.splitlines() if "count" in l.lower()][0]
     check("and the recovered line parses to the right integer",
           cell.read_count(line) == 2, (line, cell.read_count(line)))
