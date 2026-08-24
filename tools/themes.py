@@ -249,6 +249,49 @@ ACCENT_FLOOR = 4.5
 EDGE_FLOOR = 3.0
 ACCENTS = ("red", "orange", "yellow", "green", "cyan", "blue", "magenta")
 
+# HOW FAR APART TWO STATE COLOURS MUST BE, in CIE76 delta-E.
+#
+# Reported from the rig: on a light theme the lamps were "difficult to tell if
+# they are green". Measuring said the contrast floor was not the problem --
+# every theme clears 4.5:1 -- and that the real defect is SEPARATION. In
+# solarized-light, gruvbox-light and everforest-light the authored green and
+# yellow are both olive, landing 22-23 apart, and the lamp row distinguishes
+# `on` from `warn` by colour alone. Two states rendered in nearly the same
+# colour at 10px is one state.
+#
+# 25 is the usual "clearly different colours" threshold for CIE76. Nudging is
+# by LIGHTNESS, using the same _mix toward the same extreme the contrast floors
+# use, so the palette's hue is untouched and the correction can only increase
+# contrast rather than trade it away. A reader who cannot separate the hues at
+# all now has a lightness difference instead, which is the better answer for
+# them anyway.
+STATE_SEPARATION = 25.0
+
+# The pairs the status lamps actually rely on. Not every accent pair: `blue`
+# and `cyan` sitting close costs nothing, because nothing reads a machine's
+# state from them.
+STATE_PAIRS = (("green", "yellow"), ("green", "red"), ("yellow", "red"))
+
+
+def _lab(hexcolor):
+    r, g, b = (_lin(int(hexcolor.lstrip("#")[i:i + 2], 16))
+               for i in (0, 2, 4))
+    X = r * 0.4124 + g * 0.3576 + b * 0.1805
+    Y = r * 0.2126 + g * 0.7152 + b * 0.0722
+    Z = r * 0.0193 + g * 0.1192 + b * 0.9505
+    Xn, Yn, Zn = 0.95047, 1.0, 1.08883
+
+    def f(t):
+        return t ** (1.0 / 3) if t > 0.008856 else 7.787 * t + 16.0 / 116
+    fx, fy, fz = f(X / Xn), f(Y / Yn), f(Z / Zn)
+    return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
+
+
+def delta_e(a, b):
+    """CIE76. Crude next to CIEDE2000 and sufficient here: the question is
+    "are these two obviously different colours", not "how different"."""
+    return sum((x - y) ** 2 for x, y in zip(_lab(a), _lab(b))) ** 0.5
+
 
 def _mix(hexcolor, target, t):
     a = hexcolor.lstrip("#")
@@ -304,6 +347,57 @@ def fitted(name):
         if changed:
             notes.append("%s %s->%s" % (role, roles[role], new))
             roles[role] = new
+
+    # STATE COLOURS MUST BE TELLABLE APART, not merely legible.
+    #
+    # Enforced after the accent floors so a nudge here cannot undo one there:
+    # every correction mixes toward the same extreme the floors use, which
+    # only ever increases contrast against both surfaces.
+    #
+    # SKIPPED WHERE THE PALETTE IS MONOCHROME BY DESIGN. ibm-5151, dec-amber
+    # and the vt220 themes are single-phosphor terminals: green and red are the
+    # SAME COLOUR in the authored table, deliberately, and separating them
+    # would destroy the thing the theme is for. Detected by measuring the
+    # authored values rather than by a flag, so a new monochrome theme needs no
+    # metadata to be handled correctly -- and so the exemption cannot be
+    # claimed by a colour theme that merely drifted.
+    #
+    # The page carries a non-colour state marker for exactly those themes:
+    # solid underline for on, dashed for not-proven, double for held
+    # elsewhere. That is what makes the exemption safe rather than a hole.
+    authored = THEMES[name][4]
+    for a, b in STATE_PAIRS:
+        if delta_e(authored[a], authored[b]) < 1.0:
+            continue                     # monochrome by design; leave it
+        start = roles[b]
+        for _ in range(40):
+            if delta_e(roles[a], roles[b]) >= STATE_SEPARATION:
+                break
+            # Move the SECOND of the pair. green is the state a reader sees
+            # most and the one they calibrate on, so it stays put and the
+            # exceptional states move.
+            before = roles[b]
+            roles[b] = _mix(roles[b], toward, 0.05)
+            if roles[b] == before:
+                break                    # already at the extreme
+        if delta_e(roles[a], roles[b]) < STATE_SEPARATION:
+            # UNREACHABLE: revert rather than keep a nudge that bought
+            # nothing. A palette this tight -- vt220's yellow and red differ
+            # by a hair on a white phosphor -- cannot be separated by
+            # lightness, and leaving it half-moved changes the theme while
+            # still failing the thing the change was for. The note says so, so
+            # the reliance on the non-colour marker is recorded rather than
+            # implied by a number that looks like a result.
+            roles[b] = start
+            note = "%s/%s UNSEPARABLE dE%.0f -- relies on the state marker" % (
+                a, b, delta_e(roles[a], roles[b]))
+            if note not in notes:
+                notes.append(note)
+            continue
+        if roles[b] != authored[b]:
+            note = "%s/%s dE%.0f" % (a, b, delta_e(roles[a], roles[b]))
+            if note not in notes:
+                notes.append(note)
 
     # THE ORDERING IS PART OF THE CONTRACT, not a by-product of the floors.
     #

@@ -450,6 +450,28 @@
   .lamp.bad span {
     color:var(--red); font-weight:700; border-bottom-color:var(--red);
   }
+  /* A STATE MARKER, BECAUSE COLOUR ALONE DOES NOT SURVIVE EVERY PALETTE.
+     Reported from the rig: on a light theme the lamps were "difficult to tell
+     if they are green". Measuring found contrast was fine everywhere -- every
+     theme clears 4.5:1 -- and that the defect was SEPARATION: solarized-light,
+     gruvbox-light and everforest-light author green and yellow as two olives
+     about 22 apart in delta-E, and `on` and `warn` were distinguished by
+     colour and nothing else. Two states rendered in nearly the same colour at
+     10px is one state.
+     tools/themes.py now enforces a separation floor, which fixes the colour
+     themes. It CANNOT fix the single-phosphor ones: ibm-5151, dec-amber and
+     the vt220 pair have green and red as literally the same value, on purpose,
+     and separating them would destroy what the theme is for. The generator
+     marks those "UNSEPARABLE -- relies on the state marker", and this is that
+     marker.
+     Only warn and bad carry one, so the row costs nothing in its normal state
+     -- and grows by one character per lamp exactly when something is wrong,
+     which is when a wider row is worth having. `PWR!` needs no colour at all.
+     aria-hidden is not needed: the tooltip already carries the state in words
+     for a screen reader, and ::after content is not in the accessibility tree
+     in the browsers this runs in. */
+  .lamp.warn span::after { content:"?"; margin-left:1px; font-weight:700; }
+  .lamp.bad  span::after { content:"!"; margin-left:1px; font-weight:700; }
   /* COLOUR IS STILL NOT THE ONLY CARRIER -- it just stopped being a padlock.
      The glyphs cost 38px of a status row that is 100px over on a phone, and
      a lamp row that has to scroll is one nobody reads. A doubled underline
@@ -5084,6 +5106,21 @@ let zoomMode = localStorage.getItem('vcctrl.zoom2') || 'fit';
 // still applying the vanished factor.
 if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
 let crop = null, lastHinted = null, hintTimer = null;
+// The last MEASUREMENT, which is not the same thing as the adopted crop. See
+// cropsAgree() and the re-measure interval for why one sample is not enough.
+let cropCand = null, cropCandT = 0;
+
+// Do two crop measurements describe the same letterbox?
+//
+// null means "no letterbox", and two nulls agree. A tolerance of 6px because
+// measureCrop steps the image by 2 and pads the box by 4, so an identical
+// letterbox can still measure a few pixels apart between frames.
+function cropsAgree(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return Math.abs(a.x0 - b.x0) <= 6 && Math.abs(a.y0 - b.y0) <= 6
+      && Math.abs(a.bw - b.bw) <= 6 && Math.abs(a.bh - b.bh) <= 6;
+}
 
 function mediaEl() {
   return $('mjpeg').style.display === 'none' ? $('screen') : $('mjpeg');
@@ -5155,7 +5192,11 @@ function applyZoom(recentre) {
   if (frames > 0 && nw > 1 && nh > 1) {
     if (nw !== capW || nh !== capH) { capW = nw; capH = nh; showCapture(); }
   }
-  if (!crop) crop = measureCrop();
+  // NO LAZY MEASURE HERE. This used to be `if (!crop) crop = measureCrop()`,
+  // which adopted a one-frame sample on any call that happened to find crop
+  // null -- including the ones setZoom and the resize handler make. The
+  // interval above owns adoption now, because only it can compare two samples
+  // taken at different times.
   const r = crop || {x0: 0, y0: 0, bw: nw, bh: nh};
 
   // Two passes, because a scrollbar changes the space a fit has to fit into.
@@ -5242,7 +5283,10 @@ function setZoom(m) {
   $('zoomlabel').textContent = ZOOMLABEL[m] || m;
   for (const b of document.querySelectorAll('#pop-zoom button'))
     b.classList.toggle('sel', b.dataset.zoom === m);
-  crop = null;                             // re-measure on the next frame
+  // Deliberately does NOT clear `crop`. Clearing it here meant the next
+  // applyZoom re-measured from one frame, which is the hole this change
+  // closes; and a letterbox does not stop existing because somebody chose a
+  // different zoom. The interval re-confirms it either way.
   applyZoom(true);
 }
 $('zoombtn').onclick = () => openPop('zoom');
@@ -5375,10 +5419,38 @@ setBufOpen(false);
 
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.
+//
+// A CROP IS ADOPTED ONLY WHEN TWO MEASUREMENTS AGREE. One is not enough, and
+// the comment on measureCrop used to say why it thought it was: "the
+// letterbox only changes when the target changes video mode, which is rare
+// and visible". THAT PREMISE IS FALSE WHILE A GAME IS RUNNING. measureCrop
+// finds the bounding box of non-black pixels, and in Cave Story that box is
+// the SCENE: a dark cave measures small, lands roughly symmetric, passes the
+// symmetry guard meant to reject text screens, and gets treated as a
+// letterbox. Fit then fits the "drawn region", overflows the real frame on
+// purpose, and the picture jumps in, off-centre, with scrollbars -- then
+// changes again five seconds later, or when the player walks into a
+// differently-lit cave. Reported from the rig, in Firefox, playing Cave
+// Story, and every symptom in that report is this.
+//
+// A real letterbox is the same in every frame. Live content is not. So the
+// discriminator is time, not any property of a single sample: measure, keep
+// it as a candidate, and adopt only when the NEXT measurement agrees. A
+// moving picture never produces two agreeing samples and therefore never gets
+// cropped, which is the behaviour that was wanted all along.
+//
+// Dropping is symmetric: an adopted crop is abandoned only when two
+// measurements agree that it is gone, so one bright frame in a letterboxed
+// mode does not throw the crop away either.
 setInterval(() => {
   if (document.hidden) return;   // a readback nobody can see is just battery
-  crop = null;
-  applyZoom();
+  const m = measureCrop();
+  const confirmed = cropsAgree(m, cropCand);
+  cropCand = m;
+  if (!confirmed) return;        // the picture is moving: trust neither sample
+  if (cropsAgree(m, crop)) return;
+  crop = m;
+  applyZoom(true);               // a real change, so re-centre on it
 }, 5000);
 
 // Drag to pan, which is the same thing as scrolling now that the picture

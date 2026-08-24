@@ -5078,3 +5078,159 @@ def test_the_page_gets_its_targets_from_the_daemon():
     reg_src = open(DAEMON, encoding="utf-8").read()
     check("configured_targets returns [] rather than a built-in table",
           "def configured_targets" in reg_src and "return []" in reg_src)
+
+
+def test_lamp_states_are_tellable_apart():
+    """Reported from the rig: on a light theme the lamps were "difficult to
+    tell if they are green".
+
+    The contrast test passed and kept passing, because contrast was never the
+    problem -- every theme clears 4.5:1 on both surfaces. The defect was
+    SEPARATION: solarized-light, gruvbox-light and everforest-light author
+    green and yellow as two olives about 22 apart in delta-E, and the lamp row
+    distinguished `on` from `warn` by colour and nothing else. Two states
+    rendered in nearly the same colour at 10px is one state.
+
+    So there are two guarantees here and the second is what makes the first
+    safe: colour themes must separate their state roles, and the themes that
+    CANNOT -- single-phosphor terminals, where green and red are deliberately
+    the same value -- must be carried by a non-colour marker instead.
+    """
+    print("\nlamp state separation")
+    sys.path.insert(0, os.path.join(HERE, os.pardir, "tools"))
+    import themes as T
+
+    checked = mono = unseparable = 0
+    worst = (99.0, None)
+    for name in T.THEMES:
+        roles, _notes = T.fitted(name)
+        authored = T.THEMES[name][4]
+        for a, b in T.STATE_PAIRS:
+            if T.delta_e(authored[a], authored[b]) < 1.0:
+                mono += 1
+                continue              # monochrome by design
+            d = T.delta_e(roles[a], roles[b])
+            # vt220's pairs cannot be separated by lightness at all; the
+            # generator reverts those and says so, and the marker below
+            # carries them. They are excluded from the worst-case FIGURE as
+            # well as from the assertion -- a statistic that includes the
+            # exempted cases reports a floor breach that is not one, which is
+            # how a summary line stops being read.
+            unsep = any("UNSEPARABLE" in n and a in n and b in n
+                        for n in _notes)
+            if unsep:
+                unseparable += 1
+                continue
+            checked += 1
+            if d < worst[0]:
+                worst = (d, "%s %s/%s" % (name, a, b))
+            if d < T.STATE_SEPARATION:
+                check("%s: %s/%s only dE%.1f apart" % (name, a, b, d), False)
+    check("%d state-colour pairs checked across %d themes"
+          % (checked, len(T.THEMES)), checked > 30, checked)
+    check("control: some pairs were exempt as monochrome, so the check is not "
+          "silently skipping everything", 0 < mono < checked, (mono, checked))
+    check("%d pair(s) are UNSEPARABLE by lightness and rely on the marker"
+          % unseparable, unseparable > 0, unseparable)
+    check("worst separated colour pair is %s at dE%.1f (floor %.0f)"
+          % (worst[1], worst[0], T.STATE_SEPARATION),
+          worst[0] >= T.STATE_SEPARATION - 0.05, worst)
+
+    # THE NON-COLOUR MARKER. Without it the exemption above is a hole: on a
+    # single-phosphor theme `on` and `bad` would render identically.
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    check("warn carries a non-colour marker",
+          re.search(r"\.lamp\.warn\s+span::after\s*\{[^}]*content", page)
+          is not None)
+    check("bad carries a different non-colour marker",
+          re.search(r"\.lamp\.bad\s+span::after\s*\{[^}]*content", page)
+          is not None)
+    warn_c = re.search(r'\.lamp\.warn\s+span::after\s*\{[^}]*content:"([^"]*)"', page)
+    bad_c = re.search(r'\.lamp\.bad\s+span::after\s*\{[^}]*content:"([^"]*)"', page)
+    check("and the two markers differ from each other",
+          warn_c and bad_c and warn_c.group(1) != bad_c.group(1),
+          (warn_c and warn_c.group(1), bad_c and bad_c.group(1)))
+    check("`on` carries NO marker, so the row costs nothing in its normal "
+          "state", re.search(r"\.lamp\.on\s+span::after", page) is None)
+
+
+def test_a_crop_needs_two_agreeing_samples():
+    """Reported from the rig: in Firefox, with Cave Story running, "Fit to
+    Screen" would zoom in, sit off-centre and grow scrollbars -- then change
+    again when the player walked into another cave, sometimes resetting and
+    sometimes not.
+
+    measureCrop() finds the bounding box of non-black pixels, and its comment
+    justified using one frame: "the letterbox only changes when the target
+    changes video mode, which is rare and visible." THAT PREMISE IS FALSE
+    WHILE A GAME IS RUNNING. In a dark cave the bounding box IS the scene: it
+    measures small, lands roughly symmetric, passes the symmetry guard written
+    to reject text screens, and is adopted as a letterbox. Fit then fits the
+    drawn region and overflows the real frame on purpose, which is every
+    symptom in the report.
+
+    A real letterbox is identical in every frame; live content is not. So the
+    discriminator is TIME, not any property of a single sample -- the same
+    shape as a poll that caught a file mid-write and reported a real number
+    about the wrong moment.
+    """
+    print("\nletterbox needs confirming")
+    import shutil
+    import subprocess
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+
+    # Search EXECUTABLE lines only. The replacement comment quotes the old
+    # line verbatim, on purpose -- naming what a change removed is most of why
+    # the comment is worth having -- and a guard that cannot tell code from
+    # prose would force that explanation out of the file. This is the same
+    # distinction the page-targets guard makes.
+    live = "\n".join(ln for ln in page.splitlines()
+                      if not ln.lstrip().startswith(("//", "*", "/*")))
+    check("applyZoom no longer adopts a crop from a single frame",
+          "if (!crop) crop = measureCrop()" not in live)
+    check("control: the removed line is still QUOTED in a comment, so the "
+          "search above is not passing because the text vanished",
+          "if (!crop) crop = measureCrop()" in page)
+    check("adoption happens where two samples can be compared",
+          "cropsAgree(m, cropCand)" in page)
+    check("and setZoom no longer throws the crop away, which re-opened it",
+          re.search(r"crop = null;\s+// re-measure on the next frame", page)
+          is None)
+
+    m = re.search(r"^function cropsAgree\(a, b\) \{.*?^\}", page, re.S | re.M)
+    check("cropsAgree is extractable for testing", m is not None)
+    if not m:
+        return
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        print("  SKIP  no node available")
+        return
+    js = m.group(0) + """
+const L  = {x0:80,  y0:60, bw:480, bh:360};
+const L2 = {x0:82,  y0:62, bw:478, bh:358};
+const S1 = {x0:100, y0:40, bw:200, bh:300};
+const S2 = {x0:220, y0:90, bw:180, bh:260};
+console.log(JSON.stringify([
+  ['two nulls agree -- a stable absence is a result too',
+   cropsAgree(null, null), true],
+  ['a letterbox agrees with itself', cropsAgree(L, L), true],
+  ['and tolerates the few px measureCrop can jitter by',
+   cropsAgree(L, L2), true],
+  ['TWO DIFFERENT GAME SCENES DO NOT AGREE, so neither is adopted',
+   cropsAgree(S1, S2), false],
+  ['a scene does not agree with nothing', cropsAgree(S1, null), false],
+  ['nothing does not agree with a scene', cropsAgree(null, S1), false],
+]));
+"""
+    r = subprocess.run([node, "-e", js], capture_output=True, text=True)
+    check("node ran the comparator", r.returncode == 0, r.stderr[:200])
+    if r.returncode != 0:
+        return
+    import json as _json
+    rows = _json.loads(r.stdout)
+    check("control: the comparator returned every case", len(rows) == 6,
+          len(rows))
+    for name, got, want in rows:
+        check(name, got == want, (got, want))
