@@ -2225,3 +2225,52 @@ that those eight really were one arm.
 - Agreement between blocks is not evidence of a valid comparison. **A null
   result is exactly what a comparison of a thing with itself produces**, and
   it arrives wearing the clothes of a clean measurement.
+
+## 40. The repeatability band was the metric's own truncation  [measured 2026-08-24]
+
+**`per_loop_fps` is quantised in the COMPUTATION, not the format.**
+
+    main.cpp:1530   _perloop_x10 = _flips * 500UL / _reel_ticks     integer division
+    main.cpp:1617   fprintf("per_loop_fps=%lu.%lu", x/10, x%10)      just formatting
+
+It truncates — it does not round — to 0.1 fps before anything prints it, so
+**every cell reads low**, here by 0.017 to 0.081. Mostly common-mode in a delta;
+not exactly so, and it passes through twice in a delta of deltas (measured at
+0.0125 of the 0.100 increment).
+
+**Four stock cells then read `27.6, 27.6, 27.6, 27.6` — spread 0.00 — and that
+became a "±0.1 within-session repeatability band".** It was the binning. The
+exact values were `27.6459, 27.6459, 27.6265, 27.6167`: a true spread of
+**0.029**, three flips out of 2840.
+
+### The exact numbers were already on disk
+
+`fps_true_flips` and `reel_ticks` are emitted in every manifest, and `reel_ticks`
+was **identical (5140) in all twelve cells** of the confirming round. The reel is
+a fixed TAS replay, so **flips over a fixed reel is an exact integer measure with
+no quantisation at all**, recoverable from cells already collected — no rebuild,
+nothing near a binary mid-round.
+
+**Look for the raw counts beside the ratio before proposing to emit them.** A
+patch to emit `per_loop_fps_x100` was designed and dropped for this reason.
+
+### Precision was the wrong limit anyway
+
+The question it was meant to settle — does `ASM_BLIT` add 0.10 on top of
+`TILE_DWORD_COPY` — is **variance-limited, not resolution-limited**:
+
+    the increment                      +9 flips
+    same-config pair spread, archive    0 to 16 flips
+
+More decimal places would have reported those nine flips beautifully and
+resolved nothing. **Resolution and repeatability are different limits; check
+which one binds before spending a binary change on it.**
+
+### What it cost
+
+**The band became the confirming round's acceptance criterion** — 0.10 fps is
+10.3 flips, against a rig whose identically-configured pairs differ by up to 16.
+The test could not have reliably confirmed anything, and `ASM_BLIT`'s
+NOT-CONFIRMED is a property of the test rather than the lever.
+`T1-CONFIRM-RESULTS.md` has the round; `HARNESS-STANDARD.md` 10.0e is the
+design-time gate that prevents the next one.
