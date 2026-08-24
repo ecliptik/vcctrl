@@ -6617,3 +6617,42 @@ def test_dos_filename_contains_a_path_traversal():
     check("a phone photo's extension is named, not just counted",
           any(".JPE" in n for n in f("my-photo-2026.jpeg")[1]),
           f("my-photo-2026.jpeg"))
+
+
+def test_packet_driver_check_reports_cannot_tell_rather_than_no_driver():
+    """The tempting version is two-valued and wrong in the expensive direction.
+
+    "No failure string, therefore a driver is loaded" reads as success when
+    PKTTOOL dies early, prints nothing, is missing from the card, or when the
+    OCR mangles its output -- and the cost of that mistake is a transfer typed
+    at a machine with no packet driver, after a reboot, with the environment
+    already gone.
+
+    Only the NEGATIVE branch has been observed on the hardware. The positive
+    format is taken from documentation, so an unrecognised answer must land on
+    "cannot tell" rather than on either verdict.
+    """
+    f = vcctrld.packet_driver_seen
+
+    check("the observed failure line is a real no",
+          f("Scanning :\nNo packet drivers found - did you load one?") is False)
+    check("and it survives the whitespace a screen read introduces",
+          f("  Scanning :   No  packet   drivers  found ") is False)
+
+    check("a named driver is a yes",
+          f("Packet driver\n  Name: ODIPKT\n  Class: 1") is True)
+    check("an expected name makes a rig-specific answer recognisable",
+          f("something odd, ODIPKT at 0x7E", expect="ODIPKT") is True)
+
+    # EVERY ONE OF THESE WOULD PASS A TWO-VALUED CHECK.
+    for silence in ("", None, "   ", "Scanning :", "Bad command or file name",
+                    "C:\\MTCP>", "\x00\x00garbage"):
+        check("%r is cannot-tell, not a driver" % (silence,),
+              f(silence) is None, f(silence))
+
+    # A driver by another name is still a driver: `expect` may only ADD a way
+    # to recognise one, never turn an unrecognised answer into a refusal.
+    check("expect does not downgrade a generic positive",
+          f("Name: PKTDRV", expect="ODIPKT") is True)
+    check("expect does not manufacture a negative",
+          f("wholly unfamiliar output", expect="ODIPKT") is None)

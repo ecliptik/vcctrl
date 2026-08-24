@@ -3946,6 +3946,59 @@ class TargetProfile(object):
 PROFILE = TargetProfile()
 
 
+# PKTTOOL's own words, observed on the card 2026-08-24 in the PGSB profile:
+#
+#     Scanning :
+#     No packet drivers found - did you load one?
+#
+# Letters, not digits, which is what makes it usable here: this console's OCR
+# turns 0 into 8 and `10 file(s)` into `18 file(s)`, and a check keyed on a
+# number would inherit that.
+_PKT_NONE = "no packet drivers found"
+
+# A POSITIVE marker. mTCP's pkttool names each driver it finds; the docs record
+# `Name: ODIPKT, Class 1, Type 71 at 0x7E`.
+#
+# UNVERIFIED, AND SAID SO RATHER THAN ASSUMED: only the NEGATIVE branch has
+# been observed on this machine, because seeing the positive one costs a reboot
+# into NET and nobody has spent one on the easy case. If the real output words
+# it differently this returns "cannot tell" rather than "no driver" -- which is
+# the safe direction, and is the whole reason the function has three values.
+_PKT_FOUND = ("name:", "odipkt")
+
+
+def packet_driver_seen(text, expect=None):
+    """Did PKTTOOL find a packet driver? True / False / None.
+
+    THREE VALUES, AND THE THIRD IS THE POINT. The tempting implementation is
+    two-valued -- "no failure string, therefore a driver" -- and it is wrong in
+    the direction that costs a reboot and an environment: a PKTTOOL that dies
+    early, prints nothing, is missing from the card, or whose output the OCR
+    mangles all produce no failure string, and all would read as success.
+
+    So a driver is reported ONLY on a positive marker. The explicit failure
+    line gives False. Everything else -- empty, truncated, unrecognised -- is
+    None, which the caller must treat as "do not transfer", not as "probably
+    fine". Same discipline as every other could-not-look on this rig: the
+    instrument's silence is not the target's answer.
+
+    `expect` names the driver this rig should see, so a profile can be
+    specific where the generic marker is loose. It only ever ADDS a way to
+    recognise a driver; it never turns an unrecognised answer into a refusal,
+    because a driver by another name is still a driver.
+    """
+    if not text:
+        return None
+    low = " ".join(str(text).split()).lower()
+    if expect and str(expect).lower() in low:
+        return True
+    if any(m in low for m in _PKT_FOUND):
+        return True
+    if _PKT_NONE in low:
+        return False
+    return None
+
+
 def _configured_transfer_boards():
     """{board id: the literal word} from `targets:`, or None if unconfigured.
 
