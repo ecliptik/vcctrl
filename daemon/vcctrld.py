@@ -3692,6 +3692,20 @@ def dos_filename(name):
 
     Returns the notes rather than logging them, so the caller can put them in
     front of a person before the transfer rather than in a log afterwards.
+
+    THIS IS ALSO THE PATH-TRAVERSAL GUARD, AND RELAXING IT IS A SECURITY
+    CHANGE. `vcctrld` runs as root and the staged path is
+    `os.path.join(root, name)` with `name` supplied by whoever is driving the
+    page. Nothing downstream checks it again. What contains it is here:
+    `basename()` strips every path component before anything else, the
+    backslash is in the illegal set so it becomes an underscore rather than a
+    separator, and the result is rebuilt from a whitelist of surviving
+    characters rather than filtered against a blacklist of bad patterns.
+    `../../../etc/cron.d/pwn` becomes `PWN`.
+
+    It reads like a usability function. It is not only one. Anybody loosening
+    it for long filenames on a future non-DOS target is also loosening a
+    boundary, and needs to put an explicit containment check back.
     """
     notes = []
     raw = os.path.basename(str(name or "").strip())
@@ -3722,7 +3736,12 @@ def dos_filename(name):
         raise ValueError("%r leaves no usable name once DOS-legal" % (raw,))
     if len(ext) > 3:
         ext = ext[:3]
-        notes.append("extension shortened to 3 characters")
+        # NAMED, not just reported. The headline case is a phone photo:
+        # `.jpeg` becomes `.JPE`, which is a real JPEG extension and an
+        # unusual one that some DOS viewers do not associate. "Shortened to
+        # three characters" does not tell the operator that; the actual
+        # extension does, before they go looking for it on the target.
+        notes.append("extension shortened to .%s" % ext)
     if base in _DOS_DEVICES:
         # NOT silently renamed. A file the operator called CON.TXT is a file
         # they will look for under that name, and DOS would have written it to
@@ -3883,6 +3902,19 @@ class TargetProfile(object):
         evidence of any particular profile -- it rules out two and says
         nothing about the other four, which is a genuinely different statement
         from naming one.
+
+        IN PARTICULAR IT CAN NEVER NAME `NET`, and a file transfer is the
+        thing most likely to want it to. NET, PGADLIB, PGGUS and CLEAN all set
+        no BLASTER, so "no BLASTER, therefore we booted into networking" is
+        wrong three ways -- and one of those ways is CLEAN, which has no
+        network stack at all. The profile witness in `profiles/doskutsu.yaml`
+        was built to prove a cell is NOT in NET; it does not run backwards.
+
+        Proving NET wants a POSITIVE witness of the thing the transfer
+        actually needs: `C:\\MTCP\\PKTTOOL.EXE scan` reporting the packet
+        driver. That attests the capability rather than the label, and it is
+        letters rather than digits, which matters on a console whose OCR drops
+        digits.
         """
         name = self.BLASTER_PROFILES.get((value or "").strip().upper())
         if name:
@@ -4125,6 +4157,21 @@ class FilesCapability(Capability):
     STAGE_CHUNK_MAX = 4 * 1024 * 1024
 
     def _dirs(self):
+        """(served root, partial, metadata) -- and the two are SIBLINGS.
+
+        THAT IS A PRECONDITION, NOT A NAMING CONVENTION. Promotion is
+        `os.replace()`, which is atomic only within one filesystem and raises
+        EXDEV across devices; `shutil.move()` would instead degrade silently
+        to copy-then-delete, which is precisely the non-atomic window this
+        design exists to eliminate. Deriving the partial directory from the
+        configured root guarantees they share a filesystem whatever
+        `stage_dir` is set to -- a mount, a tmpfs, a separate disk.
+
+        So the obvious future refactor -- a `partial_dir` config key, for
+        somebody who wants the arriving bytes on faster storage -- would break
+        the atomicity guarantee without touching the line that depends on it.
+        If that is ever wanted, the promotion has to change with it.
+        """
         st = self.settings or {}
         root = st.get("stage_dir") or os.path.join(STATE_DIR, "stage")
         return (root, root + "-partial", root + "-meta")

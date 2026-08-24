@@ -6548,3 +6548,72 @@ def test_the_queue_ceiling_counts_the_queue():
           os.path.exists(os.path.join(root, "HANDMADE.BAT")))
     check("and the metadata went with the files we removed",
           os.listdir(meta) == [], os.listdir(meta))
+
+
+def test_no_blaster_can_never_be_read_as_the_NET_profile():
+    """The transfer is the thing most likely to want this to work backwards.
+
+    The profile witness in profiles/doskutsu.yaml proves a cell is NOT in NET,
+    by requiring BLASTER to be present. Running it backwards -- "no BLASTER,
+    therefore we booted into networking" -- is wrong three ways: PGADLIB,
+    PGGUS and CLEAN also set none, and CLEAN has no network stack at all. A
+    transfer that accepted an absence as proof of NET would reboot, type its
+    commands into a machine with no packet driver, and get its answer from a
+    failed FTP rather than from a check.
+
+    So the mapping refuses to name anything on an absence, and there is no
+    entry for NET to be found by any input. Proving NET needs a POSITIVE
+    witness of what the transfer actually requires -- PKTTOOL scan reporting
+    the packet driver -- which attests the capability rather than the label.
+    """
+    P = vcctrld.TargetProfile()
+
+    check("NET is not in the BLASTER map at all, by any value",
+          "NET" not in P.BLASTER_PROFILES.values(), P.BLASTER_PROFILES)
+    check("exactly two profiles are nameable this way",
+          len(P.BLASTER_PROFILES) == 2, P.BLASTER_PROFILES)
+
+    for absent in ("", "   ", None):
+        P.invalidate("reset")
+        check("BLASTER=%r names nothing" % (absent,),
+              P.from_blaster(absent, "test") is None, P.snapshot())
+        check("and establishes nothing", P.snapshot()["name"] is None,
+              P.snapshot())
+
+    # The two that ARE nameable stay nameable -- this test must not pass
+    # merely because the mapping is empty.
+    check("PGSB is still identifiable, so this is not passing on nothing",
+          P.from_blaster("A220 I7 D3 P330 T3", "t") == "PGSB", P.snapshot())
+
+
+def test_dos_filename_contains_a_path_traversal():
+    """vcctrld runs as root and joins this name onto a directory.
+
+    Nothing downstream re-checks it. What contains it is the 8.3 conversion
+    itself: basename() strips every path component, the backslash is in the
+    illegal set so it cannot act as a separator, and the result is rebuilt
+    from surviving characters rather than filtered against a blacklist. That
+    is a whitelist-shaped transform, which is why it holds against inputs
+    nobody enumerated.
+
+    Written down as a SECURITY test rather than a usability one so that
+    loosening the rules for a future non-DOS target trips this deliberately.
+    """
+    f = vcctrld.dos_filename
+    for evil in ("../../../etc/cron.d/pwn", "/etc/passwd", "a/../../b",
+                 "..\\..\\x.bat", "....//....//etc/shadow",
+                 "/proc/self/environ", "sub/dir/file.txt"):
+        try:
+            name, _notes = f(evil)
+        except ValueError:
+            continue                      # refusing outright is also contained
+        check("%r cannot escape: %r" % (evil, name),
+              "/" not in name and "\\" not in name and ".." not in name
+              and not name.startswith("."), name)
+        check("%r joins back inside the root" % evil,
+              os.path.dirname(os.path.join("/srv/stage", name))
+              == "/srv/stage", name)
+
+    check("a phone photo's extension is named, not just counted",
+          any(".JPE" in n for n in f("my-photo-2026.jpeg")[1]),
+          f("my-photo-2026.jpeg"))
