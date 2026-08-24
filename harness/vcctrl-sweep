@@ -50,7 +50,8 @@ sys.path.insert(0, BIN)
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, vc_json, at_prompt, ensure_powered, set_lock_owner, get_lock_owner,
-    cfg_get)
+    cfg_get, grab, VCCTRL_WEB, _daemon_alive, _daemon_host, _has_variance,
+    _grab_ffmpeg)
 
 CONF = os.path.join(HERE, "sweeps.json")
 
@@ -69,171 +70,12 @@ POLL_SECONDS = 15
 # a caller cannot open the device itself -- it would get EBUSY. It also means a
 # frame is already captured before anyone asks for one, which is why this went
 # from ~40 s to well under a second.
-# No hardcoded hostname. Env first, then control.web from
-# vcctrl.yaml. Empty is a supported answer and the callers below
-# treat it as "no daemon reachable" rather than curling a name that
-# belongs to a different rig.
-VCCTRL_WEB = os.environ.get(
-    "VCCTRL_WEB", cfg_get("control.web", "") or "")
-
-
-def _daemon_host():
-    """The ssh destination, env first then config. Empty is a real answer and
-    the ssh below will fail loudly rather than silently reaching another rig."""
-    return os.environ.get("VCCTRL_HOST") or cfg_get("control.daemon_host", "") or ""
-
-
-def _daemon_alive(timeout=2.0):
-    """Is the daemon answering at all? Cheap, and load-bearing -- see grab()."""
-    try:
-        import urllib.request
-        with urllib.request.urlopen("%s/state.json" % VCCTRL_WEB, timeout=timeout):
-            return True
-    except Exception:
-        return False
-
-
-def grab(tag, n=16):
-    """Capture a frame. Returns (path, mean_brightness) or (None, None).
-
-    Unchanged contract, three orders of magnitude faster: the daemon holds a
-    rolling ring of recent frames, so this is a read rather than a capture.
-
-    (None, None) means NO PICTURE, and it covers one more case than it used to.
-    As well as "every frame in the burst was a duplicate", the daemon reports a
-    stream that is frozen -- frames arriving but all byte-identical, which is
-    what DOS text mode 03h produces, and what it produces is flat black rather
-    than a stale screen. Either way there is nothing to judge.
-
-    **The fallback is gated on the daemon actually being down**, which is not
-    the obvious design and is the important part. The vcctrl session caught the
-    first version: it fell back to ffmpeg on any non-503 error, so a single
-    timeout against a HEALTHY daemon dropped into a direct capture that could
-    only fail -- the daemon holds /dev/video0, so ffmpeg gets EBUSY, produces
-    no frames, and returns (None, None) forty seconds later. That is a false
-    "no picture" arrived at slowly, and it is the shape this rig keeps
-    producing: a check that cannot tell "no picture" from "could not look".
-
-    So: retry the daemon once (one timeout is not evidence of anything), then
-    ask whether it is alive. If it is, do not fall back at all -- a direct
-    capture is guaranteed to fail by construction -- and say so loudly on
-    stderr. The return value is still (None, None), because callers depend on
-    that contract and refusing to proceed IS the right behaviour when you could
-    not look; what was missing was any way to tell afterwards which happened.
-    """
-    sp = os.environ.get("VCCTRL_SHOTS", "/tmp/vcctrl-shots")
-    os.makedirs(sp, exist_ok=True)
-    dest = os.path.join(sp, "%s.jpg" % tag)
-
-    import urllib.error
-    import urllib.request
-    url = "%s/shot.jpg?n=%d" % (VCCTRL_WEB, int(n))
-    last = None
-    for attempt in (1, 2):
-        try:
-            with urllib.request.urlopen(url, timeout=10) as r:
-                data = r.read()
-                mean = r.headers.get("X-Frame-Mean")
-            with open(dest, "wb") as f:
-                f.write(data)
-            # A UNIFORM frame is not a picture, however live the stream looks.
-            # Duplicate-hash rejection asks "is this frame a repeat", and the
-            # stick's no-lock constant slips past it: on 2026-08-19 two grabs
-            # twenty seconds apart returned byte-identical frames whose every
-            # pixel was exactly 7, both reported as PICTURE mean 7.0, during a
-            # game cell that was showing nothing at all.
-            #
-            # Variance is the independent test. A real capture of any scene,
-            # however dark, has a spread of values -- analog sampling noise
-            # alone guarantees it. Equal extrema means the stick is emitting a
-            # constant, which is what it does when it cannot lock.
-            if not _has_variance(dest):
-                return None, None
-            return dest, (float(mean) if mean else None)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 503:
-                return None, None      # the daemon looked and saw no picture
-            last = exc
-            break                      # it answered, so it is up; do not retry
-        except Exception as exc:
-            last = exc
-            if attempt == 1:
-                time.sleep(0.4)
-
-    if _daemon_alive():
-        sys.stderr.write(
-            "grab: daemon is up but served no frame (%s). NOT falling back to "
-            "ffmpeg -- the daemon holds /dev/video0, so a direct capture would "
-            "fail with EBUSY and return a false 'no picture' 40s from now. "
-            "Returning (None, None) meaning COULD NOT LOOK.\n" % (last,))
-        return None, None
-
-    sys.stderr.write("grab: daemon unreachable (%s), falling back to a direct "
-                     "ffmpeg capture\n" % (last,))
-    return _grab_ffmpeg(tag, sp, dest)
-
-
-def _has_variance(path, min_range=2):
-    """Does this frame contain a picture, as opposed to a uniform field?
-
-    Returns True if PIL is unavailable: refusing to judge is better than
-    judging without the means to, and the caller's other checks still apply.
-    """
-    try:
-        from PIL import Image
-    except ImportError:
-        return True
-    try:
-        lo, hi = Image.open(path).convert("L").getextrema()
-    except Exception:
-        return True
-    return (hi - lo) >= min_range
-
-
-def _grab_ffmpeg(tag, sp, dest):
-    """The original path. Kept as the fallback for a daemon that is down.
-
-    Costs ~40 s: device open, lock acquisition, settle frames, then scp.
-    """
-    subprocess.run(
-        ["ssh", _daemon_host(),
-         "rm -f /tmp/vcraw*.jpg; timeout 60 ffmpeg -hide_banner -loglevel error "
-         "-f v4l2 -input_format mjpeg -video_size 640x480 -i /dev/video0 "
-         "-frames:v 16 -vf fps=8 -y /tmp/vcraw%02d.jpg"],
-        capture_output=True)
-    import glob, shutil
-    for old_raw in glob.glob(os.path.join(sp, "vcraw*.jpg")):
-        os.unlink(old_raw)
-    subprocess.run(["scp", "-q",
-                    "%s:/tmp/vcraw*.jpg" % _daemon_host(),
-                    sp], capture_output=True)
-    try:
-        import hashlib
-        from PIL import Image, ImageStat
-        fs = sorted(glob.glob(os.path.join(sp, "vcraw*.jpg")))
-        if not fs:
-            # Zero frames is a TOOL failure, not a reading. The return value
-            # cannot carry that distinction without breaking the contract, so
-            # it goes to stderr where a log will keep it.
-            sys.stderr.write("grab: direct ffmpeg capture produced no frames "
-                             "at all -- device busy, unplugged, or ffmpeg "
-                             "missing. This is 'could not look', not 'no "
-                             "picture'.\n")
-            return None, None
-        digests = {}
-        for f in fs:
-            digests.setdefault(hashlib.md5(open(f, "rb").read()).hexdigest(), []).append(f)
-        live = [f for d, group in digests.items() if len(group) == 1 for f in group]
-        if not live:
-            return None, None
-        scored = [(ImageStat.Stat(Image.open(f).convert("L")).mean[0], f) for f in live]
-        scored.sort(reverse=True)
-        mean, best = scored[0]
-        shutil.copy(best, dest)
-        return dest, mean
-    except ImportError:
-        return None, None
-
+# VCCTRL_WEB, grab() and its three helpers moved to bin/vcctrl_common.py in
+# phase 6. They are capture infrastructure -- HTTP to the daemon, a retry, a
+# variance test -- not sweep logic, and leaving them here meant the shared
+# library had to reach into harness/ for one function, which every importer
+# of that library then inherited. Imported like any other daemon primitive
+# now; see the note above them in vcctrl_common.
 
 def frame_signature(path):
     """Coarse fingerprint of a frame, for change detection between polls."""

@@ -2751,7 +2751,7 @@ class VideoCapability(Capability):
     def _select(self, items):
         """Duplicate-hash rejection, then brightest survivor.
 
-        Ported from grab() in harness/vcctrl-sweep so the two cannot drift,
+        Ported from grab() in bin/vcctrl_common.py so the two cannot drift,
         reasoning is worth repeating rather than referencing:
 
         Settle frames are BIT-IDENTICAL to each other; real picture never

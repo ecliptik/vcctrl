@@ -46,26 +46,16 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
-    vc, at_prompt, wait_for_prompt, arm_leds, wait_led)
+    vc, at_prompt, wait_for_prompt, arm_leds, wait_led, grab)
 
 sys.path.insert(0, HERE)
 
 
-def grab(tag):
-    """Capture a frame. Imported lazily from the sweep runner to avoid
-    duplicating the settle-frame logic a third time."""
-    import importlib.util
-    from importlib.machinery import SourceFileLoader
-    # Same documented crossing as vcctrl_common.grab(): the sweep runner is in
-    # harness/ now, and uvconfig borrows its settle-frame logic rather than
-    # keeping a third copy. docs/CONFIG-PLAN.md sec. 6.
-    _harness = os.path.join(os.path.dirname(HERE), "harness")
-    loader = SourceFileLoader("sweepmod", os.path.join(_harness, "vcctrl-sweep"))
-    spec = importlib.util.spec_from_loader("sweepmod", loader)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["sweepmod"] = mod
-    loader.exec_module(mod)
-    return mod.grab(tag)
+# grab() used to be loaded out of the sweep runner by SourceFileLoader, to
+# avoid keeping a third copy of the settle-frame logic. It lives in
+# vcctrl_common now (phase 6), so this is an ordinary import and uvconfig no
+# longer reaches into harness/ at all -- which matters because uvconfig is not
+# harness code and had no business depending on it.
 
 
 def dos(line, settle=2.0):
