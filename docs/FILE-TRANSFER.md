@@ -31,15 +31,30 @@ matches. **`GET.BAT` cannot tell a short file from a whole one** — its own
 comment concedes it reports an attempt — so before-it-is-reachable is the only
 place that distinction can exist.
 
-**Proves arrival by round trip.** The target's copy is sent back with
-`VCCHK.BAT` and compared by sha256. **No OCR anywhere in the verdict**, which
-matters on a console that reads `13,800` as `13,808` and `10 file(s)` as
-`18 file(s)`.
+**Proves arrival by round trip, and the check rides INSIDE `VCGET.BAT`.**
+The target's copy goes back with `VCCHK.BAT` and is compared by sha256 against
+the staged bytes. **No OCR anywhere in the verdict**, which matters on a
+console that reads `13,800` as `13,808` and `10 file(s)` as `18 file(s)`.
 
-**Lands in `C:\UPLOADS`, not `C:\DOSKUTSU`.** That directory holds
-`DOSKUTSU.EXE`, `CLRENV.BAT` and the `LOGS\` tree, and a fetch overwrites by
-name without asking. Writing there is still possible explicitly and takes a
-backup first.
+**Typing the check as a SECOND command did not work, and why is the useful
+part.** It needed the harness to know DOS was back at a prompt, and the only
+non-OCR readiness signal available tests whether the BIOS keyboard ISR is
+alive — which it is, the whole way through `FTP.EXE`. So a 50-character
+command went into a machine that was not reading, fifteen characters fit in
+the BIOS buffer, and what executed was `C:\MTCP\VCCHK.B`.
+
+**The fix was not a longer wait.** There is no honest readiness signal here
+without OCR, so the design stopped needing one: DOS runs a batch file's lines
+in order and needs no help doing it. One typed command, one arrival to wait
+for, question gone. **When a probe cannot answer honestly, remove the
+dependency rather than tuning the probe.**
+
+**Lands in `C:\XFER\IN`, never `C:\DOSKUTSU`.** `VCGET.BAT` creates it
+beside `C:\XFER\OUT` so the pair is discoverable from a `DIR` rather than
+only from a document. **Do not set `dest` in `vcctrl.yaml` without a reason**
+— the code default is the tested path, and a second opinion in config is a
+second thing to drift. `C:\DOSKUTSU` holds `DOSKUTSU.EXE`, `CLRENV.BAT` and
+the `LOGS\` tree, and a fetch overwrites by name without asking.
 
 **Attests the profile positively.** A reboot into NET is confirmed by the
 packet driver answering, not by a missing `BLASTER` — see `OPEN-FAULTS.md`
