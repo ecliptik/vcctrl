@@ -1860,11 +1860,12 @@
       </div>
       <div class="hint" id="bufinfo" style="margin-left:0">—</div>
 
-      <label><input type="checkbox" id="opt-ws">
-        Use WebSocket when it works</label>
-      <div class="hint">Falls back to the mjpeg stream by itself if no frame
-        arrives. Runs on port 8443: a WebSocket does not survive the HTTP/2
-        proxy on 443.</div>
+      <!-- "Use WebSocket when it works" lived here. Removed: the automatic
+           fallback it appeared to control already existed and always did,
+           and the box only ever DISABLED the websocket -- a diagnostic
+           override in a settings panel, labelled as though it governed the
+           normal behaviour. The LNK lamp already says which transport is in
+           use, so nothing is lost by not being able to force it. -->
 
       <h2 style="margin-top:14px">Activity log</h2>
       <div class="hint" style="margin-left:0">Filters the view only — the
@@ -2014,13 +2015,13 @@ const BUILD = '__BUILD__';
 // is separate from the one where they ticked it last time, is a trap. The page
 // falls back to mjpeg by itself if the socket does not deliver, so defaulting
 // on costs nothing when it cannot work and saves a support round when it can.
-const OPTS = {probe:false, poll:false, mine:false, ws:true};
+const OPTS = {probe:false, poll:false, mine:false};
 // Settings are versioned. `ws` defaulted to false while the WebSocket could
 // not work, and browsers that saved settings in that period keep the false
 // forever -- a stored preference from an era whose reasoning no longer holds,
 // which the operator has now been bitten by twice (once per-origin, once
 // per-era). Bumping the version drops keys whose default has changed.
-const OPTS_V = 2;
+const OPTS_V = 3;   // 3: `ws` removed entirely
 try {
   const saved = JSON.parse(localStorage.getItem('vcctrl.opts') || '{}');
   if (saved.v !== OPTS_V) delete saved.ws;
@@ -2121,23 +2122,16 @@ function setXport(x) {
     : {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
   )[x] || x;
   xportLabel = label;
-  // AMBER MEANS "NOT WHAT YOU ASKED FOR", NOT "MJPEG".
+  // AMBER IS UNAMBIGUOUS NOW THAT THE OVERRIDE IS GONE.
   //
-  // Reported: unchecking "Use WebSocket when it works" turned LNK amber with
-  // a question mark, which reads as a fault -- and the thing that happened
-  // was the operator getting exactly what they selected. mjpeg is not a
-  // degraded state; the comment three lines up has said so all along, and the
-  // lamp contradicted it.
-  //
-  // So the transport alone does not decide the colour. Running on mjpeg
-  // BECAUSE websocket was switched off is success, and reads `on`. Running on
-  // mjpeg while websocket was wanted is the case worth flagging, and keeps
-  // its amber and its marker.
-  const wsWanted = !(typeof OPTS === 'object' && OPTS && OPTS.ws === false);
+  // While "Use WebSocket when it works" existed, mjpeg had two meanings --
+  // "you chose this" and "the socket did not survive" -- and the lamp painted
+  // both amber, so unchecking the box produced what looked like a fault. With
+  // the setting removed there is only one way to be on mjpeg: the websocket
+  // was attempted and did not hold. That IS worth flagging, so amber means
+  // exactly one thing again and the marker is honest.
   setLamp('lamp-link',
-    x === 'ws' ? 'on'
-      : x === 'mjpeg' ? (wsWanted ? 'warn' : 'on')
-      : x === 'connecting' ? 'stale' : 'bad',
+    x === 'ws' ? 'on' : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
     // NUMBERS, NOT ADJECTIVES. "High performance" and "low performance" are
     // claims nobody has measured; these two are measured and they are what
     // actually differs. The WebSocket carries frames the client can retune
@@ -2420,7 +2414,6 @@ const MJPEG_FPS = 12;
 let wsRetryTimer = null, wsRetryDelay = 60000;
 function scheduleWsRetry(reason) {
   clearTimeout(wsRetryTimer);
-  if (!OPTS.ws) return;                 // turned off in settings: respect it
   const wait = wsRetryDelay;
   wsRetryTimer = setTimeout(() => {
     if (xport !== 'mjpeg') return;
@@ -2510,16 +2503,6 @@ async function checkPort() {
 }
 
 function connect() {
-  if (!OPTS.ws) {
-    // Log this unconditionally. It used to be suppressed when the socket was
-    // disabled, so a browser with the setting off produced NO transport lines
-    // at all -- and "no logs about the websocket" is indistinguishable from
-    // "the page never tried", which is exactly what it was.
-    addLine(new Date(), 'transport',
-            'websocket disabled in settings — using the mjpeg stream', 'k-note');
-    useMjpeg('disabled in settings');
-    return;
-  }
   addLine(new Date(), 'transport', 'opening ' + wsURL(), 'k-cmd');
   if (portOK === false) { useMjpeg('port ' + tlsPort + ' unreachable'); return; }
   let sock;
@@ -2687,7 +2670,7 @@ setInterval(() => {
 
 // ------------------------------------------------------------------ input
 function send(o) {
-  if (wsAlive && xport === 'ws' && OPTS.ws) { ws.send(JSON.stringify(o)); return; }
+  if (wsAlive && xport === 'ws') { ws.send(JSON.stringify(o)); return; }
   // The mjpeg path carries no input, so fall back to the HTTP command
   // endpoint. Slower per keystroke, but it means input never depends on
   // which video transport happened to win.
@@ -3309,8 +3292,10 @@ for (const k of Object.keys(OPTS)) {
   el.onchange = () => {
     OPTS[k] = el.checked;
     localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
-    if (k === 'ws') restart();   // changing transport needs a reconnect
-    else renderLog();     // re-render rather than filter-on-arrival, so a
+    // Every remaining option is a log filter. The one exception was `ws`,
+    // which needed a reconnect; it is gone, and so is the branch, rather than
+    // left behind to imply a transport toggle still exists.
+    renderLog();          // re-render rather than filter-on-arrival, so a
   };                      // toggle shows history you had hidden
 }
 // Popovers in the rail. One at a time, anchored under whatever opened them,
@@ -4576,7 +4561,7 @@ async function pollState() {
     tlsPort = j.tls_port;
     // Check reachability before retrying, so an unreachable port is reported
     // as an unreachable port rather than as a websocket that keeps failing.
-    if (OPTS.ws && tlsPort && xport === 'mjpeg')
+    if (tlsPort && xport === 'mjpeg')
       checkPort().then(ok => { if (ok) restart(); });
   }
   if (j.build && BUILD !== '__' + 'BUILD__' && j.build !== BUILD)
