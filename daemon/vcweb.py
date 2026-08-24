@@ -596,6 +596,11 @@ class WebCapability(object):
         # Nothing here moves data or touches the target -- the commands that
         # do are deliberately NOT exposed yet.
         "files", "file_name", "file_check",
+        # The page names the boot profile in its title, so it needs to read
+        # the reading. Read-only from here: `set`, `clear` and `blaster` are
+        # reachable over the socket and from the CLI, but a browser must not
+        # be able to assert what the target is running.
+        "profile",
     ])
 
     def __init__(self, registry, bind, port, tls_port=0):
@@ -780,6 +785,18 @@ class WebCapability(object):
                           {"id": None, "name": None, "target": None,
                            "source": None, "stale": None,
                            "reason": "board capability failed to start"}),
+                # THE BOOT PROFILE, AS A READING AND NOT A STATUS. Null
+                # whenever it has not been established or a reboot has
+                # invalidated it -- absent rather than old, because a stale
+                # profile is the same string in the same place with nothing on
+                # screen to say the machine underneath it changed. The page
+                # shows the machine's name alone when this is null; it must
+                # not substitute the likely one.
+                "profile": (self.registry.caps["board"]._profile(
+                                {"action": "state"})["profile"]
+                            if "board" in self.registry.caps else
+                            {"name": None, "at": None, "how": None,
+                             "reason": "board capability failed to start"}),
                 # Host facts. The login banner has had these since the Pi 5
                 # build and the page has not, so "is it thermally throttling
                 # while I watch the stream stutter" was answerable at a shell

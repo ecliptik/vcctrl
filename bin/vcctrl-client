@@ -88,6 +88,16 @@ USAGE = """usage: vcctrl <command> [args]
                               2  could not look      (no LED channel on this
                                                       board, or unreadable)
                               3  the tool itself failed
+  profile [set NAME|blaster VALUE|clear]
+                            the target's boot profile, as a READING rather
+                            than a status. It cannot be polled -- establishing
+                            it means typing SET at a prompt -- so it carries
+                            when it was taken and what took it. ANY reboot
+                            forgets it, and forgotten means absent, not old:
+                            a stale profile is the same string in the same
+                            place with nothing to say the machine underneath
+                            it changed. `blaster` is the only form that is a
+                            measurement; `set` is an assertion and says so.
   files                     can the attached machine be sent a file at all?
                             Answers with a WORD, not a boolean: available,
                             unsupported (a Macintosh has no packet driver --
@@ -884,6 +894,10 @@ def main(argv):
             req["seconds"] = float(rest[0])
     elif cmd in ("led-changes", "led_changes"):
         req = {"cmd": "led_changes", "n": int(rest[0]) if rest else 50}
+    elif cmd == "profile":
+        req = {"cmd": "profile", "action": rest[0] if rest else "state"}
+        if len(rest) > 1:
+            req["name" if rest[0] == "set" else "value"] = rest[1]
     elif cmd == "files":
         req = {"cmd": "files"}
     elif cmd in ("file-name", "file_name"):

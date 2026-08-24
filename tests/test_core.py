@@ -6217,3 +6217,64 @@ def test_files_snapshot_separates_the_five_refusals():
     check("not_configured matches the registry's spelling",
           all(v != "not-configured" for v in s.values()
               if isinstance(v, str)), s)
+
+
+def test_profile_reading_is_forgotten_by_a_reboot_not_aged():
+    """A stale boot profile is worse than none, and this is where that is enforced.
+
+    NET and the sound profiles are indistinguishable from the harness -- same
+    prompt, same `at_prompt`, same screen -- and a cell died because the
+    machine was still in NET from a transfer an hour earlier (OPEN-FAULTS
+    sec. 7). Putting the profile in the page title makes that failure VISIBLE
+    if it survives a reboot: the same string, in the most prominent place on
+    the page, with nothing to say the machine underneath it changed.
+
+    So invalidation clears the name to null rather than marking it old. There
+    is deliberately no "stale but probably still right" state to read past.
+    """
+    P = vcctrld.TargetProfile()
+
+    s = P.snapshot()
+    check("it starts with no reading and says so",
+          s["name"] is None and s["reason"] == "never read", s)
+
+    P.establish("PGSB", "SET at a prompt")
+    s = P.snapshot()
+    check("an established reading carries how it was taken",
+          (s["name"], s["how"]) == ("PGSB", "SET at a prompt"), s)
+    check("and when", s["at"] is not None and s["reason"] is None, s)
+
+    P.invalidate("power cycle")
+    s = P.snapshot()
+    check("a reboot forgets the name entirely", s["name"] is None, s)
+    check("and the timestamp goes with it -- nothing to age past",
+          s["at"] is None and s["how"] is None, s)
+    check("the reason says what happened", s["reason"] == "power cycle", s)
+
+    # THE VALUE NAMES THE PROFILE; ITS PRESENCE DOES NOT. Only two of the six
+    # CONFIG.SYS profiles set BLASTER, and their strings differ -- which is
+    # what makes the value a reading. `FIND /C "="` on the variable proves
+    # only that *a* sound profile is loaded, and that check sat behind a
+    # hardcoded "(profile is PGSB)" in every cell log, accidentally true
+    # because PGSB is the menu default.
+    check("the PGSB string identifies PGSB",
+          P.from_blaster("A220 I7 D3 P330 T3", "test") == "PGSB",
+          P.snapshot())
+    check("the VIBRA string identifies VIBRA",
+          P.from_blaster("A220 I5 D1 H5 T6 P330", "test") == "VIBRA",
+          P.snapshot())
+
+    P.invalidate("reset")
+    check("an unrecognised BLASTER identifies nothing rather than guessing",
+          P.from_blaster("A220 I9 D0", "test") is None, P.snapshot())
+    check("and it does not establish a reading as a side effect",
+          P.snapshot()["name"] is None, P.snapshot())
+
+    # An ABSENT BLASTER is not evidence of NET. Four profiles set none, so it
+    # narrows the field to four and names none of them -- a genuinely weaker
+    # statement than the one the old presence check was read as making.
+    P.invalidate("reset")
+    check("an empty BLASTER identifies nothing",
+          P.from_blaster("", "test") is None, P.snapshot())
+    check("and neither does a missing one",
+          P.from_blaster(None, "test") is None, P.snapshot())

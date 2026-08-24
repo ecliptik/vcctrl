@@ -913,6 +913,12 @@ class InputCapability(Capability):
         return {"ok": True}
 
     def _combo(self, req):
+        # Ctrl-Alt-Del is a reboot, and after it the profile reading describes
+        # a boot that is no longer running. Matched on the SET of keys, not
+        # their order, because the caller may send them in any.
+        keys = {str(k).lower() for k in (req.get("keys") or [])}
+        if {"ctrl", "alt"} <= keys and keys & {"delete", "del"}:
+            PROFILE.invalidate("ctrl-alt-del")
         self.devs.combo(req["keys"], _pace(req))
         return {"ok": True}
 
@@ -1574,6 +1580,11 @@ class PowerCapability(Capability):
         return {"ok": True, "entries": lines[-n:], "total": len(lines)}
 
     def _power(self, req):
+        # ANY power action may have rebooted the target, so the profile
+        # reading stops being about the machine that is running. Done here
+        # rather than in a listener because the invalidation must not be able
+        # to arrive after the reboot it describes.
+        PROFILE.invalidate("power %s" % (req.get("action") or "action"))
         host = req.get("host") or kasa_host()
         if not host:
             return {"ok": False, "error":
@@ -3381,7 +3392,46 @@ class BoardCapability(Capability):
         self._last_id = _UNSET
 
     def commands(self):
-        return {"board": self._board}
+        return {"board": self._board, "profile": self._profile}
+
+    def _profile(self, req):
+        """Read, establish or forget the target's boot-profile reading.
+
+        `profile` alone reads it. `profile set NAME` records one somebody
+        established by other means -- a cell, a hand-run SET. `profile blaster
+        VALUE` maps a BLASTER string onto a profile, which is the only form
+        that is a MEASUREMENT rather than an assertion, and it is recorded as
+        such in `how`.
+
+        It lives on the board capability because both answer "what is on the
+        other end of the wire" -- one the protocol board, one the boot it came
+        up on. Neither is a fact about the Pi.
+        """
+        action = (req.get("action") or "state").lower()
+        if action == "state":
+            return {"ok": True, "profile": PROFILE.snapshot()}
+        if action == "clear":
+            PROFILE.invalidate(req.get("why") or "cleared by hand")
+            return {"ok": True, "profile": PROFILE.snapshot()}
+        if action == "blaster":
+            value = req.get("value")
+            name = PROFILE.from_blaster(value, "BLASTER value read from SET")
+            if name is None:
+                # NOT an error, and not a guess either. Four of the six
+                # profiles set no BLASTER, so an unrecognised or absent value
+                # rules two out and says nothing about the rest.
+                return {"ok": True, "name": None, "profile": PROFILE.snapshot(),
+                        "note": ("no profile sets BLASTER=%r; that rules out "
+                                 "PGSB and VIBRA and identifies nothing"
+                                 % (value,))}
+            return {"ok": True, "name": name, "profile": PROFILE.snapshot()}
+        if action == "set":
+            name = req.get("name")
+            if not name:
+                return {"ok": False, "error": "profile set needs a name"}
+            PROFILE.establish(str(name), req.get("how") or "asserted by hand")
+            return {"ok": True, "profile": PROFILE.snapshot()}
+        return {"ok": False, "error": "unknown profile action: %r" % action}
 
     def start(self):
         self.snapshot()          # publishes board.changed on first read
@@ -3698,6 +3748,105 @@ def size_verdict(sizes):
                            "is 7.8 MB, so this is untested rather than known "
                            "to be too big." % (WARN_BYTES // (1024 * 1024)))}
     return {"ok": True, "why": None, "total": total, "reason": None}
+
+
+class TargetProfile(object):
+    """The boot profile the target is currently running -- as a READING.
+
+    THIS CANNOT BE POLLED, and that fact shapes the whole class. Establishing
+    it means typing `SET` at the target's prompt and reading the answer back
+    off the screen; there is no passive channel that carries it. So it is not
+    a status the daemon observes, it is a reading somebody took, and the only
+    honest way to hold one is with when it was taken and what took it.
+
+    The dangerous direction is obvious once stated. A cell died on 2026-08-20
+    with `sdl_init failed: No BLASTER environment variable` because the
+    machine was still in NET from a hand-run transfer an hour earlier, and NET
+    and the sound profiles are indistinguishable from the harness -- same
+    prompt, same `at_prompt`, same screen (OPEN-FAULTS sec. 7). A header that
+    kept displaying `PGSB` across a reboot would be that same failure, printed
+    in the one place everybody looks and wearing the authority of a live
+    indicator.
+
+    So: any reboot invalidates it, and an invalidated reading is ABSENT rather
+    than old. Nothing here ages into a softer version of itself.
+    """
+
+    # Two of the six CONFIG.SYS profiles set BLASTER and their strings differ,
+    # so the VALUE names the profile uniquely where its presence does not.
+    # PGADLIB, PGGUS, NET and CLEAN set nothing at all -- which is why an
+    # absence is not evidence of any particular one of them.
+    BLASTER_PROFILES = {
+        "A220 I7 D3 P330 T3": "PGSB",
+        "A220 I5 D1 H5 T6 P330": "VIBRA",
+    }
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._name = None
+        self._at = None
+        self._how = None
+        self._reason = "never read"
+
+    def establish(self, name, how):
+        """Record a reading. `how` says what took it, and is not decoration --
+        it is the difference between a value somebody typed in and one the
+        machine answered with."""
+        with self._lock:
+            self._name, self._at, self._how = name, time.time(), how
+            self._reason = None
+
+    def invalidate(self, why):
+        """Forget it. Called on anything that could have rebooted the target.
+
+        ABSENT, not stale. A stale profile is worse than none: it is the same
+        string, in the same place, with nothing on screen to say the machine
+        underneath it changed. The reading's whole value is that it was true
+        of the boot that is running, and after a reboot it is true of a boot
+        that is not.
+        """
+        with self._lock:
+            if self._name is not None:
+                self._name = self._at = self._how = None
+            self._reason = why
+
+    def from_blaster(self, value, how):
+        """A BLASTER string -> a profile name, or None.
+
+        Returns None for an unrecognised value rather than guessing. Four of
+        the six profiles set no BLASTER at all, so an ABSENT one is not
+        evidence of any particular profile -- it rules out two and says
+        nothing about the other four, which is a genuinely different statement
+        from naming one.
+        """
+        name = self.BLASTER_PROFILES.get((value or "").strip().upper())
+        if name:
+            self.establish(name, how)
+        return name
+
+    def snapshot(self):
+        """EVERY KEY ALWAYS PRESENT, null where unknown.
+
+            {"name": "PGSB", "at": 1787270112.4, "how": "SET at a prompt",
+             "reason": null}
+            {"name": null, "at": null, "how": null, "reason": "power cycled"}
+
+        `reason` AND NOT `why`, deliberately. Everywhere else in this daemon
+        `why` is a controlled word a consumer branches on and `reason` is the
+        sentence a person reads; this held free text under `why` for an hour
+        and the guard that checks the word vocabulary caught it. There is no
+        word vocabulary here -- an invalidation is described by what happened,
+        which is an open set of sentences rather than of tokens. A consumer shows the machine's name
+        alone when `name` is null; it must not substitute a likely profile,
+        because the default being PGSB is exactly the assumption that made the
+        cell-log label accidentally true for weeks.
+        """
+        with self._lock:
+            return {"name": self._name, "at": self._at, "how": self._how,
+                    "reason": self._reason}
+
+
+PROFILE = TargetProfile()
 
 
 def _configured_transfer_boards():

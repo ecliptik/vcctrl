@@ -4583,6 +4583,7 @@ async function pollState() {
   const inf = j.inflight || [];
   showPower(j.power);
   showBoard(j.board);
+  showTitle(j.board, j.profile);
   showAudioDevice(j.audio);
   noteSourceRate(j.video);
   noteWsRate(j.ws);
@@ -5122,6 +5123,56 @@ function showAudioDevice(a) {
   const dead = a.state !== 'capturing';
   for (const id of ['sbtn', 'voldn', 'volup', 'vol'])
     $(id).disabled = dead;
+}
+
+// ── WHAT MACHINE, AND WHAT IT BOOTED ──────────────────────────────────────
+// The title was a constant. It is the one piece of text on the page that is
+// always visible, and it said the name of the software rather than the name
+// of the thing being driven -- which is the answer nobody needs and the
+// question everybody has when two rigs are open in two tabs.
+//
+// THE PROFILE IS A READING, NOT A STATUS, AND THAT IS THE WHOLE DIFFICULTY.
+// It cannot be polled: establishing it means typing SET at the target's
+// prompt, so there is no passive channel carrying it. The daemon therefore
+// holds a reading with a timestamp, and INVALIDATES it on anything that could
+// have rebooted the machine -- absent, not stale.
+//
+// So this renders three states and never invents a fourth. Both known gives
+// "Gateway 2000 · PGSB"; the machine alone when no reading stands; and the
+// original title when even the machine is unknown. It must NOT fall back to
+// the likely profile: PGSB being the menu default is exactly the assumption
+// that let a hardcoded "(profile is PGSB)" sit in every cell log for weeks
+// being accidentally true.
+const TITLE_DEFAULT = 'vcctrl-kvm';
+function showTitle(b, p) {
+  b = b || {}; p = p || {};
+  const machine = b.target || b.name || null;
+  const profile = p.name || null;
+  const h1 = $('hdrstatus').querySelector('h1');
+  if (!h1) return;
+  const text = machine ? (profile ? machine + ' · ' + profile : machine)
+                       : TITLE_DEFAULT;
+  if (h1.textContent !== text) h1.textContent = text;
+  // The tooltip carries what the title cannot: how the reading was taken and
+  // when. `how` matters as much as the value -- a profile somebody asserted
+  // by hand and one read back out of BLASTER are different kinds of claim,
+  // and only the second is a measurement.
+  const bits = [];
+  if (machine) bits.push(machine + (b.id != null ? ' (board ' + b.id + ')' : ''));
+  else bits.push('no board identified');
+  if (profile) {
+    bits.push('profile ' + profile
+              + (p.at ? ', read ' + fmtAge((Date.now() / 1000) - p.at)
+                        + ' ago' : '')
+              + (p.how ? ' — ' + p.how : ''));
+  } else {
+    bits.push('boot profile not known'
+              + (p.reason ? ' — ' + p.reason : ''));
+  }
+  h1.title = bits.join('\n');
+  // The document title too, because a phone with four tabs open shows only
+  // this, and "vcctrl-kvm" four times is four unlabelled tabs.
+  if (document.title !== text) document.title = text;
 }
 
 function showBoard(b) {
