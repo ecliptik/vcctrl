@@ -6781,3 +6781,43 @@ def test_the_cheap_probe_is_cached_and_the_expensive_one_is_not():
     finally:
         vcctrld.socket.create_connection = real
         vcctrld.FilesCapability._probe_cache = (0.0, None)
+
+
+def test_a_dead_server_names_the_missing_package_without_claiming_the_host():
+    """`apt install` is a deploy step, which means it is a step that silently
+    did not happen.
+
+    The server is meant to run on the daemon host, so a missing pyftpdlib is
+    very probably why nothing is listening. But `target_host` is a CONFIGURED
+    address and nothing proves it points at this machine -- so the observation
+    is offered as a fact about THIS host, conditionally, and left to the
+    reader to apply. An unconditional "install pyftpdlib" would send somebody
+    to the wrong machine every time the server is remote.
+    """
+    cap = vcctrld.FilesCapability(None)
+    cap.settings = {"target_host": "192.0.2.11", "target_port": 2121}
+    real_conn = vcctrld.socket.create_connection
+    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) \
+        else __builtins__.__import__
+
+    def refuse(addr, timeout):
+        raise OSError(111, "Connection refused")
+
+    vcctrld.socket.create_connection = refuse
+    try:
+        vcctrld.FilesCapability._probe_cache = (0.0, None)
+        live, why = cap._reachable(timeout=1.0)
+        check("a refused connection is a real no", live is False, (live, why))
+        check("and it says to start the server", "Start it" in why, why)
+        # Whichever way the import goes on this machine, the sentence must
+        # never assert that the server belongs here.
+        if "pyftpdlib" in why:
+            check("the package hint is conditional, not an instruction",
+                  "if the server is meant to run here" in why, why)
+            check("and it names the actual command",
+                  "apt install python3-pyftpdlib" in why, why)
+        check("it never claims target_host is this machine",
+              "this machine is" not in why, why)
+    finally:
+        vcctrld.socket.create_connection = real_conn
+        vcctrld.FilesCapability._probe_cache = (0.0, None)

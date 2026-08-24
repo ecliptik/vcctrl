@@ -4242,10 +4242,25 @@ class FilesCapability(Capability):
                        "-- this says the check timed out, not that the server "
                        "is down" % (host, port, wait))
         except OSError as exc:
+            # NAME THE LIKELY CAUSE WITHOUT CLAIMING TO KNOW IT. The server is
+            # meant to run on this host, so a missing pyftpdlib is very
+            # probably why nothing is listening -- but `target_host` is a
+            # configured address and nothing here proves it points at this
+            # machine. So the observation is offered conditionally: it is a
+            # fact about THIS host, stated as one, and left to the reader to
+            # apply. An unconditional "install pyftpdlib" would send somebody
+            # to the wrong machine whenever the server is remote.
+            hint = ""
+            try:
+                __import__("pyftpdlib")
+            except Exception:
+                hint = (" This host has no pyftpdlib installed, so if the "
+                        "server is meant to run here, that is why: "
+                        "apt install python3-pyftpdlib.")
             verdict = (False,
                        "the file server at %s:%d is not answering (%s). Start "
-                       "it on the daemon host."
-                       % (host, port, exc.strerror or exc))
+                       "it on the daemon host.%s"
+                       % (host, port, exc.strerror or exc, hint))
         finally:
             if s is not None:
                 try:
