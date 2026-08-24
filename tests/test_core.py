@@ -4350,7 +4350,7 @@ def test_every_commit_cited_in_docs_still_resolves():
 
     Round Q/R and the Mach64 campaign cite this repo's commits as evidence that
     a prediction was pinned BEFORE the data, that a retraction was made in the
-    open, that a guard was added on a given day. `3e5c5af` is load-bearing: it
+    open, that a guard was added on a given day. `2f24eed` is load-bearing: it
     is the proof a numeric prediction could not have been written with the
     answer in hand.
 
@@ -4399,7 +4399,7 @@ def test_every_commit_cited_in_docs_still_resolves():
         body = open(os.path.join("docs", f), encoding="utf-8", errors="replace").read()
         # ANY hex of commit length, backticked or not. The first version of
         # this only matched backticked hex and reported green while missing
-        # `commit 340b16d` written as plain prose in WEBKVM.md -- a guard that
+        # `commit 853c02d` written as plain prose in WEBKVM.md -- a guard that
         # covers a subset of the ways in, which is the shape it exists to
         # catch. A peer counting independently found more citations than this
         # test did, and that discrepancy was the only reason it surfaced.

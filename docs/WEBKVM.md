@@ -932,7 +932,7 @@ So a browser "send file" is not a push. It is:
 The honest UI consequence: **the transfer button is only enabled at a NET
 prompt.** Everywhere else it must be greyed with the reason shown, not left
 clickable to fail confusingly. That state is knowable -- the harness already
-detects the prompt (`at_prompt`, commit 340b16d) and the boot profile is
+detects the prompt (`at_prompt`, commit 853c02d) and the boot profile is
 readable via `SET`.
 
 Throughput measured by the peer session: ~880 KB/s, 10/10 byte-identical over

@@ -59,7 +59,7 @@ ALSA. One boolean, checked at spawn time, published in `/state.json`:
 
 Then the page can say **"no capture device attached"** for the swap and keep
 "no signal" for a device that is present and silent. `last_error` already
-carries ffmpeg's own words for the third case, as of `4cc1657`.
+carries ffmpeg's own words for the third case, as of `b54a0eb`.
 
 This is small and it is worth doing before the first swap, because the swap is
 the moment the distinction first matters.
@@ -178,7 +178,7 @@ job is to put both facts where those eyes already are.
 
 ## 7. What the page does when the board changes
 
-Already live as of `111ab0c`: the target chip in the status rail names the
+Already live as of `063c579`: the target chip in the status rail names the
 machine (`Macintosh Plus`), not the board (`Apple Lisa/Mac/ADB`), because the
 question anyone actually has is what they are typing into. Hidden entirely
 when unknown; yellow when the identity came from the journal fallback rather
