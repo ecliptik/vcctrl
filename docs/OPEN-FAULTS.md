@@ -277,7 +277,7 @@ for letters.
 
 ---
 
-## 3. `CLRENV.BAT` — the generator exists and the CARD never got it  — OPEN
+## 3. `CLRENV.BAT` — the generator exists and the CARD never got it  — FIXED 2026-08-24
 
 Including `SHOT_TICKS`, `BACKDROP_CACHE`, `BG_SUBREGION_BLIT`,
 `PIN_NATIVE_MODE` and every `TAS_*`. **Any cell that runs without a reboot in
@@ -331,6 +331,40 @@ size check after.
 arm from its log, so a round using it is valid whatever `CLRENV` did. `--forbid`
 clears and verifies named levers on top. The stale file is a missing layer of
 defence, not an active corruption of rounds that attest.
+
+### Resolved on the card, 2026-08-24
+
+Written over the network rather than by a card swap. `C:\MTCP\GET.BAT` pulls
+from the FTP server's `stage/` directory, so the file went
+`stage/CLRENV.BAT` -> `C:\DOSKUTSU\CLRENV.BAT` with a `.BAK` taken first.
+
+**Verified three ways, because no single reading on this console is worth
+trusting:**
+
+- **Arithmetic.** The `DIR` total reads 21,408, and 13,800 + 7,608 = 21,408
+  exactly. A sum that reconciles cannot be produced by a lucky misread of one
+  field, which is what makes it the strong witness. Both individual sizes were
+  in fact misread (`13,800` as `13,808`, the same `0`->`8` as everywhere else).
+- **Content.** `THRASH_CENTRE` reads `count: 2` in the new file and `count: 0`
+  in the `.BAK`; `TAS_REPLAY` reads `count: 4`. All three match the repo
+  exactly, and the `.BAK` difference proves the swap actually happened rather
+  than the file merely looking right.
+- **By eye.** The counts were read from the screenshots directly, because OCR
+  dropped every one of them -- see 11 below.
+
+**Two things that went wrong and are worth carrying:**
+
+**`GET.BAT` ignored its second argument and overwrote `CLRENV.BAT` in place.**
+The plan was to fetch to `.NEW`, verify, then swap, so the live file could
+never be truncated. That safety never executed and nobody was told -- the
+transfer simply landed on the real filename. **The `.BAK` is the only reason
+this was safe**, which is an argument for taking the backup even when the plan
+says you will not need it.
+
+**The first "control" was not a control.** `THRASH_ROWS` was chosen as a name
+known to be in both files; it is in neither, and returned `count: 0` from a
+perfectly healthy read. A control has to be verified present, not assumed
+present, or a genuine zero looks like a broken pipeline.
 
 A generated `CLRENV` is owed from the doskutsu side and rides the next
 populate. Until it lands, the guards above are the only protection.
@@ -610,3 +644,40 @@ from a different source than the log prefixes. Cheap to investigate — the DOS
 
 **This is an analysis-side fault, not a measurement one.** No fps figure
 depends on it. Every conclusion keyed on ordering does.
+
+
+## 11. The screen reader drops the line its caller wants  — FIXED 2026-08-24
+
+**Tesseract's default page-segmentation mode omits the `count:` line from
+`FIND /C` output, deterministically, 3 captures out of 3.** On the glass:
+
+    C:\>FIND /I /C "THRASH_CENTRE" C:\DOSKUTSU\CLRENV.BAT
+    ---------- C:\DOSKUTSU\CLRENV.BAT
+    count: 2                        <-- read by a human, dropped by the OCR
+
+The default is PSM 3, which analyses page layout; it reads the command line and
+the dashed header, then stops. PSM 6 -- *"a uniform block of text"* -- recovers
+it every time. That is not luck: **a DOS console IS a uniform block of
+monospaced text**, and PSM 3's newspaper-column heuristics have nothing to work
+with.
+
+**Why the existing retry loop could never have saved it.** The attestation
+polls twenty times. Twenty identical reads of an identical frame reproduce an
+identical omission — **retrying is only a fix for flakiness, and this is not
+flaky.** The cell then refuses with `COULD NOT READ` against a screen anyone
+could read at a glance. Same shape as 9, different cause, and it would have
+been diagnosed as 9.
+
+**Fix:** `read_env_text_raw(psm=...)`, with both polling loops alternating —
+even tries use the default, odd tries use PSM 6. **A fallback, not a swap.**
+Every read that works today keeps its exact behaviour on the first try;
+changing the mode globally under readers that are currently fine is a larger
+risk than the bug. Covered by
+`test_psm3_drops_the_count_line_and_psm6_recovers_it` against a real capture,
+and that test asserts the DEFAULT still fails — if PSM 3 ever starts reading
+the fixture, the fixture has stopped demonstrating anything and the test says
+so rather than passing on both branches.
+
+**How it was found:** by looking at the screenshot after the OCR returned
+`None` for a reading that had a plainly visible answer. The harness has eyes;
+the OCR is one instrument and not the only one.

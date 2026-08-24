@@ -5597,3 +5597,55 @@ def test_power_is_gated_by_action_and_the_holder_can_still_use_it():
           "this test exists to hold together",
           ("power" in vcc._INPUT_CMDS)
           == vcctrld._gated("power", {"action": "on"}))
+
+
+def test_psm3_drops_the_count_line_and_psm6_recovers_it():
+    """The screen reader silently omitted the only line its caller wanted.
+
+    `tests/fixtures/find-count-psm3-drops-it.jpg` is a real capture from the
+    rig, 2026-08-24. Plainly legible on the glass:
+
+        C:\\>FIND /I /C "THRASH_CENTRE" C:\\DOSKUTSU\\CLRENV.BAT
+        ---------- C:\\DOSKUTSU\\CLRENV.BAT
+        count: 2
+
+    Tesseract's DEFAULT mode reads the first two lines and stops, 3 captures
+    out of 3. Not flaky -- deterministic. So the attestation's twenty retries
+    could never have recovered it: retrying an identical read of an identical
+    frame twenty times reproduces the same omission twenty times, and the cell
+    refuses with COULD NOT READ against a screen a human can read at a glance.
+
+    That is the same shape as OPEN-FAULTS 9 with a different cause, and it is
+    why the fix alternates the segmentation mode rather than raising the count
+    again. A DOS console is a uniform block of monospaced text, which is what
+    PSM 6 assumes and what PSM 3's page-layout heuristics have nothing to do
+    with.
+
+    THE CONTROL IS THE DEFAULT-MODE ASSERTION. If PSM 3 ever starts reading
+    this image correctly the fixture no longer demonstrates the bug, and this
+    test says so instead of quietly passing on both branches.
+    """
+    print("\nOCR segmentation mode")
+    fx = os.path.join("tests", "fixtures", "find-count-psm3-drops-it.jpg")
+    if not os.path.exists(fx):
+        print("  SKIP  fixture missing")
+        return
+    try:
+        from PIL import Image
+        import pytesseract
+    except Exception:
+        print("  SKIP  no PIL/pytesseract here")
+        return
+    img = Image.open(fx)
+    default = pytesseract.image_to_string(img)
+    psm6 = pytesseract.image_to_string(img, config="--psm 6")
+
+    check("the default mode still DROPS it -- the fixture is still a bug",
+          "count" not in default.lower(), default.strip()[:70])
+    check("PSM 6 recovers the count line", "count" in psm6.lower(),
+          psm6.strip()[:70])
+
+    cell = _load("bin/vcctrl-cell", "cell_psm")
+    line = [l for l in psm6.splitlines() if "count" in l.lower()][0]
+    check("and the recovered line parses to the right integer",
+          cell.read_count(line) == 2, (line, cell.read_count(line)))

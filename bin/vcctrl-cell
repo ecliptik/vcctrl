@@ -235,11 +235,29 @@ def read_count(text):
         return None
 
 
-def read_env_text_raw():
+def read_env_text_raw(psm=None):
     """OCR the current screen without issuing anything.
 
     Used by the per-variable re-check, which has already run its own filtered
     command and must not have `SET` typed over the top of it.
+
+    `psm` SELECTS TESSERACT'S PAGE SEGMENTATION MODE, AND IT IS NOT COSMETIC.
+    Measured 2026-08-24 on three screenshots, deterministically, 3 of 3:
+
+        FIND /I /C "THRASH_CENTRE" C:\DOSKUTSU\CLRENV.BAT
+        ---------- C:\DOSKUTSU\CLRENV.BAT
+        count: 2                      <-- DEFAULT PSM DROPS THIS LINE
+
+    The default is PSM 3, whose page-layout analysis reads the command line and
+    the dashed header and then stops -- silently omitting the only line the
+    caller wants. PSM 6 ("a uniform block of text") recovers it every time,
+    which is unsurprising: a DOS console IS a uniform block of monospaced text,
+    and PSM 3's newspaper-column heuristics have nothing to work with.
+
+    THIS IS A FALLBACK, NOT A SWAP. The default is tried first so every read
+    that works today keeps its exact behaviour, and callers retry with psm=6
+    when their parse comes back empty. A silent OCR mode change under readers
+    that are currently fine is a bigger risk than the bug it fixes.
     """
     shot, _ = grab("cell-env-recheck")
     if shot is None:
@@ -247,7 +265,8 @@ def read_env_text_raw():
     try:
         from PIL import Image
         import pytesseract
-        return shot, pytesseract.image_to_string(Image.open(shot))
+        cfg = ("--psm %d" % psm) if psm else ""
+        return shot, pytesseract.image_to_string(Image.open(shot), config=cfg)
     except Exception:
         return shot, None
 
@@ -757,7 +776,11 @@ def main(argv):
                     verdict = None
                     for _try in range(20):
                         time.sleep(1.5)
-                        _sh, t3 = read_env_text_raw()
+                        # Alternate the segmentation mode. PSM 3 drops the
+                        # `count:` line outright on some layouts, and retrying
+                        # the SAME read twenty times cannot fix a
+                        # deterministic omission -- only a different read can.
+                        _sh, t3 = read_env_text_raw(6 if _try % 2 else None)
                         if t3 is None:
                             continue
                         verdict = read_count(t3)
@@ -871,7 +894,7 @@ def main(argv):
                 v = None
                 for _try in range(20):
                     time.sleep(1.5)
-                    _sh, t5 = read_env_text_raw()
+                    _sh, t5 = read_env_text_raw(6 if _try % 2 else None)
                     if t5 is None:
                         continue
                     v = read_count(t5)
