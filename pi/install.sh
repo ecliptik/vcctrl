@@ -153,20 +153,15 @@ if ! python3 -c 'import yaml' >/dev/null 2>&1; then
     && echo "installed python3-yaml (required to read vcctrl.yaml)"
 fi
 
-# pyftpdlib serves the staging directory the TARGET pulls from. Unlike
-# python3-yaml this is NOT load-bearing for the daemon -- everything else works
-# without it, and the files capability reports the absence in its own words
-# rather than failing. Installed here anyway, because the alternative is
-# discovering it at the moment somebody is trying to put a file on the machine.
+# NO apt LINE FOR pyftpdlib. It is vendored under vendor/ and travels with the
+# checkout, so there is nothing to install and nothing that needs a network at
+# deploy time. An apt line here was written and removed deliberately: a deploy
+# step that reaches the network is a step that silently does not happen, and it
+# would have made a Pi built offline get a working KVM and a broken feature.
 #
-# NOTE this is the one dependency in the project that needs the network at
-# deploy time and that the repo does not carry. A Pi built offline gets a
-# working KVM and no file transfer, which is the right way round but is a
-# difference worth knowing about before you are standing next to it.
-if ! python3 -c 'import pyftpdlib' >/dev/null 2>&1; then
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-pyftpdlib \
-    && echo "installed python3-pyftpdlib (serves the file-transfer staging dir)"
-fi
+# What DOES have to happen is that vendor/ reaches the deployed tree. If the
+# file-transfer capability reports it cannot import pyftpdlib, that is this --
+# an incomplete deploy, not a missing package.
 
 if ! dpkg -s systemd-coredump >/dev/null 2>&1; then
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q systemd-coredump \

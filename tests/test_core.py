@@ -26,6 +26,7 @@ test fails that test, reported as a failure and not counted as passed. Under
 `python3` nothing changes.
 """
 
+import builtins
 import importlib.util
 import os
 import re
@@ -6783,41 +6784,91 @@ def test_the_cheap_probe_is_cached_and_the_expensive_one_is_not():
         vcctrld.FilesCapability._probe_cache = (0.0, None)
 
 
-def test_a_dead_server_names_the_missing_package_without_claiming_the_host():
-    """`apt install` is a deploy step, which means it is a step that silently
-    did not happen.
+def test_a_dead_server_names_the_missing_library_without_claiming_the_host():
+    """The library is vendored, so its absence means an incomplete DEPLOY.
 
-    The server is meant to run on the daemon host, so a missing pyftpdlib is
-    very probably why nothing is listening. But `target_host` is a CONFIGURED
-    address and nothing proves it points at this machine -- so the observation
-    is offered as a fact about THIS host, conditionally, and left to the
-    reader to apply. An unconditional "install pyftpdlib" would send somebody
-    to the wrong machine every time the server is remote.
+    That is a different fault from a missing package and has a different fix.
+    Saying "install pyftpdlib" would send somebody to apt for a file that is
+    supposed to be sitting in the checkout.
+
+    THE IMPORT IS FORCED TO FAIL HERE. Without that this test passes on
+    nothing: vcctrld puts vendor/ on sys.path at import, so pyftpdlib resolves
+    on any machine running these tests, the hint branch never executes, and
+    every assertion about its wording is skipped while the test reports green.
     """
     cap = vcctrld.FilesCapability(None)
     cap.settings = {"target_host": "192.0.2.11", "target_port": 2121}
     real_conn = vcctrld.socket.create_connection
-    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) \
-        else __builtins__.__import__
+    real_import = builtins.__import__
 
     def refuse(addr, timeout):
         raise OSError(111, "Connection refused")
 
+    def no_ftplib(name, *a, **kw):
+        if name == "pyftpdlib":
+            raise ImportError("No module named 'pyftpdlib'")
+        return real_import(name, *a, **kw)
+
     vcctrld.socket.create_connection = refuse
     try:
         vcctrld.FilesCapability._probe_cache = (0.0, None)
+
+        # -- with the library present (the real state of this checkout) --
         live, why = cap._reachable(timeout=1.0)
         check("a refused connection is a real no", live is False, (live, why))
         check("and it says to start the server", "Start it" in why, why)
-        # Whichever way the import goes on this machine, the sentence must
-        # never assert that the server belongs here.
-        if "pyftpdlib" in why:
-            check("the package hint is conditional, not an instruction",
-                  "if the server is meant to run here" in why, why)
-            check("and it names the actual command",
-                  "apt install python3-pyftpdlib" in why, why)
+        check("with the library present there is no library hint",
+              "vendored pyftpdlib" not in why, why)
+
+        # -- with it absent, which is what the wording is FOR --
+        builtins.__import__ = no_ftplib
+        live, why = cap._reachable(timeout=1.0)
+        check("the missing library is named", "vendored pyftpdlib" in why, why)
+        check("as a deploy problem, not a package to install",
+              "vendor/" in why and "apt" not in why, why)
+        check("and it stays conditional about which host runs the server",
+              "if the server is meant to run here" in why, why)
         check("it never claims target_host is this machine",
               "this machine is" not in why, why)
     finally:
+        builtins.__import__ = real_import
         vcctrld.socket.create_connection = real_conn
         vcctrld.FilesCapability._probe_cache = (0.0, None)
+
+
+def test_the_vendored_ftp_server_is_importable_from_the_checkout():
+    """A clone must be a complete rig, which is the whole point of vendoring.
+
+    This is the check that would have caught the vendored tree being copied
+    without vendor/, or the path bootstrap being dropped in a refactor -- both
+    of which present as "file transfer is unavailable" long after the change
+    that caused them.
+    """
+    import importlib
+    here = os.path.abspath(os.path.join(HERE, os.pardir))
+    vend = os.path.join(here, "vendor")
+
+    check("vendor/ is in the tree", os.path.isdir(vend), vend)
+    check("vcctrld put it on sys.path", vend in sys.path, vend in sys.path)
+
+    mod = importlib.import_module("pyftpdlib")
+    check("pyftpdlib imports", mod is not None)
+    check("and it is OUR copy, not one installed on the host",
+          os.path.abspath(mod.__file__).startswith(vend), mod.__file__)
+
+    # asyncore/asynchat were removed from the stdlib in 3.12 and pyftpdlib
+    # 2.2.0 still imports them, so the server does not start without these.
+    # Importing servers is what actually pulls them.
+    importlib.import_module("pyftpdlib.servers")
+    importlib.import_module("pyftpdlib.authorizers")
+    check("the stdlib backfills are carried too",
+          all(os.path.isfile(os.path.join(vend, f))
+              for f in ("asyncore.py", "asynchat.py")))
+
+    # Vendored code must carry its licence. The source headers point at a
+    # LICENSE file, and the copy this came from had none.
+    check("the MIT licence travels with it",
+          os.path.isfile(os.path.join(vend, "LICENSE.pyftpdlib")))
+    lic = open(os.path.join(vend, "LICENSE.pyftpdlib")).read()
+    check("and it is the real text, not a placeholder",
+          "WITHOUT WARRANTY OF ANY KIND" in lic and "Rodola" in lic)

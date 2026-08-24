@@ -74,6 +74,27 @@ SOCKET_PATH = CFG.default("daemon.socket", "/run/vcctrl.sock")
 USB4VC_LOG = CFG.default("daemon.usb4vc.debug_log",
                          "/home/pi/usb4vc/usb4vc_debug_log.txt")
 STATE_DIR = CFG.default("daemon.state_dir", "/var/lib/vcctrl")
+
+# THE VENDORED FTP SERVER, PUT ON THE PATH HERE RATHER THAN IN PYTHONPATH.
+#
+# The daemon is started by systemd, by hand, and from tests, and only one of
+# those three reliably carries an environment somebody set up. A dependency
+# that resolves under one launcher and not the others is a feature that works
+# for whoever wrote it -- which is the same class as --out meaning a path on
+# the wrong machine.
+#
+# APPENDED, NOT PREPENDED, and that is deliberate. Anything genuinely
+# installed on the host wins; this is the fallback that makes a clone
+# self-sufficient, not an override that quietly shadows a newer package
+# somebody installed on purpose.
+#
+# Absent or broken is survivable and is NOT handled here: nothing imports
+# pyftpdlib at module scope, so a missing vendor/ costs the file-transfer
+# capability and nothing else. It reports the absence in its own words.
+_VENDOR = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "vendor")
+if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
+    sys.path.append(_VENDOR)
 CONFIG_PATH = os.path.join(CFG.default("daemon.prefix", "/opt/vcctrl"),
                            "config.json")
 
@@ -4253,10 +4274,16 @@ class FilesCapability(Capability):
             hint = ""
             try:
                 __import__("pyftpdlib")
-            except Exception:
-                hint = (" This host has no pyftpdlib installed, so if the "
-                        "server is meant to run here, that is why: "
-                        "apt install python3-pyftpdlib.")
+            except Exception as ierr:
+                # The library is vendored, so this is not "install something".
+                # It means the tree is incomplete or the path bootstrap did
+                # not run -- a different fault with a different fix, and
+                # saying "install pyftpdlib" would send somebody to apt for a
+                # file that is supposed to be sitting in the checkout.
+                hint = (" This host cannot import the vendored pyftpdlib "
+                        "(%s), so if the server is meant to run here, that is "
+                        "why -- check vendor/ is present in the deployed tree."
+                        % ierr)
             verdict = (False,
                        "the file server at %s:%d is not answering (%s). Start "
                        "it on the daemon host.%s"
