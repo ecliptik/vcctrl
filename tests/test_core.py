@@ -4802,15 +4802,50 @@ def test_no_rig_identifiers_in_the_code():
     print("\nno rig identifiers in code")
     import subprocess
     root = os.path.join(HERE, os.pardir)
+    # ASSEMBLED FROM PARTS, so no literal replacement can reach them.
+    #
+    # These patterns are the only thing that detects the identifiers, and a
+    # history rewrite applies its replacements to EVERY blob -- including this
+    # one. Written as literals, four of the five are rewritten into the
+    # placeholders they are meant to find: the guard then searches tracked code
+    # for `vcctrl-pi.example.ts.net`, finds nothing, and passes forever. It
+    # would pass because it had been blinded, on the run that was supposed to
+    # make it necessary.
+    #
+    # The lab-subnet pattern happens to survive a literal replacement, because
+    # its escaped dots do not match the unescaped form the replacement list
+    # carries. That is luck rather than design, and the near-miss is what made
+    # the danger look handled.
+    #
+    # (This comment may not quote the address either. The guard now scans every
+    # tracked file including this one, and it caught an earlier draft of this
+    # very paragraph -- which is the check working, in the least dignified way
+    # available.)
+    #
+    # Protecting this by excluding the file from the rewrite would be worse:
+    # its historical blobs carry the same strings as FIXTURE data, so the file
+    # holding the guard would become the one file the scrub cannot clean.
+    # Assembly needs no exemption -- fixtures scrub normally, detection
+    # survives, because nothing here is a literal anywhere.
     pats = {
-        "the rig's MagicDNS name": r"example-tailnet",
-        "the lab subnet": r"192\.168\.7\.",
-        "the plug's MAC": r"00:00:5E",
-        "the plug's alias": r"retro-rig-plug",
-        "a hostname as an ssh default": r':-usb4vc\}|"VCCTRL_HOST", "usb4vc"',
+        "the rig's MagicDNS name": "hale" + "-gopher",
+        "the lab subnet": "192" + r"\." + "168" + r"\." + "7" + r"\.",
+        "the plug's MAC": "E0:" + "D3:" + "62",
+        "the plug's alias": "Christmas" + " Tree",
+        "a hostname as an ssh default":
+            ":-" + "usb4vc" + r"\}|" + '"VCCTRL_HOST", "' + "usb4vc" + '"',
     }
-    tracked = subprocess.run(["git", "-C", root, "ls-files",
-                              "bin", "pi", "daemon", "common", "tools"],
+    # EVERY TRACKED FILE, not a directory list.
+    #
+    # The list used to be bin/ pi/ daemon/ common/ tools/. Phase 6 moved
+    # vcctrl-cell, -sweep and -collect from bin/ to harness/ and the guard
+    # silently stopped covering all three -- nothing went red, because a guard
+    # scoped by directory loses coverage by SUBTRACTION and never announces it.
+    # They were clean; the point is that nobody would have known otherwise.
+    #
+    # `ls-files` with no paths cannot lose a directory that way. It is also why
+    # this file has to hold its patterns in pieces: the guard now scans itself.
+    tracked = subprocess.run(["git", "-C", root, "ls-files"],
                              capture_output=True, text=True).stdout.split()
     check("control: there were tracked files to read", len(tracked) > 10,
           len(tracked))
