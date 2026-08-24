@@ -514,3 +514,49 @@ problem, and 30 s is already 20x the transition.
 **Do not change `vcctrl-cell` while a round is running on it.** A cell that
 straddles a harness change is the same hazard as one that straddles a daemon
 restart.
+
+## 10. `started_rtc_local` is corrupt — PROVENANCE HAZARD, ANALYSIS ONLY
+
+**The manifest's `started_rtc_local` field cannot be trusted, and every writeup
+that cites it for provenance is citing a fabrication.**
+
+Found 2026-08-24 while trying to establish which archived cells shared a
+sitting. Two independent proofs from data already on disk:
+
+    CX2B.LOG   started_rtc_local=2026-12-02T18:40:00
+    CX2B.LOG   its own log lines read [08:54:56] ... [08:57:04]
+
+The cell ran that morning. The manifest dates it to December. And the field is
+not merely offset — it is **incoherent**:
+
+    GPU0B   started_rtc_local=2026-11-28T21:25:03
+    GPUAB   started_rtc_local=2026-11-28T21:25:41
+
+**Thirty-eight seconds apart, for two cells that take 164 s each.** They cannot
+both be true and they cannot overlap. Some cells carry a plausible date
+(`GPU0` reads `2026-08-20`, `CX1A` reads `2026-08-24T08:49:10`, both correct),
+so the field is *sometimes* right, which is worse than always wrong: it looks
+reliable in exactly the spot-check a reader would perform.
+
+**The in-log `[HH:MM:SS]` prefixes are the good clock.** They are coherent,
+monotonic, and spaced like real cells:
+
+    CX1A  08:49:10   CX2B  08:54:56   CX3B  09:00:42   CX4A  09:08:25
+
+**What it cost:** nothing yet, but only by luck. A variance claim was one
+message from entering the benchmarking standard, and the archive comparison
+that killed it was **only possible after abandoning this field** — grouping
+cells by `started_rtc_local` puts same-sitting cells in different months and
+would have made the refuting comparison unbuildable.
+
+**Rule:** for anything that depends on WHEN a cell ran — sitting membership,
+ordering, drift, elapsed time — read the log-line timestamps. Treat
+`started_rtc_local` as unverified until the RTC is understood.
+
+**Not yet diagnosed.** Candidates: a dead CMOS battery resetting on cold boot,
+a profile that sets the clock and one that does not, or the field being written
+from a different source than the log prefixes. Cheap to investigate — the DOS
+`DATE`/`TIME` at a prompt, against the Pi, on a warm and a cold start.
+
+**This is an analysis-side fault, not a measurement one.** No fps figure
+depends on it. Every conclusion keyed on ordering does.
