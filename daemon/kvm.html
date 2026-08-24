@@ -1090,7 +1090,15 @@
   #cmdbar #filebtn:hover, #cmdbar #filestop:hover { background:var(--rule); }
   #cmdbar #filestop { color:var(--green); white-space:nowrap; }
   #cmdbar #filebtn[hidden], #cmdbar #filestop[hidden] { display:none; }
-  #fileinput {
+  /* BOTH INPUTS, and the second one was missed. A bare `input type=file`
+     renders its own "Browse..." control, so #xferinput appeared as a stray
+     button sitting in the command bar -- a control nobody put there, next to
+     ones somebody did.
+     NOT display:none: an input that is display:none is not focusable and
+     .click() on it is ignored outright by some browsers, which is exactly
+     why the clip appeared to do nothing once. Visually hidden but still laid
+     out is the form that works everywhere. */
+  #fileinput, #xferinput {
     position:absolute; width:1px; height:1px; padding:0; margin:-1px;
     overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;
   }

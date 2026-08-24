@@ -7518,3 +7518,42 @@ def test_the_three_state_words_are_checked_as_values_not_just_keys():
         check("leds is checked too", False, "it validated")
     except vcconfig.ConfigError:
         check("leds is checked too", True)
+
+
+def test_no_file_input_renders_its_own_control():
+    """A bare `input type=file` draws a "Browse..." button of its own.
+
+    #xferinput was added without the visually-hidden rule its sibling has, so
+    it appeared as a stray control in the command bar -- a button nobody put
+    there, beside ones somebody did. Reported from a real page, which is the
+    only place it shows.
+
+    display:none is NOT the fix and must not become one: an input that is
+    display:none is not focusable and .click() on it is ignored outright by
+    some browsers. That is why the paper clip once appeared to do nothing.
+    """
+    import re as _re
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    css = page[:page.index("</style>")]
+
+    ids = _re.findall(r'<input\s+id="([a-z]+)"\s+type="file"', page)
+    check("both file inputs are present", set(ids) == {"fileinput",
+          "xferinput"}, ids)
+
+    # PARSED AS RULES, not matched by a pattern that can find the id anywhere.
+    # The first version used a loose regex and passed with #xferinput removed
+    # from the hiding rule entirely -- it was finding SOME block mentioning
+    # the id and calling that coverage. Proved by deleting the fix and
+    # watching the test stay green, which is the only way that class of
+    # mistake shows.
+    blocks = _re.findall(r'([^{}]+)\{([^{}]*)\}',
+                         _re.sub(r'/\*.*?\*/', '', css, flags=_re.S))
+    for i in ids:
+        hiding = [body for sel, body in blocks
+                  if _re.search(r'#' + i + r'\b', sel) and "clip:" in body]
+        check("%s has a rule that clips it out of the layout" % i,
+              hiding, "no rule with clip: names #%s" % i)
+        for body in hiding:
+            check("%s is clipped, not display:none" % i,
+                  "display:none" not in body, body[:80])
