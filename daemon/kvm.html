@@ -472,22 +472,32 @@
      lamps actually `on` are green, and everything else in the row
      is this. --muted is fitted to 7:1 on light themes and --dim
      keeps meaning genuinely faint. */
+  /* ONE WEIGHT FOR EVERY LAMP. Reported as "C N S look thinner than the
+     rest", and they were: the `font:` shorthand resets font-weight to normal,
+     and only the state rules below set 700. In normal operation PWR, LNK,
+     AUD, KBD and MOS are all `on` and therefore bold, while a DARK Num Lock
+     carries no state class at all -- so one lamp in a row of eight rendered
+     at 400 and read as a different typeface rather than as a different state.
+     Weight was a third carrier for something colour and the underline already
+     say, and the one that produced an inconsistency instead of information.
+     It is now constant, and state is carried where it was already carried. */
   .lamp span {
-    font:var(--t-data)/1 var(--mono); color:var(--muted); letter-spacing:.04em;
+    font:700 var(--t-data)/1 var(--mono); color:var(--muted);
+    letter-spacing:.04em;
     border-bottom:1px solid transparent; padding-bottom:2px;
   }
   .lamp.on span {
-    color:var(--green); font-weight:700; border-bottom-color:var(--green);
+    color:var(--green); border-bottom-color:var(--green);
   }
   /* Same again: `opacity:.55` put this at 2.1:1 on every light theme, the
      worst text on the page. The DASHED underline distinguishes unproven from
      proven; it does not need to be faint as well. */
   .lamp.stale span { border-bottom-style:dashed; }
   .lamp.warn span {
-    color:var(--yellow); font-weight:700; border-bottom-color:var(--yellow);
+    color:var(--yellow); border-bottom-color:var(--yellow);
   }
   .lamp.bad span {
-    color:var(--red); font-weight:700; border-bottom-color:var(--red);
+    color:var(--red); border-bottom-color:var(--red);
   }
   /* A STATE MARKER, BECAUSE COLOUR ALONE DOES NOT SURVIVE EVERY PALETTE.
      Reported from the rig: on a light theme the lamps were "difficult to tell
@@ -2090,6 +2100,13 @@ $('lamp-link').style.cursor = 'pointer';
 $('lamp-link').onclick = () => {
   wsRetryDelay = 60000;
   addLine(new Date(), 'transport', 'retrying the websocket by hand', 'k-note');
+  // SAY SO WHERE IT CAN BE SEEN. This was reported as "clickable but does
+  // nothing". It always did something -- it drops the socket and reconnects,
+  // the same as Refresh video -- but its only feedback was a line in the log
+  // panel, and the panel is CLOSED by default (body.nopanel). A reconnect
+  // that succeeds quickly is visually indistinguishable from a dead control,
+  // so the affordance looked broken every time it worked.
+  hint('reconnecting the video link…');
   restart();
 };
 
@@ -2104,8 +2121,23 @@ function setXport(x) {
     : {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
   )[x] || x;
   xportLabel = label;
+  // AMBER MEANS "NOT WHAT YOU ASKED FOR", NOT "MJPEG".
+  //
+  // Reported: unchecking "Use WebSocket when it works" turned LNK amber with
+  // a question mark, which reads as a fault -- and the thing that happened
+  // was the operator getting exactly what they selected. mjpeg is not a
+  // degraded state; the comment three lines up has said so all along, and the
+  // lamp contradicted it.
+  //
+  // So the transport alone does not decide the colour. Running on mjpeg
+  // BECAUSE websocket was switched off is success, and reads `on`. Running on
+  // mjpeg while websocket was wanted is the case worth flagging, and keeps
+  // its amber and its marker.
+  const wsWanted = !(typeof OPTS === 'object' && OPTS && OPTS.ws === false);
   setLamp('lamp-link',
-    x === 'ws' ? 'on' : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
+    x === 'ws' ? 'on'
+      : x === 'mjpeg' ? (wsWanted ? 'warn' : 'on')
+      : x === 'connecting' ? 'stale' : 'bad',
     // NUMBERS, NOT ADJECTIVES. "High performance" and "low performance" are
     // claims nobody has measured; these two are measured and they are what
     // actually differs. The WebSocket carries frames the client can retune
