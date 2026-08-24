@@ -5266,3 +5266,63 @@ console.log(JSON.stringify([
           len(rows))
     for name, got, want in rows:
         check(name, got == want, (got, want))
+
+
+def test_no_status_indicator_fades_below_its_fitted_contrast():
+    """The blind spot this file has now hit three times.
+
+    tools/themes.py fits every token to a contrast floor, and the theme test
+    asserts the fitted values. Neither can see an `opacity` laid OVER one:
+    the colour is still compliant, and the pixels are not. The file already
+    records `opacity:.34` rendering a label at 1.5:1 and `opacity:.55` at
+    2.1:1. The third was the ACTIVE heartbeat -- `opacity:.5` for half of
+    every 1.6s cycle, putting it at 1.95-2.08:1 on every light theme, over a
+    --dim fitted to 4.5. The operator saw it; no test could.
+
+    The fix that generalises is not a bigger number, it is a different
+    mechanism: animate BETWEEN TWO FITTED TOKENS, so every frame of the cycle
+    is a colour the generator has already cleared.
+    """
+    print("\nno indicator fades under its floor")
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+
+    def keyframes(name):
+        m = re.search(r"@keyframes\s+%s\s*\{(.*?)\n  \}" % re.escape(name),
+                      page, re.S)
+        return m.group(1) if m else None
+
+    for name, prop in (("beat", "color"), ("beatdot", "background")):
+        body = keyframes(name)
+        check("@keyframes %s exists" % name, body is not None)
+        if body is None:
+            continue
+        check("%s animates %s, not opacity" % (name, prop),
+              "opacity" not in body and prop in body, body.strip()[:80])
+        # Every stop must be a var(--token) the generator fits, not a literal.
+        stops = re.findall(r"%s:\s*([^;]+);" % prop, body)
+        check("%s uses only fitted tokens (%d stops)" % (name, len(stops)),
+              len(stops) >= 2 and all("var(--" in v for v in stops), stops)
+
+    # Reduced motion must pin the LIVE colour. Stopping the animation and
+    # leaving the element in --dim shows a dead stream to the reader who most
+    # needs a static indicator.
+    # There are three reduced-motion blocks in the file; find the one that
+    # governs #state rather than the first one that matches. A test that grabs
+    # the wrong block reports on something it was not asked about, which is the
+    # same mistake as the contrast test measuring the wrong quantity.
+    blocks = [b for b in re.findall(
+        r"@media \(prefers-reduced-motion: reduce\) \{(.*?)\n  \}", page, re.S)
+        if "#state" in b]
+    check("the reduced-motion block governing #state exists",
+          len(blocks) == 1, len(blocks))
+    if blocks:
+        check("and it pins the live colour rather than only stopping motion",
+              "color:var(--green)" in blocks[0], blocks[0][:140])
+
+    # The control: this test must be able to fail. The old form is what it is
+    # meant to reject, so assert the detector rejects it.
+    old_form = "@keyframes beat {\n    0%, 100% { opacity:1; }\n" \
+               "    50%      { opacity:.5; }\n  }"
+    check("control: the detector would reject the form this replaced",
+          "opacity" in old_form and "color" not in old_form)

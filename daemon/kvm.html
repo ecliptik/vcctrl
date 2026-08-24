@@ -104,16 +104,44 @@
      box around the text, which is a border nobody asked for. Opacity alone
      dims the glyphs and the rule under them together, because the underline
      is this element's own border. */
+  /* THE BEAT IS A COLOUR, NOT A TRANSPARENCY -- third time in this file, and
+     this time the operator saw it before any test did.
+     `opacity:.5` for half of every 1.6s cycle put the ACTIVE label at
+     1.95-2.08:1 on every light theme, over a --dim the generator had fitted
+     to 4.5:1. The contrast test cannot see that: it measures colour TOKENS,
+     and an alpha composited over one is invisible to it. Which is exactly the
+     note below about `opacity:.34` reading 1.5:1, and the one after it about
+     `opacity:.55` reading 2.1:1. Same defect, same blind spot, third time.
+     Beating between two FITTED tokens cannot go under the floor at any point
+     in the cycle, because every frame of the animation is a colour the
+     generator has already cleared. It also gives `live` a colour carrier it
+     never had on desktop: before this, the only thing separating a live
+     stream from a dead one here was the motion -- which is nothing at all to
+     a reader with reduced motion turned on. */
   @keyframes beat {
-    0%, 100% { opacity:1; }
-    50%      { opacity:.5; }
+    0%, 100% { color:var(--green); }
+    50%      { color:var(--dim); }
+  }
+  /* The phone dot is the same heartbeat on a filled shape, so it animates
+     `background` and needs its own keyframes. One rule cannot drive both
+     properties, and pointing the dot at the colour version would have
+     silently stopped it moving. */
+  @keyframes beatdot {
+    0%, 100% { background:var(--green); }
+    50%      { background:var(--dim); }
   }
   /* The heartbeat moves to the word itself, now that there is no dot to put
      it on. Same rule: it beats only while frames are arriving, so it cannot
      beat over a frozen picture. */
   #state.live span { animation:beat 1.6s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) {
-    #state.live span, #state.live > i { animation:none; opacity:1; }
+    /* Pinned to the LIVE colour, not merely un-animated. `opacity:1`
+       on a stopped animation left the word in --dim, which is what a
+       DEAD stream looks like -- so the reader who most needs a static
+       indicator got the one saying the opposite of the truth. */
+    #state.live span { animation:none; color:var(--green); }
+    #state.live > i { animation:none; background:var(--green);
+                      opacity:1; }
   }
   .chip {
     font:var(--t-micro)/1 var(--mono); letter-spacing:.06em;
@@ -228,7 +256,7 @@
       background:var(--dim); opacity:.45;
     }
     body #state.live > i { background:var(--green); opacity:1;
-                           animation:beat 1.6s ease-in-out infinite; }
+                           animation:beatdot 1.6s ease-in-out infinite; }
     /* NO BOXES ON ANY OF THE THREE. I gave light/dark a bare glyph and kept
        boxes on the other two, on the argument that a box is the affordance
        for something that opens. Beside each other at phone size that is
