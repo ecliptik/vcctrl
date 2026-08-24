@@ -204,6 +204,83 @@ def parse_dir_summary(ocr):
     return None
 
 
+def dumps_from_log(log_path):
+    r"""[(BASENAME, bytes)] the ENGINE says it wrote, or None if unreadable.
+
+    THIS IS THE STRONGEST EVIDENCE AVAILABLE AND IT REPLACES THE DIRECTORY
+    LISTING AS THE PRIMARY SOURCE. Patch 0318 logs one line per dump:
+
+        [shot-dump] want=1000 got=1000 skew=0 WROTE LOGS\S01000.PPM
+                    bytes=230415 box=320x240@160,120 surface=640x480
+
+    Three properties nothing else here has. It comes from the process that
+    created the files, so it cannot be fooled by anything that happened
+    afterwards. It arrives over FTP as exact bytes, so **no OCR touches the
+    attribution at all** -- and OCR is where every previous design broke, from
+    `count: 0` reading as `count: @` to `10 file(s)` reading as `18`. And it
+    names each file individually WITH its size, which a directory total cannot.
+
+    WHY THIS MATTERS MORE THAN IT LOOKS. The tool was scoped to
+    `LOGS\<TAG>\` directories on the strength of patch 0322, so that a
+    directory-scoped delete could never reach the flat backlog. Measured
+    2026-08-24: **the binary in use, `a674802dcab4`, PREDATES 0322 and writes
+    flat.** Its log shows `WROTE LOGS\S01000.PPM` and no mkdir warning, which
+    0322 would have emitted had it been present and failed. So the directory
+    scoping protected against a hazard by pointing at a layout that does not
+    exist, and the tool had no targets whatsoever.
+
+    Reading the engine's own record restores per-file attribution on the FLAT
+    layout, which is the thing the directory scoping was standing in for.
+    """
+    if not log_path or not os.path.exists(log_path):
+        return None
+    try:
+        txt = open(log_path, "rb").read().decode("latin-1")
+    except OSError:
+        return None
+    out = []
+    for m in re.finditer(r"WROTE\s+(\S+?\.PPM)\s+bytes=(\d+)", txt, re.I):
+        out.append((os.path.basename(m.group(1).replace("\\", "/")).upper(),
+                    int(m.group(2))))
+    # An ARMED cell that wrote nothing is a REAL answer -- an empty list. A log
+    # that never armed cannot speak to the question at all, and returns None.
+    if not out and not re.search(r"shot-dump\]\s*ARMED", txt, re.I):
+        return None
+    return out
+
+
+def classify_dump(name, size, incoming):
+    """(verdict, reason) for ONE file the engine says it wrote.
+
+    Per-file, because the engine gave us per-file evidence and collapsing it
+    into a total throws away the only thing that can tell WHICH file is
+    missing. A total that matches by coincidence deletes the wrong file
+    silently; a per-file check names it.
+    """
+    hits = []
+    for root, _dirs, files in os.walk(incoming):
+        for f in files:
+            if f.upper() == name:
+                hits.append(os.path.join(root, f))
+    if not hits:
+        return KEEP, "the engine wrote it; no local copy exists -- NOT collected"
+    for h in hits:
+        try:
+            if os.path.getsize(h) == size:
+                return DELETE, "engine wrote %d bytes; %s matches exactly" % (
+                    size, h)
+        except OSError:
+            return REFUSE, "could not stat %s" % h
+    got = []
+    for h in hits:
+        try:
+            got.append(os.path.getsize(h))
+        except OSError:
+            return REFUSE, "could not stat %s" % h
+    return KEEP, "engine wrote %d bytes; local copy is %s -- NOT proven" % (
+        size, got)
+
+
 def local_tag_sizes(incoming, tag, suffix=".PPM"):
     """Every local file size for a tag, so the count can be DERIVED.
 
@@ -309,14 +386,38 @@ def main(argv=None):
     if not tags:
         print("REFUSED: no tags given.")
         return 2
+    verdicts = []
     suffixes = ["PPM"] + (["LOG", "TXT"] if a.logs else [])
 
-    print("== reading the card ==")
+    # THE ENGINE'S OWN RECORD FIRST. It names each file with its size, it
+    # arrives as exact bytes over FTP, and no OCR touches it. The card read
+    # below is a CROSS-CHECK on the total, not the attribution.
+    print("== what the engine says it wrote ==")
+    any_log = False
+    for tag in tags:
+        lp = os.path.join(a.incoming, tag + ".LOG")
+        dumps = dumps_from_log(lp)
+        if dumps is None:
+            print("   %-6s no collected log, or it never armed a dump -- "
+                  "cannot attribute anything to this tag" % tag)
+            continue
+        any_log = True
+        if not dumps:
+            print("   %-6s armed, wrote nothing" % tag)
+            continue
+        for name, size in dumps:
+            v, why = classify_dump(name, size, a.incoming)
+            verdicts.append((tag, name, v, why))
+            print("   %-6s %-12s %-7s %s" % (tag, name, v, why))
+    if not any_log:
+        print("   (none -- every verdict below rests on the card listing "
+              "alone, which is the weaker evidence)")
+
+    print("\n== reading the card ==")
     if a.delete:
         print("   --delete given: a DELETE verdict below WILL remove files.")
     else:
         print("   dry run (default). Nothing is removed. Add --delete to act.")
-    verdicts = []
     for tag in tags:
         for suf in suffixes:
             ocr = read_card_dir(tag, suf)

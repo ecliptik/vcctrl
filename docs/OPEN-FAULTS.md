@@ -681,3 +681,52 @@ so rather than passing on both branches.
 **How it was found:** by looking at the screenshot after the OCR returned
 `None` for a reading that had a plainly visible answer. The harness has eyes;
 the OCR is one instrument and not the only one.
+
+
+## 12. The frame dumps go flat — the binary predates patch 0322  — OPEN
+
+**The binary every measurement has been taken on, `a674802dcab4`, does not
+contain patch 0322.** It writes frame dumps to a flat `LOGS\S<tick>.PPM`, which
+is 0318's behaviour and exactly the collision hazard 0322 was written to fix.
+
+Attested by the engine itself, cell `DMPA`, 2026-08-24:
+
+    [shot-dump] ARMED n=4 first=1000 last=4000
+    [shot-dump] want=1000 got=1000 skew=0 WROTE LOGS\S01000.PPM bytes=230415
+
+**No mkdir warning anywhere in the log**, and 0322 emits one on a failed mkdir
+before falling back to flat. So this is absence of the patch, not failure of it.
+The working tree HAS 0322 at `Renderer.cpp:5146`; the shipped binary does not.
+
+### What it cost, and it was not nothing
+
+`vcctrl-cfclean` was scoped to `LOGS\<TAG>\` directories as its FIRST design
+decision, specifically so a directory-scoped delete could never reach the flat
+backlog. **On this binary there are no tag directories, so the tool had no
+targets at all** — it would have reported "nothing on the card" indefinitely
+while the backlog grew. **A guard aimed at a layout that does not exist is
+indistinguishable from a guard that works, right up until you measure it.**
+
+Found only because a cell was run specifically to produce the directory the
+tool was built around, and it did not appear.
+
+### Resolved on the harness side, not the engine side
+
+Attribution now comes from **the engine's own log** — `dumps_from_log()` parses
+the `WROTE <file> bytes=<n>` lines, which name each file individually with its
+size, arrive as exact bytes over FTP, and **remove OCR from the attribution
+entirely**. That is strictly stronger than the directory listing it replaced,
+and it works on the flat layout.
+
+### Still open on the engine side
+
+**Two cells dumping at the same ticks still overwrite each other on the card**,
+which is the hazard 0322 exists to remove. Not hypothetical: `GMQ0` overwrote
+`GVS2`'s `S02400.PPM` on 2026-08-20. The fix is a rebuild carrying 0322 — which
+changes the binary, so it does not happen mid-campaign without a new baseline.
+
+**Until then, dump-producing cells must not reuse tick values**, and the flat
+backlog must be pulled between them. `DMPA` was safe by luck rather than
+design: the flat total went 2,304,150 -> 3,225,810, a delta of exactly
+921,660 = 4 x 230,415, proving four NEW files and no overwrite. **Had it
+collided the delta would simply have been smaller, with nothing announcing it.**

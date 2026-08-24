@@ -236,7 +236,7 @@ def read_count(text):
 
 
 def read_env_text_raw(psm=None):
-    """OCR the current screen without issuing anything.
+    r"""OCR the current screen without issuing anything.
 
     Used by the per-variable re-check, which has already run its own filtered
     command and must not have `SET` typed over the top of it.

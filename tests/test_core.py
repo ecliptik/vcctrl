@@ -5649,3 +5649,76 @@ def test_psm3_drops_the_count_line_and_psm6_recovers_it():
     line = [l for l in psm6.splitlines() if "count" in l.lower()][0]
     check("and the recovered line parses to the right integer",
           cell.read_count(line) == 2, (line, cell.read_count(line)))
+
+
+def test_the_engine_names_its_own_dumps_and_that_beats_reading_the_screen():
+    r"""Attribution comes from the process that wrote the files, not from OCR.
+
+    Real lines, cell DMPA, 2026-08-24:
+
+        [shot-dump] ARMED n=4 first=1000 last=4000
+        [shot-dump] want=1000 got=1000 skew=0 WROTE LOGS\S01000.PPM bytes=230415
+
+    This replaced a design scoped to `LOGS\<TAG>\` directories, and the reason
+    is worth keeping: **the binary in use predates patch 0322 and writes flat.**
+    Its log says `WROTE LOGS\S01000.PPM` with no mkdir warning, which 0322
+    would have emitted had it been present and failed. So the directory scoping
+    was guarding a layout that does not exist, and the tool had no targets at
+    all -- it would have reported "nothing on the card" forever while the
+    backlog grew.
+
+    THREE STATES ON THE LOG ITSELF, which is the part most likely to be
+    collapsed. A cell that armed and wrote nothing returns an EMPTY LIST -- a
+    real answer, meaning there is nothing to delete. A log that never armed
+    returns None -- it cannot speak to the question, and treating that as "no
+    dumps" would silently approve deleting files it knows nothing about.
+    """
+    print("\nengine-attested dumps")
+    cf = _load("bin/vcctrl-cfclean", "cfclean_log")
+    import tempfile
+
+    ARMED = ("[11:11:20] [info] [shot-dump] ARMED n=2 first=1000 last=2000\n"
+             "[11:11:58] [info] [shot-dump] want=1000 got=1000 skew=0 WROTE "
+             "LOGS\\S01000.PPM bytes=230415 box=320x240@160,120\n"
+             "[11:12:19] [info] [shot-dump] want=2000 got=2001 skew=1 WROTE "
+             "LOGS\\S02001.PPM bytes=230415 box=320x240@160,120\n")
+    ARMED_NONE = "[info] [shot-dump] ARMED n=1 first=9999 last=9999\n"
+    NEVER = "[info] [fps-true] flips=2842 render_s=125\n"
+
+    with tempfile.TemporaryDirectory() as d:
+        def wlog(name, body):
+            p = os.path.join(d, name)
+            open(p, "w").write(body)
+            return p
+
+        got = cf.dumps_from_log(wlog("A.LOG", ARMED))
+        check("parses each WROTE line with its size",
+              got == [("S01000.PPM", 230415), ("S02001.PPM", 230415)], got)
+
+        check("armed-but-wrote-nothing is an EMPTY LIST, a real answer",
+              cf.dumps_from_log(wlog("B.LOG", ARMED_NONE)) == [])
+        check("a log that never armed is None -- it cannot speak",
+              cf.dumps_from_log(wlog("C.LOG", NEVER)) is None)
+        check("a missing log is None, not an empty list",
+              cf.dumps_from_log(os.path.join(d, "nope.LOG")) is None)
+
+        inc = os.path.join(d, "incoming", "DMPA")
+        os.makedirs(inc)
+        # CONTROL: a byte-exact local copy MUST delete. Without this the
+        # KEEPs below prove nothing -- a tool that refuses everything would
+        # pass every other assertion in this test.
+        open(os.path.join(inc, "S01000.PPM"), "wb").write(b"x" * 230415)
+        v, why = cf.classify_dump("S01000.PPM", 230415,
+                                  os.path.join(d, "incoming"))
+        check("a byte-exact local copy DELETEs", v == cf.DELETE, why)
+
+        # Same name, wrong length: a truncated or partial pull.
+        open(os.path.join(inc, "S02001.PPM"), "wb").write(b"x" * 999)
+        v, why = cf.classify_dump("S02001.PPM", 230415,
+                                  os.path.join(d, "incoming"))
+        check("a size mismatch KEEPs -- a partial pull is not a collection",
+              v == cf.KEEP, why)
+
+        v, why = cf.classify_dump("S03000.PPM", 230415,
+                                  os.path.join(d, "incoming"))
+        check("a file with no local copy at all KEEPs", v == cf.KEEP, why)
