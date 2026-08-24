@@ -354,7 +354,13 @@ trusting:**
 
 **Two things that went wrong and are worth carrying:**
 
-**`GET.BAT` ignored its second argument and overwrote `CLRENV.BAT` in place.**
+**`GET.BAT` takes ONE argument, and I passed it two.** CORRECTED 2026-08-24
+after reading the source at `g2k:MTCP/GET.BAT` instead of inferring from
+behaviour: its interface is `GET [name]`, and it builds
+`get %GETF% C:\DOSKUTSU\%GETF%` — **destination always equals source name, by
+design.** There is no second parameter; `%2` is never referenced. So it did not
+"ignore" anything and nothing was defective — I invented an interface and then
+recorded its absence as a fault.
 The plan was to fetch to `.NEW`, verify, then swap, so the live file could
 never be truncated. That safety never executed and nobody was told -- the
 transfer simply landed on the real filename. **The `.BAK` is the only reason
