@@ -483,3 +483,34 @@ because the fault was assumed to be the capture stick latching. See
 - **A pre-registered wrong answer is worse than an unplanned one**, because the
   plan supplies the permission not to look again. When writing an outcome
   table, ask what a third state would look like.
+
+---
+
+## 9. The arm attestation polls blind through a mode transition  — OPEN
+
+**Twice now** an `--expect-log` attestation has refused with `COULD NOT READ`
+on a cell that was fine: Phase 0's `D3` and the confirming round's `CX3B`. Both
+times the identical `FIND` run by hand seconds later returned `count: 1`.
+
+**Mechanism, from `grab()`'s own docstring:** it returns `(None, None)` for no
+picture, and that includes *"a stream that is frozen -- frames arriving but all
+byte-identical, which is what DOS text mode 03h produces"*.
+
+**The attestation runs immediately after the game exits**, which is the
+640x480-to-text mode transition — the same window both recorded decode errors
+came from (11 s and 13 s before a cell exited). If the stick has not re-locked,
+every `read_env_text_raw()` returns `None`, all 20 polls fail, and the cell
+refuses.
+
+**It fails SAFE** — an unreadable answer never becomes a pass, which is why
+this has cost minutes rather than a round. But it is a check polling blind
+through the one window where the thing it polls is least reliable.
+
+**Fix, not yet applied:** wait for `video state == locked` before starting the
+attestation polls, rather than beginning them the instant the game exits. Do
+not simply raise the poll count — that treats a timing problem as a patience
+problem, and 30 s is already 20x the transition.
+
+**Do not change `vcctrl-cell` while a round is running on it.** A cell that
+straddles a harness change is the same hazard as one that straddles a daemon
+restart.
