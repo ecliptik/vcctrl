@@ -857,10 +857,21 @@
   .popmenu button:hover { background:var(--rule); }
   .popmenu button.sel { color:var(--green); }
   /* Says "drag to move" once, when a mode first spills past the edges. */
+  /* THEME TOKENS BOTH SIDES, AND OPAQUE.
+     This was `color:var(--text)` over a hardcoded `rgba(0,0,0,.72)`. On a
+     light theme --text is nearly black, so the toast was black text on a
+     black scrim -- reported as hard to read in BOTH modes, and it was worst
+     in light. The scrim was chosen because this floats over video, but a
+     fixed dark background with a theme-following foreground is a pair that
+     was never checked together; only one half moved with the theme.
+     Opaque --panel instead: the picture behind cannot dilute it, and --text
+     on --panel is a pair the generator already fits to a floor on every
+     theme, so this cannot drift out of contrast when a palette changes. */
   #zhint {
     position:absolute; right:10px; bottom:10px; z-index:3; pointer-events:none;
     font:var(--t-micro) var(--mono); letter-spacing:.06em; color:var(--text);
-    background:rgba(0,0,0,.72); border:1px solid var(--rule); border-radius:5px;
+    background:var(--panel); border:1px solid var(--edge); border-radius:5px;
+    box-shadow:0 2px 10px rgba(0,0,0,.35);
     padding:5px 8px; opacity:0; transition:opacity .25s linear;
   }
   #zhint.show { opacity:1; }
