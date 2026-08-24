@@ -26,9 +26,32 @@ target:
   # a stranger whose rig has no sound card will switch a check off within
   # an hour of it inconveniencing them, and then get results from an
   # unverified configuration that look entirely normal.
+  # ONE-DIRECTIONAL. Read it backwards and it lies.
+  #
+  # PRESENT  -> the profile is PGSB or VIBRA, and is therefore NOT NET.
+  #             That is the only claim a cell needs, and it is why this is
+  #             here: a measured run must not be in NET.
+  # ABSENT   -> rules out PGSB and VIBRA and says NOTHING ELSE. FOUR profiles
+  #             set no BLASTER at all -- NET, PGADLIB, PGGUS and CLEAN -- so an
+  #             absence is consistent with all four.
+  #
+  # ABSENCE IS NOT EVIDENCE OF NET, and CLEAN is why that matters: it has no
+  # network stack whatsoever. Anything that reboots into NET and confirms it by
+  # a missing BLASTER would accept CLEAN, then type an FTP command into a
+  # machine with no packet driver and learn the answer from the failure.
+  #
+  # To prove NET, attest the CAPABILITY rather than the label -- the packet
+  # driver answering, or better a reachability check against the file server
+  # the transfer will actually dial. Positive, about the resource in use, and
+  # it fails closed.
+  #
+  # `PGSB` in `proves` is the DEFAULT profile's name, not a reading. The value
+  # of BLASTER distinguishes PGSB from VIBRA; its presence does not.
+  # See docs/OPEN-FAULTS.md sec. 15.
   profile_witness:
     variable: BLASTER
-    proves: "the sound profile is loaded (PGSB), not the NET profile"
+    proves: "NOT the NET profile (a sound profile is loaded)"
+    direction: one-way
 
   # The names the program itself consults. Inventing one here would set a
   # variable on the target that nothing reads.
