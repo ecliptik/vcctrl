@@ -161,6 +161,23 @@ reboots.
 The CONFIG.SYS menu is uncapturable (text mode 03h @70 Hz) and times out in 5 s
 to `VIBRAUSB`, so selection is blind and timed.
 
+> **CORRECTED 2026-08-24, read off the card rather than from either doc.**
+> `C:\CONFIG.SYS` says `menudefault=PGSB,5` — **the default is `PGSB`, not
+> `VIBRAUSB`**, and the block is named `VIBRA`. `OPEN-FAULTS` sec. 7 was right
+> and this was wrong; two documents disagreed and the card settled it. The full
+> menu, in order:
+>
+>     1 PGSB     PicoGUS Sound Blaster        <- menudefault, 5 s timeout
+>     2 PGADLIB  PicoGUS AdLib
+>     3 PGGUS    PicoGUS Ultrasound
+>     4 VIBRA    Vibra16 + PicoGUS USB (CD on D:)
+>     5 NET      Networking (ODI + mTCP) -- transfers only, NOT measured runs
+>     6 CLEAN    Recovery boot -- no sound, no video init, no TSRs
+>
+> `NET` is item **5**, matching `NET_MENU_ITEM` in `harness/vcctrl-collect`.
+> **`CONFIG.SYS` states the never-measure-in-NET rule in its own menu text**,
+> which is the best possible place for it.
+
 - **Digit alone does not work.** Spamming `2` across a 56 s window left
   `CONFIG=VIBRAUSB`.
 - **Digit + Enter works.** Same window, `2` then Enter every 2 s, produced

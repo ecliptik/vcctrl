@@ -826,3 +826,37 @@ learned once and applied to only one of the two.
 git repo. Run anywhere else it errors, and `verify | grep -c "complete history"`
 then returns 0 — which reads as *failed* rather than as *never ran*. Same shape
 as every other well-formed zero in this document.
+
+
+## 15. The profile witness labels more than it measures  — OPEN
+
+Every cell log carries this line, and it has been read as provenance all week:
+
+    -- profile witness --
+      BLASTER                          set (profile is PGSB)
+
+**`PGSB` is a hardcoded string in `harness/vcctrl-cell`, not a reading.** The
+check is:
+
+    SET | FIND /I "BLASTER" | FIND /C "="
+
+**Presence, one or zero.** It proves *a* profile that sets `BLASTER` is loaded.
+It cannot distinguish `PGSB` from `PGADLIB`, `PGGUS` or `VIBRA`, and the card
+has four such profiles plus a `CLEAN` recovery boot that sets nothing.
+
+**The information to do better is already on screen and thrown away.**
+`C:\AUTOEXEC.BAT` carries at least two DIFFERENT `BLASTER` strings —
+`A220 I5 D1 H5 T6 P330` and `A220 I7 D3 P330 T3` among them — so the VALUE
+distinguishes profiles where the presence does not. Reading the value instead
+of counting it would turn a label into a measurement, at no extra round trip.
+
+**Why it has not bitten yet:** the menu default is `PGSB` (`menudefault=PGSB,5`,
+read off the card), and nothing has deliberately selected another sound profile
+during a measured run. **So the label has been accidentally true, which is the
+worst way for a claim to survive** — it is indistinguishable from a checked one
+right up until somebody boots `PGADLIB` and gets a cell that says `PGSB`.
+
+**Not yet fixed and not yet urgent**, but every fps figure this week rests on a
+profile assertion that was never made. **Which BLASTER string belongs to which
+block needs a boot of each profile to establish** — that is real rig time and
+has not been spent.
