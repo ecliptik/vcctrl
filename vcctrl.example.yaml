@@ -191,6 +191,14 @@ capabilities:
       # picks for the target's subnet (`ip route get <target>`), so the server
       # is not fighting the kernel about which way replies leave.
       #
+      # THE OTHER INTERFACE STAYS UP AND IS DELIBERATELY UNUSED. Say so where
+      # somebody debugging will read it: a daemon host answering perfectly on
+      # the address you did NOT choose, while the target dials the one you
+      # did, is a healthy machine that looks dead. The next person will find
+      # that interface up and wonder why it was passed over, and "we picked
+      # the one the routing table already prefers for the target's subnet" is
+      # the answer they need in front of them.
+      #
       # THIS ADDRESS MUST ALSO BE THE SERVER'S BIND ADDRESS AND ITS PASSIVE
       # MASQUERADE ADDRESS. Not three settings that happen to agree -- one
       # value read three times. FTP passive mode advertises an address in its
