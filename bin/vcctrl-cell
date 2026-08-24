@@ -101,7 +101,8 @@ from importlib.machinery import SourceFileLoader
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
-    vc, at_prompt, wait_for_prompt, set_lock_owner, get_lock_owner)
+    vc, at_prompt, wait_for_prompt, set_lock_owner, get_lock_owner,
+    wait_video_locked)
 
 _l = SourceFileLoader("sw", os.path.join(HERE, "vcctrl-sweep"))
 _s = importlib.util.spec_from_loader("sw", _l)
@@ -848,6 +849,21 @@ def main(argv):
         # answers 0 or 1 so the digit classifier handles it.
         if expect_log:
             print("-- attesting the arm from %s.LOG on the card --" % tag)
+            # OPEN-FAULTS 9. The game has just exited, which is the
+            # 640x480-to-text transition -- the one window in which every
+            # frame reads as "no picture". Starting the polls here is polling
+            # blind through the least reliable moment for the thing we poll.
+            # Wait for the lock, and REMEMBER which of the three answers we
+            # got, so a refusal below can say whether the instrument or the
+            # target was the problem.
+            lk = wait_video_locked()
+            if lk is True:
+                print("   capture locked -- polling a screen that is readable")
+            elif lk is False:
+                print("   *** CAPTURE NEVER LOCKED. Reading anyway, but a")
+                print("   *** failure below is the INSTRUMENT, not the cell.")
+            else:
+                print("   *** could not ask the daemon for video state at all.")
             for want in expect_log:
                 cmd("CLS")
                 time.sleep(1.0)
@@ -865,6 +881,15 @@ def main(argv):
                     print("     %-40s COULD NOT READ" % want[:40])
                     print("   REFUSED: could not attest the arm from the engine")
                     print("   log. That is COULD NOT LOOK, not a pass.")
+                    if lk is True:
+                        print("   The capture WAS locked, so this is not the")
+                        print("   mode transition -- look at the card.")
+                    elif lk is False:
+                        print("   The capture never locked. Suspect the stick")
+                        print("   or the mode restore, NOT the cell.")
+                    else:
+                        print("   The daemon never answered `video state`, so")
+                        print("   the instrument was unavailable throughout.")
                     return 2
                 if v < 1:
                     print("     %-40s *** NOT PRESENT ***" % want[:40])

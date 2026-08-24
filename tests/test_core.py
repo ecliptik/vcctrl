@@ -5384,3 +5384,61 @@ def test_emergency_tools_run_from_a_copy():
               and "No such file" in (r.stderr or ""), (r.stdout, r.stderr[:80]))
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_wait_video_locked_reports_which_of_three_things_happened():
+    """OPEN-FAULTS 9's fix must not collapse "never locked" into "no answer".
+
+    The whole point of waiting is to tell the operator WHY a refusal happened.
+    A cell that refuses because the capture stick never came back from the mode
+    transition and a cell that refuses because the daemon was unreachable get
+    the same COULD NOT READ from the read itself -- so the distinction has to
+    come from here, or it does not exist.
+
+    NONE OF THE INTERESTING STATES OCCUR ON A HEALTHY RIG. Against the live
+    daemon this returns True in 60 ms, every time, so a test that only exercised
+    the live path would be a check that cannot fail. The unlocked and
+    unreachable rigs are therefore invented, and the True case is kept as a
+    control: if it does not pass, the fake is wrong rather than the code.
+    """
+    print("\nwait_video_locked, three states")
+    common = _load("bin/vcctrl_common.py", "vcc_common_vid")
+
+    calls = {"n": 0}
+
+    def rig(reply):
+        def _vc_json(*args):
+            calls["n"] += 1
+            if reply == "boom":
+                raise RuntimeError("cannot reach vcctrld")
+            return reply
+        return _vc_json
+
+    orig, orig_sleep = common.vc_json, common.time.sleep
+    common.time.sleep = lambda _s: None          # do not actually wait 25 s
+    try:
+        # CONTROL FIRST. If a locked rig does not return True the fakes are
+        # wrong, and every "correctly returned False" below would be worthless.
+        common.vc_json = rig({"state": "locked", "ok": True})
+        check("a locked rig returns True", common.wait_video_locked(0.5) is True)
+
+        # Asked, answered, never locked -- the mode-transition case.
+        calls["n"] = 0
+        common.vc_json = rig({"state": "no-signal", "ok": False})
+        r = common.wait_video_locked(0.3)
+        check("an unlocked rig returns False, not None", r is False)
+        check("  and it actually asked more than once", calls["n"] > 1)
+
+        # Never answered at all -- daemon down, socket gone mid-cell.
+        common.vc_json = rig("boom")
+        check("an unreachable daemon returns None, not False",
+              common.wait_video_locked(0.3) is None)
+
+        # A well-formed reply with no state field is still "could not ask" --
+        # a daemon that answers without saying anything has not told us the
+        # capture is unlocked, and reporting False would be inventing a reading.
+        common.vc_json = rig({"ok": True})
+        check("a reply with no state field is None, not False",
+              common.wait_video_locked(0.3) is None)
+    finally:
+        common.vc_json, common.time.sleep = orig, orig_sleep

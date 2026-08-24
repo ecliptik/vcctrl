@@ -153,6 +153,43 @@ def leds_available():
     return (bool(st.get("available")), st.get("why"), st.get("reason"))
 
 
+def wait_video_locked(timeout=25.0, poll=0.5):
+    """Block until the capture stick reports `locked`. THREE outcomes.
+
+        True   it locked -- a read taken now is a read of the screen
+        False  we asked, repeatedly, and it never locked within `timeout`
+        None   we could not ask at all (daemon unreachable, malformed reply)
+
+    OPEN-FAULTS 9. A check that polls the screen the instant a cell exits is
+    polling through the 640x480-to-text mode transition, which is exactly the
+    window where `grab()` returns "no picture" for every frame -- a stream that
+    is frozen, all frames byte-identical, is what DOS text mode 03h produces.
+    Twenty polls then fail against a perfectly healthy machine and the cell
+    REFUSES. Seen twice: Phase 0's D3 and the confirming round's CX3B, both of
+    which returned `count: 1` to the identical FIND run by hand seconds later.
+
+    WAITING IS NOT POLLING MORE. Raising the retry count treats a timing
+    problem as a patience problem; 30 s was already 20x the transition and it
+    still refused. This waits for the specific condition that makes a read
+    meaningful, and it returns WHICH of the three things happened so that
+    "the instrument never came back" is never reported as "the target said no".
+    """
+    t0 = time.time()
+    asked = False
+    while time.time() - t0 < timeout:
+        try:
+            st = vc_json("video", "state")
+        except Exception:
+            st = None
+        if isinstance(st, dict) and st.get("state"):
+            asked = True
+            if st.get("state") == "locked":
+                return True
+        time.sleep(poll)
+    # Never conflate "asked and it stayed unlocked" with "never got an answer".
+    return False if asked else None
+
+
 def power_on():
     """True, False, or None. THREE states, because the plug has three.
 

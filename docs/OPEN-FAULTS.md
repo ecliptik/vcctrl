@@ -486,7 +486,7 @@ because the fault was assumed to be the capture stick latching. See
 
 ---
 
-## 9. The arm attestation polls blind through a mode transition  — OPEN
+## 9. The arm attestation polls blind through a mode transition  — FIXED 2026-08-24
 
 **Twice now** an `--expect-log` attestation has refused with `COULD NOT READ`
 on a cell that was fine: Phase 0's `D3` and the confirming round's `CX3B`. Both
@@ -514,6 +514,26 @@ problem, and 30 s is already 20x the transition.
 **Do not change `vcctrl-cell` while a round is running on it.** A cell that
 straddles a harness change is the same hazard as one that straddles a daemon
 restart.
+
+### Fixed, after the confirming round landed
+
+`wait_video_locked()` in `vcctrl_common.py`, called once before the attestation
+polls begin. **Three states, deliberately** — `True` locked, `False` asked and
+never locked, `None` could not ask at all — because a refusal has to be able to
+say whether the instrument or the target was the problem. The two failures look
+identical from the read itself, so if the distinction is not made here it does
+not exist anywhere.
+
+**Waiting is not polling more.** The retry count is unchanged; what changed is
+that the polls now start from a screen known to be readable.
+
+**Not yet exercised against a live transition.** It returns `True` in 60 ms
+against the healthy rig, and the unlocked and unreachable paths are covered by
+`test_wait_video_locked_reports_which_of_three_things_happened` with invented
+rigs — including a well-formed reply carrying no `state` field, which must be
+`None` rather than `False`. **The real proof is the next cell that exits a game
+into text mode**, and until one has, this is fixed in the sense that the code is
+right, not in the sense that the fault has been observed to go away.
 
 ## 10. `started_rtc_local` is corrupt — PROVENANCE HAZARD, ANALYSIS ONLY
 
