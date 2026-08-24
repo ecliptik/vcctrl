@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 # Push vcctrl from the VM to the Pi and install it there.
 set -euo pipefail
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/common/config.sh"
+# SOURCING THIS MUST NEVER BE FATAL.
+#
+# It was, and it broke pi/core.sh at the exact moment core.sh existed for: the
+# daemon aborted on 2026-08-24 and the first command run was a copy of this
+# script from /tmp, where `dirname/..` resolves to `/` and the source failed
+# under `set -e` before a single line of work ran. The backtrace had to be got
+# by hand.
+#
+# A tool that is only exercised on the day it is needed has never been tested.
+# So: find the library if it is there, and if it is not, define a stub that
+# returns the caller's fallback. Every caller already passes one, because the
+# absent-key contract required it.
+_vc_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)/common/config.sh"
+if [ -f "$_vc_lib" ]; then
+  # shellcheck source=../common/config.sh
+  . "$_vc_lib"
+else
+  vc_cfg() { [ "$#" -ge 2 ] && printf '%s' "$2"; return 0; }
+fi
 HOST="${VCCTRL_HOST:-$(vc_cfg control.daemon_host "")}"
 if [ -z "$HOST" ]; then
   echo "deploy: no daemon host configured. Set control.daemon_host in" >&2

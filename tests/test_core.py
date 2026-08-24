@@ -5326,3 +5326,61 @@ def test_no_status_indicator_fades_below_its_fitted_contrast():
                "    50%      { opacity:.5; }\n  }"
     check("control: the detector would reject the form this replaced",
           "opacity" in old_form and "color" not in old_form)
+
+
+def test_emergency_tools_run_from_a_copy():
+    """pi/core.sh broke at the exact moment it existed for.
+
+    The daemon aborted on 2026-08-24 and the first thing run was a copy of
+    core.sh from /tmp -- where `dirname/..` resolves to `/`, so the
+    `. .../common/config.sh` added by phase 3 failed under `set -e` before a
+    line of work ran. The backtrace had to be recovered by hand, from a tool
+    written specifically so that would not be necessary.
+
+    A TOOL EXERCISED ONLY ON THE DAY IT IS NEEDED HAS NEVER BEEN TESTED. So
+    this runs them the way an emergency runs them: as a copy, outside the
+    repository, with nothing else set up.
+
+    It does NOT assert success -- these scripts ssh to a rig that is not here.
+    It asserts they get far enough to fail on their own terms rather than on a
+    missing file, which is the whole difference.
+    """
+    print("\nemergency tools from a copy")
+    import shutil
+    import subprocess
+    import tempfile
+    root = os.path.join(HERE, os.pardir)
+    d = tempfile.mkdtemp()
+    try:
+        for rel in ("pi/core.sh", "bin/vcctrl", "pi/deploy.sh"):
+            src = os.path.join(root, rel)
+            if not os.path.exists(src):
+                continue
+            dst = os.path.join(d, os.path.basename(rel))
+            shutil.copy(src, dst)
+            env = dict(os.environ)
+            for k in ("VCCTRL_PI", "VCCTRL_HOST", "VCCTRL_CONFIG"):
+                env.pop(k, None)
+            r = subprocess.run(["bash", dst, "--help"], capture_output=True,
+                               text=True, env=env, timeout=30)
+            out = (r.stdout or "") + (r.stderr or "")
+            check("%s does not die on a missing config.sh" % rel,
+                  "No such file or directory" not in out
+                  and "config.sh" not in out, out.strip()[:160])
+            check("%s says something actionable instead" % rel,
+                  bool(out.strip()), "(silence)")
+
+        # The control: the failure this guards against must be reproducible,
+        # or the check above could pass because nothing sources anything.
+        probe = os.path.join(d, "probe.sh")
+        open(probe, "w").write(
+            'set -euo pipefail\n'
+            '. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)'
+            '/common/config.sh"\necho reached\n')
+        r = subprocess.run(["bash", probe], capture_output=True, text=True,
+                           timeout=30)
+        check("control: the old sourcing form DOES die this way",
+              "reached" not in r.stdout
+              and "No such file" in (r.stderr or ""), (r.stdout, r.stderr[:80]))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
