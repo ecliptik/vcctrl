@@ -87,6 +87,50 @@ things the standard path checks:
 **Neither had a verification step that did not go through OCR**, and neither
 would have stopped a truncated transfer from landing under a live filename.
 
+## What has actually been measured
+
+Everything below was read from the **file server's own log**, not off the
+target's screen. That distinction is the point: this console reads `13,800` as
+`13,808`, and the target's FTP transcript once reported an elapsed time of
+`8.055 s` for a transfer that took `0.055`.
+
+    10,485,760 bytes  server -> card   14.952 s   685 KiB/s
+    10,485,760 bytes  card -> server   10.781 s   950 KiB/s
+    whole job, both reboots included              89 s
+
+**10 MB is the largest transfer verified end to end**, out and back and
+byte-for-byte. `LARGEST_VERIFIED_BYTES` in the daemon carries that number with
+its provenance, and `WARN_BYTES` **is** that constant — so the warning fires
+exactly above what somebody has watched work, and the threshold cannot drift
+away from the evidence for it. The text quoted `7.8 MB` for a while after that
+was beaten, which is what tying them together prevents.
+
+**Throughput rises with size, so a single figure is a figure about one file.**
+
+    13.8 KB    122 KiB/s
+     2 MB      384 KiB/s
+    10 MB      685 KiB/s
+
+A curve fitted to the small end and extrapolated missed a 2 MB transfer by
+3.4x. **The reboots are the wall clock in any case** — about a minute of them
+against a few seconds of transfer — which is why progress is reported for the
+reboots and not for the bytes.
+
+**Writing to the CF is slower than reading from it**, consistently and by
+roughly 40%. That is a hypothesis about the mechanism, not a finding.
+
+## What has NOT been tested
+
+Named because a feature that works is the easiest thing to over-claim.
+
+- **Nothing between 10 MB and the 64 MB refusal.** The ceiling has only been
+  met by a file well past it, never by one just over.
+- **No transfer with a viewer attached to the KVM.** The Pi's video stream and
+  the target's transfer share the wifi, and this is the one place a viewer
+  measurably costs the harness something.
+- **No transfer while anything else was driving the target**, which the daemon
+  refuses anyway but which has not been provoked.
+
 ## Preconditions, and how to tell
 
 `VCGET.BAT` and `VCCHK.BAT` must be on the card. **They are generated per rig
