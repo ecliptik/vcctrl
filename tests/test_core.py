@@ -3231,6 +3231,18 @@ def test_why_values_are_all_documented():
                 for k, v in zip(n.keys, n.values):
                     if (isinstance(k, _ast.Constant) and k.value == "why"):
                         out += _consts(v)
+            elif isinstance(n, _ast.Call):
+                # A THIRD CONSTRUCTION, found the same way as the first two:
+                # `self._fail("no-net", ...)` emits a `why` as an ARGUMENT,
+                # which neither the dict form nor the assignment form sees.
+                # Five of the transfer job's nine values were invisible until
+                # this arm existed, and the two that were not were only caught
+                # because they happened to be written as dict literals
+                # elsewhere.
+                fn = n.func
+                nm = getattr(fn, "attr", None) or getattr(fn, "id", None)
+                if nm in ("_fail",) and n.args:
+                    out += _consts(n.args[0])
             elif isinstance(n, _ast.Assign):
                 tgts = n.targets[0]
                 tgts = tgts.elts if isinstance(tgts, _ast.Tuple) else [tgts]
@@ -3260,6 +3272,13 @@ def test_why_values_are_all_documented():
     # became wrong the moment a second capability did -- the check would have
     # demanded that FilesCapability's words be documented in the LED
     # docstring, which is not a place any consumer would look for them.
+    #
+    # THREE CONSTRUCTIONS ARE COVERED AND THAT IS NOT A CLAIM OF
+    # EXHAUSTIVENESS. A `why` built by concatenation, looked up in a table, or
+    # passed through a helper this does not name would still be invisible. The
+    # honest statement is that the check covers the forms the code actually
+    # uses today, verified by breaking each of them -- not that no other form
+    # could exist.
     #
     # A vocabulary declares itself by saying its set is open. That is the same
     # sentence this test already required, so it costs nothing and it means
@@ -7055,3 +7074,257 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
     # of the parsing above cannot quietly stop checking them.
     for needed in ("vendor", "common", "harness", "profiles", "daemon"):
         check("%s/ is deployed" % needed, needed in shipped, shipped)
+
+
+class FakeTarget(object):
+    """A DOS machine that does what it is told, or a chosen part of it.
+
+    Injected so the whole sequence is exercised without the rig: every refusal
+    path, the per-file loop, and the two reboots. What it cannot test is the
+    thing no fake can -- whether a 1995 machine actually behaves this way.
+    """
+
+    def __init__(self, cap, reset=True, boot=True, net=True, prompt=True,
+                 corrupt=(), screen_text=""):
+        self.cap = cap
+        self.reset, self.boot, self.net = reset, boot, net
+        self.prompt, self.corrupt = prompt, set(corrupt)
+        self.screen_text = screen_text
+        self.typed, self.combos, self.slept = [], [], 0.0
+
+    def combo(self, keys):
+        self.combos.append(list(keys))
+
+    def sleep(self, s):
+        self.slept += s
+
+    def menu_attempts(self):
+        return 2
+
+    def transfer_timeout(self):
+        return 6.0
+
+    def wait_menu(self):
+        return self.reset
+
+    def wait_boot(self):
+        return self.boot
+
+    def wait_prompt(self):
+        return self.prompt
+
+    def screen(self):
+        return self.screen_text
+
+    def _incoming(self, name, data):
+        _s, _p, _m, _r, inc = self.cap._dirs()
+        os.makedirs(inc, exist_ok=True)
+        with open(os.path.join(inc, name), "wb") as f:
+            f.write(data)
+
+    def type_line(self, text):
+        self.typed.append(text)
+        parts = text.split()
+        if "VCCHK.BAT" in text and len(parts) >= 3:
+            src, dest = parts[1], parts[2]
+            if dest == vcctrld.TransferJob.PROOF_NAME:
+                if self.net:
+                    self._incoming(dest, b"packetint 0x7E\r\n")
+                return
+            # The verification leg: hand back what the target "holds".
+            base = src.rsplit("\\", 1)[-1]
+            stage = self.cap._dirs()[0]
+            try:
+                body = open(os.path.join(stage, base), "rb").read()
+            except OSError:
+                return
+            if base in self.corrupt:
+                body = body + b"tampered"
+            self._incoming(dest, body)
+
+
+def test_the_transfer_refuses_before_it_reboots_anything():
+    """Every gate that can be checked from here is checked from here.
+
+    The ordering is the point rather than the list: a refusal after the reboot
+    has already cost two minutes and the target's entire environment, for
+    faults that a shell command or a second look would have caught.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+
+    # AN EMPTY QUEUE THAT REBOOTED AND REPORTED SUCCESS WOULD BE THE PUREST
+    # FORM OF A CHECK PASSING ON NOTHING.
+    d = FakeTarget(cap)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("an empty queue is refused", r["ok"] is False, r)
+    check("named as such", r["why"] == "empty-queue", r)
+    check("AND NOTHING WAS REBOOTED", d.combos == [], d.combos)
+
+    _send(cap, "a.txt", b"payload")
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (False, "server is down")
+    d = FakeTarget(cap)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("a dead server is refused", r["why"] == "unreachable", r)
+    check("and still nothing was rebooted", d.combos == [], d.combos)
+
+    # THE ABOVE IS TRUE FOR THE WRONG REASON ON ITS OWN. snapshot() consults
+    # the cheap CACHED probe, so deleting the dedicated pre-reboot check
+    # entirely leaves those two assertions passing -- proved by doing exactly
+    # that and watching them stay green. What they cannot see is whether the
+    # EXPENSIVE check ran, and that is the one standing between the operator
+    # and a wasted reboot: a five-second-old cached answer is not what should
+    # decide it.
+    #
+    # So the distinguishing fact is asserted directly: a probe was made with
+    # an explicit timeout, which only a deliberate check does, and it happened
+    # BEFORE anything was typed or rebooted.
+    calls = []
+
+    def watched(timeout=None):
+        calls.append((timeout, len(d2.combos), len(d2.typed)))
+        return (True, None)
+
+    cap._reachable = watched
+    d2 = FakeTarget(cap, net=False)
+    vcctrld.TransferJob(cap, d2).run()
+    explicit = [c for c in calls if c[0] is not None]
+    check("the expensive check really runs, not just the cached one",
+          explicit, calls)
+    check("and it runs before anything is rebooted or typed",
+          explicit and explicit[0][1] == 0 and explicit[0][2] == 0, explicit)
+
+
+def test_the_transfer_proves_NET_by_arrival_not_by_reading_the_screen():
+    """One arrival proves four things at once, and no OCR is in the verdict.
+
+    The packet driver is loaded, the address in the BAT is right, the
+    credentials on the card are right, and the FTP client works -- established
+    together, from the side that counts. A PKTTOOL line says nothing about
+    three of those.
+
+    When the arrival does NOT happen, PKTTOOL becomes the diagnosis. That is
+    the right way round: a diagnostic that cannot fail the run cannot mislead
+    it either.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    _send(cap, "a.txt", b"payload")
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    d = FakeTarget(cap, net=False, screen_text=PKTTOOL_NONE)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("no arrival means no transfer", r["ok"] is False, r)
+    check("and the gate is named", r["why"] == "no-net", r)
+    check("the reason lists all three things it could be",
+          "credentials" in r["reason"] and "reach this host" in r["reason"], r)
+    check("PKTTOOL is used as the DIAGNOSIS when it fails",
+          "no packet driver is loaded" in r["reason"], r["reason"])
+
+    # The PATH gotcha, arriving through the same path: a machine that is
+    # perfectly configured, refused because the command was spelled without
+    # its directory. The diagnosis has to say so or the evening is gone.
+    d = FakeTarget(cap, net=False,
+                   screen_text="C:\\>PKTTOOL SCAN\nBad command or file name")
+    r = vcctrld.TransferJob(cap, d).run()
+    check("a command that did not run is diagnosed as that",
+          "not on the PATH" in r["reason"], r["reason"])
+
+
+def test_a_verified_file_is_cleared_and_a_corrupt_one_is_kept():
+    """The round trip is the verdict, and the staged sha is what makes it one.
+
+    Pulling the file back and comparing it against the staged copy only means
+    something because the staged copy was sha-verified when it landed --
+    otherwise this compares a wrong file against itself and passes.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    _send(cap, "good.txt", b"a good payload")
+    _send(cap, "bad.txt", b"a payload that gets mangled in flight")
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    d = FakeTarget(cap, corrupt={"BAD.TXT"})
+    r = vcctrld.TransferJob(cap, d).run()
+
+    by = {f["name"]: f for f in r["files"]}
+    check("the intact file verifies", by["GOOD.TXT"]["ok"] is True, by)
+    check("the mangled one does not", by["BAD.TXT"]["ok"] is False, by)
+    check("and says the copy on the target is not what was staged",
+          by["BAD.TXT"]["why"] == "sha-mismatch", by)
+    check("one bad file fails the RUN", r["ok"] is False, r["ok"])
+
+    left = {q["name"] for q in cap._queued()}
+    check("the verified file is cleared -- its bytes are on the target",
+          "GOOD.TXT" not in left, left)
+    check("THE FAILED ONE IS KEPT, so a retry needs no re-upload",
+          "BAD.TXT" in left, left)
+
+    check("it rebooted twice: in and back out", len(d.combos) == 2, d.combos)
+    check("and the return typed no digit, so the menu default lands",
+          not any(t.strip() == "5" for t in d.typed[-1:]), d.typed)
+
+
+def test_a_missing_prompt_stops_the_run_and_a_bad_file_does_not():
+    """These are different CLASSES of event, not degrees of the same one.
+
+    at_prompt() tests whether the BIOS keyboard ISR is intact, not whether DOS
+    is reading -- so it cannot fail merely because a file did. A prompt that
+    never comes back is evidence about the MACHINE, and it is the only
+    condition where continuing means typing into the dark.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    for n in ("one.txt", "two.txt", "three.txt"):
+        _send(cap, n, b"x" * 20)
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    d = FakeTarget(cap, prompt=False)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("the run stops at the first missing prompt",
+          len(r["files"]) == 1, r["files"])
+    check("named as a machine-state problem", r["files"][0]["why"] == "no-prompt",
+          r["files"])
+    check("and the log says why it stopped rather than carrying on",
+          any("typing blind" in e["text"] for e in r["log"]), r["log"])
+    check("nothing was cleared", len(cap._queued()) == 3, cap._queued())
+
+
+def test_leaving_the_machine_in_NET_is_said_out_loud():
+    """OPEN-FAULTS sec. 7: a cell died because the machine was still in NET.
+
+    NET loads the ODI stack as TSRs and the standing rule is never load TSRs
+    and measure in the same boot -- so returning is a correctness requirement,
+    not politeness, and declining it must not be quiet.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    _send(cap, "a.txt", b"payload")
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    d = FakeTarget(cap)
+    r = vcctrld.TransferJob(cap, d, do_return=False).run()
+    check("staying is reported in the result", r["left_in_net"] is True, r)
+    check("and the log warns what that means",
+          any("measured run must not start" in e["text"] for e in r["log"]),
+          r["log"])
+    check("only one reboot happened", len(d.combos) == 1, d.combos)
+
+    # THE RETURN NEVER ASSERTS A PROFILE NAME. The timeout lands on the
+    # default and nobody typed anything to change that -- but nothing READ it,
+    # and a name written down with no reading behind it is the hardcoded
+    # "(profile is PGSB)" all over again.
+    d = FakeTarget(cap)
+    _send(cap, "b.txt", b"payload2")
+    r = vcctrld.TransferJob(cap, d, do_return=True).run()
+    check("the return says the profile is unread, not which it is",
+          any("which profile is unread" in e["text"] for e in r["log"]),
+          r["log"])
+    check("and the profile reading is left invalidated",
+          vcctrld.PROFILE.snapshot()["name"] is None,
+          vcctrld.PROFILE.snapshot())

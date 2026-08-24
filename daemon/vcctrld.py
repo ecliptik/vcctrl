@@ -4084,6 +4084,244 @@ def _configured_transfer_boards():
     return out
 
 
+class TransferJob(object):
+    """One transfer: reboot into NET, send the queue, verify, come back.
+
+    NO OCR IN ANY VERDICT, AND THAT IS THE DESIGN RATHER THAN AN ECONOMY.
+    Every witness here is either a hardware LED edge or a byte arriving on
+    this host:
+
+        the machine reset          Scroll Lock 1 -> 0   (POST clears it)
+        the boot completed         Scroll Lock 0 -> 1   (RDYPULSE, ~16 s)
+        NET really booted          a file arrives in incoming/
+        the payload really landed  its bytes come back and the sha matches
+
+    The earlier design gated on reading `PKTTOOL SCAN` off the screen. That
+    needed OCR in the daemon -- which lives in the client, not here -- and it
+    read a console whose OCR turns 0 into 8. The replacement is already this
+    project's own idea, stated in harness/vcctrl-collect: **a file landing in
+    incoming/ proves NET booted, and nothing else can produce one.**
+
+    It is also a STRONGER claim than the screen read was. One arrival proves
+    the packet driver is loaded, the address in the BAT is right, the
+    credentials are right and the FTP client works -- four things a `PKTTOOL`
+    line says nothing about, established together, from the side that counts.
+
+    `PKTTOOL` keeps a job: it is the DIAGNOSIS when the arrival does not
+    happen, not the gate. Which is the right way round -- a diagnostic that
+    cannot fail the run cannot mislead it either.
+
+    The driver is injected so the whole sequence is testable without a rig.
+    """
+
+    # The proof file is one that MUST already exist for a transfer to be
+    # possible at all: mTCP's own config, which every BAT points MTCPCFG at.
+    # Sending something we placed there would prove less -- it would have to
+    # get there first, which is the thing being tested.
+    PROOF_SOURCE = "C:\\MTCP\\TCP.CFG"
+    PROOF_NAME = "NETPROOF.TXT"
+
+    def __init__(self, cap, driver, dest=None, do_return=True):
+        self.cap = cap
+        self.d = driver
+        self.dest = dest or (cap.settings or {}).get("dest", "C:\\UPLOADS")
+        self.do_return = do_return
+        self.log = []
+
+    def _say(self, phase, text, **kw):
+        rec = dict(kw, phase=phase, text=text, t=time.time())
+        self.log.append(rec)
+        return rec
+
+    def run(self):
+        """{"ok", "why", "files": [...], "log": [...]}."""
+        queue = self.cap._queued()
+        if not queue:
+            # A CHECK MAY NOT PASS ON NOTHING. An empty queue that rebooted the
+            # machine and reported success would be the purest form of it.
+            return self._fail("empty-queue",
+                              "nothing is staged, so there is nothing to send")
+
+        snap = self.cap.snapshot()
+        if not snap["available"]:
+            return self._fail(snap["why"], snap["reason"])
+
+        # THE EXPENSIVE CHECK BEFORE THE EXPENSIVE ACTION. A server that is not
+        # answering costs two minutes and the target's whole environment if it
+        # is discovered after the reboot, and a shell command if before.
+        live, why = self.cap._reachable(timeout=5.0)
+        if live is not True:
+            return self._fail("unreachable" if live is False else "unchecked",
+                              why)
+
+        self._say("reboot", "rebooting into the NET profile")
+        PROFILE.invalidate("rebooting for a file transfer")
+        self.d.combo(["ctrl", "alt", "delete"])
+
+        # BLIND, AND TIMED. The CONFIG.SYS menu is text mode 03h at 70 Hz and
+        # cannot be captured, so nothing can confirm the selection while it is
+        # happening -- FINDINGS sec. 8: the digit alone does not work, the
+        # digit AND Enter does, repeated across the window because the POST
+        # edge is not observable either.
+        if not self.d.wait_menu():
+            return self._fail("no-reset",
+                              "the machine never reset -- Scroll Lock did not "
+                              "clear, so the reboot did not happen")
+        self._say("select", "selecting NET, blind")
+        for _ in range(self.d.menu_attempts()):
+            self.d.type_line("5")
+            self.d.sleep(2.0)
+
+        if not self.d.wait_boot():
+            return self._fail("no-boot",
+                              "no readiness pulse after the reboot: the "
+                              "machine did not finish booting, or "
+                              "RDYPULSE.COM is missing from the card")
+
+        gate = self._prove_net()
+        if gate is not True:
+            return gate
+
+        results = []
+        for rec in queue:
+            results.append(self._send_one(rec))
+            if results[-1].get("why") == "no-prompt":
+                # A FILE FAILING IS NOT THE RUN FAILING -- the reboots are
+                # already paid for and stranding the rest wastes them. But a
+                # prompt that never comes back is a different CLASS of event:
+                # at_prompt() tests whether the BIOS ISR is intact, not whether
+                # DOS is reading, so it cannot fail merely because a file did.
+                # The machine's state is unknown and the next VCGET would be
+                # typing into the dark.
+                self._say("abort", "the prompt did not come back; stopping "
+                                   "rather than typing blind")
+                break
+
+        self._finish(results)
+        return {"ok": all(r["ok"] for r in results), "why": None,
+                "files": results, "log": self.log,
+                "left_in_net": not self.do_return}
+
+    def _prove_net(self):
+        """One arrival proves four things. Nothing else here proves any."""
+        self._say("attest", "proving NET by making the target send a file back")
+        before = time.time()
+        self.d.type_line("C:\\MTCP\\VCCHK.BAT %s %s"
+                         % (self.PROOF_SOURCE, self.PROOF_NAME))
+        if self.cap._await_incoming(self.PROOF_NAME, before,
+                                    self.d.transfer_timeout()):
+            self._say("attest", "NET confirmed: the target reached this host")
+            return True
+        # The gate has failed. NOW ask the screen why -- as a diagnosis, which
+        # cannot promote a failure into a pass because it runs only on this
+        # path and its answer is never a verdict.
+        detail = ""
+        try:
+            text = self.d.screen()
+        except Exception:
+            text = None
+        seen = packet_driver_seen(text)
+        if seen is False:
+            detail = (" PKTTOOL says no packet driver is loaded, so the menu "
+                      "selection did not land on NET.")
+        else:
+            hint = packet_driver_reason(text)
+            if hint:
+                detail = " " + hint
+        return self._fail("no-net",
+                          "nothing arrived from the target, so NET is not up, "
+                          "or it cannot reach this host, or the credentials on "
+                          "the card do not match.%s" % detail)
+
+    def _send_one(self, rec):
+        name = rec["name"]
+        self._say("send", "sending %s" % name, name=name)
+        self.d.type_line("C:\\MTCP\\VCGET.BAT %s %s" % (name, self.dest))
+        if not self.d.wait_prompt():
+            return {"name": name, "ok": False, "why": "no-prompt",
+                    "reason": "the prompt did not come back after VCGET"}
+
+        # ARRIVAL PROVED THE TRANSFER; IT SAYS NOTHING ABOUT THE PAYLOAD.
+        # The round trip is what closes that: pull the file back off the target
+        # and compare bytes here. And it only means anything because the staged
+        # copy was sha-verified when it landed -- otherwise this compares a
+        # wrong file against itself and passes.
+        back = name + ".CHK"
+        before = time.time()
+        self.d.type_line("C:\\MTCP\\VCCHK.BAT %s\\%s %s" % (self.dest, name, back))
+        if not self.cap._await_incoming(back, before,
+                                        self.d.transfer_timeout()):
+            return {"name": name, "ok": False, "why": "no-return",
+                    "reason": "%s did not come back, so whether it arrived on "
+                              "the target is unknown" % name}
+        got = self.cap._incoming_sha(back)
+        if got != rec.get("sha256"):
+            return {"name": name, "ok": False, "why": "sha-mismatch",
+                    "reason": "%s came back with a different sha256, so the "
+                              "copy on the target is not the file that was "
+                              "staged" % name, "sha256": got}
+        self._say("verify", "%s verified byte for byte" % name, name=name)
+        return {"name": name, "ok": True, "why": None, "sha256": got}
+
+    def _finish(self, results):
+        # CLEAR WHAT IS VERIFIED, KEEP WHAT FAILED. A queue is one transfer's
+        # worth and not a library: a verified file's bytes exist on the target,
+        # and a failed one is exactly what somebody wants to retry without
+        # uploading it again from a phone.
+        for r in results:
+            if r["ok"]:
+                self.cap._file_queue({"action": "clear", "name": r["name"]})
+        if not self.do_return:
+            self._say("stay", "left in NET at your request -- a measured run "
+                              "must not start from here")
+            return
+        self._say("return", "returning to the menu default")
+        PROFILE.invalidate("returning from a file transfer")
+        self.d.combo(["ctrl", "alt", "delete"])
+        if self.d.wait_boot():
+            # DELIBERATELY NOT ASSERTING WHICH PROFILE. The timeout lands on
+            # the default and that is what we typed nothing to change -- but
+            # nothing here READ it, and a name written down without a reading
+            # behind it is the hardcoded "(profile is PGSB)" all over again.
+            self._say("return", "the machine booted; which profile is unread")
+        else:
+            self._say("return", "NO READINESS PULSE AFTER THE RETURN REBOOT -- "
+                                "the machine may still be in NET, which no "
+                                "measured run may start from", warn=True)
+
+    def _fail(self, why, reason):
+        """Refuse the run, naming which gate stopped it.
+
+        THE VOCABULARY, AND IT IS NOT CLOSED:
+
+            empty-queue   nothing staged -- a run that rebooted and reported
+                          success on an empty queue would be the purest form
+                          of a check passing on nothing
+            unreachable   the file server is not answering (checked BEFORE
+                          anything reboots)
+            unchecked     that check could not be made
+            no-reset      Scroll Lock never cleared, so the reboot did not
+                          happen at all
+            no-boot       no readiness pulse: the machine did not finish
+                          booting, or RDYPULSE.COM is missing
+            no-net        nothing arrived from the target -- NET is not up, or
+                          it cannot reach this host, or the card's credentials
+                          do not match. One arrival would have proved all three
+            no-prompt     the prompt did not come back; the machine's state is
+                          unknown and the next command would be typed blind
+            no-return     a file did not come back, so whether it arrived on
+                          the target is unknown
+            sha-mismatch  it came back different: the copy on the target is
+                          not the file that was staged
+
+        `unsupported`, `unknown` and `not_configured` reach here unchanged
+        from FilesCapability.snapshot(), which is where they are defined.
+        """
+        self._say("refused", reason, why=why)
+        return {"ok": False, "why": why, "reason": reason, "files": [],
+                "log": self.log}
+
+
 class FilesCapability(Capability):
     """Putting a file onto the target, over the target's own FTP client.
 
@@ -4522,6 +4760,49 @@ class FilesCapability(Capability):
                 rec["orphan"] = True
             out.append(rec)
         return out
+
+    def _await_incoming(self, name, since, timeout):
+        """Wait for the target to put `name` into incoming/. True if it lands.
+
+        SIZE-STABLE, NOT MERELY PRESENT. FTP creates the file and then fills
+        it, so a poll that returns on existence catches it mid-write and hands
+        back a short file that will hash differently every time -- the
+        collector learned this and its comment says so. Two equal sizes a poll
+        apart is the cheapest thing that is actually true.
+
+        `since` guards against a stale file of the same name from an earlier
+        attempt being read as this one's, which is the failure that makes a
+        retry look like a success.
+        """
+        _stage, _p, _m, _root, incoming = self._dirs()
+        p = os.path.join(incoming, name)
+        deadline = time.time() + float(timeout)
+        last = None
+        while time.time() < deadline:
+            try:
+                st = os.stat(p)
+                if st.st_mtime >= since - 1.0:
+                    if last is not None and st.st_size == last and st.st_size:
+                        return True
+                    last = st.st_size
+                else:
+                    last = None
+            except OSError:
+                last = None
+            time.sleep(0.5)
+        return False
+
+    def _incoming_sha(self, name):
+        """sha256 of a returned file, or None if it cannot be read."""
+        _stage, _p, _m, _root, incoming = self._dirs()
+        h = hashlib.sha256()
+        try:
+            with open(os.path.join(incoming, name), "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+        except OSError:
+            return None
+        return h.hexdigest()
 
     def _file_queue(self, req):
         """List what is staged, or drop it.
