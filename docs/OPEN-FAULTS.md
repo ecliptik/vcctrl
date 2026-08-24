@@ -773,3 +773,36 @@ survives, because the failure it prevents produces a zero rather than an error.
 **And a Caps Lock reading is a reading of the harness, not of the target.**
 Comparing it between sessions says nothing unless both know which of the three
 writers ran last.
+
+
+## 14. `git bundle verify` passes on a bundle that cannot be restored
+
+**Measured 2026-08-24.** A 1.4 MB bundle, truncated and each fragment tested:
+
+    95% of the file:  verify=PASS  clone=BROKEN
+    75% of the file:  verify=PASS  clone=BROKEN
+    50% of the file:  verify=PASS  clone=BROKEN
+    25% of the file:  verify=PASS  clone=BROKEN
+    10% of the file:  verify=PASS  clone=BROKEN
+
+**A bundle missing ninety percent of its bytes still reports "The bundle
+records a complete history."** `verify` reads the header and checks that the
+prerequisite commits exist in the LOCAL repo. **It never validates the
+packfile.** Only a clone touches the objects.
+
+This matters because it is the check anyone reaches for before an irreversible
+operation. **It is not weaker than a restore — it passes on files that cannot be
+restored**, which is worse than having no check at all, because it manufactures
+confidence at exactly the moment confidence is expensive.
+
+**Acceptance criterion for any bundle relied on before a history rewrite:**
+
+1. `git clone` from the bundle into a scratch directory.
+2. Confirm HEAD, commit count and tags match the source.
+3. Resolve every SHA cited in docs **inside the clone**.
+4. Run the test suite **from the clone**.
+
+**One trap while measuring this:** `git bundle verify` must run from inside a
+git repo. Run anywhere else it errors, and `verify | grep -c "complete history"`
+then returns 0 — which reads as *failed* rather than as *never ran*. Same shape
+as every other well-formed zero in this document.
