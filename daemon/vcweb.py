@@ -500,10 +500,35 @@ class TLSServer(Server):
         except Exception:
             # A TLS handshake failure is one client's problem, not the
             # server's; without this the accept loop dies on the first probe.
-            try:
-                sock.close()
-            except Exception:
-                pass
+            # DO NOT CLOSE WHILE THE READER IS STILL INSIDE THE SOCKET.
+            #
+            # vcctrld aborted on 2026-08-24 with "free(): invalid next size",
+            # raised from SSL_free reached through a Python attribute rebind --
+            # an SSLSocket being deallocated. This is where that happened: the
+            # reader loops in ws_read() until `stop` is set, so at teardown it
+            # is typically sitting inside SSL_read on the very object about to
+            # be closed and freed. One OpenSSL SSL* used by two threads, with
+            # a close racing a read, produces exactly that.
+            #
+            # `wlock` did not cover it. It serialises WRITERS against each
+            # other, and the reader is neither a writer nor joined.
+            #
+            # So: stop, join, then close. And if the join times out, DO NOT
+            # CLOSE -- leaking a file descriptor on a rare path is enormously
+            # better than corrupting the heap of a process that is driving a
+            # measurement. The leak is recorded so it cannot be silent.
+            reader.join(timeout=2.0)
+            if reader.is_alive():
+                with self.lock:
+                    self.ws_reader_stuck += 1
+                    self.ws_last_error = (
+                        "reader thread did not exit in 2s; socket left open "
+                        "rather than freed underneath it")
+            else:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
             raise
 
 
@@ -607,6 +632,10 @@ class WebCapability(object):
         self.ws_hs = None
         self.listeners = 0
         self.lock = threading.Lock()
+        # Times a websocket teardown left a socket open because its reader
+        # would not exit. Non-zero means fds are leaking and the TLS thread
+        # model needs the rewrite noted in serve_ws, not another timeout.
+        self.ws_reader_stuck = 0
 
     def start(self):
         self.httpd = Server((self.bind, self.port), Handler)
@@ -897,10 +926,14 @@ class WebCapability(object):
         # A list so the input thread can retune it live: the client knows how
         # it is doing far better than this side can infer.
         rate = [fps]
+        # KEEP THE HANDLE. See the teardown in `finally`: this thread must be
+        # joined before the socket is closed, and a fire-and-forget daemon
+        # thread cannot be.
+        reader = threading.Thread(target=self._ws_input,
+                                  args=(sock, stop, held, rate, wlock),
+                                  daemon=True)
         try:
-            threading.Thread(target=self._ws_input,
-                             args=(sock, stop, held, rate, wlock),
-                             daemon=True).start()
+            reader.start()
             self._ws_frames(sock, stop, rate, wlock)
         except Exception as exc:
             with self.lock:
@@ -1117,8 +1150,29 @@ class WebCapability(object):
                 pass
 
     def _ws_input(self, sock, stop, held, rate=None, wlock=None):
+        """Read frames from the client until `stop`.
+
+        WAKES UP REGULARLY, which is what makes the join in serve_ws possible.
+        ws_read() blocks indefinitely, so a reader that only checks `stop` at
+        the top of the loop can sit in SSL_read forever while teardown waits --
+        and the previous code did not wait at all, which is what let the socket
+        be freed underneath it.
+
+        `select` on the fd is not sufficient on its own for a TLS socket:
+        OpenSSL may already hold a decrypted record in its own buffer, in which
+        case the fd is not readable and the data is there. `pending()` is
+        checked first for that reason. Getting this wrong does not hang -- it
+        stalls input for up to the poll interval, which reads as a keyboard
+        that sometimes ignores you, and is the kind of fault nobody reports
+        precisely.
+        """
+        import select
         while not stop.is_set():
             try:
+                if not getattr(sock, "pending", lambda: 0)():
+                    r, _w, _x = select.select([sock], [], [], 0.5)
+                    if not r:
+                        continue
                 got = ws_read(sock)
             except Exception:
                 break
