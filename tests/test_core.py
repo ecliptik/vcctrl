@@ -5533,3 +5533,67 @@ def test_cfclean_deletes_despite_a_misread_count_and_never_on_a_blind_read():
     # A single clean file, uniform by definition.
     v, _w = cf.classify_tag(cf.parse_dir_summary(CLEAN_ONE), (1, 7608), [7608])
     check("the clean single-file listing DELETEs", v == cf.DELETE)
+
+
+def test_power_is_gated_by_action_and_the_holder_can_still_use_it():
+    """The most destructive control was the one the arbiter did not cover.
+
+    Adding `power` to the gate is a MATCHED PAIR with adding it to
+    `_INPUT_CMDS` in bin/vcctrl_common.py, and a one-sided fix is worse than
+    the gap: the daemon would refuse a cell permission to power its OWN
+    target, killing every run at its first ensure_powered. Both halves ship in
+    one commit and this test is what catches them being separated.
+
+    Two things beyond that, one from the vcctrl session's review and one that
+    surfaced while writing it:
+
+    - `vc()` only appends `--as` when a lock owner is SET, so a caller that
+      never took the lock sends none. That is correct, and it means callers
+      like `vcctrl-collect --power-on` are refused only while somebody else
+      holds the lock -- which is the intent, not a regression.
+    - `power state` is a READ. Gating the whole verb would stop everyone else
+      discovering whether the machine is on while a cell runs, including
+      preflight. The arbiter gates input, never observation.
+    """
+    print("\npower gating")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+
+    check("the daemon gates power ON", vcctrld._gated("power", {"action": "on"}))
+    check("and OFF", vcctrld._gated("power", {"action": "off"}))
+    check("and CYCLE", vcctrld._gated("power", {"action": "cycle"}))
+    check("but NOT state -- observation is never gated",
+          not vcctrld._gated("power", {"action": "state"}))
+    check("and not a bare power request, which defaults to state",
+          not vcctrld._gated("power", {}))
+    check("input commands are still gated", vcctrld._gated("key", {}))
+    check("reads are still ungated", not vcctrld._gated("leds", {}))
+
+    # With a lock held by somebody else: writes refused, reads not.
+    reg.arbiter.acquire("cell-A")
+    try:
+        ref = reg.arbiter.check("cell-B")
+        check("a stranger is refused while the lock is held", ref is not None)
+        check("THE HOLDER IS NOT -- a cell can still power its own target",
+              reg.arbiter.check("cell-A") is None)
+        check("and an unnamed caller is refused too, which is what makes the "
+              "`--as` half of the pair load-bearing",
+              reg.arbiter.check(None) is not None)
+    finally:
+        reg.arbiter.release("cell-A")
+    check("released", reg.arbiter.check(None) is None)
+
+    # The client half: vc() must append --as for power, or the holder locks
+    # itself out.
+    import importlib.util as _u
+    spec = _u.spec_from_file_location(
+        "vcctrl_common", os.path.join(HERE, os.pardir, "bin",
+                                      "vcctrl_common.py"))
+    vcc = _u.module_from_spec(spec)
+    spec.loader.exec_module(vcc)
+    check("the client half lists power, so --as is appended",
+          "power" in vcc._INPUT_CMDS, sorted(vcc._INPUT_CMDS))
+    check("control: the two halves name the same verb, which is the pairing "
+          "this test exists to hold together",
+          ("power" in vcc._INPUT_CMDS)
+          == vcctrld._gated("power", {"action": "on"}))

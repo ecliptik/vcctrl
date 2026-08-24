@@ -661,6 +661,33 @@ GATED_COMMANDS = frozenset([
     "mouse_move", "mouse_click",
 ])
 
+# Power ACTIONS that change the target's state. Gated like input, because
+# cutting mains under a running cell destroys it exactly as surely as typing
+# into it -- and until now the most destructive control on the rig was the one
+# the arbiter did not cover, which is the wrong way round.
+#
+# `state` IS NOT HERE, DELIBERATELY. It is a read, and the arbiter gates input
+# only, never observation: gating it would mean a held lock stops everyone
+# else from finding out whether the machine is on, including `preflight` and
+# `power_on()` in the harness library. Diagnosing a stuck run must never
+# require taking the lock away from it.
+GATED_POWER_ACTIONS = frozenset(["on", "off", "cycle"])
+
+
+def _gated(cmd, req):
+    """Does this specific request need the input lock?
+
+    Command-level for input, action-level for power. A set of command names
+    could not express "on but not state", and the alternative -- gating the
+    whole `power` verb -- trades a destructive-action hole for an observation
+    outage.
+    """
+    if cmd in GATED_COMMANDS:
+        return True
+    if cmd == "power":
+        return req.get("action", "state") in GATED_POWER_ACTIONS
+    return False
+
 
 class Bus(object):
     """Ring of recent events, published by every command the daemon runs.
@@ -737,11 +764,22 @@ class Activity(object):
 
 
 class Arbiter(object):
-    """The input lock. Gates input only -- never observation.
+    """The input lock, and the destructive power actions. Never observation.
 
-    Unheld by default, and while unheld every input command behaves exactly as
-    it did before this existed. Nothing in the existing tooling acquires it, so
-    adopting it is opt-in and this can land without touching a sweep.
+    Unheld by default, and while unheld every gated command behaves exactly as
+    it did before this existed.
+
+    NO LONGER OPT-IN. The docstring used to say "nothing in the existing
+    tooling acquires it", which was true when written and stopped being true
+    without the sentence changing: vcctrl-sweep takes it and refuses outright
+    if somebody else holds it, and vcctrl-cell takes it best-effort and says so
+    when it cannot. A comment that states a fact reads as one, and this one
+    was cited in a discussion about why a running round showed no owner.
+
+    What it gates is input plus power on/off/cycle -- see _gated(). `power
+    state` is excluded on purpose: gating a read would mean a held lock stops
+    anyone else discovering whether the machine is on, and diagnosing a stuck
+    run must never require taking the lock away from it.
     """
 
     def __init__(self, bus):
@@ -3729,7 +3767,7 @@ class Registry(object):
         # Gating and event publishing are central rather than per-capability,
         # so a new capability cannot forget either. A capability that wants to
         # be gated only has to name its command in GATED_COMMANDS.
-        if cmd in GATED_COMMANDS:
+        if _gated(cmd, req):
             refusal = self.arbiter.check(req.get("as"))
             if refusal is not None:
                 self.bus.publish("input.refused", cmd=cmd,

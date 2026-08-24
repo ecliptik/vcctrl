@@ -117,7 +117,19 @@ def get_lock_owner():
 # depend on holding a lock, or diagnosing a stuck run would require taking
 # input away from it.
 _INPUT_CMDS = {"key", "type", "hold", "keydown", "keyup", "release-all",
-               "release_all", "combo", "mouse"}
+               "release_all", "combo", "mouse",
+               # `power` joins the list IN THE SAME CHANGE as the daemon's
+               # gate, and the two must never be separated. The daemon now
+               # refuses power on/off/cycle from anyone who is not the lock
+               # holder; if this side did not append `--as`, a cell would be
+               # refused permission to power ITS OWN target -- the
+               # "locks the caller out of its own machine" trap this file
+               # already warns about for input.
+               #
+               # Appending it to `power state` too is harmless: reads are not
+               # gated, so the extra argument is ignored. Filtering by action
+               # here would put the action vocabulary in two places.
+               "power"}
 
 
 def vc(*args, check=True):
