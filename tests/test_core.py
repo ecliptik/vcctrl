@@ -7699,3 +7699,75 @@ def test_a_returned_file_is_matched_whatever_case_it_arrives_in():
           cap._incoming_sha("HELLO.TXT.CHK") is not None)
     check("a file that is genuinely absent still times out",
           cap._await_incoming("NOTHERE.CHK", 0, 1.0) is False)
+
+
+def test_the_probe_is_quiet_and_the_target_is_not():
+    """The liveness probe was burying the sessions worth reading.
+
+    A bare TCP connect every few seconds, from every open tab, and pyftpdlib
+    logs an opened and a closed for each. The target's own sessions -- the
+    RETR and STOR lines that say what actually happened -- were lost among
+    them.
+    """
+    f = vcctrld.ftp_log_suppressed
+
+    # The probe: connects, never authenticates, closes.
+    check("an unauthenticated open is dropped",
+          f("FTP session opened (connect)", False) is True)
+    check("and its close is dropped too",
+          f("FTP session closed (disconnect).", False) is True)
+
+    # The target: logs in, does work, disconnects.
+    check("an authenticated close is KEPT",
+          f("FTP session closed (disconnect).", True) is False)
+    for line in ("USER 'dos' logged in.",
+                 "RETR /srv/stage/HELLO.TXT completed=1 bytes=49",
+                 "STOR /srv/incoming/HELLO.TXT.CHK completed=1 bytes=49",
+                 "CWD /srv/stage 250"):
+        check("kept: %s" % line[:28], f(line, True) is False)
+        # And kept even unauthenticated -- anything that is not a session
+        # boundary is somebody doing something, which is worth seeing.
+        check("kept even unauthenticated: %s" % line[:28],
+              f(line, False) is False)
+
+    # SUPPRESSED BY AUTHENTICATION, NOT BY ADDRESS. Filtering on the source
+    # would hide a real client that happened to run on this host, and would
+    # say nothing about why it had been hidden.
+    check("the rule does not consult an address at all",
+          f("FTP session closed (disconnect).", True) is False
+          and f("FTP session closed (disconnect).", False) is True)
+
+
+def test_the_job_log_is_live_rather_than_delivered_at_the_end():
+    """file_status showed nothing for three minutes and then everything.
+
+    TransferJob kept its own list and the job record was only updated when
+    run() returned. Live progress is the whole reason this is a job rather
+    than a blocking call, and it was the one thing it did not do.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    _send(cap, "a.txt", b"payload")
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    shared = []
+    d = FakeTarget(cap)
+    job = vcctrld.TransferJob(cap, d, log=shared)
+
+    check("the caller's list is the job's list", job.log is shared)
+    job._say("test", "something happened")
+    check("and a phase reaches it immediately, before run() returns",
+          len(shared) == 1 and shared[0]["text"] == "something happened",
+          shared)
+
+    job.run()
+    check("the run appends to that same list rather than replacing it",
+          job.log is shared and len(shared) > 5, len(shared))
+    check("and every entry carries a phase and a timestamp",
+          all(e.get("phase") and e.get("t") for e in shared), shared[:2])
+
+    # Without a list it still works standalone -- the tests and any other
+    # caller construct it that way.
+    solo = vcctrld.TransferJob(cap, FakeTarget(cap))
+    check("a job with no shared list keeps its own", solo.log == [])

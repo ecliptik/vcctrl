@@ -4073,6 +4073,32 @@ def packet_driver_seen(text, expect=None):
     return None
 
 
+def ftp_log_suppressed(msg, authenticated):
+    """Should this server log line be dropped? True to drop.
+
+    THE LIVENESS PROBE IS A BARE TCP CONNECT, every few seconds, from every
+    open tab. pyftpdlib logs an opened and a closed for each, so the journal
+    fills with pairs from this host and the TARGET's own sessions -- the ones
+    that say what actually happened -- are buried among them.
+
+    SUPPRESSED BY AUTHENTICATION, NOT BY SOURCE ADDRESS. A probe connects and
+    closes without a USER; the target always logs in. Filtering on the address
+    would have hidden a real client that happened to run on this host, and
+    would have said nothing about why it was hidden.
+
+    Nothing meaningful goes. A successful login is still logged, and so is
+    every RETR and STOR. What goes is a pair of lines about a socket that did
+    nothing -- and the "opened" line is dropped unconditionally because at the
+    moment it is written nobody has authenticated yet, so keeping it would
+    mean deciding on information that does not exist.
+    """
+    if msg.startswith("FTP session opened"):
+        return True
+    if msg.startswith("FTP session closed") and not authenticated:
+        return True
+    return False
+
+
 def packet_driver_reason(text):
     """Why packet_driver_seen() could not tell, where that is recognisable.
 
@@ -4334,12 +4360,17 @@ class TransferJob(object):
     PROOF_SOURCE = "C:\\MTCP\\TCP.CFG"
     PROOF_NAME = "NETPROOF.TXT"
 
-    def __init__(self, cap, driver, dest=None, do_return=True):
+    def __init__(self, cap, driver, dest=None, do_return=True, log=None):
         self.cap = cap
         self.d = driver
         self.dest = dest or (cap.settings or {}).get("dest", DEFAULT_DEST)
         self.do_return = do_return
-        self.log = []
+        # THE CALLER'S LIST, NOT A PRIVATE ONE. This kept its own and the job
+        # record was only updated when run() returned -- so file_status showed
+        # an empty log for the entire three minutes and then everything at
+        # once. Live progress is the whole reason this is a job rather than a
+        # blocking call, and it was the one thing it did not do.
+        self.log = [] if log is None else log
 
     def _say(self, phase, text, **kw):
         rec = dict(kw, phase=phase, text=text, t=time.time())
@@ -4802,7 +4833,7 @@ ECHO Usage: VCCHK source-path name-on-server
         def run():
             drv = RegistryDriver(self.registry, pace=req.get("pace"))
             tj = TransferJob(self, drv, dest=job["dest"],
-                             do_return=job["return"])
+                             do_return=job["return"], log=job["log"])
             try:
                 out = tj.run()
             except Exception as exc:
@@ -4810,6 +4841,7 @@ ECHO Usage: VCCHK source-path name-on-server
                        "reason": "%s: %s" % (type(exc).__name__, exc),
                        "files": [], "log": tj.log}
                 sys.stderr.write("transfer crashed: %s\n" % exc)
+            out.pop("log", None)        # already live in job["log"]
             job.update(out)
             job["running"] = False
             job["finished_at"] = time.time()
@@ -4955,7 +4987,37 @@ ECHO Usage: VCCHK source-path name-on-server
             # would belong to the module rather than to this server. One
             # server makes that harmless and it is one line to not rely on
             # that being true later.
-            handler = type("VcctrlFTPHandler", (FTPHandler,), {})
+            def _quiet_log(self, msg, *a, **kw):
+                """Thin wrapper; the RULE is ftp_log_suppressed(), so it can be
+                tested without standing a server up and reading a journal.
+
+                THE LIVENESS PROBE IS A BARE TCP CONNECT, every few seconds,
+                from every open tab. pyftpdlib logs an opened and a closed for
+                each, so the journal fills with pairs from this host and the
+                TARGET's own sessions -- the ones that say what actually
+                happened -- are buried among them.
+
+                Suppressed by AUTHENTICATION, not by source address. A probe
+                connects and closes without a USER; the target always logs in.
+                Filtering on the address would have hidden a real client that
+                happened to run here, and would have said nothing about why.
+
+                Nothing meaningful is lost: a successful login is still
+                logged, and so is every RETR and STOR. What goes is a pair of
+                lines about a socket that did nothing.
+                """
+                if ftp_log_suppressed(
+                        msg, getattr(self, "authenticated", False)):
+                    return
+                # PASSED THROUGH, NOT RE-DECLARED. The real signature is
+                # `log(self, msg, logfun=logger.info)`; re-declaring it with a
+                # None default forced None down as the log function and reset
+                # the connection -- so the quieting broke the server it was
+                # tidying the output of.
+                FTPHandler.log(self, msg, *a, **kw)
+
+            handler = type("VcctrlFTPHandler", (FTPHandler,),
+                           {"log": _quiet_log})
             handler.authorizer = auth
             # THE MASQUERADE IS THE CONFIGURED ADDRESS, NEVER A DETECTED ONE.
             # Passive mode advertises an address in its reply. This host has
