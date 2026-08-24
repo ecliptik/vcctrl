@@ -4109,6 +4109,126 @@ class FilesCapability(Capability):
                 "file_name": self._file_name, "file_stage": self._file_stage,
                 "file_queue": self._file_queue}
 
+    # -- the server the target pulls from -------------------------------------
+
+    _ftpd = None
+    _ftpd_error = None
+
+    def start(self):
+        """Serve the staging root, if this rig is configured for transfers.
+
+        Runs in a daemon thread, which is the house pattern -- video and the
+        others do the same, and the registry already records a capability that
+        raises during start as failed without taking the daemon with it.
+
+        NOT CONFIGURED IS NOT AN ERROR. A rig with no `target_host` gets no
+        server and no complaint; `snapshot()` already reports that state in its
+        own word. Only a configured-but-broken server is a failure.
+        """
+        FilesCapability._ftpd_error = None
+        srv = self._server()
+        if srv is None:
+            return
+        host, port = srv
+        try:
+            stage, _p, _m, root, incoming = self._ensure_dirs()
+        except RuntimeError as exc:
+            FilesCapability._ftpd_error = str(exc)
+            return
+        try:
+            from pyftpdlib.authorizers import DummyAuthorizer
+            from pyftpdlib.handlers import FTPHandler
+            from pyftpdlib.servers import FTPServer
+        except Exception as exc:
+            FilesCapability._ftpd_error = (
+                "cannot import the vendored pyftpdlib (%s) -- check vendor/ "
+                "reached the deployed tree" % exc)
+            return
+
+        user, password = self._credentials()
+        if not user or not password:
+            # NO DEFAULT CREDENTIALS, the same refusal server.py makes on the
+            # control host and for the same reason: a server that falls back
+            # to a built-in login comes up working while the configuration it
+            # claims to follow was never read. That is a rig that works and a
+            # false account of why.
+            FilesCapability._ftpd_error = (
+                "refusing to serve without credentials: set "
+                "control.fileserver.user and put the password in the variable "
+                "control.fileserver.password_env names")
+            return
+
+        try:
+            auth = DummyAuthorizer()
+            # Full perms on a DEDICATED root with nothing above it. The target
+            # reads from stage/ and writes its verification copy to incoming/,
+            # and separating those into two logins would buy nothing: both
+            # credentials would sit in plaintext in BATs on the same CF card.
+            auth.add_user(user, password, root, perm="elradfmwMT")
+            # A SUBCLASS, NOT THE SHARED CLASS. server.py on the control
+            # host assigns straight onto FTPHandler, which is global mutable
+            # state: the authorizer, the masquerade and the passive range
+            # would belong to the module rather than to this server. One
+            # server makes that harmless and it is one line to not rely on
+            # that being true later.
+            handler = type("VcctrlFTPHandler", (FTPHandler,), {})
+            handler.authorizer = auth
+            # THE MASQUERADE IS THE CONFIGURED ADDRESS, NEVER A DETECTED ONE.
+            # Passive mode advertises an address in its reply. This host has
+            # two addresses up on the target's subnet, and deriving this from
+            # "the first global address" -- which is what the control host's
+            # launcher does -- can name the other one. The target would then
+            # connect to the control port here and be told to open its data
+            # connection somewhere it was never pointed at: control succeeds,
+            # data hangs, every check green.
+            handler.masquerade_address = host
+            handler.passive_ports = range(60000, 60011)
+            # BOUND TO THE ONE ADDRESS, never 0.0.0.0. Same value again, so
+            # the bind and the advertisement cannot disagree.
+            self._ftpd = FTPServer((host, port), handler)
+            threading.Thread(target=self._serve_forever, daemon=True).start()
+            sys.stderr.write("file server on ftp://%s:%d/ root=%s\n"
+                             % (host, port, root))
+        except Exception as exc:
+            FilesCapability._ftpd_error = "%s: %s" % (type(exc).__name__, exc)
+            self._ftpd = None
+
+    def _serve_forever(self):
+        try:
+            self._ftpd.serve_forever(handle_exit=False)
+        except Exception as exc:
+            # The thread dying must not be silent, and must not be fatal: the
+            # KVM keeps working and the transfer control goes unavailable with
+            # a reason, which is exactly the split the five states exist for.
+            FilesCapability._ftpd_error = "server stopped: %s" % exc
+            sys.stderr.write("file server stopped: %s\n" % exc)
+
+    def stop(self):
+        if self._ftpd is not None:
+            try:
+                self._ftpd.close_all()
+            except Exception:
+                pass
+            self._ftpd = None
+
+    def _credentials(self):
+        """(user, password) -- the SAME login the control host's server uses.
+
+        One secret and one rotation. Separate credentials would be isolation
+        on paper only: both would live in plaintext in BATs on the same CF
+        card, so anyone holding the card holds both.
+
+        The password is reached through the variable `password_env` NAMES and
+        is never in any config file.
+        """
+        user = CFG.optional("control.fileserver.user")
+        var = CFG.optional("control.fileserver.password_env")
+        if user in (vcconfig.ABSENT, vcconfig.NONE, None, ""):
+            return None, None
+        if var in (vcconfig.ABSENT, vcconfig.NONE, None, ""):
+            return str(user), None
+        return str(user), os.environ.get(str(var)) or None
+
     # -- does this even apply -------------------------------------------------
 
     def support(self):
@@ -4320,7 +4440,27 @@ class FilesCapability(Capability):
     STAGE_CHUNK_MAX = 4 * 1024 * 1024
 
     def _dirs(self):
-        """(served root, partial, metadata) -- and the two are SIBLINGS.
+        """(stage, partial, meta, ftp_root, incoming).
+
+        THE FTP ROOT IS NOT THE STAGE DIRECTORY, and getting that wrong is
+        what this layout exists to prevent. The card's BATs `cd stage` and
+        `cd incoming` relative to their login home, so the home has to contain
+        both -- the target GETs from one and PUTs its verification copy back
+        into the other.
+
+            <root>/stage/       served. GET. complete, verified files only.
+            <root>/incoming/    served. PUT. the round-trip copies come back.
+            <root>-partial/     NOT under the root. bytes still arriving.
+            <root>-meta/        NOT under the root. sha and size.
+
+        The first version made `stage` the root and derived the partial
+        directory as its sibling. Adding `incoming` inside the root would then
+        have put `<root>-partial` INSIDE the FTP home -- reachable by anything
+        that can `cd ..`, which is the exact guarantee the separation is for.
+        Partial and meta are siblings of the ROOT, so they are outside it
+        however the root is configured.
+
+        AND THEY ARE STILL SIBLINGS, which is the atomicity precondition.
 
         THAT IS A PRECONDITION, NOT A NAMING CONVENTION. Promotion is
         `os.replace()`, which is atomic only within one filesystem and raises
@@ -4336,8 +4476,9 @@ class FilesCapability(Capability):
         If that is ever wanted, the promotion has to change with it.
         """
         st = self.settings or {}
-        root = st.get("stage_dir") or os.path.join(STATE_DIR, "stage")
-        return (root, root + "-partial", root + "-meta")
+        root = st.get("root_dir") or os.path.join(STATE_DIR, "fileserver")
+        return (os.path.join(root, "stage"), root + "-partial",
+                root + "-meta", root, os.path.join(root, "incoming"))
 
     def _ensure_dirs(self):
         dirs = self._dirs()
@@ -4357,7 +4498,7 @@ class FilesCapability(Capability):
         queue forgets a file that is still sitting in the FTP root, reachable
         by a target that was told to fetch it.
         """
-        root, _partial, meta = self._dirs()
+        root, _partial, meta = self._dirs()[:3]
         out = []
         try:
             names = sorted(os.listdir(root))
@@ -4393,7 +4534,7 @@ class FilesCapability(Capability):
         """
         action = (req.get("action") or "list").lower()
         try:
-            root, partial, meta = self._ensure_dirs()
+            root, partial, meta = self._ensure_dirs()[:3]
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc)}
         q = self._queued()
@@ -4462,7 +4603,7 @@ class FilesCapability(Capability):
         and the diagnosis absent.
         """
         try:
-            root, partial, meta = self._ensure_dirs()
+            root, partial, meta = self._ensure_dirs()[:3]
         except RuntimeError as exc:
             return {"ok": False, "error": str(exc)}
 

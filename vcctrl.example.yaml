@@ -215,6 +215,17 @@ capabilities:
       # in there replaces it silently, and that directory holds the batch
       # files every measured run calls.
       dest: "C:\\UPLOADS"
+      # The FTP login's home on THIS host. It holds stage/ (the target GETs
+      # from here) and incoming/ (the target PUTs its verification copy back
+      # here) -- the card's batch files `cd` to both by those names.
+      #
+      # Two more directories are created as SIBLINGS of this one, deliberately
+      # outside it: bytes still arriving, and per-file checksums. A partial
+      # file inside the served root is a truncated transfer waiting to happen,
+      # because the target fetches by name and a name that exists is a name it
+      # will fetch. Being siblings also keeps them on one filesystem with
+      # stage/, which is what makes the promotion an atomic rename.
+      root_dir: /var/lib/vcctrl/fileserver
 
   board:
     backend: usb4vc-runfile       # usb4vc-runfile | static | none

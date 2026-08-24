@@ -6378,7 +6378,7 @@ def test_the_liveness_check_dials_the_address_the_card_dials():
 def _mkfiles(tmp):
     cap = vcctrld.FilesCapability(None)
     cap.backend_name = "mtcp-ftp"
-    cap.settings = {"stage_dir": os.path.join(tmp, "stage"),
+    cap.settings = {"root_dir": os.path.join(tmp, "fileserver"),
                     "target_host": "192.0.2.11"}
     return cap
 
@@ -6417,7 +6417,7 @@ def test_staging_never_exposes_a_partial_file():
     import tempfile
     tmp = tempfile.mkdtemp()
     cap = _mkfiles(tmp)
-    root, partial, meta = cap._dirs()
+    root, partial, meta = cap._dirs()[:3]
     payload = b"MENU 1\r\nMENU 2\r\n" * 500
 
     # Mid-upload: bytes exist, and NOT where the target could reach them.
@@ -6452,7 +6452,7 @@ def test_staging_refuses_rather_than_repairing():
     import base64 as b64, tempfile
     tmp = tempfile.mkdtemp()
     cap = _mkfiles(tmp)
-    root, partial, _meta = cap._dirs()
+    root, partial, _meta = cap._dirs()[:3]
     payload = b"x" * 2048
 
     r = _send(cap, "photo.jpg", payload, sha="0" * 64)
@@ -6512,7 +6512,7 @@ def test_the_queue_ceiling_counts_the_queue():
     import tempfile
     tmp = tempfile.mkdtemp()
     cap = _mkfiles(tmp)
-    root, _p, meta = cap._dirs()
+    root, _p, meta = cap._dirs()[:3]
 
     _send(cap, "a.bin", b"a" * 1000)
     _send(cap, "b.bin", b"b" * 1000)
@@ -6872,3 +6872,133 @@ def test_the_vendored_ftp_server_is_importable_from_the_checkout():
     lic = open(os.path.join(vend, "LICENSE.pyftpdlib")).read()
     check("and it is the real text, not a placeholder",
           "WITHOUT WARRANTY OF ANY KIND" in lic and "Rodola" in lic)
+
+
+def test_the_partial_directory_is_outside_the_ftp_root():
+    """The structural half of "a partial file is never fetchable".
+
+    The atomic rename is only half the guarantee. The other half is that the
+    directory bytes arrive in cannot be reached from the target's login at
+    all -- and the first layout made `stage` the FTP root and derived
+    `stage-partial` as its sibling, which was fine until `incoming/` had to
+    live in the root too. Then the root became the parent and the partial
+    directory would have been INSIDE it.
+    """
+    cap = vcctrld.FilesCapability(None)
+    cap.settings = {"root_dir": "/var/lib/vcctrl/fileserver"}
+    stage, partial, meta, root, incoming = cap._dirs()
+
+    check("stage is inside the FTP root", stage.startswith(root + os.sep),
+          (stage, root))
+    check("incoming is inside the FTP root",
+          incoming.startswith(root + os.sep), (incoming, root))
+    for name, d in (("partial", partial), ("meta", meta)):
+        check("%s is NOT inside the FTP root" % name,
+              not d.startswith(root + os.sep), (d, root))
+    # Siblings of the root, which keeps them on one filesystem with stage --
+    # os.replace() raises EXDEV across devices.
+    check("partial is a sibling of the root, so the rename stays atomic",
+          os.path.dirname(partial) == os.path.dirname(root), partial)
+
+
+def test_the_file_server_actually_serves_a_staged_file():
+    """End to end over real FTP, because everything else is inference.
+
+    Binds loopback on an ephemeral port and drives it with stdlib ftplib --
+    the same protocol the DOS client speaks. This is the only test here that
+    proves the vendored library, the directory layout, the credentials path
+    and the staging promotion work as one thing rather than four.
+    """
+    import ftplib, socket as sk, tempfile
+
+    tmp = tempfile.mkdtemp()
+    with sk.socket() as probe:                    # an ephemeral free port
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    cap = vcctrld.FilesCapability(None)
+    cap.settings = {"root_dir": os.path.join(tmp, "fileserver"),
+                    "target_host": "127.0.0.1", "target_port": port}
+    cap._credentials = lambda: ("dosuser", "dospass")
+
+    payload = b"@ECHO OFF\r\nECHO hello from the staging directory\r\n"
+    r = _send(cap, "hello.bat", payload)
+    check("the file staged", r.get("ok") is True, r)
+
+    cap.start()
+    check("the server started", cap._ftpd is not None,
+          vcctrld.FilesCapability._ftpd_error)
+    try:
+        # BOUND TO THE CONFIGURED ADDRESS, NOT 0.0.0.0. Binding everything
+        # would work in every test and be wrong on the rig, where the daemon
+        # host has two addresses on the target's subnet.
+        check("it is bound to the configured address only",
+              cap._ftpd.socket.getsockname()[0] == "127.0.0.1",
+              cap._ftpd.socket.getsockname())
+
+        # THE MASQUERADE, ASSERTED DIRECTLY. Passive mode advertises an
+        # address in its reply, and on the rig the daemon host has two
+        # addresses up on the target's subnet -- deriving this from "the
+        # first global address" can name the wrong one, and then the target
+        # connects to the control port here and is told to open its data
+        # connection somewhere it was never pointed at. Control succeeds,
+        # data hangs, every check green.
+        #
+        # It is checked on the handler rather than through the protocol
+        # because over loopback PASV advertises 127.0.0.1 whatever this is
+        # set to -- so a protocol-level test passes with the field unset and
+        # proves nothing. That was true of this test until it was noticed.
+        check("PASV advertises the CONFIGURED address, not a detected one",
+              cap._ftpd.handler.masquerade_address == "127.0.0.1",
+              cap._ftpd.handler.masquerade_address)
+        check("and it is the same value the socket is bound to",
+              cap._ftpd.handler.masquerade_address
+              == cap._ftpd.socket.getsockname()[0],
+              (cap._ftpd.handler.masquerade_address,
+               cap._ftpd.socket.getsockname()))
+
+        ftp = ftplib.FTP()
+        ftp.connect("127.0.0.1", port, timeout=10)
+        ftp.login("dosuser", "dospass")
+        try:
+            ftp.cwd("stage")
+            names = ftp.nlst()
+            check("the staged file is listed under stage/",
+                  "HELLO.BAT" in names, names)
+
+            got = bytearray()
+            ftp.retrbinary("RETR HELLO.BAT", got.extend)
+            check("and the bytes come back identical", bytes(got) == payload,
+                  (len(got), len(payload)))
+
+            # incoming/ has to exist and be WRITABLE -- the round-trip
+            # verification PUTs the target's copy back into it, and without
+            # it there is no way to compare anything.
+            ftp.cwd("/incoming")
+            import io
+            ftp.storbinary("STOR RETURN.CHK", io.BytesIO(b"round trip"))
+            check("incoming/ accepts a PUT",
+                  os.path.isfile(os.path.join(tmp, "fileserver", "incoming",
+                                              "RETURN.CHK")))
+
+            # THE PARTIAL DIRECTORY MUST NOT BE REACHABLE FROM THE LOGIN.
+            # This is the guarantee the layout exists for, asserted through
+            # the protocol rather than from the filesystem.
+            escaped = None
+            for attempt in ("/../fileserver-partial", "..", "/.."):
+                try:
+                    ftp.cwd(attempt)
+                    if "partial" in ftp.pwd():
+                        escaped = ftp.pwd()
+                except ftplib.error_perm:
+                    pass
+            check("no cwd escapes the root into the partial directory",
+                  escaped is None, escaped)
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+    finally:
+        cap.stop()
+    check("stopping releases the server", cap._ftpd is None)
