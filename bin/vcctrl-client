@@ -136,8 +136,15 @@ USAGE = """usage: vcctrl <command> [args]
                             its author did not choose.
                             Returns at once -- watch it with file-status.
   file-status [n]           how the running transfer is getting on, with the
-                            last n log lines. The reboots are the wall clock;
-                            the transfers are about 4% of it.
+                            last n log lines. Exit codes once it has finished:
+                              0  everything asked for was sent and verified
+                              1  at least one file did not
+                              2  what was sent verified, but work is left --
+                                 cancelled, or stopped early. `remaining`
+                                 names it.
+                            Still running exits 0: nothing has failed yet.
+                            The reboots are the wall clock; the transfers are
+                            a small fraction of it.
   file-cancel               stop after the file in flight. NOT mid-transfer:
                             FTP.EXE on the target cannot be interrupted from
                             here, and between files is the only honest
@@ -1109,6 +1116,18 @@ def main(argv):
         return verify_input_exit(resp)
     if cmd in ("file-check", "file_check"):
         return file_check_exit(resp)
+    if cmd in ("file-status", "file_status"):
+        j = resp.get("job") or {}
+        sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
+        if j.get("running") or j.get("ok") is None:
+            return 0
+        # A CANCELLED RUN IS NOT A FAILED ONE AND IS NOT A FINISHED ONE.
+        # `ok` says every file attempted succeeded; `complete` says everything
+        # asked for was done. A script that cancelled still wants to know work
+        # is outstanding, and one that did not wants to know it stopped early.
+        if not j.get("ok"):
+            return 1
+        return 0 if j.get("complete") else 2
     if not resp.get("ok"):
         sys.stderr.write("error: %s\n" % resp.get("error"))
         return 1

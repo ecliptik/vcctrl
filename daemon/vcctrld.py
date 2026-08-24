@@ -3731,7 +3731,24 @@ _DOS_ILLEGAL = set('"*+,/:;<=>?[]|\\ ') | set(chr(c) for c in range(0, 32))
 DEFAULT_DEST = "C:\\XFER\\IN"
 DEFAULT_OUT = "C:\\XFER\\OUT"
 
-WARN_BYTES = 8 * 1024 * 1024
+# THE LARGEST TRANSFER THIS TOOL HAS ACTUALLY VERIFIED, end to end, on the
+# rig: 10 MB out and back, byte-for-byte, 2026-08-24. Measured by the file
+# server rather than read off the target's screen --
+#
+#     RETR 10,485,760 bytes in 14.952 s   =  685 KiB/s   (server -> card)
+#     STOR 10,485,760 bytes in 10.781 s   =  950 KiB/s   (card -> server)
+#
+# A CONSTANT WITH PROVENANCE rather than a number inside a sentence, because
+# the warning text quoted "7.8 MB" long after that was beaten -- a figure from
+# a different tool, cited as though it were this one's limit. Beat it and
+# update it here; nothing else should carry the number.
+LARGEST_VERIFIED_BYTES = 10 * 1024 * 1024
+
+# WARN AT WHAT HAS BEEN PROVEN, not at a round number. Below this somebody has
+# watched it work; above it nobody has, and that is the whole content of the
+# warning. Tying them together means the threshold cannot drift away from the
+# evidence for it.
+WARN_BYTES = LARGEST_VERIFIED_BYTES
 REFUSE_BYTES = 64 * 1024 * 1024
 
 
@@ -3837,9 +3854,10 @@ def size_verdict(sizes):
                            % (REFUSE_BYTES // (1024 * 1024)))}
     if biggest > WARN_BYTES or total > WARN_BYTES:
         return {"ok": True, "why": "unmeasured", "total": total,
-                "reason": ("over %d MB. The largest transfer on record here "
-                           "is 7.8 MB, so this is untested rather than known "
-                           "to be too big." % (WARN_BYTES // (1024 * 1024)))}
+                "reason": ("over %d MB, which is the largest this tool has "
+                           "verified end to end on this rig. Untested rather "
+                           "than known to be too big."
+                           % (LARGEST_VERIFIED_BYTES // (1024 * 1024)))}
     return {"ok": True, "why": None, "total": total, "reason": None}
 
 
@@ -4452,8 +4470,25 @@ class TransferJob(object):
                                    "rather than typing blind")
                 break
 
+        cancelled = self._cancelled()
         self._finish(results)
+        left = [q["name"] for q in self.cap._queued()]
+        # TWO DIFFERENT FACTS, AND THEY WERE ONE FLAG. `ok` answers "did
+        # everything I attempted succeed"; `complete` answers "was everything
+        # you asked for done". A cancelled run reported ok=True with a file
+        # still sitting in the queue -- true, and read by anything branching
+        # on it as "all sent".
+        #
+        # ok stays as it was rather than being folded into completion: the
+        # operator ASKED to stop, and reporting a deliberate act as a failure
+        # is the mirror of the same mistake.
         return {"ok": all(r["ok"] for r in results), "why": None,
+                "complete": bool(results) and not cancelled and not left,
+                "cancelled": cancelled, "remaining": left,
+                # Returned for a DIRECT caller, and popped by _file_send
+                # because there it is already the live shared list. Dropping
+                # it here made run() incomplete for anyone not going through
+                # the job wrapper.
                 "files": results, "log": self.log,
                 "left_in_net": not self.do_return}
 

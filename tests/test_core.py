@@ -6106,11 +6106,19 @@ def test_size_verdict_has_three_answers_not_two():
     check("an ordinary photo passes silently",
           (r["ok"], r["why"]) == (True, None), r)
 
-    r = v([12 * MB])
-    check("past 8 MB it proceeds, and says the regime is unmeasured",
+    r = v([vcctrld.LARGEST_VERIFIED_BYTES + MB])
+    check("past what has been verified it proceeds, and says so",
           (r["ok"], r["why"]) == (True, "unmeasured"), r)
     check("the warning says untested rather than too big",
-          "untested" in r["reason"], r["reason"])
+          "Untested" in r["reason"], r["reason"])
+    # THE THRESHOLD IS THE EVIDENCE. The warning quoted "7.8 MB" -- a figure
+    # from a different tool -- for as long as it took to beat it twice.
+    check("and the threshold is exactly what has been verified",
+          vcctrld.WARN_BYTES == vcctrld.LARGEST_VERIFIED_BYTES,
+          (vcctrld.WARN_BYTES, vcctrld.LARGEST_VERIFIED_BYTES))
+    check("the warning cites that number and no other",
+          str(vcctrld.LARGEST_VERIFIED_BYTES // MB) in r["reason"]
+          and "7.8" not in r["reason"], r["reason"])
 
     r = v([80 * MB])
     check("past 64 MB it refuses", (r["ok"], r["why"]) == (False, "too-large"),
@@ -7771,3 +7779,58 @@ def test_the_job_log_is_live_rather_than_delivered_at_the_end():
     # caller construct it that way.
     solo = vcctrld.TransferJob(cap, FakeTarget(cap))
     check("a job with no shared list keeps its own", solo.log == [])
+
+
+def test_a_cancelled_run_is_not_reported_as_a_finished_one():
+    """"Everything I attempted succeeded" and "everything you asked for was
+    done" are different facts, and they were one flag.
+
+    Measured on the rig: three files queued, cancelled after the second, and
+    the run reported ok=True with a file still sitting in the queue. True, and
+    read by anything branching on it as "all sent".
+
+    `ok` deliberately stays as it was rather than being folded into
+    completion. The operator ASKED to stop, and reporting a deliberate act as
+    a failure is the mirror of the same mistake.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    for n in ("one.bin", "two.bin", "three.bin"):
+        _send(cap, n, b"x" * 64)
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    # Cancel once the first file has gone, the way a person would.
+    d = FakeTarget(cap)
+    real = d.type_line
+    seen = []
+
+    def cancel_after_first(text):
+        real(text)
+        if "VCGET.BAT" in text:
+            seen.append(text)
+            if len(seen) == 1:
+                vcctrld.FilesCapability._job = {"cancel": True}
+
+    d.type_line = cancel_after_first
+    vcctrld.FilesCapability._job = {}
+    r = vcctrld.TransferJob(cap, d).run()
+
+    check("the file that was sent verified", r["ok"] is True, r["files"])
+    check("but the run is NOT reported complete", r["complete"] is False, r)
+    check("it says it was cancelled", r["cancelled"] is True, r)
+    check("and names what is left rather than leaving it to be discovered",
+          r["remaining"], r["remaining"])
+    check("the untouched files are still queued",
+          len(cap._queued()) == 2, [q["name"] for q in cap._queued()])
+    check("and it still returned the machine rather than stranding it",
+          r["left_in_net"] is False, r)
+
+    # A RUN THAT FINISHES EVERYTHING IS complete. Without this the check above
+    # passes on a `complete` that is always False.
+    vcctrld.FilesCapability._job = {}
+    r2 = vcctrld.TransferJob(cap, FakeTarget(cap)).run()
+    check("an uncancelled run that empties the queue IS complete",
+          r2["complete"] is True and r2["cancelled"] is False, r2)
+    check("with nothing remaining", not r2["remaining"], r2["remaining"])
+    vcctrld.FilesCapability._job = None
