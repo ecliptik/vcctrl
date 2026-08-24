@@ -9,6 +9,10 @@ section.
 
 ## Start here
 
+**`FILE-TRANSFER.md`** — how a file gets onto the CF card, and why the
+improvised reboot-and-`GET.BAT` is not it. `GET.BAT` is the bootstrap and the
+recovery path; `VCGET.BAT` is the routine one.
+
 **`OPEN-FAULTS.md`** — the forward-looking register: what is still broken, what
 is worked around rather than fixed, and what to check before trusting a result.
 **Read this before running anything measured.** `FINDINGS.md` records what

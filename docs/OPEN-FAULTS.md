@@ -334,6 +334,14 @@ defence, not an active corruption of rounds that attest.
 
 ### Resolved on the card, 2026-08-24
 
+**Done by hand, and that sequence is now superseded — see
+`FILE-TRANSFER.md`.** A future `CLRENV.BAT` update should go through
+`vcctrl file-stage` + `send-file`, which renames before the bytes move,
+refuses to serve a partial file, and proves arrival by round-trip sha256
+rather than by reconciling a `DIR` total off the screen. **The hand-run
+version below worked, which is exactly why it is worth replacing: it worked
+while skipping checks the standard path makes unskippable.**
+
 Written over the network rather than by a card swap. `C:\MTCP\GET.BAT` pulls
 from the FTP server's `stage/` directory, so the file went
 `stage/CLRENV.BAT` -> `C:\DOSKUTSU\CLRENV.BAT` with a `.BAK` taken first.
