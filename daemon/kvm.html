@@ -82,7 +82,11 @@
      half-converted bar means dark text on a dark surface -- which is exactly
      the toast bug fixed two commits ago. */
   #hdrstatus {
-    flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:11px;
+    /* 0 1 auto, not 1 1 auto: size to the lamps and no further. Growing is
+       now the spacer's job -- see the markup. Shrink is kept, with the
+       min-width:0 below it, because on a phone this group still has to give
+       way and scroll rather than push the controls off the edge. */
+    flex:0 1 auto; min-width:0; display:flex; align-items:center; gap:11px;
     overflow-x:auto; scrollbar-width:none;
     background:var(--row-panel); color:var(--row-text);
     border:1px solid var(--row-edge); border-radius:6px;
@@ -1581,8 +1585,17 @@
          with the lamps rather than sitting in the gap after them -- a rule
          floating in open space is the thing I removed from between the
          phone's glyphs an hour ago. -->
-    <span class="sep" aria-hidden="true">|</span>
+    <!-- The trailing separator went with the bar. It divided the status
+         group from the controls; the bar's own border does that now, and
+         a rule at the end of a filled strip marks a boundary that is
+         already drawn. -->
    </div>
+   <!-- The bar sizes to its contents; THIS pushes the controls right.
+        #hdrstatus used to do both jobs by growing, which meant the dark
+        surface ran the whole width of the header with nothing on most
+        of it. Separating them means the bar covers the lamps and the
+        empty space stays empty. -->
+   <span class="grow" aria-hidden="true"></span>
     <button id="zoombtn" aria-haspopup="true" aria-expanded="false"
             title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- Fit to Screen acts on the PICTURE; the three to its right open panels
