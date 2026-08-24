@@ -4379,8 +4379,22 @@ def test_every_commit_cited_in_docs_still_resolves():
 
     import re as _re
     cited = {}
-    for f in sorted(os.listdir("docs")) if os.path.isdir("docs") else []:
-        if not f.endswith(".md"):
+    # TRACKED FILES, NOT THE FILESYSTEM -- the same fix its sibling
+    # test_the_docs_index_cannot_rot_silently already carries, and this one was
+    # missed. Measured 2026-08-24: reading `docs/` off disk pulled in a 41 KB
+    # untracked draft that supplied 15 of the 22 citations, so the guard
+    # reported 19 across 7 docs in the worktree and 7 across 6 in a clone of
+    # the same commit. Two sessions then argued about the discrepancy and
+    # produced two different wrong explanations for it.
+    #
+    # It matters beyond tidiness. A BUNDLE CANNOT HOLD UNTRACKED FILES, so a
+    # citation guard run over the working tree partly validates prose that no
+    # backup contains and no clone will ever see -- which is exactly the
+    # number somebody would quote to say a restore is sound.
+    _ls = _sp.run(("git", "ls-files", "docs/*.md"), capture_output=True,
+                  text=True)
+    for f in sorted(x.split("/")[-1] for x in _ls.stdout.split() if x.strip()):
+        if not f.endswith(".md") or not os.path.exists(os.path.join("docs", f)):
             continue
         body = open(os.path.join("docs", f), encoding="utf-8", errors="replace").read()
         # ANY hex of commit length, backticked or not. The first version of

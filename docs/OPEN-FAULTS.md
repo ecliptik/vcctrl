@@ -802,6 +802,20 @@ confidence at exactly the moment confidence is expensive.
 3. Resolve every SHA cited in docs **inside the clone**.
 4. Run the test suite **from the clone**.
 
+**A second trap, found afterwards and worse.** The citation guard read `docs/`
+off the FILESYSTEM, so an untracked 41 KB draft supplied 15 of its 22
+citations. The same guard therefore reported **19 across 7 docs** in the
+working tree and **7 across 6** in a clone of the same commit — and two
+sessions produced two different wrong explanations for the gap before either
+looked at the instrument.
+
+**A bundle cannot hold untracked files.** So a citation guard run over the
+working tree partly validates prose that no backup contains and no clone will
+ever see — which is precisely the number somebody would quote to argue a
+restore is sound. Fixed to use `git ls-files`, which its sibling
+`test_the_docs_index_cannot_rot_silently` already did; the lesson had been
+learned once and applied to only one of the two.
+
 **One trap while measuring this:** `git bundle verify` must run from inside a
 git repo. Run anywhere else it errors, and `verify | grep -c "complete history"`
 then returns 0 — which reads as *failed* rather than as *never ran*. Same shape
