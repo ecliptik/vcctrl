@@ -91,10 +91,27 @@ STATE_DIR = CFG.default("daemon.state_dir", "/var/lib/vcctrl")
 # Absent or broken is survivable and is NOT handled here: nothing imports
 # pyftpdlib at module scope, so a missing vendor/ costs the file-transfer
 # capability and nothing else. It reports the absence in its own words.
-_VENDOR = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "vendor")
-if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
-    sys.path.append(_VENDOR)
+# TWO LAYOUTS, BECAUSE THERE ARE TWO. In the checkout this file is
+# <repo>/daemon/vcctrld.py, so vendor/ is one level up. Deployed it is
+# /opt/vcctrl/vcctrld.py -- FLAT, no daemon/ directory -- so vendor/ sits
+# beside it and "one level up" is /opt.
+#
+# The first version only knew the checkout, which is why it worked in every
+# test and failed on the rig with "No module named 'pyftpdlib'". The tests
+# asserted the repo layout and were right about it; nothing asserted the
+# deployed one, which is the layout that matters.
+_here = os.path.dirname(os.path.abspath(__file__))
+for _cand in (os.path.join(_here, "vendor"),
+              os.path.join(os.path.dirname(_here), "vendor")):
+    if os.path.isdir(_cand):
+        if _cand not in sys.path:
+            # APPENDED: anything genuinely installed on the host wins, and
+            # this is the fallback rather than an override.
+            sys.path.append(_cand)
+        _VENDOR = _cand
+        break
+else:
+    _VENDOR = None
 CONFIG_PATH = os.path.join(CFG.default("daemon.prefix", "/opt/vcctrl"),
                            "config.json")
 
@@ -4758,6 +4775,27 @@ ECHO Usage: VCCHK source-path name-on-server
     _ftpd_error = None
 
     def start(self):
+        """Report whatever _start_server() left behind, on EVERY path.
+
+        The first version wrote to stderr at the end of the method, so the
+        early returns -- missing credentials, an import failure, a directory
+        it could not create -- all recorded a reason and left in silence. A
+        daemon whose file server declined to start looked exactly like one
+        that started it, and the only symptom was "Connection refused" from a
+        probe, which points at the network rather than at the thing that chose
+        not to listen.
+
+        One exit, so a path cannot be added that skips the telling.
+        """
+        try:
+            self._start_server()
+        except Exception as exc:
+            FilesCapability._ftpd_error = "%s: %s" % (type(exc).__name__, exc)
+        if FilesCapability._ftpd_error:
+            sys.stderr.write("file server did not start: %s\n"
+                             % FilesCapability._ftpd_error)
+
+    def _start_server(self):
         """Serve the staging root, if this rig is configured for transfers.
 
         Runs in a daemon thread, which is the house pattern -- video and the
@@ -4795,10 +4833,16 @@ ECHO Usage: VCCHK source-path name-on-server
             # to a built-in login comes up working while the configuration it
             # claims to follow was never read. That is a rig that works and a
             # false account of why.
+            var = CFG.optional("control.fileserver.password_env")
             FilesCapability._ftpd_error = (
-                "refusing to serve without credentials: set "
-                "control.fileserver.user and put the password in the variable "
-                "control.fileserver.password_env names")
+                "refusing to serve without credentials. control.fileserver "
+                "names user=%r and password_env=%r; on the daemon host that "
+                "variable reaches the service through "
+                "/etc/vcctrl/secrets.env (mode 0600, root), which is NOT "
+                "created by the installer because it holds a secret. A shell "
+                "profile is not a service's environment."
+                % (user, var if var not in (vcconfig.ABSENT, vcconfig.NONE)
+                   else None))
             return
 
         try:
@@ -4835,6 +4879,7 @@ ECHO Usage: VCCHK source-path name-on-server
         except Exception as exc:
             FilesCapability._ftpd_error = "%s: %s" % (type(exc).__name__, exc)
             self._ftpd = None
+
 
     def _serve_forever(self):
         try:
@@ -5483,7 +5528,14 @@ ECHO Usage: VCCHK source-path name-on-server
             return out
         live, why = self._reachable()
         if live is False:
+            # THE SERVER'S OWN REASON BEATS THE PROBE'S. "Connection refused"
+            # is what a probe sees; "no credentials" is what actually
+            # happened, and only one of those tells anybody what to do.
+            if FilesCapability._ftpd_error:
+                why = "%s (the server on this host did not start: %s)" % (
+                    why, FilesCapability._ftpd_error)
             out["why"], out["reason"] = "unreachable", why
+            out["server_error"] = FilesCapability._ftpd_error
             return out
         if live is None:
             out["why"], out["reason"] = "unchecked", why

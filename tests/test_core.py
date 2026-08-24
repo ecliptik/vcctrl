@@ -7070,6 +7070,16 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
         os.path.join(root, d)))
     check("deploy.sh ships nothing that does not exist", not missing, missing)
 
+    # SHIPPING IS NOT INSTALLING, and this guard only checked the first.
+    # vendor/ rode the tar to ~/vcctrl-src and stopped there, because
+    # install.sh never placed it -- so the daemon came up without the FTP
+    # server while every test here was green. Two steps, and only one was
+    # covered.
+    inst = open(os.path.join(root, "pi", "install.sh")).read()
+    check("install.sh places vendor/ where the daemon looks",
+          "$SRC/vendor" in inst and "$PREFIX/vendor" in inst,
+          "shipped but never installed")
+
     # The two the daemon cannot run without, named individually so a rewrite
     # of the parsing above cannot quietly stop checking them.
     for needed in ("vendor", "common", "harness", "profiles", "daemon"):

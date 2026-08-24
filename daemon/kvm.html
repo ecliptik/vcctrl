@@ -2011,9 +2011,9 @@
        picker natively from a label, and the scripted path is the one that
        silently did nothing. -->
   <label for="fileinput" id="fi-type"
-         title="Typed as keystrokes, exactly as if you typed it">Type it in…</label>
+         title="Typed as keystrokes, exactly as if you typed it">Copy/Paste from text file</label>
   <label for="xferinput" id="fi-xfer"
-         title="Really move the bytes, over the network">Transfer to target…</label>
+         title="Move the bytes over the network — reboots the target">Upload file</label>
   <!-- Greyed WITH THE REASON, never hidden and never left clickable to fail.
        A control that vanishes is indistinguishable from one that never
        existed, and one that fails on click teaches people the page lies. -->
@@ -3031,28 +3031,21 @@ $('xferinput').onchange = async () => {
   const refuse = filesNow.refuse_bytes, warn = filesNow.warn_bytes;
   if (refuse && total > refuse) {
     alert('Too large: ' + fmtBytes(total) + '.\n\n'
-      + 'Nothing above ' + fmtBytes(refuse) + ' has been transferred here, '
-      + 'and a transfer that wedges cannot be interrupted — a cancel lands '
-      + 'between files, never inside FTP.EXE on the target.');
+      + 'Nothing above ' + fmtBytes(refuse) + ' has been sent here, and a '
+      + 'stuck transfer cannot be interrupted.');
     return;
   }
-  const names = picked.map(f => f.name).join('  ');
-  let msg = 'Transfer ' + picked.length + ' file'
-    + (picked.length > 1 ? 's' : '') + ' to the target?\n\n'
-    + fmtBytes(total) + ' → ' + (filesNow.dest || 'the target') + '\n  '
-    + names + '\n\n'
-    + 'THIS REBOOTS THE MACHINE. Anything running is lost, and the entire '
-    + 'environment goes with it — every SET. You get back what you booted, '
-    + 'not what you had: the return lands on the menu default, so if you are '
-    + 'on a non-default profile now, you will not be afterwards.\n\n'
-    + 'About 60 s each way, paid once for the whole queue.\n\n'
-    + 'The boot menu cannot be seen, so the profile is chosen blind and '
-    + 'checked afterwards by making the target send a file back. If nothing '
-    + 'arrives, this stops.';
+  // SHORT, AND THE ONE FACT THAT MATTERS IS FIRST. The long version listed
+  // every consequence of the reboot -- true, and nobody reads a paragraph in
+  // a confirm box. What a person needs before clicking is: it reboots, that
+  // costs their session, and it takes about two minutes.
+  const names = picked.map(f => f.name).join(', ');
+  let msg = 'Upload ' + fmtBytes(total) + ' to '
+    + (filesNow.dest || 'the target') + '?\n\n' + names + '\n\n'
+    + 'This REBOOTS the target — anything running is lost, and it comes back '
+    + 'on the default profile. About 2 minutes.';
   if (warn && total > warn) {
-    msg += '\n\nOver ' + fmtBytes(warn) + ': the largest transfer on record '
-      + 'here is 7.8 MB, so this size is untested rather than known to be '
-      + 'too big.';
+    msg += '\n\nOver ' + fmtBytes(warn) + ' is untested here.';
   }
   if (!confirm(msg)) return;
 
@@ -3060,10 +3053,10 @@ $('xferinput').onchange = async () => {
   // network stack as TSRs, and the standing rule is never load TSRs and
   // measure in the same boot -- so coming back is a correctness requirement
   // rather than politeness. A cell has already died of this.
-  const stay = !confirm('Reboot back to the menu default when it is done?\n\n'
+  const stay = !confirm('Reboot back afterwards?\n\n'
     + 'OK — come back (recommended)\n'
-    + 'Cancel — leave it in NET, because I am not finished\n\n'
-    + 'NO MEASURED RUN MAY START FROM NET.');
+    + 'Cancel — stay on the network profile\n\n'
+    + 'No measured run may start from the network profile.');
 
   addLine(new Date(), 'file', 'staging ' + picked.length + ' file'
     + (picked.length > 1 ? 's' : ''), 'k-cmd');

@@ -25,6 +25,19 @@ Type=simple
 ExecStart=/usr/bin/python3 -u /opt/vcctrl/vcctrld.py
 # vcweb lives beside vcctrld; the daemon imports it by name.
 Environment=PYTHONPATH=/opt/vcctrl
+# THE FTP PASSWORD REACHES THE DAEMON THROUGH HERE AND NOWHERE ELSE.
+# control.fileserver.password_env NAMES a variable; nothing puts one in a
+# service's environment by magic, and the operator's shell profile is not the
+# daemon's. Without this the file server refuses to start -- correctly, since
+# a server that fell back to a built-in login would come up working while the
+# configuration it claims to follow was never read.
+#
+# The leading `-` makes it OPTIONAL: a rig with no file transfer configured
+# must not fail to boot its KVM over a secrets file it does not need.
+#
+# NOT created by install.sh, deliberately. It holds a secret, so it is written
+# once by hand with mode 0600 and never by a script that runs from a checkout.
+EnvironmentFile=-/etc/vcctrl/secrets.env
 Restart=always
 RestartSec=2
 # Needs root for /dev/uinput and for reading the USB4VC debug log.
@@ -213,6 +226,23 @@ fi
 # which file the daemon resolved, or says there was none.
 #
 # The library goes to $PREFIX so vcctrld imports it as a sibling.
+# vendor/ IS A TREE, so it needs copying rather than installing file by file.
+# It carries the FTP server the target pulls from -- absent, everything else
+# works and only file transfer is dead, which is the slowest possible way to
+# find a deploy problem.
+#
+# It landed in ~/vcctrl-src and stopped there for one release: deploy.sh
+# shipped it and this script never placed it, and the guard covering that only
+# checked the tar payload. Transport and installation are two steps and only
+# one of them was tested.
+if [ -d "$SRC/vendor" ]; then
+  sudo rm -rf "$PREFIX/vendor.tmp"
+  sudo cp -a "$SRC/vendor" "$PREFIX/vendor.tmp"
+  sudo rm -rf "$PREFIX/vendor"
+  sudo mv "$PREFIX/vendor.tmp" "$PREFIX/vendor"
+  echo "installed vendor/ ($(find "$SRC/vendor" -type f | wc -l) files)"
+fi
+
 sudo install -m 0644 -T "$SRC/common/vcconfig.py" "$PREFIX/vcconfig.py"
 if [ -f "$SRC/vcctrl.yaml" ]; then
   sudo install -m 0644 -T "$SRC/vcctrl.yaml" "$PREFIX/vcctrl.yaml"
