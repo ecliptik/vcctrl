@@ -187,7 +187,19 @@ capabilities:
       # subnet -- a wired and a wireless one, both DHCP -- has two candidates,
       # and the one not named here is an address the target will never dial.
       # A machine that comes up on the other is entirely healthy and entirely
-      # unreachable from the card. Record which, and why.
+      # unreachable from the card. Prefer the one the routing table already
+      # picks for the target's subnet (`ip route get <target>`), so the server
+      # is not fighting the kernel about which way replies leave.
+      #
+      # THIS ADDRESS MUST ALSO BE THE SERVER'S BIND ADDRESS AND ITS PASSIVE
+      # MASQUERADE ADDRESS. Not three settings that happen to agree -- one
+      # value read three times. FTP passive mode advertises an address in its
+      # reply, so a masquerade auto-detected from "the first global address"
+      # can name the OTHER interface: the target connects to the control port
+      # here and is then told to open its data connection somewhere else.
+      # Control succeeds, data hangs. That is a half-working transfer, and it
+      # is the worst shape to debug on a machine whose only console is the
+      # screen you are capturing.
       target_host: 192.0.2.11     # the daemon host, on the target's subnet
       target_port: 2121
       # Where files land on the target. Deliberately NOT the directory the

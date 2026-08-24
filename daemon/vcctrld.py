@@ -4020,12 +4020,28 @@ class FilesCapability(Capability):
         already gone.
 
         `target_host` therefore has exactly one meaning: **the string that
-        goes into the BAT**. The generator that writes the BAT and the check
-        that dials it read the same key, so they cannot drift apart. Absent is
-        `not_configured` rather than a fallback to `control.fileserver` --
-        falling back would silently reinstate the drift this exists to
-        prevent, by testing the control host's server and reporting on the
-        Pi's.
+        goes into the BAT**. Absent is `not_configured` rather than a fallback
+        to `control.fileserver` -- falling back would silently reinstate the
+        drift this exists to prevent, by testing the control host's server and
+        reporting on the Pi's, and it would read as robustness.
+
+        FOUR CONSUMERS, ONE KEY, AND THE FOURTH IS THE SUBTLE ONE:
+
+            1. the generator that writes the address into VCGET.BAT
+            2. this check, which dials it
+            3. the server's BIND_IP -- bound to this address, never 0.0.0.0
+            4. the server's PASV masquerade address
+
+        (4) is where a host with two addresses on ONE subnet stops being a
+        curiosity and becomes a bug. FTP passive mode advertises an address
+        in its reply, so if the masquerade is auto-detected and picks the
+        other interface, the card connects to the control port on the address
+        the BAT named and is then told to open its data connection somewhere
+        else. **Control succeeds and data hangs** -- a half-working transfer,
+        which is the worst failure shape to debug across a serial console on a
+        1995 machine. Auto-detection is exactly what `serve.sh` does today by
+        taking the first global address it finds, which is an ordering, not a
+        choice.
 
         WHICH INTERFACE, DELIBERATELY. The Pi has two addresses on the same
         /24 -- eth0 and wlan0, both DHCP, both up. Whichever one this names,
