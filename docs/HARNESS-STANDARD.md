@@ -1210,6 +1210,14 @@ the evidence for an effect and the evidence for its explanation are the
 same measurements, no amount of further reasoning over them adds
 information.
 
+**Count independent comparisons, not pairings.** A group of N cells yields
+N(N-1)/2 possible pairs but only N-1 independent comparisons. Forming every
+pair and reporting the count as the sample size reuses each cell and
+inflates n without adding evidence -- four cells were once quoted as nine
+pairs when they carried three comparisons. **Use a disjoint set: each cell
+in exactly one pair.** This is 7.2.2h's rule reached by a different route
+-- there by repeated measurements, here by recombined ones.
+
 **This applies with full force to a passing gate.** A stability gate
 answers *is this sitting usable*, not *is this sitting typical*. Passing it
 comfortably is not evidence that the configuration is unusually stable --
