@@ -658,6 +658,43 @@ def css():
         # the pair this is, and where the other half lives. Kept here rather
         # than in a second list inside the HTML, because two lists of themes
         # drift and the failure is a swatch with no palette behind it.
+        # THE STATUS ROW'S OWN SURFACE.
+        #
+        # The row is dark-text-on-light on a light theme, and that caps how
+        # green a green can be: at 7:1 against a light panel the most
+        # saturated green available is around chroma 50, which reads as dark
+        # olive. Against a DARK surface the same 7:1 allows chroma 94. The
+        # operator asked for a green that looks green, and the background is
+        # the constraint, not the colour.
+        #
+        # So a light theme borrows its row from ITS OWN DARK HALF rather than
+        # from a generic grey: a light Tokyo Night page gets a Tokyo Night
+        # bar. The pairing already exists -- it is what the light/dark button
+        # toggles -- so this introduces no new table to drift.
+        #
+        # A dark theme's row is simply its own panel, so nothing changes there
+        # and there is no second code path to keep in step.
+        src = name if dark else pair
+        try:
+            rrow, _n = fitted(src)
+        except KeyError:
+            rrow = roles
+        # The row's GREEN is re-fitted against the row's own surface, for the
+        # reason the row exists: a dark half authors green as a pastel
+        # (tokyo-night is #9ece6a, chroma 55), and the whole point of moving
+        # the bar to a dark surface was the chroma that becomes reachable
+        # there. Maximising it at 7:1 against the bar gives roughly double.
+        #
+        # Only green. Yellow and red are already unmistakable in every dark
+        # palette and re-fitting them would flatten theme character for
+        # nothing -- the same rule as on the light themes.
+        row_surfaces = [rrow["bg"], rrow["panel"]]
+        row_green, _c = fit_max_chroma(rrow["green"], row_surfaces,
+                                       STATE_FLOOR, True, hue=136)
+        for r in ("bg", "panel", "text", "muted", "dim", "edge", "rule",
+                  "green", "yellow", "red"):
+            val = row_green if r == "green" else rrow[r]
+            out.append("  --row-%s: %s;" % (r, val))
         out.append("  --label: \"%s\";" % label)
         out.append("  --group: \"%s\";" % group)
         out.append("  --dark: %d;" % (1 if dark else 0))

@@ -64,9 +64,33 @@
   }
   /* The readable half takes what is left and scrolls inside itself; the
      controls are flex:none and therefore never shrink or leave. */
+  /* THE STATUS ROW HAS ITS OWN SURFACE, AND ON A LIGHT THEME IT IS DARK.
+     The row is dark-text-on-light everywhere else, and that caps how green a
+     green can be: at 7:1 against a light panel the most saturated green
+     available is about chroma 50, which is why four rounds of fixing produced
+     a dark olive and the report stayed "difficult to tell if they are green".
+     Against a dark surface the same 7:1 allows chroma 97. The background was
+     the constraint the whole time, not the colour.
+     The row borrows from the theme's OWN DARK HALF rather than a generic
+     grey, so a light Tokyo Night page gets a Tokyo Night bar. On a dark theme
+     --row-* is simply the theme's own panel, so nothing changes and there is
+     no second code path.
+     REDEFINING THE TOKENS rather than rewriting the rules inside is the whole
+     trick: custom properties inherit, so every descendant that already says
+     var(--muted) or var(--green) follows automatically. The alternative was
+     restyling h1, .sep, .lamp, .chip and the lamps button by hand, and a
+     half-converted bar means dark text on a dark surface -- which is exactly
+     the toast bug fixed two commits ago. */
   #hdrstatus {
     flex:1 1 auto; min-width:0; display:flex; align-items:center; gap:11px;
     overflow-x:auto; scrollbar-width:none;
+    background:var(--row-panel); color:var(--row-text);
+    border:1px solid var(--row-edge); border-radius:6px;
+    padding:4px 9px;
+    --bg:var(--row-bg); --panel:var(--row-panel); --text:var(--row-text);
+    --muted:var(--row-muted); --dim:var(--row-dim); --edge:var(--row-edge);
+    --rule:var(--row-rule); --green:var(--row-green);
+    --yellow:var(--row-yellow); --red:var(--row-red);
   }
   #hdrstatus::-webkit-scrollbar { display:none; }
   header > button, header > .sep { flex:none; }
@@ -756,9 +780,20 @@
   #cmdbar button > .bi, #zoombtn > .bi, .lbtn > .bi {
     border-right:1px solid var(--edge); padding-right:8px; margin-right:0;
   }
+  /* 600, NOT 500. Reported as the strip buttons looking "thin", and they
+     did: system-ui and Segoe UI have no 500 face, so the browser either
+     synthesises one or falls back to 400 -- and next to a lamp row that is
+     now 700 mono, a 400-ish sans label reads as a different, lighter class of
+     control than the state beside it.
+     600 rather than 700: these are a dense strip of eight controls and full
+     bold turns the row into a wall. 600 is a real face in both stacks, so it
+     renders as drawn rather than as whatever the browser invents.
+     This covers every button in both strips at once -- Send, Grab, Capture,
+     Sound, Power, the zoom control and the log buttons all resolve through
+     this one rule, so none of them can drift from the others. */
   #cmdbar button, #zoombtn, .lbtn {
     display:flex; align-items:center; gap:8px;
-    font:500 var(--t-data)/1 var(--sans); letter-spacing:0; padding:0 9px;
+    font:600 var(--t-data)/1 var(--sans); letter-spacing:0; padding:0 9px;
   }
   #cmdbar button > .bl, #zoombtn > .bl, .lbtn > .bl {
     flex:none; white-space:nowrap;
