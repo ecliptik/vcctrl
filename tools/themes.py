@@ -688,13 +688,56 @@ def css():
         # Only green. Yellow and red are already unmistakable in every dark
         # palette and re-fitting them would flatten theme character for
         # nothing -- the same rule as on the light themes.
-        row_surfaces = [rrow["bg"], rrow["panel"]]
-        row_green, _c = fit_max_chroma(rrow["green"], row_surfaces,
-                                       STATE_FLOOR, True, hue=136)
+        # THE BAR IS THE DARK HALF'S `rule`, NOT ITS `panel`.
+        #
+        # panel is near-black on most dark themes -- tokyo-night is #16161e at
+        # Lab lightness 7.6 -- and a black strip across a light page was
+        # reported as looking "really bad". `rule` is the palette's own
+        # elevated surface, L19-32 depending on the theme, which is a slate or
+        # charcoal rather than a hole in the page. It is a token the theme
+        # already ships, so this stays inside the palette instead of inventing
+        # a grey.
+        #
+        # It costs nothing measurable. Lifting tokyo-night's bar from L7.6 to
+        # L19.3 leaves the best green at 7:1 unchanged at chroma 98 and text at
+        # 8.3:1. Past `rule` it does start to cost: at L27 text falls to 6.35
+        # and by L35 no green clears 7:1 at all, so this is the top of the
+        # usable range rather than a midpoint.
+        bar = rrow["rule"]
+        # CAP THE BAR'S LIGHTNESS. `rule` is L19 on tokyo-night but L34 on
+        # everforest-dark, and a bar that light cannot carry a 7:1 green at
+        # all -- everforest came out at 4.01:1 with the fit silently returning
+        # the colour it started from, because there was nothing better to
+        # find. Darkening back toward panel until the bar can hold its own
+        # contrast is the difference between a palette-shaped choice and a
+        # palette-shaped failure.
+        for _ in range(40):
+            if _lab(bar)[0] <= 26.0:
+                break
+            bar = _mix(bar, rrow["panel"], 0.12)
+        row_surfaces = [bar]
+        # A single-phosphor theme keeps its own green, which IS its red. The
+        # main token pass already exempts these; the row is a second place the
+        # same rule has to hold, and it did not -- ibm-5151, dec-amber and the
+        # vt220 pair all came out with a bright green bar lamp, which is the
+        # one thing those themes must never have.
+        if delta_e(rrow["green"], rrow["red"]) < 1.0:
+            row_green = rrow["green"]
+        else:
+            row_green, _c = fit_max_chroma(rrow["green"], row_surfaces,
+                                           STATE_FLOOR, True, hue=136)
+        # The border has to separate the bar from the page, so it cannot be
+        # the bar's own colour -- which `rule` now is.
+        row_edge = _mix(bar, rrow["dim"], 0.45)
+        vals = dict(rrow)
+        vals["panel"] = bar
+        vals["bg"] = bar
+        vals["green"] = row_green
+        vals["edge"] = row_edge
+        vals["rule"] = row_edge
         for r in ("bg", "panel", "text", "muted", "dim", "edge", "rule",
                   "green", "yellow", "red"):
-            val = row_green if r == "green" else rrow[r]
-            out.append("  --row-%s: %s;" % (r, val))
+            out.append("  --row-%s: %s;" % (r, vals[r]))
         out.append("  --label: \"%s\";" % label)
         out.append("  --group: \"%s\";" % group)
         out.append("  --dark: %d;" % (1 if dark else 0))
