@@ -342,6 +342,56 @@ def _lab(hexcolor):
     return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
 
 
+def _lab_to_hex(L, a, b):
+    """Lab -> sRGB hex, clamped into gamut."""
+    def finv(t):
+        return t ** 3 if t ** 3 > 0.008856 else (t - 16.0 / 116) / 7.787
+    fy = (L + 16) / 116.0
+    X = 0.95047 * finv(fy + a / 500.0)
+    Y = 1.00000 * finv(fy)
+    Z = 1.08883 * finv(fy - b / 200.0)
+    r = X * 3.2406 + Y * -1.5372 + Z * -0.4986
+    g = X * -0.9689 + Y * 1.8758 + Z * 0.0415
+    bl = X * 0.0557 + Y * -0.2040 + Z * 1.0570
+
+    def enc(c):
+        c = max(0.0, min(1.0, c))
+        c = 1.055 * (c ** (1 / 2.4)) - 0.055 if c > 0.0031308 else 12.92 * c
+        return max(0, min(255, int(round(c * 255))))
+    return "#%02x%02x%02x" % (enc(r), enc(g), enc(bl))
+
+
+def fit_keep_chroma(colour, surfaces, floor, dark):
+    """Reach `floor` by moving LIGHTNESS, keeping the hue and its intensity.
+
+    WHY NOT _mix. Mixing toward black or white walks a straight line through
+    sRGB toward a grey point, so it drains chroma along with lightness: fitting
+    tokyo-night-light's green to 7:1 that way produced #364624 -- 7.03:1 and
+    chroma 22.8, against 29.3 for the colour it started from. More readable and
+    less green, which is the opposite of what was asked for. The operator's
+    words were "difficult to tell if they are green", and that is a question
+    about HUE that a contrast number cannot answer.
+
+    Holding a and b while L falls raises chroma relative to lightness, so the
+    colour gets darker and MORE saturated. Out-of-gamut results are clamped by
+    the conversion, and the loop re-checks contrast afterwards, so a clamp
+    cannot silently return something that misses the floor.
+    """
+    L, a, b = _lab(colour)
+    best = colour
+    for _ in range(100):
+        if all(contrast(best, s) >= floor for s in surfaces):
+            return best, best != colour
+        L = L + 1.5 if dark else L - 1.5
+        if L <= 0 or L >= 100:
+            break
+        cand = _lab_to_hex(L, a, b)
+        if cand == best:
+            break
+        best = cand
+    return best, best != colour
+
+
 def delta_e(a, b):
     """CIE76. Crude next to CIEDE2000 and sufficient here: the question is
     "are these two obviously different colours", not "how different"."""
@@ -431,7 +481,8 @@ def fitted(name):
             if roles["text"] == before:
                 break
         for role in STATE_ROLES:
-            new_c, changed = fit(roles[role], surfaces, STATE_FLOOR, toward)
+            new_c, changed = fit_keep_chroma(roles[role], surfaces,
+                                             STATE_FLOOR, dark)
             if changed and new_c != roles[role]:
                 notes.append("%s %s->%s (state floor)"
                              % (role, roles[role], new_c))
