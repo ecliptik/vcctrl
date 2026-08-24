@@ -374,6 +374,33 @@ this instrument, and it is worth more than the phase-6 PASS. A difference
 smaller than 0.10 between two PUMP runs is not evidence of anything, whatever
 changed between them.
 
+> **RETRACTED 2026-08-24 — THE 0.10 IS QUANTISATION, AND FOR PHASE 6 IT IS
+> WRONG IN THE DANGEROUS DIRECTION.**
+>
+> `per_loop_fps` is computed as `_flips * 500 / _reel_ticks` in **integer**
+> arithmetic (`main.cpp:1530`), so it truncates to 0.1 fps before anything
+> prints it. Four cells reading identically became a "repeatability floor".
+> **0.10 fps IS 10.3 flips**, and the rig's measured same-config pair spread,
+> over seven independent pairs in the archive, is **0 to 16 flips**. See
+> `FINDINGS.md` §40, `T1-CONFIRM-RESULTS.md`, `HARNESS-STANDARD.md` 10.0e.
+>
+> **Phase 6 is an EQUIVALENCE test, so a too-tight floor fails the good case.**
+> Its question is "did the new machine move anything", and the stated rule —
+> *a difference smaller than 0.10 is not evidence* — reads as *a difference
+> LARGER than 0.10 IS evidence*. On a rig whose identical configurations
+> routinely differ by up to 16 flips, **a healthy Pi 5 will exceed 0.10 by
+> ordinary chance and phase 6 will report a regression that is not there.**
+> That is the opposite failure from the one this section was written to
+> prevent, and it is the more expensive one, because it condemns working
+> hardware.
+>
+> **Restated:** express the margin in **flips over the fixed reel**, not in
+> `per_loop_fps`, and take it from the archive rather than from the metric's
+> resolution. On present evidence a difference **within ~16 flips (~0.16 fps)
+> is not evidence of anything**, and a real regression must clear that
+> comfortably. `fps_true_flips` and `reel_ticks` are already in every manifest,
+> so no rebuild is needed to work in the exact unit.
+
 Measured, not assumed: Pi 5 run 1 gave +1.30 and run 2 gave +1.20, thirty
 minutes apart, same hardware, same declared configuration, manifests identical.
 
