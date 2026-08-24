@@ -4738,6 +4738,20 @@ ECHO Usage: VCCHK source-path name-on-server
                                      "FTP.EXE on the target cannot be "
                                      "interrupted from here")}
 
+    @staticmethod
+    def _listed_boards():
+        """Board ids that appear in `targets:` at all, whatever they declare."""
+        t = CFG.optional("targets")
+        if t is vcconfig.ABSENT or t is vcconfig.NONE:
+            return ()
+        out = []
+        for row in t:
+            try:
+                out.append(int(row["board_id"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return tuple(out)
+
     # -- the server the target pulls from -------------------------------------
 
     _ftpd = None
@@ -4888,8 +4902,20 @@ ECHO Usage: VCCHK source-path name-on-server
             return False, ("board %d has no way to receive a file -- no packet "
                            "driver and no FTP client" % bid)
         if word is None:
-            return None, ("board %d is not listed in `targets:`, so whether it "
-                          "can receive files has never been stated" % bid)
+            # LISTED AND SILENT IS NOT THE SAME AS ABSENT. This said "board %d
+            # is not listed in targets:", which sends somebody looking for a
+            # missing entry that is sitting right there with a `leds:` line --
+            # the wrong repair for the right refusal. Both cases are `unknown`
+            # and they are fixed by different edits, so they say different
+            # things.
+            if bid in (self._listed_boards() or ()):
+                return None, ("board %d is in `targets:` but does not say "
+                              "whether it can receive files -- add `transfer: "
+                              "supported` or `unsupported` beside its `leds:`"
+                              % bid)
+            return None, ("board %d is not listed in `targets:` at all, so "
+                          "whether it can receive files has never been stated"
+                          % bid)
         if word == "unknown":
             return None, ("board %d declares `transfer: unknown`" % bid)
         # A typo. Fails closed as UNKNOWN rather than unsupported: "somebody

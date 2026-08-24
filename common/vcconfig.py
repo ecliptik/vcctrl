@@ -122,6 +122,38 @@ NONE = _Sentinel("NONE")
 
 ANY = ("any",)
 
+# WORDS WHOSE SPELLING IS LOAD-BEARING. Keys were checked and values were not,
+# so `transfer: supproted` validated clean -- and then it is neither
+# `supported` nor `unsupported`, and what happens depends entirely on which
+# way the consumer branches. Test `== "supported"` and a typo silently
+# disables the feature; test `== "unsupported"` and it silently enables one.
+# Either way `config check` says the file is fine.
+#
+# `leds` has always had the gap and it degrades a probe. `transfer` gates a
+# feature that reboots the machine and writes to its disk, which is what moved
+# this from tidy to worth doing.
+#
+# Three words, one place. The tell was `not_configured` against
+# `not-configured` -- one state, two spellings, live since backends existed,
+# and nothing ever failed because a consumer branching on one simply took the
+# else branch on the other.
+ENUMS = {
+    "leds": ("supported", "unsupported", "unknown"),
+    "transfer": ("supported", "unsupported", "unknown"),
+}
+
+
+def _validate_value(key, value, path, errors):
+    allowed = ENUMS.get(key)
+    if not allowed or value is None:
+        return
+    if not isinstance(value, str) or value not in allowed:
+        near = _nearest(value, {a: 1 for a in allowed}) \
+            if isinstance(value, str) else None
+        errors.append("%s: %r is not one of %s%s"
+                      % (path, value, ", ".join(allowed),
+                         (" -- did you mean %r?" % near) if near else ""))
+
 _ADDR = (str,)
 _PORT = (int,)
 
@@ -315,6 +347,7 @@ def _validate(node, schema, path, errors):
                                  (" -- did you mean %r?" % near) if near else ""))
                 continue
             _validate(v, schema[k], _join(path, k), errors)
+            _validate_value(k, v, _join(path, k), errors)
         return
 
     if isinstance(schema, tuple) and schema and schema[0] == "list":
@@ -480,11 +513,46 @@ def _read_yaml(path):
         raise ConfigError(
             "PyYAML is not installed, so %s cannot be read. "
             "Install it with: apt install python3-yaml" % path)
+    # DUPLICATE KEYS ARE AN ERROR, NOT A PREFERENCE FOR THE LAST ONE.
+    #
+    # PyYAML's default is last-wins, silently. Two sessions editing this
+    # untracked file minutes apart produced exactly that on 2026-08-24 --
+    # `transfer:` twice in one target entry -- and `config check` reported the
+    # file fine, because the loader had already thrown one away before any
+    # validation ran. It was harmless only because both copies happened to say
+    # the same thing.
+    #
+    # That is the same shape as every other silence on this rig: the check was
+    # correct and was looking at something other than what was written. A
+    # duplicate key means two people believe different things about one
+    # setting, and resolving it quietly picks a winner without telling either.
+    class _NoDupes(yaml.SafeLoader):
+        pass
+
+    def _no_dupes(loader, node, deep=False):
+        seen = {}
+        for kn, vn in node.value:
+            k = loader.construct_object(kn, deep=deep)
+            if k in seen:
+                raise ConfigError(
+                    "%s: duplicate key %r at line %d -- it also appears at "
+                    "line %d. Nothing here picks a winner: say which one you "
+                    "mean." % (path, k, kn.start_mark.line + 1, seen[k] + 1))
+            seen[k] = kn.start_mark.line
+        return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+    _NoDupes.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dupes)
+
     try:
         with open(path) as f:
-            data = yaml.safe_load(f)
+            data = yaml.load(f, Loader=_NoDupes)
     except OSError as exc:
         raise ConfigError("cannot read %s: %s" % (path, exc))
+    except ConfigError:
+        # Ours, and already precise. Wrapping it as "not valid YAML" would
+        # replace a message naming two line numbers with one naming none.
+        raise
     except Exception as exc:
         raise ConfigError("%s is not valid YAML: %s" % (path, exc))
     if data is None:

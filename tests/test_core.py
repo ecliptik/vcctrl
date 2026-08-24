@@ -7411,3 +7411,100 @@ def test_file_bats_is_not_reachable_from_a_browser():
     for needed in ("files", "file_stage", "file_send", "file_status"):
         check("%s is reachable from the page" % needed,
               needed in vcweb.WebCapability.ALLOWED, needed)
+
+
+def test_a_duplicate_key_is_refused_rather_than_resolved():
+    """PyYAML's default is last-wins, silently, and that hid a real collision.
+
+    Two sessions edited the untracked vcctrl.yaml minutes apart on 2026-08-24
+    and produced `transfer:` twice in one target entry. `config check`
+    reported the file fine, because the loader had already thrown one away
+    before any validation ran -- and it was harmless only because both copies
+    happened to say the same thing.
+
+    Same shape as every other silence here: the check was correct and was
+    looking at something other than what was written. A duplicate key means
+    two people believe different things about one setting, and picking a
+    winner quietly tells neither of them.
+    """
+    import tempfile
+    vcconfig = _vcconfig()
+    good = """version: 1
+rig: {name: t}
+targets:
+  - board_id: 1
+    name: A
+    leds: supported
+    transfer: supported
+"""
+    dup = good + "    transfer: unsupported\n"
+
+    d = tempfile.mkdtemp()
+    gp, dp = os.path.join(d, "g.yaml"), os.path.join(d, "d.yaml")
+    open(gp, "w").write(good)
+    open(dp, "w").write(dup)
+
+    cfg = vcconfig.load(gp)
+    check("a clean file still loads",
+          cfg.default("targets", [])[0]["transfer"] == "supported",
+          cfg.default("targets", []))
+
+    try:
+        vcconfig.load(dp)
+        check("a duplicate key is refused", False, "it loaded")
+    except vcconfig.ConfigError as exc:
+        check("a duplicate key is refused", True)
+        # NAMING BOTH LINES IS THE POINT. "duplicate key" alone leaves someone
+        # scrolling a file two people just edited.
+        check("and it names the key", "'transfer'" in str(exc), str(exc))
+        check("and both line numbers", str(exc).count("line") >= 2, str(exc))
+
+
+def test_the_three_state_words_are_checked_as_values_not_just_keys():
+    """`transfer: supproted` validated clean until this existed.
+
+    Keys were checked and values were not, so a plausible typo passed -- and
+    it is then neither `supported` nor `unsupported`. Test `== "supported"`
+    somewhere and the typo silently disables the feature; test
+    `== "unsupported"` and it silently enables one. Either way the config
+    check says the file is fine.
+
+    `leds` has always had the gap and it degrades a probe. `transfer` gates a
+    feature that reboots the machine and writes to its disk.
+    """
+    import tempfile
+    vcconfig = _vcconfig()
+    d = tempfile.mkdtemp()
+
+    def cfg(body):
+        p = os.path.join(d, "c%d.yaml" % abs(hash(body)))
+        open(p, "w").write("version: 1\nrig: {name: t}\ntargets:\n"
+                           "  - board_id: 1\n    name: A\n" + body)
+        return p
+
+    for word in ("supported", "unsupported", "unknown"):
+        vcconfig.load(cfg("    transfer: %s\n" % word))
+        check("%r is accepted" % word, True)
+
+    for bad in ("supproted", "banana", "yes", "Supported", "true"):
+        try:
+            vcconfig.load(cfg("    transfer: %s\n" % bad))
+            check("%r is refused" % bad, False, "it validated")
+        except vcconfig.ConfigError as exc:
+            check("%r is refused" % bad, True)
+            check("and the message lists the real words",
+                  "supported, unsupported, unknown" in str(exc), str(exc))
+
+    # The near-miss suggestion is what turns a refusal into a fix.
+    try:
+        vcconfig.load(cfg("    transfer: supproted\n"))
+    except vcconfig.ConfigError as exc:
+        check("a close typo is offered the word it meant",
+              "did you mean 'supported'" in str(exc), str(exc))
+
+    # leds carries the same rule, since it is the same three words.
+    try:
+        vcconfig.load(cfg("    leds: banana\n"))
+        check("leds is checked too", False, "it validated")
+    except vcconfig.ConfigError:
+        check("leds is checked too", True)
