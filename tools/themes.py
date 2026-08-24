@@ -392,6 +392,45 @@ def fit_keep_chroma(colour, surfaces, floor, dark):
     return best, best != colour
 
 
+def fit_max_chroma(colour, surfaces, floor, dark, hue=None):
+    """The MOST saturated colour of this hue that still clears `floor`.
+
+    fit_keep_chroma preserved the chroma the palette authored, which was the
+    wrong target: tokyo-night-light authors its green as an olive at chroma
+    29.3, so faithfully preserving that produced a faithful olive. The report
+    was that the lamps still did not read as green. At the SAME 7:1 floor
+    against the same row, chroma 49.9 is available -- the constraint was never
+    the contrast, it was that fitting only ever moved lightness.
+
+    `hue` overrides the palette's own hue angle. Used for the `green` state
+    role, and deliberately: several of these palettes author green at 84-111
+    degrees, which is a yellow-green, and a state lamp that means "this is
+    working" has to READ as green before it has to match a scheme. Yellow and
+    red keep their authored hues -- they are already unmistakable and moving
+    them would cost theme character for nothing.
+    """
+    import math
+    L0, a0, b0 = _lab(colour)
+    h = math.radians(hue) if hue is not None else math.atan2(b0, a0)
+    best = colour
+    best_c = math.hypot(a0, b0) if all(
+        contrast(colour, s) >= floor for s in surfaces) else -1.0
+    lo, hi = (5, 95)
+    for Li in range(lo, hi):
+        L = float(Li)
+        for Ci in range(6, 100, 2):
+            C = float(Ci)
+            cand = _lab_to_hex(L, C * math.cos(h), C * math.sin(h))
+            # The conversion clamps out-of-gamut requests, so verify the
+            # colour we got is the colour we asked for before trusting it.
+            _L, ca, cb = _lab(cand)
+            if abs(math.hypot(ca, cb) - C) > 3.0:
+                continue
+            if all(contrast(cand, s) >= floor for s in surfaces) and C > best_c:
+                best, best_c = cand, C
+    return best, best != colour
+
+
 def delta_e(a, b):
     """CIE76. Crude next to CIEDE2000 and sufficient here: the question is
     "are these two obviously different colours", not "how different"."""
@@ -456,6 +495,7 @@ def fitted(name):
     # The state roles are re-fitted to their own, higher floor before the
     # separation pass, so separation is enforced on the final colours rather
     # than on ones a later step would move.
+    authored = THEMES[name][4]
     if not dark:
         for role in ROW_ROLES:
             new_c, changed = fit(roles[role], surfaces, STATE_FLOOR, toward)
@@ -480,9 +520,28 @@ def fitted(name):
             roles["text"] = _mix(roles["text"], toward, 0.05)
             if roles["text"] == before:
                 break
-        for role in STATE_ROLES:
-            new_c, changed = fit_keep_chroma(roles[role], surfaces,
-                                             STATE_FLOOR, dark)
+        # A single-phosphor theme has no hue to spare. ibm-5151 is green,
+        # dec-amber is amber and the vt220 pair are white, and in all three
+        # the authored green and red are the SAME COLOUR on purpose. Pinning
+        # green to a green hue there paints an amber terminal green and stops
+        # it being the thing it is. Detected from the authored values, the
+        # same way the separation pass detects it, so a new monochrome theme
+        # needs no metadata.
+        monochrome = delta_e(authored["green"], authored["red"]) < 1.0
+        # A single-phosphor theme is not fitted AT ALL here. Not merely
+        # un-pinned: maximising chroma at their own hue still moved green away
+        # from red, and green == red is the property that makes them what they
+        # are. It would have made a white VT220 draw one lamp in olive.
+        #
+        # They need nothing anyway -- their state colours already sit at
+        # 11-14:1, far above the floor this loop exists to reach. Skipping is
+        # not a concession, it is the observation that there is nothing to fix.
+        for role in ([] if monochrome else STATE_ROLES):
+            # 136 degrees in Lab is an unambiguous green. Only `green` is
+            # pinned; see fit_max_chroma.
+            pin = 136 if role == "green" else None
+            new_c, changed = fit_max_chroma(
+                roles[role], surfaces, STATE_FLOOR, dark, hue=pin)
             if changed and new_c != roles[role]:
                 notes.append("%s %s->%s (state floor)"
                              % (role, roles[role], new_c))
@@ -505,7 +564,6 @@ def fitted(name):
     # The page carries a non-colour state marker for exactly those themes:
     # solid underline for on, dashed for not-proven, double for held
     # elsewhere. That is what makes the exemption safe rather than a hole.
-    authored = THEMES[name][4]
     for a, b in STATE_PAIRS:
         if delta_e(authored[a], authored[b]) < 1.0:
             continue                     # monochrome by design; leave it
