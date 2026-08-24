@@ -1173,6 +1173,48 @@ one. Comparing the total count against an expected value refuses any stray
 inheritance, whatever it is called -- which matters because the leaked
 setting is rarely the one anybody thought to name.
 
+### 10.0d A contrast within one sitting is not a finding until the archive says so
+
+Three claims were built in one afternoon on the same four cells, each
+refuted by a single pass over runs already on disk.
+
+A control arm read unusually tight -- four cells agreeing where the
+treatment arms scattered. From that came a mechanism (the lever makes the
+work data-dependent), then a cost derived from the mechanism (it widens
+every future measurement band), then a third claim about *how* the control
+was tight (its variation cancelled rather than being absent).
+
+**Every one was false.** Pooling every same-configuration pair in the
+archive:
+
+    control arms   7 pairs, spread 0 1 2 5 12 15 16
+    treated arms   6 pairs, spread 4 8 9 11 12 13
+
+The treated arms sit **inside** the control distribution. **The four cells
+that started it were the two tightest control pairs of seven**, and were
+read as typical.
+
+**Requirement: before proposing a mechanism for a contrast, establish the
+base rate for both sides from banked runs.** Not a repeat -- the archive.
+A repeat of an unusual sitting can be unusual in the same way.
+
+**The asymmetry is what makes this worth a rule.** Querying the archive
+costs one pass over data already collected. A mechanism costs a design, a
+round, and everything downstream that cites it -- and it is
+self-reinforcing, because a mechanism that explains the contrast makes the
+contrast feel established.
+
+**The tell is specific and checkable:** the cells that produced the
+contrast are the same cells you would naturally reach for to test it. When
+the evidence for an effect and the evidence for its explanation are the
+same measurements, no amount of further reasoning over them adds
+information.
+
+**This applies with full force to a passing gate.** A stability gate
+answers *is this sitting usable*, not *is this sitting typical*. Passing it
+comfortably is not evidence that the configuration is unusually stable --
+it is evidence that it is within tolerance, which most sittings are.
+
 ### L1 -- Reproducible
 
 - A result MUST carry the build identity and configuration that produced
