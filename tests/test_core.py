@@ -5859,3 +5859,66 @@ def test_the_harness_profile_carries_what_sweeps_json_did():
     check("menu window is TARGET physics and lives here",
           (prof.get("timing") or {}).get("menu_window_s") == 14,
           prof.get("timing"))
+
+
+def test_the_client_finds_vcconfig_in_the_INSTALLED_layout():
+    """`vcctrl config check` had never worked on the daemon host.
+
+    The client's loader looked for `dirname(dirname(__file__))/common/
+    vcconfig.py`, which is right in a source checkout and wrong once
+    installed: deploy.sh puts the library in $PREFIX (/opt/vcctrl) and the
+    client in /usr/local/bin/vcctrl, so it searched /usr/local/common/ --
+    a directory that has never existed.
+
+    IT WENT UNNOTICED BECAUSE IT FAILED SAFE: exit 3, "the tool could not
+    run", never a claim that the configuration was bad. A wrong answer would
+    have been found in a day; a refusal to answer sat there indefinitely.
+
+    So the test builds the INSTALLED layout rather than the source one, which
+    is the shape no existing test had.
+    """
+    print("\nclient finds vcconfig when installed")
+    import shutil
+    import subprocess
+    import tempfile
+    root = os.path.join(HERE, os.pardir)
+    d = tempfile.mkdtemp()
+    try:
+        # /usr/local/bin/vcctrl + /opt/vcctrl/vcconfig.py, as deploy.sh makes.
+        binp = os.path.join(d, "usr", "local", "bin")
+        prefix = os.path.join(d, "opt", "vcctrl")
+        os.makedirs(binp)
+        os.makedirs(prefix)
+        shutil.copy(os.path.join(root, "bin", "vcctrl-client"),
+                    os.path.join(binp, "vcctrl"))
+        shutil.copy(os.path.join(root, "common", "vcconfig.py"),
+                    os.path.join(prefix, "vcconfig.py"))
+        cfg = os.path.join(d, "vcctrl.yaml")
+        open(cfg, "w").write("version: 1\nrig:\n  name: installed-layout\n")
+
+        env = dict(os.environ)
+        env["VCCTRL_PREFIX"] = prefix
+        env["VCCTRL_CONFIG"] = cfg
+        r = subprocess.run(["python3", os.path.join(binp, "vcctrl"),
+                            "config", "check", cfg],
+                           capture_output=True, text=True, env=env, timeout=60)
+        out = (r.stdout or "") + (r.stderr or "")
+        check("config check runs in the installed layout", r.returncode == 0,
+              (r.returncode, out.strip()[:160]))
+        check("and reads the file it was given",
+              "installed-layout" in out, out.strip()[:160])
+
+        # The control: with the library removed it must FAIL and say where it
+        # looked. A loader that cannot name its candidates sends the reader to
+        # the wrong file, which is how this one hid.
+        os.unlink(os.path.join(prefix, "vcconfig.py"))
+        r2 = subprocess.run(["python3", os.path.join(binp, "vcctrl"),
+                             "config", "check", cfg],
+                            capture_output=True, text=True, env=env, timeout=60)
+        out2 = (r2.stdout or "") + (r2.stderr or "")
+        check("control: without the library it fails rather than passing",
+              r2.returncode == 3, r2.returncode)
+        check("and names every path it tried",
+              out2.count("vcconfig.py") >= 2, out2.strip()[:200])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
