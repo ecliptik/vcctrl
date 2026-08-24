@@ -2272,5 +2272,27 @@ which one binds before spending a binary change on it.**
 10.3 flips, against a rig whose identically-configured pairs differ by up to 16.
 The test could not have reliably confirmed anything, and `ASM_BLIT`'s
 NOT-CONFIRMED is a property of the test rather than the lever.
+
+### And it condemned a healthy result the same day, live
+
+The harness move out of `bin/` (`CONFIG-PLAN` phase 6) was accepted against the
+**restated** criterion. The first cell from the new paths:
+
+    banked six, pre-move   2842 2842 2840 2839 2844 2849   mean 2842.67
+    ACC1, post-move        2827                            -0.152 fps
+
+**Under the retracted 0.10 floor: `|−0.152| > 0.10` → "IS evidence" → phase 6
+FAILS**, and somebody spends the evening hunting a fault in a file move that
+changed nothing. `ACC2` then read **2840 — inside the banked band** — so `ACC1`
+was ordinary scatter and the level had not moved at all.
+
+**Worse, the old floor's verdict depended on how many cells you happened to
+run.** `ACC1` alone is `−0.152` and fails it; the two-cell mean is `−0.089` and
+passes it. A margin that is narrower than the measurement noise does not test
+the subject, it tests the sample size.
+
+**The restated criterion got it right from the first cell**, and it did so
+because the margin came from the archive's own pair spread rather than from the
+metric's resolution.
 `T1-CONFIRM-RESULTS.md` has the round; `HARNESS-STANDARD.md` 10.0e is the
 design-time gate that prevents the next one.
