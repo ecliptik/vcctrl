@@ -7002,3 +7002,56 @@ def test_the_file_server_actually_serves_a_staged_file():
     finally:
         cap.stop()
     check("stopping releases the server", cap._ftpd is None)
+
+
+def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
+    """Adding a directory must force a decision about whether it ships.
+
+    This has already gone wrong twice. The harness moved out of bin/ and the
+    deploy still sent only bin/, leaving a Pi with the client and no runners --
+    working for every verb anyone tests by hand and missing exactly the ones a
+    round needs. Then vendor/ arrived carrying the FTP server, with the same
+    shape of failure waiting: everything works except file transfer, reported
+    as a broken feature rather than as a missing directory.
+
+    Both were caught by someone remembering. This is that, mechanised: the
+    check fails on a directory nobody has classified, so the answer has to be
+    written down rather than recalled.
+    """
+    import re as _re
+    root = os.path.abspath(os.path.join(HERE, os.pardir))
+    dep = open(os.path.join(root, "pi", "deploy.sh")).read()
+
+    m = _re.search(r'tar -C "\$SRC" -cf - ([a-z /]+?) \|', dep)
+    check("deploy.sh has a recognisable payload list", m is not None)
+    if not m:
+        return
+    shipped = set(m.group(1).split())
+
+    # NOT SHIPPED, ON PURPOSE. Each needs a reason, because "we never sent it"
+    # is not one -- that was true of harness/ too, right up until it mattered.
+    not_shipped = {
+        "docs": "the shipped record, read from a clone rather than the Pi",
+        "dos": "DOS sources; built elsewhere and delivered on the CF card",
+        "internal": "gitignored planning work, not part of any deployment",
+        "tests": "run against a checkout, never on the daemon host",
+    }
+
+    present = {d for d in os.listdir(root)
+               if os.path.isdir(os.path.join(root, d))
+               and not d.startswith(".") and d != "__pycache__"}
+
+    unclassified = sorted(present - shipped - set(not_shipped))
+    check("every directory is either shipped or listed as deliberately not",
+          not unclassified,
+          "classify these in this test and in deploy.sh: %s"
+          % ", ".join(unclassified))
+
+    missing = sorted(d for d in shipped if not os.path.isdir(
+        os.path.join(root, d)))
+    check("deploy.sh ships nothing that does not exist", not missing, missing)
+
+    # The two the daemon cannot run without, named individually so a rewrite
+    # of the parsing above cannot quietly stop checking them.
+    for needed in ("vendor", "common", "harness", "profiles", "daemon"):
+        check("%s/ is deployed" % needed, needed in shipped, shipped)

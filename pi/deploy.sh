@@ -244,7 +244,12 @@ ssh "$HOST" 'rm -rf ~/vcctrl-src && mkdir -p ~/vcctrl-src'
 # bin/ in phase 6, and a deploy that still sent only bin/ would leave a Pi
 # with the client and no runners -- working for every verb anyone tests by
 # hand, and missing exactly the ones a round needs.
-tar -C "$SRC" -cf - daemon bin pi tools common harness profiles | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+# vendor/ ships for the same reason harness/ does, and it is the same mistake
+# one release later: the file server the target pulls from is a vendored
+# library, and a deploy that omitted it would give a Pi where everything anyone
+# tests by hand works and only file transfer is dead -- reported as a broken
+# feature rather than as a missing directory.
+tar -C "$SRC" -cf - daemon bin pi tools common harness profiles vendor | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
 if [ -f "$SRC/vcctrl.yaml" ]; then
   # Validate BEFORE shipping. An invalid file does not stop the daemon -- it
   # degrades to built-in defaults, which on this rig means no power control and
