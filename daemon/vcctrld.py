@@ -4084,6 +4084,152 @@ def _configured_transfer_boards():
     return out
 
 
+class RegistryDriver(object):
+    """TransferJob's driver, over the registry rather than a capability.
+
+    RULE 1: A CAPABILITY MAY NOT CALL INTO ANOTHER. This job needs input and
+    the LED channel, so it goes through `registry.execute()` -- the same door
+    a client uses -- rather than reaching sideways into InputCapability. That
+    is what makes it a sequence over capabilities instead of a capability with
+    tentacles.
+
+    Every wait here is closed-loop on the LED return channel. Nothing is a
+    fixed sleep waiting for a machine to be ready, because a fixed sleep that
+    is long enough on a good day is a race on a bad one, and this rig has
+    produced four separate timing bugs of exactly that shape.
+    """
+
+    # Cold start to a prompt is ~90 s; the peer measured reset -> RDYPULSE at
+    # ~16 s and prompt ~17 s after that. Generous, because the failure of
+    # waiting too long is a slow refusal and the failure of waiting too little
+    # is typing into a machine that is not listening.
+    BOOT_TIMEOUT_S = 150.0
+    MENU_TIMEOUT_S = 30.0
+    PROMPT_TIMEOUT_S = 120.0
+    TRANSFER_TIMEOUT_S = 180.0
+    LED_POLL_S = 0.5
+
+    def __init__(self, registry, pace=None):
+        self.reg = registry
+        self.pace = pace
+
+    # -- typing ---------------------------------------------------------------
+
+    def _do(self, cmd, **kw):
+        req = dict(kw, cmd=cmd)
+        req.setdefault("as", "transfer")
+        if self.pace is not None:
+            req["pace"] = self.pace
+        return self.reg.execute(req)
+
+    def combo(self, keys):
+        return self._do("combo", keys=list(keys))
+
+    def type_line(self, text):
+        r = self._do("type", text=text)
+        if not r.get("ok"):
+            return r
+        return self._do("key", keys=["enter"])
+
+    def sleep(self, s):
+        time.sleep(s)
+
+    def menu_attempts(self):
+        # The window is target physics and lives in the profile; the number of
+        # attempts is derived from it rather than configured, because a
+        # derived value presented as configuration is a value with its
+        # reasoning deleted.
+        window = 14.0
+        try:
+            prof = CFG.optional("harness.profile")
+            if prof not in (vcconfig.ABSENT, vcconfig.NONE, None):
+                pass
+        except Exception:
+            pass
+        return max(2, int(window / 2.0))
+
+    def transfer_timeout(self):
+        return self.TRANSFER_TIMEOUT_S
+
+    # -- the LED return channel -----------------------------------------------
+
+    def _led(self, name):
+        r = self._do("leds")
+        if not r.get("ok") and r.get("available") is not True:
+            return None
+        v = r.get(name)
+        return None if v is None else bool(v)
+
+    def _await_led(self, name, want, timeout):
+        end = time.time() + timeout
+        while time.time() < end:
+            v = self._led(name)
+            if v is not None and v == want:
+                return True
+            time.sleep(self.LED_POLL_S)
+        return False
+
+    def arm(self):
+        """Set Scroll Lock so POST clearing it is an EDGE.
+
+        Without this the reset is invisible: if Scroll is already 0, POST
+        clearing it changes nothing and the wait for 1 -> 0 times out on a
+        machine that rebooted perfectly. Same reason arm_leds() exists for
+        Caps Lock -- a level cannot show a transition.
+        """
+        if self._led("scrolllock") is not True:
+            self._do("key", keys=["scrolllock"])
+            self._await_led("scrolllock", True, 5.0)
+        return self._led("scrolllock") is True
+
+    def wait_menu(self):
+        """Scroll Lock 1 -> 0: POST ran, so the machine really reset."""
+        return self._await_led("scrolllock", False, self.MENU_TIMEOUT_S)
+
+    def wait_boot(self):
+        """Scroll Lock 0 -> 1: RDYPULSE ran, so AUTOEXEC finished."""
+        return self._await_led("scrolllock", True, self.BOOT_TIMEOUT_S)
+
+    def wait_prompt(self):
+        """Is the BIOS keyboard ISR alive? NOT "is DOS at a prompt".
+
+        Caps Lock is serviced by INT 09h and DOS is not involved, so this is
+        True during an FTP transfer as well as at a prompt. It is a NECESSARY
+        condition and never a sufficient one: what it genuinely detects is a
+        program that HOOKS the vector, which is why it correctly reports the
+        game as not-at-a-prompt.
+
+        The transfer does not lean on it the way its name invites -- the thing
+        that actually proves a transfer finished is the file arriving here.
+        """
+        before = self._led("capslock")
+        if before is None:
+            return False
+        end = time.time() + self.PROMPT_TIMEOUT_S
+        while time.time() < end:
+            self._do("key", keys=["capslock"])
+            if self._await_led("capslock", not before, 8.0):
+                # Restore, ALWAYS. On the failure path the keystroke was
+                # usually only buffered, so leaving it unrestored means a
+                # failed probe corrupts the state the next probe reads.
+                self._do("key", keys=["capslock"])
+                self._await_led("capslock", before, 8.0)
+                return True
+            time.sleep(1.0)
+        self._do("key", keys=["capslock"])
+        return False
+
+    def screen(self):
+        """Whatever text the screen holds, or None.
+
+        DIAGNOSIS ONLY. The daemon has frames and no OCR -- that lives in the
+        client -- so this returns None here and the job's gate does not depend
+        on it. It is a seam for a caller that can read the screen to pass one
+        in, not a capability being claimed.
+        """
+        return None
+
+
 class TransferJob(object):
     """One transfer: reboot into NET, send the queue, verify, come back.
 
@@ -4154,6 +4300,14 @@ class TransferJob(object):
             return self._fail("unreachable" if live is False else "unchecked",
                               why)
 
+        # ARM FIRST. POST clears Scroll Lock, so the reset is only visible as
+        # an edge if it was set beforehand -- otherwise the wait for 1 -> 0
+        # times out on a machine that rebooted perfectly.
+        if hasattr(self.d, "arm") and not self.d.arm():
+            return self._fail("no-witness",
+                              "could not set Scroll Lock, so a reboot would "
+                              "be invisible -- refusing rather than rebooting "
+                              "blind")
         self._say("reboot", "rebooting into the NET profile")
         PROFILE.invalidate("rebooting for a file transfer")
         self.d.combo(["ctrl", "alt", "delete"])
@@ -4184,6 +4338,9 @@ class TransferJob(object):
 
         results = []
         for rec in queue:
+            if self._cancelled():
+                self._say("cancel", "stopped between files, as asked")
+                break
             results.append(self._send_one(rec))
             if results[-1].get("why") == "no-prompt":
                 # A FILE FAILING IS NOT THE RUN FAILING -- the reboots are
@@ -4289,6 +4446,10 @@ class TransferJob(object):
                                 "the machine may still be in NET, which no "
                                 "measured run may start from", warn=True)
 
+    def _cancelled(self):
+        job = FilesCapability._job
+        return bool(job and job.get("cancel"))
+
     def _fail(self, why, reason):
         """Refuse the run, naming which gate stopped it.
 
@@ -4300,6 +4461,8 @@ class TransferJob(object):
             unreachable   the file server is not answering (checked BEFORE
                           anything reboots)
             unchecked     that check could not be made
+            no-witness    Scroll Lock could not be set, so a reboot would be
+                          invisible -- refusing beats rebooting blind
             no-reset      Scroll Lock never cleared, so the reboot did not
                           happen at all
             no-boot       no readiness pulse: the machine did not finish
@@ -4313,6 +4476,12 @@ class TransferJob(object):
                           the target is unknown
             sha-mismatch  it came back different: the copy on the target is
                           not the file that was staged
+            busy          a transfer is already running -- refused rather than
+                          queued, because two runs interleaving their reboots
+                          would each misread the other's machine state
+            unsequenced   no registry to drive input through
+            crashed       the job raised; the target is very likely still in
+                          NET, which nothing downstream can otherwise tell
 
         `unsupported`, `unknown` and `not_configured` reach here unchanged
         from FilesCapability.snapshot(), which is where they are defined.
@@ -4335,6 +4504,13 @@ class FilesCapability(Capability):
 
     name = "files"
 
+    # Set by the registry after construction, the same way `bus` is. The job
+    # sequences input through registry.execute() rather than reaching into
+    # InputCapability, which is rule 1: a capability may not call into
+    # another. A sequence OVER capabilities is a different object from a
+    # capability with tentacles.
+    registry = None
+
     # How long the cheap check waits. It runs on every state poll, so it is
     # not allowed to make the page wait: a server that is slow to answer
     # leaves the previous state standing and says the check timed out. It must
@@ -4345,7 +4521,222 @@ class FilesCapability(Capability):
     def commands(self):
         return {"files": self._files, "file_check": self._file_check,
                 "file_name": self._file_name, "file_stage": self._file_stage,
-                "file_queue": self._file_queue}
+                "file_queue": self._file_queue, "file_send": self._file_send,
+                "file_status": self._file_status,
+                "file_cancel": self._file_cancel, "file_bats": self._file_bats}
+
+    # -- the two BATs the card needs ------------------------------------------
+    #
+    # GENERATED, NOT SHIPPED AS FILES, because they carry the address and the
+    # credentials -- and the address is the same `target_host` the liveness
+    # check dials and the server binds. That is the whole point of the key
+    # having one meaning: a static BAT in the tree would be a fourth place the
+    # address is written down and the first to go stale.
+    #
+    # Both follow the card's existing BATs exactly: CRLF, `binary`, no `pasv`
+    # (mTCP negotiates it and prints "Unknown command" otherwise), no caret
+    # anywhere and no `>` inside a REM -- redirection IS parsed in REM on
+    # 6.22, and a comment explaining that once created the files it warned
+    # about. The success line says "attempted": whether FTP.EXE sets an
+    # errorlevel is unverified, and `IF ERRORLEVEL 1` would then read the
+    # PREVIOUS command's value, which is a check reporting confidently on a
+    # different operation.
+
+    VCGET_BAT = """@ECHO OFF
+REM VCGET name [destdir] -- pulls stage\\name from the vcctrl daemon host.
+REM NO ANGLE BRACKETS ANYWHERE IN THIS FILE, not even in a comment: DOS 6.22
+REM parses redirection INSIDE REM, so a usage line written the obvious way
+REM creates a file named after the following word.
+REM Generated by `vcctrl file-bats`. Do not hand-edit: the address here must
+REM match capabilities.files.settings.target_host, and a copy edited on the
+REM card is one nothing can check.
+REM Requires the NET boot profile. C:\\MTCP is NOT on the PATH there, so this
+REM uses full paths throughout.
+SET VGF=%1
+SET VGD=%2
+IF "%VGF%"=="" GOTO USAGE
+IF "%VGD%"=="" SET VGD=@@DEST@@
+IF NOT EXIST %VGD%\\NUL MD %VGD%
+SET MTCPCFG=C:\\MTCP\\TCP.CFG
+ECHO @@USER@@> C:\\MTCP\\VCGET.RSP
+ECHO @@PASS@@>> C:\\MTCP\\VCGET.RSP
+ECHO binary>> C:\\MTCP\\VCGET.RSP
+ECHO cd stage>> C:\\MTCP\\VCGET.RSP
+ECHO get %VGF% %VGD%\\%VGF%>> C:\\MTCP\\VCGET.RSP
+ECHO quit>> C:\\MTCP\\VCGET.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET.RSP
+ECHO.
+ECHO VCGET attempted: %VGD%\\%VGF%
+GOTO END
+:USAGE
+ECHO Usage: VCGET name [destdir]
+:END
+SET VGF=
+SET VGD=
+"""
+
+    VCCHK_BAT = """@ECHO OFF
+REM VCCHK source-path name-on-server -- sends a file BACK to the vcctrl
+REM daemon host so its bytes can be compared there.
+REM NO ANGLE BRACKETS ANYWHERE IN THIS FILE, not even in a comment: DOS 6.22
+REM parses redirection INSIDE REM.
+REM Generated by `vcctrl file-bats`. Do not hand-edit.
+REM This is the verification leg: no OCR is involved in the verdict, because
+REM the comparison happens on the Linux side against the staged copy.
+REM Requires the NET boot profile.
+IF "%1"=="" GOTO USAGE
+IF "%2"=="" GOTO USAGE
+SET MTCPCFG=C:\\MTCP\\TCP.CFG
+ECHO @@USER@@> C:\\MTCP\\VCCHK.RSP
+ECHO @@PASS@@>> C:\\MTCP\\VCCHK.RSP
+ECHO binary>> C:\\MTCP\\VCCHK.RSP
+ECHO cd incoming>> C:\\MTCP\\VCCHK.RSP
+ECHO put %1 %2>> C:\\MTCP\\VCCHK.RSP
+ECHO quit>> C:\\MTCP\\VCCHK.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCCHK.RSP
+ECHO.
+ECHO VCCHK attempted: %1
+GOTO END
+:USAGE
+ECHO Usage: VCCHK source-path name-on-server
+:END
+"""
+
+    def _file_bats(self, req):
+        """Render the two BATs the card needs, for this rig's configuration.
+
+        DELIBERATELY NOT EXPOSED TO THE BROWSER. They contain the FTP password
+        in plaintext -- which is unavoidable, it is plaintext on the card too
+        -- but a password already on a CF card is a different exposure from
+        one a web request will hand out.
+        """
+        srv = self._server()
+        if srv is None:
+            return {"ok": False, "why": "not_configured",
+                    "error": "no capabilities.files.settings.target_host is "
+                             "set, so there is no address to write into them"}
+        host, port = srv
+        user, password = self._credentials()
+        if not user or not password:
+            return {"ok": False, "why": "not_configured",
+                    "error": "no credentials: set control.fileserver.user and "
+                             "the variable control.fileserver.password_env "
+                             "names"}
+        dest = (self.settings or {}).get("dest", "C:\\UPLOADS")
+        out = {}
+        for name, tpl in (("VCGET.BAT", self.VCGET_BAT),
+                          ("VCCHK.BAT", self.VCCHK_BAT)):
+            text = (tpl.replace("@@HOST@@", host)
+                       .replace("@@PORT@@", str(port))
+                       .replace("@@USER@@", user)
+                       .replace("@@PASS@@", password)
+                       .replace("@@DEST@@", dest))
+            # CRLF, because a DOS batch file with LF endings fails in ways
+            # that read as a logic bug rather than a formatting one.
+            out[name] = text.replace("\n", "\r\n")
+        return {"ok": True, "bats": out, "host": host, "port": port,
+                "dest": dest,
+                "install": [
+                    "Put both files in the CONTROL host's stage/ directory",
+                    "  (~/doskutsu-netiter/stage/), NOT this host's -- the",
+                    "  card's existing GET.BAT is the only way onto the card",
+                    "  and it dials the control host.",
+                    "At a NET prompt on the target:",
+                    "  C:\\MTCP\\GET.BAT VCGET.BAT",
+                    "  C:\\MTCP\\GET.BAT VCCHK.BAT",
+                    "  COPY C:\\DOSKUTSU\\VCGET.BAT C:\\MTCP\\",
+                    "  COPY C:\\DOSKUTSU\\VCCHK.BAT C:\\MTCP\\",
+                    "  DEL C:\\DOSKUTSU\\VCGET.BAT",
+                    "  DEL C:\\DOSKUTSU\\VCCHK.BAT",
+                    "Then verify before relying on either:",
+                    "  C:\\MTCP\\CHK.BAT C:\\MTCP\\VCGET.BAT VCGET.chk",
+                    "  and sha256 that against what this printed.",
+                    "NEITHER OVERWRITES GET.BAT. It stays the known-good",
+                    "  bootstrap, and it is the only way to fix these two",
+                    "  without a card swap."]}
+
+    # -- the transfer, as a job rather than a call ----------------------------
+    #
+    # MINUTES LONG, SO NOT A BLOCKING REQUEST. Two reboots at ~60 s each plus
+    # the transfers; a POST held open for that is what makes a page look hung,
+    # and a browser that closes must not abandon a machine mid-reboot. So the
+    # command starts it and returns, and `file_status` is how anyone watches.
+
+    _job = None
+    _job_lock = threading.Lock()
+
+    def _file_send(self, req):
+        with FilesCapability._job_lock:
+            cur = FilesCapability._job
+            if cur and cur.get("running"):
+                # ONE AT A TIME, AND REFUSED RATHER THAN QUEUED. Two transfers
+                # interleaving their reboots would each see the other's
+                # machine state and both would be wrong about it.
+                return {"ok": False, "why": "busy",
+                        "error": "a transfer is already running",
+                        "status": cur}
+            if self.registry is None:
+                return {"ok": False, "why": "unsequenced",
+                        "error": "no registry to sequence input through"}
+            job = {"running": True, "started_at": time.time(), "log": [],
+                   "files": [], "ok": None, "why": None, "reason": None,
+                   "dest": req.get("dest") or (self.settings or {}).get(
+                       "dest", "C:\\UPLOADS"),
+                   "return": bool(req.get("return", True))}
+            FilesCapability._job = job
+
+        def run():
+            drv = RegistryDriver(self.registry, pace=req.get("pace"))
+            tj = TransferJob(self, drv, dest=job["dest"],
+                             do_return=job["return"])
+            try:
+                out = tj.run()
+            except Exception as exc:
+                out = {"ok": False, "why": "crashed",
+                       "reason": "%s: %s" % (type(exc).__name__, exc),
+                       "files": [], "log": tj.log}
+                sys.stderr.write("transfer crashed: %s\n" % exc)
+            job.update(out)
+            job["running"] = False
+            job["finished_at"] = time.time()
+            # THE MACHINE'S STATE AFTER A CRASH IS THE PART WORTH SAYING. A
+            # transfer that died between the two reboots has left the target
+            # in NET, and nothing downstream can tell that from a tidy exit.
+            if out.get("why") == "crashed":
+                job["left_in_net"] = True
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "started": True, "status": FilesCapability._job}
+
+    def _file_status(self, req):
+        job = FilesCapability._job
+        if not job:
+            return {"ok": True, "job": None,
+                    "note": "no transfer has run since the daemon started"}
+        out = dict(job)
+        # The log is unbounded over a long run and the page polls this; the
+        # tail is what anyone watching needs, and the whole thing is in the
+        # result of the run for anyone who wants it.
+        n = int(req.get("log") or 40)
+        out["log"] = job["log"][-n:]
+        out["log_total"] = len(job["log"])
+        return {"ok": True, "job": out}
+
+    def _file_cancel(self, req):
+        """Ask the running transfer to stop at the next FILE boundary.
+
+        NEVER MID-FTP. There is no way to interrupt FTP.EXE on the target from
+        here, so a cancel that claimed to stop a transfer in flight would be
+        claiming something it cannot do. Between files is the only honest
+        boundary, and it is stated rather than implied.
+        """
+        job = FilesCapability._job
+        if not job or not job.get("running"):
+            return {"ok": False, "error": "no transfer is running"}
+        job["cancel"] = True
+        return {"ok": True, "note": ("will stop after the file in flight -- "
+                                     "FTP.EXE on the target cannot be "
+                                     "interrupted from here")}
 
     # -- the server the target pulls from -------------------------------------
 
@@ -5212,6 +5603,12 @@ class Registry(object):
                 # Set unconditionally, so every capability has one whether or
                 # not its constructor asked for it.
                 cap.bus = self.bus
+                # Only the files capability declares it wants this, and it is
+                # set unconditionally for the same reason `bus` is: an
+                # attribute that exists on some siblings and not others, with
+                # nothing saying which, is how LedsCapability ended up without
+                # a bus and raised on the first line that touched it.
+                cap.registry = self
                 # The CONFIGURED name, not the class's. See
                 # DEFAULT_BACKEND_NAME above for why those differ.
                 cap.backend_name = chosen_name

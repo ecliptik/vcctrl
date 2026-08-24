@@ -7328,3 +7328,86 @@ def test_leaving_the_machine_in_NET_is_said_out_loud():
     check("and the profile reading is left invalidated",
           vcctrld.PROFILE.snapshot()["name"] is None,
           vcctrld.PROFILE.snapshot())
+
+
+def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
+    """Two DOS 6.22 facts that have each cost this project a session.
+
+    The caret escapes NOTHING on 6.22 -- established by hardware test -- so
+    `ECHO CHK done: %1 ^> incoming\\%2` did not print a greater-than, it
+    REDIRECTED, creating a file named after the following word. And
+    redirection is parsed inside REM, so the first patch quoted the broken
+    line in a comment to explain it and would have created the very files it
+    existed to stop creating. That was caught on re-read rather than by
+    reasoning, which means the defence is the re-read -- so it is a test.
+    """
+    cap = vcctrld.FilesCapability(None)
+    cap.settings = {"target_host": "192.0.2.11", "target_port": 2121,
+                    "dest": "C:\\UPLOADS"}
+    cap._credentials = lambda: ("dosuser", "dospass")
+
+    r = cap._file_bats({})
+    check("both batch files are generated", r["ok"] and
+          set(r["bats"]) == {"VCGET.BAT", "VCCHK.BAT"}, r.get("bats", {}).keys())
+
+    for name, text in r["bats"].items():
+        check("%s uses CRLF" % name,
+              text.count("\r\n") > 5 and "\n" not in text.replace("\r\n", ""),
+              name)
+        check("%s contains no caret -- it escapes nothing on 6.22" % name,
+              "^" not in text, name)
+        for line in text.split("\r\n"):
+            if line.strip().upper().startswith("REM"):
+                check("no REM line in %s contains a redirect" % name,
+                      ">" not in line and "<" not in line, line)
+        # The address is the CONFIGURED one, which is the whole point of
+        # generating these rather than shipping them: a static BAT would be a
+        # fourth place the address is written and the first to go stale.
+        check("%s dials the configured host" % name, "192.0.2.11" in text, name)
+        check("%s uses the configured port" % name, "-port 2121" in text, name)
+        check("%s uses full paths, since C:\\MTCP is not on the NET PATH"
+              % name, "C:\\MTCP\\FTP.EXE" in text, name)
+        check("%s does not claim success, only an attempt" % name,
+              "attempted" in text and "ERRORLEVEL" not in text.upper(), name)
+
+    check("VCGET defaults to the configured destination",
+          "C:\\UPLOADS" in r["bats"]["VCGET.BAT"], r["bats"]["VCGET.BAT"])
+    check("VCCHK returns files into incoming/",
+          "cd incoming" in r["bats"]["VCCHK.BAT"], r["bats"]["VCCHK.BAT"])
+    check("VCGET fetches from stage/",
+          "cd stage" in r["bats"]["VCGET.BAT"], r["bats"]["VCGET.BAT"])
+    check("neither is named GET.BAT or CHK.BAT",
+          not {"GET.BAT", "CHK.BAT"} & set(r["bats"]), set(r["bats"]))
+
+    # `pasv` is not one of mTCP's commands: it negotiates passive mode itself
+    # and including the word just prints "Unknown command" into the transcript.
+    for name, text in r["bats"].items():
+        check("%s does not send a pasv line" % name,
+              "pasv" not in text.lower(), name)
+
+    # Refuses rather than emitting a BAT with a hole in it.
+    cap._credentials = lambda: (None, None)
+    check("no credentials means no batch file",
+          cap._file_bats({})["ok"] is False, cap._file_bats({}))
+    cap._credentials = lambda: ("u", "p")
+    cap.settings = {"dest": "C:\\UPLOADS"}
+    check("no target_host means no batch file",
+          cap._file_bats({})["ok"] is False, cap._file_bats({}))
+
+
+def test_file_bats_is_not_reachable_from_a_browser():
+    """It renders the FTP password in plaintext.
+
+    That password is plaintext on the CF card too and there is no way around
+    it -- the card's batch files have always carried it. But a password
+    sitting on a card is a different exposure from one a web request hands out
+    on demand, and the allowlist is where that distinction is enforced.
+    """
+    import vcweb
+    check("file_bats is not on the web allowlist",
+          "file_bats" not in vcweb.WebCapability.ALLOWED,
+          sorted(c for c in vcweb.WebCapability.ALLOWED if c.startswith("file")))
+    # The ones that ARE exposed must stay exposed, or the page breaks quietly.
+    for needed in ("files", "file_stage", "file_send", "file_status"):
+        check("%s is reachable from the page" % needed,
+              needed in vcweb.WebCapability.ALLOWED, needed)

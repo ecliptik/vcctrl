@@ -603,6 +603,12 @@ class WebCapability(object):
         # destination directory is decided here. It writes to the daemon
         # host's staging directory and touches the target not at all.
         "file_stage", "file_queue",
+        # The transfer itself. It REBOOTS the target, which is the same class
+        # of action as the power buttons already in this strip and behind the
+        # same kind of confirmation. `file_send` returns at once and
+        # `file_status` is how the page follows it, so no request is held open
+        # across two reboots.
+        "file_send", "file_status", "file_cancel",
         # The page names the boot profile in its title, so it needs to read
         # the reading. Read-only from here: `set`, `clear` and `blaster` are
         # reachable over the socket and from the CLI, but a browser must not
@@ -792,6 +798,15 @@ class WebCapability(object):
                           {"id": None, "name": None, "target": None,
                            "source": None, "stale": None,
                            "reason": "board capability failed to start"}),
+                # Whether this machine can be sent a file at all, and if
+                # not, WHICH not -- the page greys the transfer entry with the
+                # reason rather than hiding it or letting it fail on click.
+                "files": (self.registry.caps["files"].snapshot()
+                          if "files" in self.registry.caps else
+                          {"available": False, "why": "not_configured",
+                           "reason": "the files capability is not running",
+                           "backend": None, "server": None, "dest": None,
+                           "warn_bytes": None, "refuse_bytes": None}),
                 # THE BOOT PROFILE, AS A READING AND NOT A STATUS. Null
                 # whenever it has not been established or a reboot has
                 # invalidated it -- absent rather than old, because a stale

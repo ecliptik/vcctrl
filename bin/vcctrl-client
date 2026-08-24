@@ -118,6 +118,30 @@ USAGE = """usage: vcctrl <command> [args]
                             uppercase, and the rename happens here because the
                             target cannot rename in transit. Prints the notes
                             so a shortened name is seen before it is sent.
+  file-bats [DIR]           print, or write into DIR, the two batch files
+                            this rig's CF card needs -- VCGET.BAT and
+                            VCCHK.BAT, carrying THIS rig's server address and
+                            login. Generated rather than shipped, so the
+                            address cannot drift from the one the daemon binds
+                            and the liveness check dials. Prints how to get
+                            them onto the card, and neither replaces GET.BAT:
+                            that stays the known-good bootstrap and is the
+                            only way to fix these two without a card swap.
+  send-file (--return|--stay) [--dest DIR]
+                            send everything staged to the target. REBOOTS it
+                            twice and destroys its environment. Neither flag
+                            is the default: --stay leaves the machine in NET,
+                            which no measured run may start from, so a script
+                            that does not say would leave the rig in a state
+                            its author did not choose.
+                            Returns at once -- watch it with file-status.
+  file-status [n]           how the running transfer is getting on, with the
+                            last n log lines. The reboots are the wall clock;
+                            the transfers are about 4% of it.
+  file-cancel               stop after the file in flight. NOT mid-transfer:
+                            FTP.EXE on the target cannot be interrupted from
+                            here, and between files is the only honest
+                            boundary.
   file-check [timeout]      the real check: is the file server actually
                             answering? Run this BEFORE a transfer, not after --
                             a dead server discovered post-reboot has cost two
@@ -384,6 +408,45 @@ def stage_file(path, as_name=None, replace=False):
     except OSError as exc:
         sys.stderr.write("stage-file: %s\n" % exc)
         return 3
+
+
+def file_bats(out_dir=None):
+    """Print or write the two BATs this rig's card needs.
+
+    NOT ON THE WEB ALLOWLIST, and this is where that shows: they carry the FTP
+    password in plaintext. It is plaintext on the CF card too and there is no
+    way around that -- the card's BATs have always held it -- but a password
+    already sitting on a card is a different exposure from one a web request
+    hands out on demand.
+    """
+    resp = call({"cmd": "file_bats"})
+    if resp is None:
+        sys.stderr.write("file-bats: the daemon did not answer\n")
+        return 1
+    if not resp.get("ok"):
+        sys.stderr.write("error: %s\n" % resp.get("error"))
+        return 3
+    bats = resp["bats"]
+    if out_dir:
+        if not os.path.isdir(out_dir):
+            sys.stderr.write("file-bats: %s is not a directory\n" % out_dir)
+            return 3
+        for name, text in sorted(bats.items()):
+            p = os.path.join(out_dir, name)
+            # BINARY, so the CRLF the daemon put in survives. Opening in text
+            # mode would translate them back on some platforms, and a DOS
+            # batch file with LF endings fails in ways that read as a logic
+            # bug rather than a formatting one.
+            with open(p, "wb") as f:
+                f.write(text.encode("ascii"))
+            sys.stdout.write("wrote %s (%d bytes)\n" % (p, len(text)))
+    else:
+        for name, text in sorted(bats.items()):
+            sys.stdout.write("----- %s -----\n%s\n" % (name, text))
+    sys.stdout.write("\n")
+    for line in resp.get("install") or ():
+        sys.stdout.write("  %s\n" % line)
+    return 0
 
 
 def file_check_exit(resp):
@@ -991,6 +1054,35 @@ def main(argv):
             sys.stderr.write("file-name needs a filename to convert\n")
             return 3
         req = {"cmd": "file_name", "name": rest[0]}
+    elif cmd in ("send-file", "file_send"):
+        req = {"cmd": "file_send"}
+        if "--stay" in argv:
+            req["return"] = False
+        elif "--return" in argv:
+            req["return"] = True
+        else:
+            # NEITHER IS THE DEFAULT. NET loads the ODI stack as TSRs and the
+            # standing rule is never load TSRs and measure in the same boot,
+            # so a script that does not say leaves the rig in a state its
+            # author did not think about -- which is exactly how a cell died
+            # with no BLASTER after a hand-run transfer.
+            sys.stderr.write(
+                "send-file needs --return or --stay.\n"
+                "  --return  reboot back to the menu default afterwards\n"
+                "  --stay    leave the machine in NET (NO measured run may\n"
+                "            start from there)\n")
+            return 3
+        for i, a in enumerate(rest):
+            if a == "--dest" and i + 1 < len(rest):
+                req["dest"] = rest[i + 1]
+    elif cmd in ("file-bats", "file_bats"):
+        return file_bats(rest[0] if rest and not rest[0].startswith("-")
+                         else None)
+    elif cmd in ("file-status", "file_status"):
+        req = {"cmd": "file_status", "log": int(rest[0]) if rest and
+               rest[0].isdigit() else 40}
+    elif cmd in ("file-cancel", "file_cancel"):
+        req = {"cmd": "file_cancel"}
     elif cmd in ("file-check", "file_check"):
         req = {"cmd": "file_check"}
         if rest:

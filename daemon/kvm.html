@@ -893,7 +893,22 @@
     background:transparent; font:500 var(--t-read)/1 var(--sans);
     padding:0 9px;
   }
-  .popmenu button:hover { background:var(--rule); }
+  .popmenu button:hover, .popmenu label:hover { background:var(--rule); }
+  /* The labels render exactly as the buttons do -- same rule, extended --
+     because they ARE the menu items; only the mechanism differs. */
+  .popmenu label {
+    display:block; width:100%; text-align:left; border:0; border-radius:5px;
+    background:transparent; font:500 var(--t-read)/1 var(--sans);
+    padding:0 9px; line-height:30px; cursor:pointer;
+  }
+  /* A COLOUR TOKEN, NOT AN ALPHA. `opacity` on text is invisible to the
+     contrast floor -- it measures tokens, and an alpha applied on top of one
+     is not the token. A not-applicable lamp rendered at 1.5:1 that way while
+     every check stayed green. --dim is fitted, so this stays legible. */
+  .popmenu label.off {
+    color:var(--dim); cursor:not-allowed; pointer-events:none;
+  }
+  #fi-why { padding:4px 9px 2px; max-width:280px; line-height:1.35; }
   .popmenu button.sel { color:var(--green); }
   /* Says "drag to move" once, when a mode first spills past the edges. */
   /* THEME TOKENS BOTH SIDES, AND OPAQUE.
@@ -1755,9 +1770,17 @@
            input needs no script at all -- the browser opens it natively,
            which is the one path every browser agrees on. Stop is a separate
            control, swapped in while a file is going. -->
-      <label id="filebtn" for="fileinput"
-             title="Type a text file into the target, line by line"><span
-             class="gly">📄</span></label>
+      <!-- OPENS A MENU NOW. The two entries below are LABELS pointed at two
+           different inputs, not buttons with click handlers: opening a file
+           picker from script is a privileged action browsers police
+           differently, and the handler running while no picker appeared is
+           exactly how this control broke before. A label needs no script at
+           all, which is the one path every browser agrees on -- so putting a
+           menu in front must not reintroduce a scripted .click(). -->
+      <button id="filebtn" aria-haspopup="true" aria-expanded="false"
+              aria-controls="pop-file"
+              title="Put a file into the target"><span
+              class="gly">📄</span></button>
       <button id="filestop" hidden title="Stop where it has got to">■</button>
       <!-- THE KEYS THAT BELONG TO THIS FIELD, IN IT. The clip is here on the
            argument that "put a file in" is the same gesture as "put text in";
@@ -1804,6 +1827,10 @@
          still laid out is the form that works everywhere. -->
     <input id="fileinput" type="file" accept=".txt,.bat,.ini,.cfg,.sys,text/*"
            tabindex="-1" aria-hidden="true">
+    <!-- No accept filter and multiple: a transfer moves bytes, so anything
+         goes, and the reboots cost the same whether one file rides them or
+         ten. -->
+    <input id="xferinput" type="file" multiple tabindex="-1" aria-hidden="true">
     <!-- TWO CONTROLS IN ONE OBJECT. The divider is not decoration here: the
          speaker half mutes, the word half opens the menu, and the line is
          what says they are different buttons. The other three carry the same
@@ -1977,6 +2004,20 @@
       <path class="fsout" d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/>
       <path class="fsin" d="M7.5 3v4.5H3M17 7.5h-4.5V3M12.5 17v-4.5H17M3 12.5h4.5V17"/>
     </svg>Full screen</button>
+</div>
+
+<div id="pop-file" class="pop popmenu" role="dialog" aria-label="File" hidden>
+  <!-- LABELS, NOT BUTTONS. See the comment on #filebtn: the browser opens the
+       picker natively from a label, and the scripted path is the one that
+       silently did nothing. -->
+  <label for="fileinput" id="fi-type"
+         title="Typed as keystrokes, exactly as if you typed it">Type it in…</label>
+  <label for="xferinput" id="fi-xfer"
+         title="Really move the bytes, over the network">Transfer to target…</label>
+  <!-- Greyed WITH THE REASON, never hidden and never left clickable to fail.
+       A control that vanishes is indistinguishable from one that never
+       existed, and one that fails on click teaches people the page lies. -->
+  <div class="hint" id="fi-why" hidden></div>
 </div>
 
 <div id="pop-power" class="pop" role="dialog" aria-label="Power" hidden>
@@ -2906,11 +2947,188 @@ function setFileBtn() {
 $('filestop').onclick = () => { if (sending) sending.stop = true; };
 // Cleared on every open so the same file can be sent twice: without it the
 // change event never fires the second time and the control looks broken.
-$('filebtn').onclick = () => { $('fileinput').value = ''; };
+// The clip opens the menu; the two inputs are cleared here so the same file
+// can be picked twice -- without it the change event never fires the second
+// time and the control looks broken.
+$('filebtn').onclick = () => {
+  $('fileinput').value = ''; $('xferinput').value = '';
+  openPop('file');
+};
 $('fileinput').onchange = () => {
   const f = $('fileinput').files[0];
   if (f) typeFile(f);
 };
+
+// ── TRANSFER A FILE TO THE TARGET ─────────────────────────────────────────
+// The other half of the clip, and a genuinely different act from typing one
+// in. This moves bytes over the network -- which on this machine means
+// rebooting it into the NET profile, sending, verifying, and rebooting back.
+//
+// THE REBOOTS ARE THE WALL CLOCK. Measured: a 2 MB file is 5.3 s of transfer
+// against ~120 s of reboots, about 4%. So progress is reported for the
+// REBOOTS. A bar that fills during five seconds and then sits at 100% for two
+// minutes is worse than no bar -- it reports the fast step it can see and
+// goes silent through the slow one it cannot.
+let filesNow = {available: false, why: null};
+
+function showFiles(f) {
+  filesNow = f || {available: false, why: 'not_configured'};
+  const item = $('fi-xfer'), why = $('fi-why');
+  const ok = filesNow.available === true;
+  item.classList.toggle('off', !ok);
+  item.setAttribute('aria-disabled', ok ? 'false' : 'true');
+  // GREYED WITH THE REASON. Five different negatives reach here and they want
+  // different things doing about them: a Macintosh has no way to receive a
+  // file and never will; a server that is not answering is a shell command
+  // away. Collapsing them into one grey control loses exactly the part that
+  // tells someone which of those they are looking at.
+  why.hidden = ok;
+  if (!ok) why.textContent = filesNow.reason || 'not available';
+  item.title = ok
+    ? 'Send files to ' + (filesNow.dest || 'the target')
+      + ' — reboots the machine'
+    : (filesNow.reason || 'not available');
+}
+
+async function sha256Hex(buf) {
+  const d = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+const CHUNK = 4 * 1024 * 1024;
+
+async function stageOne(file) {
+  const buf = await file.arrayBuffer();
+  const sha = await sha256Hex(buf);
+  const bytes = new Uint8Array(buf);
+  for (let off = 0; off < bytes.length || off === 0; off += CHUNK) {
+    const slice = bytes.subarray(off, Math.min(off + CHUNK, bytes.length));
+    // btoa wants a binary string; String.fromCharCode over a whole 4 MB
+    // slice blows the argument limit, so it goes in pieces.
+    let bin = '';
+    for (let i = 0; i < slice.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, slice.subarray(i, i + 0x8000));
+    }
+    const final = off + slice.length >= bytes.length;
+    const r = await post('file_stage', {
+      name: file.name, total: bytes.length, offset: off,
+      data: btoa(bin), final: final, sha256: final ? sha : undefined,
+    });
+    if (!r || !r.ok) return r || {ok: false, error: 'no answer from the daemon'};
+    if (final) return r;
+  }
+  return {ok: false, error: 'nothing to send'};
+}
+
+$('xferinput').onchange = async () => {
+  const picked = [...$('xferinput').files];
+  if (!picked.length) return;
+  closePop();
+  if (!filesNow.available) { hint(filesNow.reason || 'not available'); return; }
+
+  const total = picked.reduce((n, f) => n + f.size, 0);
+  const refuse = filesNow.refuse_bytes, warn = filesNow.warn_bytes;
+  if (refuse && total > refuse) {
+    alert('Too large: ' + fmtBytes(total) + '.\n\n'
+      + 'Nothing above ' + fmtBytes(refuse) + ' has been transferred here, '
+      + 'and a transfer that wedges cannot be interrupted — a cancel lands '
+      + 'between files, never inside FTP.EXE on the target.');
+    return;
+  }
+  const names = picked.map(f => f.name).join('  ');
+  let msg = 'Transfer ' + picked.length + ' file'
+    + (picked.length > 1 ? 's' : '') + ' to the target?\n\n'
+    + fmtBytes(total) + ' → ' + (filesNow.dest || 'the target') + '\n  '
+    + names + '\n\n'
+    + 'THIS REBOOTS THE MACHINE. Anything running is lost, and the entire '
+    + 'environment goes with it — every SET. You get back what you booted, '
+    + 'not what you had: the return lands on the menu default, so if you are '
+    + 'on a non-default profile now, you will not be afterwards.\n\n'
+    + 'About 60 s each way, paid once for the whole queue.\n\n'
+    + 'The boot menu cannot be seen, so the profile is chosen blind and '
+    + 'checked afterwards by making the target send a file back. If nothing '
+    + 'arrives, this stops.';
+  if (warn && total > warn) {
+    msg += '\n\nOver ' + fmtBytes(warn) + ': the largest transfer on record '
+      + 'here is 7.8 MB, so this size is untested rather than known to be '
+      + 'too big.';
+  }
+  if (!confirm(msg)) return;
+
+  // RETURN IS THE DEFAULT AND DECLINING IT IS DELIBERATE. NET loads the
+  // network stack as TSRs, and the standing rule is never load TSRs and
+  // measure in the same boot -- so coming back is a correctness requirement
+  // rather than politeness. A cell has already died of this.
+  const stay = !confirm('Reboot back to the menu default when it is done?\n\n'
+    + 'OK — come back (recommended)\n'
+    + 'Cancel — leave it in NET, because I am not finished\n\n'
+    + 'NO MEASURED RUN MAY START FROM NET.');
+
+  addLine(new Date(), 'file', 'staging ' + picked.length + ' file'
+    + (picked.length > 1 ? 's' : ''), 'k-cmd');
+  for (const f of picked) {
+    const r = await stageOne(f);
+    if (!r.ok) {
+      addLine(new Date(), 'file', 'refused ' + f.name + ' — ' + r.error,
+              'k-warn');
+      hint('refused: ' + r.error);
+      return;
+    }
+    addLine(new Date(), 'file', 'staged ' + r.name
+      + (r.notes && r.notes.length ? ' (' + r.notes.join('; ') + ')' : ''),
+      'k-vid');
+  }
+
+  const started = await post('file_send', {return: !stay});
+  if (!started || !started.ok) {
+    addLine(new Date(), 'file', 'refused: '
+      + ((started && started.error) || 'no answer'), 'k-warn');
+    return;
+  }
+  addLine(new Date(), 'file', 'transfer started — the reboots are the wait',
+          'k-cmd');
+  watchTransfer();
+};
+
+let xferTimer = null;
+function watchTransfer() {
+  if (xferTimer) return;
+  let seen = 0;
+  xferTimer = setInterval(async () => {
+    const r = await post('file_status', {log: 200});
+    if (!r || !r.ok || !r.job) return;
+    const j = r.job;
+    for (const e of j.log.slice(seen)) {
+      addLine(new Date(e.t * 1000), 'file', e.phase + ': ' + e.text,
+              e.warn ? 'k-warn' : 'k-vid');
+    }
+    seen = j.log.length;
+    if (!j.running) {
+      clearInterval(xferTimer); xferTimer = null;
+      const bad = (j.files || []).filter(f => !f.ok);
+      addLine(new Date(), 'file',
+        j.ok ? 'transfer complete — every file verified byte for byte'
+             : 'transfer finished with ' + (bad.length || 1) + ' problem'
+               + (bad.length === 1 ? '' : 's')
+               + (j.reason ? ' — ' + j.reason : ''),
+        j.ok ? 'k-vid' : 'k-warn');
+      if (j.left_in_net) {
+        addLine(new Date(), 'file',
+          'THE MACHINE IS IN NET. No measured run may start from there.',
+          'k-warn');
+      }
+      pollState();
+    }
+  }, 2000);
+}
+
+function fmtBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
 
 // -- the line box: the reliable way to type on a phone -----------------------
 // A virtual keyboard does not produce usable keydown events for every key, and
@@ -3361,7 +3579,7 @@ for (const k of Object.keys(OPTS)) {
 // and clamped to the window -- a menu that opens off the right edge of a
 // phone is a menu you cannot use.
 const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn',
-             keys: 'keysbtn'};
+             keys: 'keysbtn', file: 'filebtn'};
 // The scrub overlay is a menu too, but it is not a .pop -- it is anchored to
 // the picture rather than to its button, because a timeline the width of a
 // button would be a timeline you cannot use. So it drives its own caret and
@@ -4584,6 +4802,7 @@ async function pollState() {
   showPower(j.power);
   showBoard(j.board);
   showTitle(j.board, j.profile);
+  showFiles(j.files);
   showAudioDevice(j.audio);
   noteSourceRate(j.video);
   noteWsRate(j.ws);
