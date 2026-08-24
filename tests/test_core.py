@@ -7353,7 +7353,7 @@ def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
     """
     cap = vcctrld.FilesCapability(None)
     cap.settings = {"target_host": "192.0.2.11", "target_port": 2121,
-                    "dest": "C:\\UPLOADS"}
+                    "dest": "C:\\XFER\\IN"}
     cap._credentials = lambda: ("dosuser", "dospass")
 
     r = cap._file_bats({})
@@ -7380,8 +7380,23 @@ def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
         check("%s does not claim success, only an attempt" % name,
               "attempted" in text and "ERRORLEVEL" not in text.upper(), name)
 
+    # MD ON 6.22 TAKES ONE LEVEL AT A TIME. `MD C:\XFER\IN` fails outright
+    # when C:\XFER does not exist, and the transfer then lands nowhere with a
+    # message that reads like a network fault.
+    g = r["bats"]["VCGET.BAT"]
+    mds = [l.split("MD ", 1)[1].strip() for l in g.split("\r\n")
+           if " MD " in l or l.startswith("MD ")]
+    # The destination is `MD %VGD%` -- a variable, because a caller may pass
+    # its own. What must be literal is its PARENT, created first.
+    check("the parent is created before the destination",
+          mds and mds.index("C:\\XFER") < mds.index("%VGD%"), mds)
+    check("and the return directory is created too, so DIR shows the pair",
+          "MD C:\\XFER\\OUT" in g, g)
+    check("every MD is guarded, so a re-run is silent",
+          g.count("IF NOT EXIST") == g.count("MD "), g)
+
     check("VCGET defaults to the configured destination",
-          "C:\\UPLOADS" in r["bats"]["VCGET.BAT"], r["bats"]["VCGET.BAT"])
+          "C:\\XFER\\IN" in r["bats"]["VCGET.BAT"], r["bats"]["VCGET.BAT"])
     check("VCCHK returns files into incoming/",
           "cd incoming" in r["bats"]["VCCHK.BAT"], r["bats"]["VCCHK.BAT"])
     check("VCGET fetches from stage/",
@@ -7400,7 +7415,7 @@ def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
     check("no credentials means no batch file",
           cap._file_bats({})["ok"] is False, cap._file_bats({}))
     cap._credentials = lambda: ("u", "p")
-    cap.settings = {"dest": "C:\\UPLOADS"}
+    cap.settings = {"dest": "C:\\XFER\\IN"}
     check("no target_host means no batch file",
           cap._file_bats({})["ok"] is False, cap._file_bats({}))
 
@@ -7557,3 +7572,123 @@ def test_no_file_input_renders_its_own_control():
         for body in hiding:
             check("%s is clipped, not display:none" % i,
                   "display:none" not in body, body[:80])
+
+
+def test_the_driver_reads_leds_from_where_the_daemon_puts_them():
+    """It read them from the top level; they are nested under "leds".
+
+    Every lookup returned None, so arm() concluded Scroll Lock could not be
+    set on a machine where it works perfectly, and the transfer refused with
+    `no-witness`. That was the RIGHT refusal for a wrong reason -- it declined
+    to reboot into a state it could not witness, and what it could not witness
+    was its own bug.
+
+    A guard that fails closed still has to be right about what it saw, which
+    is why the shape is pinned here rather than left to a live daemon.
+    """
+    class FakeReg(object):
+        def __init__(self, payload):
+            self.payload, self.sent = payload, []
+
+        def execute(self, req):
+            self.sent.append(req)
+            if req["cmd"] == "leds":
+                return self.payload
+            return {"ok": True}
+
+    real = {"ok": True, "leds": {"available": True, "capslock": 0,
+                                 "numlock": 1, "scrolllock": 1}}
+    d = vcctrld.RegistryDriver(FakeReg(real))
+    check("a set LED reads True", d._led("scrolllock") is True)
+    check("a clear LED reads False", d._led("capslock") is False)
+    check("and it is not confused by a sibling", d._led("numlock") is True)
+
+    # THE SHAPE THAT BROKE IT: values at the top level, which is what the
+    # first version expected and what the daemon has never sent.
+    flat = {"ok": True, "available": True, "scrolllock": 1}
+    check("the flat shape is not silently accepted",
+          vcctrld.RegistryDriver(FakeReg(flat))._led("scrolllock") is None)
+
+    for bad in ({"ok": False}, {}, {"ok": True, "leds": None},
+                {"ok": True, "leds": {"available": False, "scrolllock": 1}}):
+        check("unreadable LEDs give None, not a level: %r" % (bad,),
+              vcctrld.RegistryDriver(FakeReg(bad))._led("scrolllock") is None)
+
+    # arm() must not press a key that is already set -- doing so turns the
+    # witness OFF, which is how a manual drive produced a false reset edge.
+    reg = FakeReg(real)
+    d = vcctrld.RegistryDriver(reg)
+    check("arm() succeeds when the LED is already set", d.arm() is True)
+    check("and it presses nothing", not [r for r in reg.sent
+                                         if r["cmd"] == "key"], reg.sent)
+
+
+def test_typing_proves_caps_lock_is_off_first():
+    """The readiness probe and the payload were fighting over one piece of
+    global state, and the payload lost silently.
+
+    wait_prompt() detects a live BIOS keyboard ISR by TOGGLING CAPS LOCK. Caps
+    Lock inverts what this harness types. So the command typed immediately
+    after a readiness check came out in the wrong case -- and DOS being
+    case-insensitive about commands and paths meant it ran perfectly and only
+    the ARGUMENTS were wrong.
+
+    Measured on the rig: a verification copy asked for as HELLO.TXT.CHK
+    arrived as hello.txt.chk, and the wait timed out on a transfer whose
+    server log read `STOR ... completed=1 bytes=49`.
+    """
+    class Reg(object):
+        def __init__(self, caps):
+            self.caps, self.sent = caps, []
+
+        def execute(self, req):
+            self.sent.append(req)
+            if req["cmd"] == "leds":
+                return {"ok": True, "leds": {"available": True,
+                                             "capslock": 1 if self.caps else 0,
+                                             "numlock": 0, "scrolllock": 1}}
+            if req["cmd"] == "key" and req.get("keys") == ["capslock"]:
+                self.caps = not self.caps
+            return {"ok": True}
+
+    r = Reg(caps=True)
+    vcctrld.RegistryDriver(r).type_line("VCCHK.BAT A B")
+    keys = [x for x in r.sent if x["cmd"] == "key"]
+    check("caps lock is cleared before typing",
+          any(k.get("keys") == ["capslock"] for k in keys), r.sent)
+    order = [i for i, x in enumerate(r.sent) if x["cmd"] == "type"]
+    caps_at = [i for i, x in enumerate(r.sent)
+               if x["cmd"] == "key" and x.get("keys") == ["capslock"]]
+    check("and it is cleared BEFORE the text, not after",
+          caps_at and order and caps_at[0] < order[0], r.sent)
+
+    # It must not toggle a lock that is already off -- that would TURN IT ON
+    # and produce the exact fault it exists to prevent.
+    r = Reg(caps=False)
+    vcctrld.RegistryDriver(r).type_line("VCCHK.BAT A B")
+    check("caps lock is left alone when already off",
+          not [x for x in r.sent
+               if x["cmd"] == "key" and x.get("keys") == ["capslock"]], r.sent)
+
+
+def test_a_returned_file_is_matched_whatever_case_it_arrives_in():
+    """The far end is a FAT volume and an FTP client from 1996.
+
+    Case is not a property either of them promises, so a verification that
+    hinges on it is testing the wrong thing. The Caps Lock collision is fixed
+    at its source; this is here because the source is not the only way case
+    can change on that path.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    _s, _p, _m, _r, incoming = cap._dirs()
+    os.makedirs(incoming, exist_ok=True)
+    with open(os.path.join(incoming, "hello.txt.chk"), "wb") as f:
+        f.write(b"forty nine bytes of nothing in particular here!!!")
+
+    check("a lowercase arrival satisfies an uppercase wait",
+          cap._await_incoming("HELLO.TXT.CHK", 0, 3.0) is True)
+    check("and its sha is readable under the asked-for name",
+          cap._incoming_sha("HELLO.TXT.CHK") is not None)
+    check("a file that is genuinely absent still times out",
+          cap._await_incoming("NOTHERE.CHK", 0, 1.0) is False)

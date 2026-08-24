@@ -214,7 +214,15 @@ capabilities:
       # program under test lives in: a staged file that collides with a name
       # in there replaces it silently, and that directory holds the batch
       # files every measured run calls.
-      dest: "C:\\UPLOADS"
+      # Where pulled files land ON THE TARGET. NOT the directory the
+      # program under test lives in: a pulled file whose name collides there
+      # silently replaces something every measured run calls.
+      #
+      # The words are from the TARGET's point of view and they invert across
+      # the wire -- the server's stage/ feeds the target's IN, and the
+      # target's OUT feeds the server's incoming/. Terse on purpose, so
+      # nobody reads them as matching the server's names.
+      dest: "C:\\XFER\\IN"
       # The FTP login's home on THIS host. It holds stage/ (the target GETs
       # from here) and incoming/ (the target PUTs its verification copy back
       # here) -- the card's batch files `cd` to both by those names.

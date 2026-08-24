@@ -3715,6 +3715,22 @@ _DOS_ILLEGAL = set('"*+,/:;<=>?[]|\\ ') | set(chr(c) for c in range(0, 32))
 # Where the size policy sits. Both are bytes, both apply to a single file AND
 # to a queue total -- without the second, three 30 MB files walk past a 64 MB
 # refusal one at a time.
+# WHERE PULLED FILES LAND ON THE TARGET, and deliberately not the directory
+# the program under test lives in. C:\DOSKUTSU holds DOSKUTSU.EXE, CLRENV.BAT
+# and LOGS\ -- a pulled file whose name collides silently replaces something
+# every measured run calls, which happened to CLRENV.BAT on 2026-08-24 and was
+# survivable only because a .BAK was taken first.
+#
+# The sibling OUT is the return direction, reserved and created so the
+# convention is discoverable from a DIR rather than only from a document.
+#
+# THE WORDS ARE FROM THE TARGET'S POINT OF VIEW AND THEY INVERT ACROSS THE
+# WIRE: the server's stage/ feeds the target's IN, and the target's OUT feeds
+# the server's incoming/. IN and OUT are deliberately terse so nobody reads
+# them as matching the server's names.
+DEFAULT_DEST = "C:\\XFER\\IN"
+DEFAULT_OUT = "C:\\XFER\\OUT"
+
 WARN_BYTES = 8 * 1024 * 1024
 REFUSE_BYTES = 64 * 1024 * 1024
 
@@ -4143,6 +4159,26 @@ class RegistryDriver(object):
         return self._do("combo", keys=list(keys))
 
     def type_line(self, text):
+        """Type a line, with CAPS LOCK PROVEN OFF FIRST.
+
+        Caps Lock inverts what this harness types -- an established fact about
+        this rig -- and wait_prompt() PROBES BY TOGGLING CAPS LOCK. So the
+        readiness check corrupts the case of the command typed immediately
+        after it, and it does so silently: DOS is case-insensitive about
+        commands and paths, so `c:\\mtcp\\vcchk.bat` runs perfectly and only
+        the ARGUMENTS come out wrong.
+
+        Measured: a verification copy asked for as HELLO.TXT.CHK arrived as
+        hello.txt.chk, and the wait timed out on a transfer the server log
+        showed completing. The probe and the payload were fighting over one
+        piece of global state.
+
+        Checked rather than assumed off, because the failure is invisible in
+        every other respect.
+        """
+        if self._led("capslock") is True:
+            self._do("key", keys=["capslock"])
+            self._await_led("capslock", False, 5.0)
         r = self._do("type", text=text)
         if not r.get("ok"):
             return r
@@ -4171,10 +4207,24 @@ class RegistryDriver(object):
     # -- the LED return channel -----------------------------------------------
 
     def _led(self, name):
-        r = self._do("leds")
-        if not r.get("ok") and r.get("available") is not True:
+        """One LED's level, or None when it cannot be read.
+
+        THE VALUES ARE NESTED UNDER "leds" AND THIS READ THEM FROM THE TOP
+        LEVEL, so every lookup returned None and arm() concluded Scroll Lock
+        could not be set -- on a machine where it works perfectly. The
+        transfer then refused with `no-witness`, which was the RIGHT refusal
+        for a wrong reason: it declined to reboot into a state it could not
+        witness, and the thing it could not witness was its own bug.
+
+        A guard that fails closed still has to be right about what it saw.
+        """
+        r = self._do("leds") or {}
+        leds = r.get("leds")
+        if not isinstance(leds, dict):
             return None
-        v = r.get(name)
+        if leds.get("available") is not True:
+            return None
+        v = leds.get(name)
         return None if v is None else bool(v)
 
     def _await_led(self, name, want, timeout):
@@ -4287,7 +4337,7 @@ class TransferJob(object):
     def __init__(self, cap, driver, dest=None, do_return=True):
         self.cap = cap
         self.d = driver
-        self.dest = dest or (cap.settings or {}).get("dest", "C:\\UPLOADS")
+        self.dest = dest or (cap.settings or {}).get("dest", DEFAULT_DEST)
         self.do_return = do_return
         self.log = []
 
@@ -4573,7 +4623,13 @@ SET VGF=%1
 SET VGD=%2
 IF "%VGF%"=="" GOTO USAGE
 IF "%VGD%"=="" SET VGD=@@DEST@@
+REM MD ON 6.22 WILL NOT CREATE A NESTED PATH IN ONE GO, so the parent comes
+REM first. Both are IF NOT EXIST so a re-run is silent rather than noisy.
+IF NOT EXIST @@DESTPARENT@@\\NUL MD @@DESTPARENT@@
 IF NOT EXIST %VGD%\\NUL MD %VGD%
+REM The return direction, created here so the pair is discoverable from a DIR
+REM rather than only from a document. Nothing writes it yet.
+IF NOT EXIST @@DESTOUT@@\\NUL MD @@DESTOUT@@
 SET MTCPCFG=C:\\MTCP\\TCP.CFG
 ECHO @@USER@@> C:\\MTCP\\VCGET.RSP
 ECHO @@PASS@@>> C:\\MTCP\\VCGET.RSP
@@ -4639,7 +4695,12 @@ ECHO Usage: VCCHK source-path name-on-server
                     "error": "no credentials: set control.fileserver.user and "
                              "the variable control.fileserver.password_env "
                              "names"}
-        dest = (self.settings or {}).get("dest", "C:\\UPLOADS")
+        dest = (self.settings or {}).get("dest", DEFAULT_DEST)
+        # The parent is needed because DOS MD takes one level at a time, and
+        # the sibling OUT because a convention nobody can see is not one.
+        parent = dest.rsplit("\\", 1)[0] if "\\" in dest.rstrip("\\") else dest
+        out_dir = (self.settings or {}).get("out_dir") or (
+            parent + "\\OUT" if parent != dest else DEFAULT_OUT)
         out = {}
         for name, tpl in (("VCGET.BAT", self.VCGET_BAT),
                           ("VCCHK.BAT", self.VCCHK_BAT)):
@@ -4647,12 +4708,14 @@ ECHO Usage: VCCHK source-path name-on-server
                        .replace("@@PORT@@", str(port))
                        .replace("@@USER@@", user)
                        .replace("@@PASS@@", password)
-                       .replace("@@DEST@@", dest))
+                       .replace("@@DEST@@", dest)
+                       .replace("@@DESTPARENT@@", parent)
+                       .replace("@@DESTOUT@@", out_dir))
             # CRLF, because a DOS batch file with LF endings fails in ways
             # that read as a logic bug rather than a formatting one.
             out[name] = text.replace("\n", "\r\n")
         return {"ok": True, "bats": out, "host": host, "port": port,
-                "dest": dest,
+                "dest": dest, "out_dir": out_dir,
                 "install": [
                     "Put both files in the CONTROL host's stage/ directory",
                     "  (~/doskutsu-netiter/stage/), NOT this host's -- the",
@@ -4698,7 +4761,7 @@ ECHO Usage: VCCHK source-path name-on-server
             job = {"running": True, "started_at": time.time(), "log": [],
                    "files": [], "ok": None, "why": None, "reason": None,
                    "dest": req.get("dest") or (self.settings or {}).get(
-                       "dest", "C:\\UPLOADS"),
+                       "dest", DEFAULT_DEST),
                    "return": bool(req.get("return", True))}
             FilesCapability._job = job
 
@@ -5237,11 +5300,36 @@ ECHO Usage: VCCHK source-path name-on-server
         retry look like a success.
         """
         _stage, _p, _m, _root, incoming = self._dirs()
-        p = os.path.join(incoming, name)
         deadline = time.time() + float(timeout)
         last = None
+
+        def _find():
+            """The name, whatever case it arrives in.
+
+            MEASURED, NOT DEFENSIVE. `HELLO.TXT.CHK` was asked for and
+            `hello.txt.chk` arrived, so the wait timed out on a transfer that
+            had completed -- the server log said `STOR ... completed=1
+            bytes=49` while this reported the file never came back.
+
+            The proximate cause is Caps Lock (see type_line), and it is fixed
+            there. This stays because the far end is a FAT volume and an FTP
+            client from 1996: case is not a property either of them promises,
+            and a verification that hinges on it is testing the wrong thing.
+            """
+            want = name.lower()
+            try:
+                for n in os.listdir(incoming):
+                    if n.lower() == want:
+                        return os.path.join(incoming, n)
+            except OSError:
+                pass
+            return None
+
         while time.time() < deadline:
             try:
+                p = _find()
+                if p is None:
+                    raise OSError("not yet")
                 st = os.stat(p)
                 if st.st_mtime >= since - 1.0:
                     if last is not None and st.st_size == last and st.st_size:
@@ -5255,11 +5343,25 @@ ECHO Usage: VCCHK source-path name-on-server
         return False
 
     def _incoming_sha(self, name):
-        """sha256 of a returned file, or None if it cannot be read."""
+        """sha256 of a returned file, or None if it cannot be read.
+
+        Case-insensitive for the same reason _await_incoming is: the file may
+        arrive under a different case than it was asked for.
+        """
         _stage, _p, _m, _root, incoming = self._dirs()
+        path = None
+        try:
+            for n in os.listdir(incoming):
+                if n.lower() == name.lower():
+                    path = os.path.join(incoming, n)
+                    break
+        except OSError:
+            pass
+        if path is None:
+            return None
         h = hashlib.sha256()
         try:
-            with open(os.path.join(incoming, name), "rb") as f:
+            with open(path, "rb") as f:
                 for block in iter(lambda: f.read(1 << 20), b""):
                     h.update(block)
         except OSError:
@@ -5502,7 +5604,7 @@ ECHO Usage: VCCHK source-path name-on-server
         out = {"available": False, "why": None, "reason": None,
                "backend": self.backend_name,
                "server": ("%s:%d" % srv) if srv else None,
-               "dest": (self.settings or {}).get("dest", "C:\\UPLOADS"),
+               "dest": (self.settings or {}).get("dest", DEFAULT_DEST),
                "warn_bytes": WARN_BYTES, "refuse_bytes": REFUSE_BYTES}
 
         supported, why = self.support()
