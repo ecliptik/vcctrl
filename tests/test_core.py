@@ -4231,11 +4231,22 @@ def test_cfclean_never_deletes_what_it_cannot_prove():
     check("a screen with no summary line at all is None",
           cf.parse_dir_summary("Volume in drive C is DOS") is None)
 
-    # A DOS "File not found" has no summary line -- it must NOT read as
-    # "zero files", because zero files would mean nothing to delete AND
-    # nothing to keep, and the two are different.
-    check("File not found is None, not (0, 0)",
-          cf.parse_dir_summary("File not found") is None)
+    # A DOS "File not found" used to return None here, on the reasoning that
+    # it has no summary line so nothing was read. CHANGED 2026-08-24, and the
+    # original reasoning was wrong: the card ANSWERED. "There is no such
+    # directory" is a reading, and the only honest verdict on it is KEEP --
+    # there is nothing to delete and nothing was lost.
+    #
+    # Collapsing it into None made every never-dumped tag look like an
+    # instrument failure. Running the tool against the real card produced
+    # REFUSE for CS1A purely because that round forbade SHOT_TICKS and so
+    # wrote no dumps at all. If the ordinary case reports COULD-NOT-LOOK then
+    # REFUSE stops being a signal anybody reads, which is how a three-state
+    # check decays back into two.
+    check("File not found is a READING of an empty directory",
+          cf.parse_dir_summary("File not found") == (0, 0))
+    check("  and a genuinely blank screen is still None",
+          cf.parse_dir_summary("") is None)
 
     # 2. THE VERDICT. Totals, not names.
     with tempfile.TemporaryDirectory() as d:
@@ -4272,10 +4283,21 @@ def test_cfclean_never_deletes_what_it_cannot_prove():
         check("nothing on the card is KEEP, not a spurious delete",
               v == cf.KEEP, (v, why))
 
-    # 3. The tool refuses to run, because its card half is unwritten.
-    rc = cf.main(["--tags", "D1"])
-    check("the CLI refuses at the top rather than half-driving a delete",
-          rc == 2, rc)
+    # 3. The read half now runs; the DEL half still refuses. Stub the card
+    #    read -- a unit test must not drive the Gateway, and one that does is
+    #    slow, non-hermetic, and fails when somebody else holds the rig.
+    orig = cf.read_card_dir
+    cf.read_card_dir = lambda *_a, **_k: "File not found"
+    try:
+        rc = cf.main(["--tags", "D1"])
+        check("a dry run completes rather than refusing at the top", rc == 0,
+              rc)
+        rc = cf.main(["--tags", "D1", "--delete"])
+        check("--delete still REFUSES: the DEL itself has never been "
+              "exercised, and a half-driven destructive tool reads as a "
+              "completed one", rc == 2, rc)
+    finally:
+        cf.read_card_dir = orig
 
 
 def test_the_docs_index_cannot_rot_silently():
@@ -5442,3 +5464,72 @@ def test_wait_video_locked_reports_which_of_three_things_happened():
               common.wait_video_locked(0.3) is None)
     finally:
         common.vc_json, common.time.sleep = orig, orig_sleep
+
+
+def test_cfclean_deletes_despite_a_misread_count_and_never_on_a_blind_read():
+    """The count OCRs wrong. The tool must survive that WITHOUT going unsafe.
+
+    Every string below was captured off the rig on 2026-08-24, not invented.
+    The one that killed the original design:
+
+        on the glass    10 file(s)  2,304,150 bytes
+        OCR             18 file(s)  2,304,150 bytes
+
+    The total is exact -- 2,304,150 is 10 x 230,415 to the byte -- and the
+    count is wrong, because a `0` reads as an `8` in this font. The tool's
+    docstring had asserted "both OCR correctly in every sample" from three
+    samples; the fourth refuted it.
+
+    So there are two failure directions here and a test that only checks one is
+    worthless. Gating on the misread count turns every correct directory into a
+    KEEP -- which fails safe, but by accident, and a tool that never deletes is
+    not a cleanup tool. Ignoring the count entirely and trusting bytes alone
+    deletes on a coincidence. The answer is to DERIVE the count from the byte
+    total, which is arithmetic rather than OCR, and the derivation must be
+    skipped -- loudly -- when the local files are not uniform.
+    """
+    print("\ncfclean against real OCR")
+    cf = _load("bin/vcctrl-cfclean", "cfclean_real")
+
+    TRUNCATED = "230,415 88-20-26\n238,415 88-20-26\n   2,304,150 bytes\n" \
+                "751,206 400 bytes free"
+    ZERO_AS_AT = " 2 file(s) @ bytes\n   751,206,400 bytes free"
+    MISREAD    = "18 file(s) 2,304,150 bytes\n\n751,173,632 bytes free"
+    CLEAN_ONE  = "    1 file(s)      7,608 bytes\n   751,206,400 bytes free"
+    NOT_FOUND  = "File not found\n\nC:\\>"
+
+    ten = [230415] * 10
+
+    # CONTROL FIRST. If the honest case does not DELETE then every "correctly
+    # refused" below is vacuous -- the tool could be refusing everything.
+    v, why = cf.classify_tag(cf.parse_dir_summary(MISREAD), (10, 2304150), ten)
+    check("a byte-exact directory DELETEs despite the misread count",
+          v == cf.DELETE)
+    check("  and says the count was derived, not read", "derived" in why)
+
+    # Blind reads must never become verdicts.
+    for name, ocr in (("truncated", TRUNCATED), ("0 read as @", ZERO_AS_AT)):
+        v, _w = cf.classify_tag(cf.parse_dir_summary(ocr), (10, 2304150), ten)
+        check("%s -> REFUSE, not DELETE" % name, v == cf.REFUSE)
+
+    # A missing directory is an ANSWER, not a blind read.
+    v, why = cf.classify_tag(cf.parse_dir_summary(NOT_FOUND), (10, 2304150), ten)
+    check("'File not found' is KEEP-nothing, not REFUSE", v == cf.KEEP)
+
+    # Totals agree, but the card holds a file we do not have.
+    v, _w = cf.classify_tag((99, 2304150), (9, 2073735), [230415] * 9, )
+    check("a byte MISMATCH never deletes", v == cf.KEEP)
+
+    # Totals agree and the count derives to something else -- a stray file.
+    v, why = cf.classify_tag((99, 2304150), (9, 2304150), [230415] * 9)
+    check("bytes match but derived count != local count -> KEEP",
+          v == cf.KEEP)
+
+    # Totals agree but the directory is not a whole number of uniform files.
+    v, why = cf.classify_tag((99, 2304151), (10, 2304151), [230415] * 10)
+    check("a total that is not a whole number of files -> KEEP",
+          v == cf.KEEP)
+
+    # A single clean file, uniform by definition.
+    v, _w = cf.classify_tag(cf.parse_dir_summary(CLEAN_ONE), (1, 7608), [7608])
+    check("the clean single-file listing DELETEs", v == cf.DELETE)

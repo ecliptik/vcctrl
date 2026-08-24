@@ -2,14 +2,24 @@
 """vcctrl-cfclean -- decide what may be deleted from the CF card, and refuse
 to delete anything not PROVEN collected.
 
-STATUS: THE DECISION HALF IS COMPLETE AND TESTED. THE CARD-DRIVING HALF IS NOT
-WRITTEN, and this tool refuses at the top rather than pretending otherwise.
-Reading `DIR LOGS\\<TAG>\\` back off the screen needs the Gateway, which was
-not available when this was written. `parse_dir_summary()` and `classify_tag()`
-below are the parts that decide what is safe, they are pure, and
-`test_cfclean_never_deletes_what_it_cannot_prove` covers them -- including
-against REAL OCR captured from the rig. What is missing is only issuing the
-`DIR` and handing its OCR to the parser.
+STATUS: THE READ HALF IS WIRED AND EXERCISED AGAINST THE REAL CARD. THE DELETE
+ITSELF IS STILL NOT WIRED, AND `--delete` REFUSES RATHER THAN PRETENDING.
+
+Exercised 2026-08-24 against real listings, which is what the previous version
+of this file said had to happen before anything was wired:
+
+    a clean single-file summary       parsed exactly          (1, 7608)
+    a count OCR'd as 18 for 10        DELETE, count DERIVED from the total
+    a truncated listing               None -> REFUSE
+    `0` read as `@`                   None -> REFUSE
+    a directory that does not exist   (0, 0) -> KEEP, nothing to delete
+
+WHAT IS STILL NOT EXERCISED, stated plainly: **no populated `LOGS\<TAG>\`
+directory exists on this card**, because patch 0322's layout has never produced
+one here and the confirming round forbade `SHOT_TICKS` entirely. So the read has
+never seen a real multi-file tag directory -- only the flat backlog, a single
+file, and an absent directory. The DELETE path's own input is therefore
+CONSTRUCTED, not observed, and that is the remaining gap.
 
 WHY THIS EXISTS. Frame dumps are 230,415 bytes each, four per cell, and they
 are in neither glob:
@@ -41,10 +51,24 @@ output with the SIZES right and the NAMES WRONG.
     OCR    RIA  LOG  1,102  88-20-26  18:58p
 
 PPM filenames are `S<tick>.PPM` -- all digits -- so per-file name matching off
-a listing cannot be made safe. **The card is therefore asked only for two
-numbers: how many files, and how many bytes.** Both OCR correctly in every
-sample. The local side supplies everything else, and a count-and-total match
-over a directory is the proof. Three outcomes, never two.
+a listing cannot be made safe.
+
+AND THE FILE COUNT IS NOT SAFE EITHER. That was this tool's original design and
+a real listing killed it, 2026-08-24:
+
+    on the glass    10 file(s)  2,304,150 bytes
+    OCR             18 file(s)  2,304,150 bytes
+
+The TOTAL is exact -- 2,304,150 is 10 x 230,415 to the byte -- and the COUNT is
+wrong, because a `0` in this font reads as an `8`. An earlier version of this
+docstring asserted "both OCR correctly in every sample"; that assertion was
+made from three samples and the fourth refuted it.
+
+**So the card is asked for ONE number: how many bytes.** The count is still
+parsed, and it is REPORTED, but it is never a gate -- a comparison that must
+pass cannot depend on a field measured to misread. Where the local files are
+uniform in size the count is instead DERIVED from the total, which cannot be
+misread because it is arithmetic rather than OCR. Three outcomes, never two.
 
 DESIGN DECISIONS:
 
@@ -65,11 +89,61 @@ DESIGN DECISIONS:
 4. REFUSES UNLESS TOLD TWICE. Dry run is the default.
 """
 import argparse
+import importlib.util
 import os
 import re
 import sys
+import time
+from importlib.machinery import SourceFileLoader
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 
 KEEP, DELETE, REFUSE = "KEEP", "DELETE", "REFUSE"
+
+
+def _cell():
+    """The cell runner, loaded for its screen reader and digit classifier.
+
+    Reusing it rather than re-implementing: `read_count`'s confusion classes
+    and `read_env_text_raw`'s three-state grab are the parts that took the
+    longest to get right, and a second copy would drift from them silently.
+    """
+    l = SourceFileLoader("cell", os.path.join(HERE, "vcctrl-cell"))
+    sp = importlib.util.spec_from_loader("cell", l)
+    m = importlib.util.module_from_spec(sp)
+    sys.modules["cell"] = m
+    l.exec_module(m)
+    return m
+
+
+def read_card_dir(tag, suffix="PPM", settle=3.5):
+    """OCR of the DIR summary for one tag directory, or None.
+
+    PIPED THROUGH `FIND` ON PURPOSE. A bare `DIR` of a directory holding forty
+    dumps scrolls its own summary off the top of the screen, and the parser
+    then correctly returns None -- correct, and useless, because that is the
+    normal case rather than the exceptional one. Measured 2026-08-24: a bare
+    DIR of ten PPMs left only `2,304,150 bytes` visible with the count gone.
+
+    NO PARENTHESES IN THE PATTERN. Caps Lock inverts Shift on this harness, so
+    a shifted `(` is a live hazard and `FIND "file(s)"` is one keystroke from
+    becoming `FIND "file9s0"`. `bytes` needs no shift beyond the quotes, which
+    the existing FIND calls already prove survive the trip.
+    """
+    from vcctrl_common import vc, at_prompt, wait_video_locked
+    C = _cell()
+    if wait_video_locked() is not True:
+        return None                      # could not look -- never a reading
+    if not at_prompt():
+        return None
+    vc("type", "CLS"); vc("key", "enter"); time.sleep(1.0)
+    vc("type", 'DIR C:\\DOSKUTSU\\LOGS\\%s\\*.%s | FIND "bytes"'
+       % (tag.upper(), suffix.upper()))
+    vc("key", "enter")
+    time.sleep(settle)
+    _sh, txt = C.read_env_text_raw()
+    return txt
 
 
 def local_index(incoming):
@@ -101,11 +175,21 @@ def parse_dir_summary(ocr):
     it is one glyph away from matching the wrong file. Sizes, counts and totals
     OCR correctly in every sample; names and dates do not.
 
-    So the card is asked only for two numbers -- how many files and how many
-    bytes -- and the local side supplies everything else.
+    So the card is asked for ONE number it can be trusted on: the TOTAL BYTES.
+
+    The count comes back too and is returned for reporting, but callers must
+    not gate on it. Measured 2026-08-24 on a real listing: `10 file(s)` OCRs as
+    `18 file(s)` while its total, 2,304,150, is exact to the byte.
     """
     if not ocr:
         return None
+    # A DIRECTORY THAT DOES NOT EXIST IS A READABLE ANSWER, NOT A BLIND ONE.
+    # DOS answers "File not found" / "Path not found", and that is the card
+    # telling us there is nothing here -- which is a KEEP, not a REFUSE.
+    # Collapsing it into None would make every uncollected tag look like an
+    # instrument failure, and REFUSE would stop being a signal worth reading.
+    if re.search(r"not\s+found", ocr, re.I):
+        return (0, 0)
     # "  1 file(s)     122,485 bytes"  -- and OCR renders file(s) as filets),
     # fitets), file<s), so the word is not matched at all. The shape is:
     # <count> ... <bytes> bytes, on one line, and that is what is anchored on.
@@ -118,6 +202,27 @@ def parse_dir_summary(ocr):
             except ValueError:
                 return None
     return None
+
+
+def local_tag_sizes(incoming, tag, suffix=".PPM"):
+    """Every local file size for a tag, so the count can be DERIVED.
+
+    Uniform sizes let classify_tag() recover the file count from the byte total
+    by division -- a number no OCR digit contributed to. It is the only count
+    in this tool that can be trusted.
+    """
+    out = []
+    for root, _dirs, files in os.walk(incoming):
+        for f in files:
+            if not f.upper().endswith(suffix.upper()):
+                continue
+            if tag.upper() in [p.upper() for p in root.split(os.sep)] \
+               or f.upper().startswith(tag.upper()):
+                try:
+                    out.append(os.path.getsize(os.path.join(root, f)))
+                except OSError:
+                    return None
+    return out
 
 
 def local_tag_totals(incoming, tag, suffix=".PPM"):
@@ -140,17 +245,25 @@ def local_tag_totals(incoming, tag, suffix=".PPM"):
     return (n, tot)
 
 
-def classify_tag(card, local):
+def classify_tag(card, local, sizes=None):
     """(verdict, reason) for a whole tag directory. Three outcomes, never two.
 
-    DELETE  count AND total bytes both match -- the directory is collected
+    DELETE  total bytes match exactly, and -- where the local files are uniform
+            -- the count DERIVED from that total matches the local count
     KEEP    they differ, or nothing was collected
     REFUSE  either side could not be read
 
-    Compares TOTALS rather than filenames because filenames are the part OCR
-    gets wrong. A count-and-bytes match over a directory is strong evidence
-    every file arrived; a per-name match built on misread digits is not
-    evidence at all.
+    THE OCR'd FILE COUNT IS DELIBERATELY NOT A GATE. It was, until a real
+    listing showed `10 file(s)` reading as `18 file(s)` beside a byte-exact
+    total. Gating on a field measured to misread would have turned every
+    correct directory into a KEEP -- which fails safe, but by accident, and an
+    accident that protects you is still not a guarantee.
+
+    `sizes` is the set of distinct local file sizes. When it holds exactly one
+    value the count is recovered from the total by division, which is immune to
+    OCR because no digit of it was read. When the files are NOT uniform the
+    derivation is skipped and the byte total stands alone -- stated in the
+    reason so nobody has to guess which test actually ran.
     """
     if card is None:
         return REFUSE, "could not read the card's DIR summary"
@@ -158,15 +271,29 @@ def classify_tag(card, local):
         return REFUSE, "could not stat the local copies"
     cn, cb = card
     ln, lb = local
-    if cn == 0:
+    if cb == 0:
         return KEEP, "nothing on the card for this tag"
     if ln == 0:
         return KEEP, "nothing collected locally -- never collected, or an " \
                      "abandoned round"
-    if (cn, cb) == (ln, lb):
-        return DELETE, "%d files / %d bytes match exactly" % (cn, cb)
-    return KEEP, "card has %d/%d bytes, local has %d/%d -- NOT proven" % (
-        cn, cb, ln, lb)
+    if cb != lb:
+        return KEEP, "card holds %d bytes, local holds %d -- NOT proven " \
+                     "(card said %s files, untrusted)" % (cb, lb, cn)
+    # Totals agree. Try to derive the count without trusting a single OCR digit.
+    if sizes and len(set(sizes)) == 1:
+        one = list(set(sizes))[0]
+        if one > 0 and cb % one == 0:
+            derived = cb // one
+            if derived != ln:
+                return KEEP, "bytes match but the card holds %d files of " \
+                             "%d and only %d are here" % (derived, one, ln)
+            return DELETE, "%d bytes match exactly; %d files of %d derived " \
+                           "from the total, not read off the screen" % (
+                               cb, derived, one)
+        return KEEP, "bytes match but %d is not a whole number of %d-byte " \
+                     "files -- something else is in that directory" % (cb, one)
+    return DELETE, "%d bytes match exactly (local files are not uniform, so " \
+                   "the count could not be derived and was not trusted)" % cb
 
 
 def main(argv=None):
@@ -178,22 +305,53 @@ def main(argv=None):
     ap.add_argument("--delete", action="store_true")
     a = ap.parse_args(argv)
 
-    # REFUSE AT THE TOP. A tool that half-drives a destructive operation is
-    # worse than one that declines: the operator reads a partial run as a
-    # completed one. See docs/OPEN-FAULTS.md.
-    print("REFUSED: the card-reading half of this tool is not written.")
-    print()
-    print("  parse_dir_summary() and classify_tag() decide what is safe and")
-    print("  are tested against real OCR, but issuing the DIR and reading it")
-    print("  `DIR LOGS\\<TAG>\\` back off the screen needs the Gateway, which")
-    print("  was unavailable when this was written.")
-    print()
-    print("  What is missing is ONE call: issue `DIR LOGS\\<TAG>\\*.PPM`, hand")
-    print("  the OCR to parse_dir_summary(), and pass its result to")
-    print("  classify_tag(). A None from the parser must stay None.")
-    print()
-    print("  Do NOT wire it to a delete until that read has been exercised")
-    print("  against a real card listing, including a truncated one.")
+    tags = [t.strip().upper() for t in a.tags.split(",") if t.strip()]
+    if not tags:
+        print("REFUSED: no tags given.")
+        return 2
+    suffixes = ["PPM"] + (["LOG", "TXT"] if a.logs else [])
+
+    print("== reading the card ==")
+    if a.delete:
+        print("   --delete given: a DELETE verdict below WILL remove files.")
+    else:
+        print("   dry run (default). Nothing is removed. Add --delete to act.")
+    verdicts = []
+    for tag in tags:
+        for suf in suffixes:
+            ocr = read_card_dir(tag, suf)
+            card = parse_dir_summary(ocr)
+            local = local_tag_totals(a.incoming, tag, "." + suf)
+            sizes = local_tag_sizes(a.incoming, tag, "." + suf)
+            v, why = classify_tag(card, local, sizes)
+            verdicts.append((tag, suf, v, why))
+            print("   %-6s %-4s %-7s %s" % (tag, suf, v, why))
+            if ocr is None:
+                print("          (could not look at all -- the screen never"
+                      " became readable)")
+
+    n_del = sum(1 for _t, _s, v, _w in verdicts if v == DELETE)
+    n_ref = sum(1 for _t, _s, v, _w in verdicts if v == REFUSE)
+    print("\n== summary ==")
+    print("   %d would delete, %d refused, %d kept"
+          % (n_del, n_ref, len(verdicts) - n_del - n_ref))
+    if n_ref:
+        print("   REFUSE means COULD NOT LOOK. It is not a KEEP and it is not")
+        print("   a failure of the card -- re-run it before reading anything")
+        print("   into the counts above.")
+    if not a.delete:
+        return 0
+
+    # THE DELETE ITSELF IS STILL NOT WIRED, and this refuses rather than
+    # pretending. Everything above is a read; issuing DEL against the card is
+    # the irreversible half and it has never been exercised even once. A tool
+    # that half-drives a destructive operation is worse than one that declines,
+    # because a partial run reads as a completed one.
+    print("\n   REFUSED: the DEL itself is not wired. The read half above is")
+    print("   now exercised against real listings, including a truncated one")
+    print("   and one where OCR misread the count; the write half is not.")
+    print("   Wire it only with a per-directory DIR re-read AFTER the delete,")
+    print("   proving what went rather than trusting that DEL succeeded.")
     return 2
 
 

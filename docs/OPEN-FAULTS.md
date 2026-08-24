@@ -277,7 +277,7 @@ for letters.
 
 ---
 
-## 3. `CLRENV.BAT` clears 205 names; ~97 engine levers are not among them  — OPEN
+## 3. `CLRENV.BAT` — the generator exists and the CARD never got it  — OPEN
 
 Including `SHOT_TICKS`, `BACKDROP_CACHE`, `BG_SUBREGION_BLIT`,
 `PIN_NATIVE_MODE` and every `TAS_*`. **Any cell that runs without a reboot in
@@ -301,6 +301,36 @@ engine's log is downstream of the environment, the config file, the defaults
 and every killswitch. **Give the control arm the same rigour as the treatment
 arm** — forbid the *other* arm's lever, not just the ones that spoil the class
 of measurement.
+
+**MEASURED ON THE CARD 2026-08-24, and this is the live half of the fault.**
+`tests/qa/gen-clrenv.sh` was written, `CLRENV.BAT` in the repo was regenerated
+to **189 names / 13,800 bytes**, and `--check` reports it up to date. **The card
+still has the old one.**
+
+    repo  tests/qa/CLRENV.BAT   13,800 bytes   189 names
+    card  C:\DOSKUTSU\CLRENV.BAT  7,608 bytes  ~104 names, dated 8-20-26
+
+Read by size rather than by name, deliberately — sizes OCR reliably on this
+console font and names do not. The arithmetic corroborates it independently:
+at ~73 bytes per name (two spellings, CRLF) 7,608 bytes is ~104 names, against
+the documented ~102 of the stale file.
+
+**The repo being fixed says nothing about the machine being fixed**, and the
+generated file's own header says so: *"this file only reaches the card on a
+populate"*. `install-qa.sh` populates, and it runs on the operator's laptop with
+the CF physically mounted.
+
+**There may be a path that avoids a card swap.** `C:\MTCP\FTP.EXE` is driven by
+a response file (`PUT.RSP`), and mTCP's client supports `get` as well as `put` —
+so a `GET.RSP` could pull the new `CLRENV.BAT` onto the card over the network.
+**Not attempted.** It writes to a file every cell `CALL`s, and a truncated
+transfer breaks every future cell, so it wants the operator's go-ahead and a
+size check after.
+
+**What limits the damage today:** `--expect-log` makes the engine attest its own
+arm from its log, so a round using it is valid whatever `CLRENV` did. `--forbid`
+clears and verifies named levers on top. The stale file is a missing layer of
+defence, not an active corruption of rounds that attest.
 
 A generated `CLRENV` is owed from the doskutsu side and rides the next
 populate. Until it lands, the guards above are the only protection.
