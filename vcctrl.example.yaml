@@ -160,6 +160,21 @@ capabilities:
       channels: 2
       rate: 48000
 
+  # Putting a file ONTO the target. The backend names the METHOD; `targets:`
+  # says which attached machines it applies to, so a rig can have one of each.
+  #
+  # `mtcp-ftp` means the target pulls from the server named in
+  # `control.fileserver` using its own FTP client -- the DOS side always
+  # initiates, because mTCP's client cannot be pushed to.
+  files:
+    backend: mtcp-ftp             # mtcp-ftp | none
+    settings:
+      # Where files land on the target. Deliberately NOT the directory the
+      # program under test lives in: a staged file that collides with a name
+      # in there replaces it silently, and that directory holds the batch
+      # files every measured run calls.
+      dest: "C:\\UPLOADS"
+
   board:
     backend: usb4vc-runfile       # usb4vc-runfile | static | none
     settings:
@@ -193,11 +208,23 @@ targets:
     # collapses "this machine has no such channel" into "the channel is
     # broken", and those need different responses from a person.
     leds: supported
+    # Can this machine be sent a file? Same three words, same reason. This
+    # one is `supported` because the machine has a packet driver and an FTP
+    # client; the capability still refuses if no file server is answering,
+    # which is a different fact and reported under a different word.
+    transfer: supported
 
   - board_id: 3
     name: Example Macintosh
     native: {width: 512, height: 342}
     leds: unsupported
+    # No packet driver, no FTP client, nothing to pull with. This is working
+    # hardware with no such channel -- the transfer control is greyed and says
+    # so, rather than being offered and failing. A Macintosh could gain this
+    # later: it would need `transfer: supported` here AND a backend under
+    # `capabilities.files` implementing its own answer to "how do you know it
+    # arrived". The plumbing is shared; that proof is not.
+    transfer: unsupported
 
 # ---------------------------------------------------------------------------
 # Harness. See docs/HARNESS-STANDARD.md; project-specific parameters belong in

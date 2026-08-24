@@ -3201,19 +3201,85 @@ def test_why_values_are_all_documented():
     silently lag the values it documents is not documentation, it is a second
     source of truth. So the drift is made detectable.
     """
+    import ast as _ast
     import re
     src = open(os.path.join(HERE, os.pardir, "daemon", "vcctrld.py")).read()
     web = open(os.path.join(HERE, os.pardir, "daemon", "vcweb.py")).read()
 
-    emitted = set(re.findall(r'"why":\s*"([a-z]+)"', src + web))
+    # COLLECTED FROM THE SYNTAX TREE, NOT BY REGEX, and the difference is not
+    # style. The pattern here was `"why":\s*"([a-z]+)"`, which finds a `why`
+    # only where it is written as a DICT LITERAL. FilesCapability sets its own
+    # by assignment --
+    #
+    #     out["why"], out["reason"] = "unsupported", why
+    #
+    # -- and five of its six values were invisible to this check. The hyphen
+    # was the second hole: the pattern had to match the whole quoted string,
+    # so `not-configured` matched nothing at all.
+    #
+    # BOTH WERE FOUND BY DELIBERATELY BREAKING IT. A value was injected that
+    # no docstring mentions, the test was run, and it PASSED -- so the check
+    # had been approving whatever it could not see, which is the same thing as
+    # not having it. A guard is worth what its negative control proves, and
+    # this one had never been given one.
+    def _why_strings(node):
+        """Every string this node can put under a `why` key, either form."""
+        out = []
+        for n in _ast.walk(node):
+            if isinstance(n, _ast.Dict):
+                for k, v in zip(n.keys, n.values):
+                    if (isinstance(k, _ast.Constant) and k.value == "why"):
+                        out += _consts(v)
+            elif isinstance(n, _ast.Assign):
+                tgts = n.targets[0]
+                tgts = tgts.elts if isinstance(tgts, _ast.Tuple) else [tgts]
+                vals = n.value.elts if isinstance(n.value, _ast.Tuple) \
+                    else [n.value]
+                for t, v in zip(tgts, vals):
+                    if (isinstance(t, _ast.Subscript)
+                            and isinstance(t.slice, _ast.Constant)
+                            and t.slice.value == "why"):
+                        out += _consts(v)
+        return out
+
+    def _consts(v):
+        """A literal, or both arms of `"a" if cond else "b"`."""
+        if isinstance(v, _ast.Constant) and isinstance(v.value, str):
+            return [v.value]
+        if isinstance(v, _ast.IfExp):
+            return _consts(v.body) + _consts(v.orelse)
+        return []
+
+    emitted = set(_why_strings(_ast.parse(src)) + _why_strings(_ast.parse(web)))
     check("the daemon emits several distinct why values", len(emitted) >= 4,
           emitted)
 
-    doc = vcctrld.LedsCapability.snapshot.__doc__ or ""
-    undocumented = sorted(w for w in emitted if w not in doc)
-    check("every emitted `why` appears in snapshot()'s docstring",
+    # EVERY VOCABULARY, NOT ONE CLASS'S. This asked LedsCapability.snapshot
+    # alone, which was right while leds was the only thing emitting `why` and
+    # became wrong the moment a second capability did -- the check would have
+    # demanded that FilesCapability's words be documented in the LED
+    # docstring, which is not a place any consumer would look for them.
+    #
+    # A vocabulary declares itself by saying its set is open. That is the same
+    # sentence this test already required, so it costs nothing and it means
+    # the docstrings that define words are found by what they promise rather
+    # than by being named in a list here.
+    vocab = []
+    for node in _ast.walk(_ast.parse(src)):
+        if not isinstance(node, (_ast.FunctionDef, _ast.ClassDef,
+                                 _ast.Module)):
+            continue
+        doc = _ast.get_docstring(node) or ""
+        if "NOT CLOSED" in doc.upper():
+            vocab.append(doc)
+    check("at least one docstring declares an open `why` vocabulary",
+          vocab, "none says NOT CLOSED")
+    undocumented = sorted(w for w in emitted
+                          if not any(w in d for d in vocab))
+    check("every emitted `why` appears in a documented open vocabulary",
           not undocumented,
-          "missing from the docstring: %s" % ", ".join(undocumented))
+          "missing from every NOT-CLOSED docstring: %s"
+          % ", ".join(undocumented))
 
     # And it must SAY SO that the set is open. A positive assertion rather
     # than "the phrase 'closed set' is absent" -- the first version of this
@@ -3224,8 +3290,11 @@ def test_why_values_are_all_documented():
     # A consumer told the set is closed will branch exhaustively on it and
     # mis-describe anything added later. That is not hypothetical: it is what
     # happened.
-    check("the docstring states the set is NOT closed",
-          "NOT CLOSED" in doc.upper(),
+    check("the LED docstring still states its set is NOT closed",
+          "NOT CLOSED" in (vcctrld.LedsCapability.snapshot.__doc__ or "").upper(),
+          "it does not tell a consumer the set can grow")
+    check("the files docstring states its set is NOT closed",
+          "NOT CLOSED" in (vcctrld.FilesCapability.snapshot.__doc__ or "").upper(),
           "it does not tell a consumer the set can grow")
 
 
@@ -5939,3 +6008,212 @@ def test_the_client_finds_vcconfig_in_the_INSTALLED_layout():
               out2.count("vcconfig.py") >= 2, out2.strip()[:200])
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+# ------------------------------------------------------- files capability
+
+def test_dos_filename_mangles_rather_than_truncating_silently():
+    """`my-photo-2026.jpg` is not a filename on a FAT volume.
+
+    The rename has to happen on the STAGING side, because the target cannot
+    rename in transit -- `GET.BAT` and its successor write whatever name they
+    fetched. So the interesting property is not that a name is shortened; it
+    is that the caller is TOLD it was, before the bytes move. Two photos off a
+    phone whose names differ after the eighth character become one file
+    otherwise, and the second silently replaces the first.
+    """
+    f = vcctrld.dos_filename
+
+    # The hyphen is LEGAL in an 8.3 name and stays. This test asserted it
+    # became an underscore, which was a guess about DOS rather than a fact
+    # about it -- the code was right and the expectation was not.
+    name, notes = f("my-photo-2026.jpg")
+    check("a legal hyphen survives", name == "MY-PHOTO.JPG", name)
+    check("a shortened name says so", any("8 characters" in n for n in notes),
+          notes)
+
+    name, _ = f("my photo:1.jpg")
+    check("illegal characters are replaced, not dropped",
+          name == "MY_PHOTO.JPG", name)
+
+    name, notes = f("/home/someone/READ.ME")
+    check("a path is reduced to its basename", name == "READ.ME", name)
+
+    name, notes = f("already.ok")
+    check("a name that needed nothing reports nothing",
+          (name, notes) == ("ALREADY.OK", []), (name, notes))
+
+    # An 8.3 name holds ONE separator. This produced `ARCHIVE..GZ` -- a name
+    # DOS will not open, made to look deliberate by the truncation landing on
+    # the stray dot.
+    name, _ = f("archive.tar.gz")
+    check("a stem's own dots do not survive into the 8.3 name",
+          name == "ARCHIVE.GZ", name)
+
+    # THE ONE THAT MATTERS. DOS reserves device names regardless of extension,
+    # so a file called CON.TXT is the console. The transfer would report
+    # success having written to a device, which is this rig's signature
+    # failure: a result that is real and is about something else.
+    for bad in ("CON.TXT", "con.txt", "PRN", "LPT1.DAT", "aux.bak"):
+        try:
+            f(bad)
+            check("%s is refused as a DOS device" % bad, False, "accepted")
+        except ValueError as exc:
+            check("%s is refused as a DOS device" % bad,
+                  "reserved DOS device" in str(exc), str(exc))
+
+    for bad in ("", "   ", ".", "..", ".bashrc"):
+        try:
+            f(bad)
+            check("%r is refused" % bad, False, "accepted")
+        except ValueError:
+            check("%r is refused" % bad, True)
+
+
+def test_size_verdict_has_three_answers_not_two():
+    """`warn` is a state, not a softer refusal.
+
+    Past 8 MB the honest statement is that nobody has measured this path at
+    that size -- the largest on record is a 7.8 MB binary. "Untested" and "too
+    big" are different facts and the operator is entitled to proceed on the
+    first. Collapsing them would either block a working transfer or wave
+    through one that cannot be interrupted.
+    """
+    v = vcctrld.size_verdict
+    MB = 1024 * 1024
+
+    r = v([2 * MB])
+    check("an ordinary photo passes silently",
+          (r["ok"], r["why"]) == (True, None), r)
+
+    r = v([12 * MB])
+    check("past 8 MB it proceeds, and says the regime is unmeasured",
+          (r["ok"], r["why"]) == (True, "unmeasured"), r)
+    check("the warning says untested rather than too big",
+          "untested" in r["reason"], r["reason"])
+
+    r = v([80 * MB])
+    check("past 64 MB it refuses", (r["ok"], r["why"]) == (False, "too-large"),
+          r)
+    check("the refusal explains that a transfer cannot be interrupted",
+          "interrupted" in r["reason"], r["reason"])
+
+    # THE CEILING IS ON THE QUEUE TOO. Without this, three 30 MB files walk
+    # past a 64 MB refusal one at a time and the machine spends half an hour
+    # in a state nothing can cancel.
+    r = v([30 * MB, 30 * MB, 30 * MB])
+    check("a queue is judged on its total, not per file",
+          (r["ok"], r["why"]) == (False, "too-large"), r)
+    check("the total is reported", r["total"] == 90 * MB, r["total"])
+
+    r = v([])
+    check("an empty queue is not a pass on nothing",
+          r["total"] == 0 and r["ok"] is True, r)
+
+
+def test_files_support_is_three_valued_and_unknown_refuses():
+    """A Macintosh Plus and an unidentified machine are different answers.
+
+    `unsupported` is working hardware with no such channel -- there is nothing
+    to fix and nothing to retry. `unknown` is "which machine is this?", and it
+    REFUSES rather than trying, because this is the one capability whose
+    attempt reboots the target and writes to its disk. Every other capability
+    can afford to try and fail.
+
+    A typo in the config resolves to `unknown`, NOT to `unsupported`: somebody
+    wrote something unreadable, which is fixable by editing a line, and that
+    is a different fact from a machine that has no packet driver.
+    """
+    cap = vcctrld.FilesCapability(None)
+
+    def with_config(board, targets):
+        real_board = vcctrld.installed_board_id
+        real_cfg = vcctrld._configured_transfer_boards
+        vcctrld.installed_board_id = lambda: board
+        vcctrld._configured_transfer_boards = lambda: targets
+        try:
+            return cap.support()
+        finally:
+            vcctrld.installed_board_id = real_board
+            vcctrld._configured_transfer_boards = real_cfg
+
+    ok, why = with_config(1, {1: "supported"})
+    check("a declared PC supports transfer", ok is True, (ok, why))
+
+    ok, why = with_config(3, {3: "unsupported"})
+    check("a declared Macintosh does not", ok is False, (ok, why))
+    check("and the reason names what it lacks rather than blaming it",
+          "no packet driver" in (why or ""), why)
+
+    ok, why = with_config(None, {1: "supported"})
+    check("an unidentified board is unknown, not assumed", ok is None,
+          (ok, why))
+    check("and the reason says why guessing is expensive",
+          "writes to its disk" in (why or ""), why)
+
+    ok, why = with_config(1, {})
+    check("a board absent from targets: is unknown, not unsupported",
+          ok is None, (ok, why))
+
+    ok, why = with_config(1, None)
+    check("no targets: at all is unknown", ok is None, (ok, why))
+
+    # FAILS CLOSED, AND CLOSED HERE MEANS `unknown`. Reading a typo as
+    # `unsupported` would tell the operator their hardware cannot do this,
+    # sending them to buy a network card instead of fixing a line of YAML.
+    ok, why = with_config(1, {1: "suported"})
+    check("a typo resolves to unknown rather than unsupported", ok is None,
+          (ok, why))
+    check("and the reason quotes what was actually written",
+          "suported" in (why or ""), why)
+
+
+def test_files_snapshot_separates_the_five_refusals():
+    """Each `why` sends a person somewhere different, so they stay apart.
+
+    `unreachable` is the only one fixable in a shell, and it is the one that
+    must never be confused with `unsupported` -- one means start serve.sh, the
+    other means this machine will never do this. `unchecked` is the probe
+    timing out, which is a statement about the instrument and not about the
+    target: reporting it as a dead server sends somebody to restart a service
+    that was never down.
+    """
+    cap = vcctrld.FilesCapability(None)
+    cap.backend_name = "mtcp-ftp"
+    cap.settings = {}
+
+    def snap(support, server, live):
+        cap.support = lambda: support
+        cap._server = lambda: server
+        cap._reachable = lambda timeout=None: live
+        return cap.snapshot()
+
+    s = snap((False, "no packet driver"), ("h", 21), (True, None))
+    check("unsupported short-circuits before the server is consulted",
+          s["why"] == "unsupported" and s["available"] is False, s)
+
+    s = snap((None, "which machine?"), ("h", 21), (True, None))
+    check("unknown short-circuits too", s["why"] == "unknown", s)
+
+    s = snap((True, None), None, (True, None))
+    check("no fileserver configured is not_configured",
+          s["why"] == "not_configured", s)
+
+    s = snap((True, None), ("h", 21), (False, "refused"))
+    check("a dead server is unreachable", s["why"] == "unreachable", s)
+
+    s = snap((True, None), ("h", 21), (None, "timed out"))
+    check("a timed-out probe is unchecked, NOT unreachable",
+          s["why"] == "unchecked", s)
+
+    s = snap((True, None), ("h", 21), (True, None))
+    check("everything holding is available",
+          s["available"] is True and s["why"] is None, s)
+
+    # THE SPELLING IS THE REGISTRY'S. One daemon, one state, one word: the
+    # registry has emitted `not_configured` since capabilities had backends,
+    # and this shipped as `not-configured` for two hours. A consumer branching
+    # on one would fall through to its default on the other.
+    check("not_configured matches the registry's spelling",
+          all(v != "not-configured" for v in s.values()
+              if isinstance(v, str)), s)

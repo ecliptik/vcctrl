@@ -88,6 +88,28 @@ USAGE = """usage: vcctrl <command> [args]
                               2  could not look      (no LED channel on this
                                                       board, or unreadable)
                               3  the tool itself failed
+  files                     can the attached machine be sent a file at all?
+                            Answers with a WORD, not a boolean: available,
+                            unsupported (a Macintosh has no packet driver --
+                            working hardware, nothing to fix), unknown (which
+                            machine IS this?), not-configured, unreachable
+                            (the file server is not running) or unchecked
+                            (the probe itself timed out). Those need different
+                            things doing about them, so they stay apart.
+  file-name NAME            what NAME becomes on the target. DOS 8.3 and
+                            uppercase, and the rename happens here because the
+                            target cannot rename in transit. Prints the notes
+                            so a shortened name is seen before it is sent.
+  file-check [timeout]      the real check: is the file server actually
+                            answering? Run this BEFORE a transfer, not after --
+                            a dead server discovered post-reboot has cost two
+                            minutes and the target's whole environment. Exit
+                            codes as verify-input:
+                              0  ready
+                              1  the server is not answering  (start serve.sh)
+                              2  could not look
+                              3  this machine cannot receive files, or none
+                                 is configured
   preflight [--no-input] [--as NAME]
                             ONE gate for "is this rig fit to run". Checks caps,
                             board, power, video, scrub ring, the input lock and
@@ -276,6 +298,39 @@ def write_burst(resp, outdir):
     meta["seqs"] = [int(f["seq"]) for f in frames]
     sys.stdout.write(json.dumps(meta, indent=2, sort_keys=True) + "\n")
     return 0
+
+
+def file_check_exit(resp):
+    """Map the transfer's availability onto an exit code.
+
+        0  the target can receive a file and the server answered
+        1  the server is not answering    -- a real fault, and fixable in a
+                                             shell: start serve.sh
+        2  could not look                 -- the board is unidentified, or the
+                                             probe itself timed out
+        3  the tool refused before acting -- this machine has no way to receive
+                                             a file, or none is configured
+
+    `unsupported` is 3 and NOT 1. A Macintosh Plus with no packet driver has
+    not failed at anything; the operation does not exist there, and a harness
+    that treats it as a fault aborts on working hardware. That is the same
+    argument verify_input_exit makes about LEDs, and it is the reason both
+    need four codes rather than two.
+
+    `unchecked` is 2 rather than 1 for the mirror-image reason: a probe that
+    timed out is a statement about the probe. Reporting it as a dead server
+    would send somebody to restart a service that was never down.
+    """
+    why = resp.get("why")
+    if resp.get("ok"):
+        sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
+        return 0
+    sys.stderr.write("error: %s\n" % resp.get("error"))
+    if why == "unreachable":
+        return 1
+    if why in ("unknown", "unchecked"):
+        return 2
+    return 3
 
 
 def verify_input_exit(resp):
@@ -829,6 +884,17 @@ def main(argv):
             req["seconds"] = float(rest[0])
     elif cmd in ("led-changes", "led_changes"):
         req = {"cmd": "led_changes", "n": int(rest[0]) if rest else 50}
+    elif cmd == "files":
+        req = {"cmd": "files"}
+    elif cmd in ("file-name", "file_name"):
+        if not rest:
+            sys.stderr.write("file-name needs a filename to convert\n")
+            return 3
+        req = {"cmd": "file_name", "name": rest[0]}
+    elif cmd in ("file-check", "file_check"):
+        req = {"cmd": "file_check"}
+        if rest:
+            req["timeout"] = float(rest[0])
     elif cmd in ("verify-input", "verify_input"):
         req = {"cmd": "verify_input"}
     elif cmd == "ledwait":
@@ -845,9 +911,12 @@ def main(argv):
 
     resp = call(req)
     if resp is None:
-        return 3 if cmd in ("verify-input", "verify_input") else 1
+        return 3 if cmd in ("verify-input", "verify_input",
+                            "file-check", "file_check") else 1
     if cmd in ("verify-input", "verify_input"):
         return verify_input_exit(resp)
+    if cmd in ("file-check", "file_check"):
+        return file_check_exit(resp)
     if not resp.get("ok"):
         sys.stderr.write("error: %s\n" % resp.get("error"))
         return 1

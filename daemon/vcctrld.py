@@ -3581,6 +3581,354 @@ InputCapability.DEFAULT_BACKEND_NAME = 'usb4vc-uinput'
 LedsCapability.BACKENDS = {"ps2-sysfs": LedsCapability}
 LedsCapability.DEFAULT_BACKEND = LedsCapability
 LedsCapability.DEFAULT_BACKEND_NAME = 'ps2-sysfs'
+# ---------------------------------------------------------------------------
+# FILES -- putting a file ONTO the target.
+# ---------------------------------------------------------------------------
+#
+# The transport is the target's own FTP client pulling from a server on the
+# control host; the DOS side always initiates, because mTCP's FTP is a client
+# and nothing can be pushed to it unsolicited. That single fact shapes
+# everything here, including why this capability spends most of its code
+# saying when it does NOT apply.
+
+# DOS 6.22 reserves these names, and it reserves them REGARDLESS OF EXTENSION:
+# `CON.TXT` is the console, not a file. A transfer to one of these does not
+# fail loudly -- it writes to a device and reports success, which is the exact
+# shape of failure this rig keeps producing.
+_DOS_DEVICES = frozenset([
+    "CON", "PRN", "AUX", "NUL", "CLOCK$",
+] + ["COM%d" % n for n in range(1, 10)] + ["LPT%d" % n for n in range(1, 10)])
+
+# Everything DOS will not accept in a filename. The space is in here
+# deliberately: FAT permits it in some tools and the BATs that carry these
+# names do not, because a space ends the argument.
+_DOS_ILLEGAL = set('"*+,/:;<=>?[]|\\ ') | set(chr(c) for c in range(0, 32))
+
+# Where the size policy sits. Both are bytes, both apply to a single file AND
+# to a queue total -- without the second, three 30 MB files walk past a 64 MB
+# refusal one at a time.
+WARN_BYTES = 8 * 1024 * 1024
+REFUSE_BYTES = 64 * 1024 * 1024
+
+
+def dos_filename(name):
+    """A local filename -> (DOS 8.3 name, [notes]), or raise ValueError.
+
+    Renaming happens HERE, on the staging side, because the DOS side cannot
+    rename in transit: `GET.BAT` and its successor write the name they
+    fetched. So `my-photo-2026.jpg` has to become `MY_PHOTO.JPG` before the
+    bytes ever move, and the operator has to be shown that it did -- silently
+    truncating a name is how two files become one.
+
+    Returns the notes rather than logging them, so the caller can put them in
+    front of a person before the transfer rather than in a log afterwards.
+    """
+    notes = []
+    raw = os.path.basename(str(name or "").strip())
+    if not raw or raw in (".", ".."):
+        raise ValueError("no filename in %r" % (name,))
+    base, dot, ext = raw.rpartition(".")
+    if not dot:
+        base, ext = raw, ""
+    up = lambda s: "".join(("_" if c in _DOS_ILLEGAL else c) for c in s).upper()
+    # THE STEM'S OWN DOTS HAVE TO GO. An 8.3 name holds exactly one separator,
+    # and `archive.tar.gz` splits into a stem that still contains one --
+    # which came out as `ARCHIVE..GZ`, a name DOS will not open and which
+    # nothing downstream would have questioned. Caught by a test, not by
+    # reading: the truncation to eight characters happened to land on the
+    # stray dot and made it look deliberate.
+    base = up(base).replace(".", "_")
+    ext = up(ext)
+    if not base:
+        # ".bashrc" has no stem. DOS has no concept of a leading-dot file.
+        raise ValueError("%r has no name before its extension" % (raw,))
+    if len(base) > 8:
+        base = base[:8]
+        notes.append("name shortened to 8 characters")
+    # A stem that truncated onto a separator would end in one. Valid, ugly,
+    # and it makes two different files look like the same typo.
+    base = base.rstrip("_")
+    if not base:
+        raise ValueError("%r leaves no usable name once DOS-legal" % (raw,))
+    if len(ext) > 3:
+        ext = ext[:3]
+        notes.append("extension shortened to 3 characters")
+    if base in _DOS_DEVICES:
+        # NOT silently renamed. A file the operator called CON.TXT is a file
+        # they will look for under that name, and DOS would have written it to
+        # the console and said nothing.
+        raise ValueError("%s is a reserved DOS device name, whatever the "
+                         "extension -- rename it before sending" % base)
+    out = base + ("." + ext if ext else "")
+    if out != raw.upper():
+        notes.append("sent as %s" % out)
+    return out, notes
+
+
+def size_verdict(sizes):
+    """[bytes] -> {"ok", "why", "reason", "total"}. Three answers, not two.
+
+    `warn` is a real third state and the reason this is not a boolean: past
+    8 MB the honest statement is that the regime is UNMEASURED, not that it
+    will fail. The largest transfer on record over this path is a 7.8 MB
+    binary (FINDINGS sec. 15), so above that nobody has looked -- which is a
+    different fact from "too big", and the operator is entitled to proceed.
+
+    The refusal at 64 MB is not about size either. It is about there being no
+    safe interruption: a cancel lands between files and never inside
+    FTP.EXE, so a wedged transfer is a wedged machine whose only exit is a
+    power cycle.
+
+    The `why` set here is NOT CLOSED -- `too-large` and `unmeasured` are what
+    exists today, and a future ceiling (free space on the target, a queue
+    length) would add a word rather than overload one of these.
+    """
+    total = sum(int(s) for s in sizes)
+    biggest = max([int(s) for s in sizes] or [0])
+    if biggest > REFUSE_BYTES or total > REFUSE_BYTES:
+        return {"ok": False, "why": "too-large", "total": total,
+                "reason": ("over the %d MB ceiling. Nothing this large has "
+                           "been transferred here, and a transfer that wedges "
+                           "cannot be interrupted -- a cancel lands between "
+                           "files, never inside FTP.EXE."
+                           % (REFUSE_BYTES // (1024 * 1024)))}
+    if biggest > WARN_BYTES or total > WARN_BYTES:
+        return {"ok": True, "why": "unmeasured", "total": total,
+                "reason": ("over %d MB. The largest transfer on record here "
+                           "is 7.8 MB, so this is untested rather than known "
+                           "to be too big." % (WARN_BYTES // (1024 * 1024)))}
+    return {"ok": True, "why": None, "total": total, "reason": None}
+
+
+def _configured_transfer_boards():
+    """{board id: the literal word} from `targets:`, or None if unconfigured.
+
+    Returns the WORD rather than a boolean, because the caller has to tell
+    `unsupported` from `unknown` and from a target that is simply not listed.
+    Anything that is not one of the three known words is returned as it was
+    written, so a typo surfaces as a typo instead of failing open.
+    """
+    t = CFG.optional("targets")
+    if t is vcconfig.ABSENT or t is vcconfig.NONE:
+        return None
+    out = {}
+    for row in t:
+        try:
+            word = row.get("transfer")
+            if word is not None:
+                out[int(row["board_id"])] = str(word)
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+class FilesCapability(Capability):
+    """Putting a file onto the target, over the target's own FTP client.
+
+    Rule 1 applies here as everywhere: this class does not call into input,
+    power or video. The transfer itself is a SEQUENCE across those three and
+    belongs to the registry, the way a sweep does. What lives here is the
+    part that is genuinely about files -- whether the feature applies at all,
+    what a name has to become, what a size means, and whether the server that
+    the target would pull from is actually answering.
+    """
+
+    name = "files"
+
+    # How long the cheap check waits. It runs on every state poll, so it is
+    # not allowed to make the page wait: a server that is slow to answer
+    # leaves the previous state standing and says the check timed out. It must
+    # NOT report `unsupported`, which would be the instrument's own state
+    # reported as the target's.
+    PROBE_TIMEOUT_S = 0.4
+
+    def commands(self):
+        return {"files": self._files, "file_check": self._file_check,
+                "file_name": self._file_name}
+
+    # -- does this even apply -------------------------------------------------
+
+    def support(self):
+        """Is a file transfer MEANINGFUL on the installed board?
+
+        Three values, and the third is load-bearing. `True` for a machine with
+        a packet driver and an FTP client; `False` for a Macintosh Plus, which
+        has neither and is working hardware; `None` when nobody can say which
+        machine is attached.
+
+        `None` refuses rather than proceeding. Every other capability can
+        afford to try and fail -- this one reboots the target and writes to
+        its disk, and doing that to an unidentified machine is the one case
+        where a wrong guess is both expensive and quiet.
+        """
+        bid = installed_board_id()
+        if bid is None:
+            return None, ("cannot tell which machine is attached, and a "
+                          "transfer reboots the target and writes to its disk")
+        table = _configured_transfer_boards()
+        if table is None:
+            return None, ("no `targets:` are configured, so it is not known "
+                          "whether board %d can receive files" % bid)
+        word = table.get(bid)
+        if word == "supported":
+            return True, None
+        if word == "unsupported":
+            return False, ("board %d has no way to receive a file -- no packet "
+                           "driver and no FTP client" % bid)
+        if word is None:
+            return None, ("board %d is not listed in `targets:`, so whether it "
+                          "can receive files has never been stated" % bid)
+        if word == "unknown":
+            return None, ("board %d declares `transfer: unknown`" % bid)
+        # A typo. Fails closed as UNKNOWN rather than unsupported: "somebody
+        # wrote something we cannot read" is not the same fact as "this
+        # machine has no such channel", and only one of them is fixable by
+        # editing a line.
+        return None, ("board %d declares `transfer: %s`, which is not one of "
+                      "supported/unsupported/unknown" % (bid, word))
+
+    # -- the server the target would pull FROM --------------------------------
+
+    def _server(self):
+        """(host, port) from `control.fileserver`, or None if not configured."""
+        host = CFG.optional("control.fileserver.host")
+        port = CFG.optional("control.fileserver.port")
+        if host in (vcconfig.ABSENT, vcconfig.NONE, None, ""):
+            return None
+        try:
+            return str(host), int(port) if port not in (
+                vcconfig.ABSENT, vcconfig.NONE, None) else 21
+        except (TypeError, ValueError):
+            return None
+
+    def _reachable(self, timeout=None):
+        """(True|False|None, reason). None means the CHECK failed, not the server.
+
+        A config file is not the configuration: a `control.fileserver` block
+        proves somebody wrote an address down, not that `serve.sh` is running
+        behind it. This is the cheap half -- a TCP connect, no login -- and it
+        decides whether the control is offered.
+
+        The third value exists because a timeout is a statement about this
+        probe, not about the far end, and reporting it as `False` would turn
+        a slow network into a machine that "cannot receive files".
+        """
+        srv = self._server()
+        if srv is None:
+            return None, "no control.fileserver is configured"
+        host, port = srv
+        s = None
+        try:
+            s = socket.create_connection(
+                (host, port), timeout or self.PROBE_TIMEOUT_S)
+            return True, None
+        except socket.timeout:
+            return None, ("the file server at %s:%d did not answer within %.1fs"
+                          " -- this says the check timed out, not that the "
+                          "server is down" % (host, port,
+                                              timeout or self.PROBE_TIMEOUT_S))
+        except OSError as exc:
+            return False, ("the file server at %s:%d is not answering (%s). "
+                           "Start it with serve.sh on the control host."
+                           % (host, port, exc.strerror or exc))
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+
+    # -- the contract ---------------------------------------------------------
+
+    def snapshot(self):
+        """EVERY KEY ALWAYS PRESENT, null where unknown.
+
+            {"available": true,  "why": null, ...}
+            {"available": false, "why": "unsupported",    "reason": "..."}
+            {"available": false, "why": "unknown",        "reason": "..."}
+            {"available": false, "why": "not_configured", "reason": "..."}
+            {"available": false, "why": "unreachable",    "reason": "..."}
+            {"available": false, "why": "unchecked",      "reason": "..."}
+
+        SIX WORDS, AND THEY ARE NOT INTERCHANGEABLE -- which is the whole
+        point of this method. `unsupported` is a Macintosh and there is
+        nothing to fix. `unknown` is "which machine is this?". `not_configured`
+        is nobody asked for the feature. `unreachable` is a server that is not
+        running, and it is the only one an operator fixes in a shell.
+        `unchecked` is the probe itself failing, and reporting it as any of the
+        others would be the instrument's state wearing the target's name.
+
+        The set is NOT closed. LedsCapability's docstring said CLOSED SET and
+        listed three while emitting five; the cost was a session reading this
+        code and building against a set that was already wrong.
+        """
+        srv = self._server()
+        out = {"available": False, "why": None, "reason": None,
+               "backend": self.backend_name,
+               "server": ("%s:%d" % srv) if srv else None,
+               "dest": (self.settings or {}).get("dest", "C:\\UPLOADS"),
+               "warn_bytes": WARN_BYTES, "refuse_bytes": REFUSE_BYTES}
+
+        supported, why = self.support()
+        if supported is False:
+            out["why"], out["reason"] = "unsupported", why
+            return out
+        if supported is None:
+            out["why"], out["reason"] = "unknown", why
+            return out
+        if srv is None:
+            # UNDERSCORE, matching Registry._refusal. It was written
+            # `not-configured` here for two hours: one daemon, one state, two
+            # spellings, and a consumer branching on the registry's word would
+            # have fallen through to the default for this capability's. Caught
+            # by the `why` guard only after that guard was rebuilt to see
+            # assignment forms -- the old one could not read this line at all.
+            out["why"] = "not_configured"
+            out["reason"] = ("no control.fileserver is configured, so there is "
+                             "nothing for the target to pull from")
+            return out
+        live, why = self._reachable()
+        if live is False:
+            out["why"], out["reason"] = "unreachable", why
+            return out
+        if live is None:
+            out["why"], out["reason"] = "unchecked", why
+            return out
+        out["available"] = True
+        return out
+
+    def _files(self, req):
+        return {"ok": True, "files": self.snapshot()}
+
+    def _file_name(self, req):
+        """Dry-run the rename, so a person sees it before the bytes move."""
+        try:
+            name, notes = dos_filename(req.get("name"))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "name": name, "notes": notes}
+
+    def _file_check(self, req):
+        """The EXPENSIVE check, run before anything is destroyed.
+
+        The cheap probe decides whether a button is grey. This one is what
+        stands between the operator and a wasted reboot: a transfer that finds
+        the server dead AFTER the machine has rebooted has cost two minutes and
+        the target's entire environment, for a fault that a shell command
+        fixes. So it runs after the confirmation and before the first
+        keystroke -- the expensive check guarding the expensive action.
+        """
+        snap = self.snapshot()
+        if not snap["available"]:
+            return {"ok": False, "error": snap["reason"], "why": snap["why"],
+                    "files": snap}
+        live, why = self._reachable(timeout=float(req.get("timeout", 5.0)))
+        if live is not True:
+            return {"ok": False, "why": "unreachable" if live is False
+                    else "unchecked", "error": why, "files": snap}
+        return {"ok": True, "files": snap}
+
+
 VideoCapability.BACKENDS = {"v4l2-ffmpeg": VideoCapability}
 VideoCapability.DEFAULT_BACKEND = VideoCapability
 VideoCapability.DEFAULT_BACKEND_NAME = 'v4l2-ffmpeg'
@@ -3588,8 +3936,13 @@ AudioCapability.BACKENDS = {"alsa-ffmpeg": AudioCapability}
 AudioCapability.DEFAULT_BACKEND = AudioCapability
 AudioCapability.DEFAULT_BACKEND_NAME = 'alsa-ffmpeg'
 
+FilesCapability.BACKENDS = {"mtcp-ftp": FilesCapability}
+FilesCapability.DEFAULT_BACKEND = FilesCapability
+FilesCapability.DEFAULT_BACKEND_NAME = 'mtcp-ftp'
+
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
-                VideoCapability, AudioCapability, BoardCapability]
+                VideoCapability, AudioCapability, BoardCapability,
+                FilesCapability]
 
 # vcweb holds the TLS paths as class attributes; the resolved config lives
 # here. Pushed rather than pulled so there is exactly one loader in the

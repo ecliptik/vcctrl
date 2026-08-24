@@ -187,6 +187,13 @@ SCHEMA = {
         # channel" into "the channel is broken", and the daemon distinguishes
         # those. See LedsCapability.support().
         "leds": str,                 # supported | unsupported | unknown
+        # THE SAME WORD DISCIPLINE, FOR THE SAME REASON. Can this machine
+        # receive a file at all? A Macintosh Plus has no packet driver and no
+        # mTCP client -- that is working hardware with no such channel, not a
+        # broken transfer. `unknown` is a third answer and stays one: the
+        # transfer reboots the target and writes to its disk, which is the
+        # wrong thing to do to a machine nobody has identified.
+        "transfer": str,             # supported | unsupported | unknown
     }),
 
     "harness": {

@@ -588,6 +588,14 @@ class WebCapability(object):
         # closing, in the other consumer. The KVM is where an intermittent
         # would actually be noticed.
         "led_changes",
+        # READ-ONLY, ALL THREE. `files` is the availability answer that decides
+        # whether the transfer entry in the File menu is offered at all;
+        # `file_name` dry-runs the 8.3 rename so a person sees what their file
+        # will be called before any byte moves; `file_check` is the expensive
+        # server probe, run after the confirmation and before the reboot.
+        # Nothing here moves data or touches the target -- the commands that
+        # do are deliberately NOT exposed yet.
+        "files", "file_name", "file_check",
     ])
 
     def __init__(self, registry, bind, port, tls_port=0):
