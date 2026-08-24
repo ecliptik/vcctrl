@@ -730,3 +730,46 @@ backlog must be pulled between them. `DMPA` was safe by luck rather than
 design: the flat total went 2,304,150 -> 3,225,810, a delta of exactly
 921,660 = 4 x 230,415, proving four NEW files and no overwrite. **Had it
 collided the delta would simply have been smaller, with nothing announcing it.**
+
+
+## 13. Caps Lock is harness-controlled state, and short commands do not know it
+
+**Two sessions disagreed about Caps Lock on 2026-08-24 and both were right.**
+One saw typed commands arriving inverted; the other read `capslock: 0` from the
+LED channel with `available: true`. Neither channel was lying, and the
+resolution is that **Caps Lock is deliberately driven by the harness itself.**
+
+Three places move it, all on purpose:
+
+    at_prompt()      TOGGLES it as the liveness probe, and its own docstring
+                     says it "does not always restore it"
+    arm_leds()       SETS it high -- POST clears it, so caps 1 -> 0 IS the
+                     reboot edge
+    type_command()   FORCES it high before typing, because mode 12h lowercase
+                     OCRs as "he L Lowor Ld" and the echo check then rejects
+                     commands that arrived perfectly
+
+**The trap is the asymmetry.** `type_command()` only runs for commands longer
+than `SHORT_CMD_CHARS`; anything shorter goes straight to `vc("type", ...)`,
+which does not touch Caps Lock and does not know what the last long command
+left behind. **So a short command arrives in whatever case the previous long
+one happened to set** — and the case a command arrives in is a function of
+history, not of the caller.
+
+Observed exactly this: a `DIR ... | FIND "bytes"` typed after a cell arrived as
+`dir ... | find "BYTES"`. The unquoted half did not matter. **The quoted
+pattern did**, and without `/I` it would have searched for `BYTES` against DOS
+output that says `bytes`, matched nothing, and returned a well-formed zero.
+
+The disagreement itself resolved the same way: the LED read `0` later because
+two reboots had happened in between, and POST clears it.
+
+### The rule
+
+**Always `FIND /I`. Never let a typed pattern's case carry meaning.** This is
+already the convention in `vcctrl-cell`; it is written down here so the reason
+survives, because the failure it prevents produces a zero rather than an error.
+
+**And a Caps Lock reading is a reading of the harness, not of the target.**
+Comparing it between sessions says nothing unless both know which of the three
+writers ran last.
