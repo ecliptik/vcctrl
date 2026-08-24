@@ -6656,3 +6656,81 @@ def test_packet_driver_check_reports_cannot_tell_rather_than_no_driver():
           f("Name: PKTDRV", expect="ODIPKT") is True)
     check("expect does not manufacture a negative",
           f("wholly unfamiliar output", expect="ODIPKT") is None)
+
+
+# The real thing, off the card in NET, 2026-08-24. Kept verbatim so a future
+# change to the matcher is checked against what the hardware actually says
+# rather than against somebody's memory of it.
+PKTTOOL_FOUND = """Scanning :
+Details for driver at software interrupt: 0x7E
+Name: ODIPKT
+Entry point: 1256:08DD
+Version: 21 Class: 1 Type: 71 Interface Number: 0
+Function flag: 6 (basic, high performance, and extended functions)
+Current receive mode: packets for this MAC and broadcast packets
+MAC address: 00:00:5E:00:53:03"""
+
+PKTTOOL_NONE = """Scanning :
+No packet drivers found - did you load one?"""
+
+
+def test_packet_driver_matcher_against_the_real_output():
+    """Both branches now observed on the hardware, so both are pinned here.
+
+    The positive one was documentation until somebody spent a reboot on it.
+    """
+    f = vcctrld.packet_driver_seen
+    check("the real success output is a yes", f(PKTTOOL_FOUND) is True)
+    check("the real failure output is a no", f(PKTTOOL_NONE) is False)
+    check("the rig's own driver name matches when named",
+          f(PKTTOOL_FOUND, expect="ODIPKT") is True)
+
+    # THE MARKER IS LETTERS, DELIBERATELY. `Details for driver at software
+    # interrupt: 0x7E` would also identify a driver, and its value came back
+    # off the glass as `@x7E`. A check that reads a number on this console has
+    # a failure rate rather than a result -- so a mangled hex line must not be
+    # what the verdict rests on.
+    mangled = PKTTOOL_FOUND.replace("0x7E", "@x7E").replace("08DD", "@8DD")
+    check("a mangled hex value does not disturb the verdict",
+          f(mangled) is True, mangled.splitlines()[1])
+
+    # And the verdict must not survive losing the line it actually rests on.
+    without = "\n".join(l for l in PKTTOOL_FOUND.splitlines()
+                        if not l.lower().startswith("name:"))
+    check("dropping the Name: line makes it cannot-tell, not a yes",
+          f(without) is None, without.splitlines()[:3])
+
+
+def test_a_refused_gate_says_when_the_command_simply_did_not_run():
+    """C:\\MTCP is not on the PATH in NET, and the driver being loaded does not
+    change that.
+
+    `PKTTOOL SCAN` returns "Bad command or file name" on a machine that is
+    perfectly configured. The matcher correctly answers cannot-tell and the
+    gate refuses -- which is right, and would be maddening to debug, because
+    every visible fact says the machine is fine.
+
+    A refusal whose cause is invisible is an outage with good manners. So the
+    one cause we have actually met is turned into an instruction.
+    """
+    seen, why = vcctrld.packet_driver_seen, vcctrld.packet_driver_reason
+
+    bad = "C:\\>PKTTOOL SCAN\nBad command or file name"
+    check("the gate still refuses -- this is not a driver", seen(bad) is None)
+    check("but the reason names the cause",
+          "not on the PATH" in (why(bad) or ""), why(bad))
+    check("and names the fix, with the full path",
+          "PKTTOOL.EXE" in (why(bad) or ""), why(bad))
+    check("and says the driver may be fine, so nobody goes hunting a fault",
+          "may well be loaded" in (why(bad) or ""), why(bad))
+
+    check("an empty read is described as a failed READ, not a target fault",
+          "could not be read" in (why("") or ""), why(""))
+
+    # NO INVENTED EXPLANATIONS. Output nobody has seen gets no story attached
+    # to it -- a plausible cause offered for an unknown one is how a person
+    # spends an hour on the wrong thing.
+    check("unrecognised output gets no fabricated reason",
+          why("some future firmware chattering") is None)
+    check("and a successful scan needs no reason at all",
+          why(PKTTOOL_FOUND) is None)

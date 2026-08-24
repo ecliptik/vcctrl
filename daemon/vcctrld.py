@@ -3956,15 +3956,31 @@ PROFILE = TargetProfile()
 # number would inherit that.
 _PKT_NONE = "no packet drivers found"
 
-# A POSITIVE marker. mTCP's pkttool names each driver it finds; the docs record
-# `Name: ODIPKT, Class 1, Type 71 at 0x7E`.
+# A POSITIVE marker. OBSERVED on the card 2026-08-24, in NET:
 #
-# UNVERIFIED, AND SAID SO RATHER THAN ASSUMED: only the NEGATIVE branch has
-# been observed on this machine, because seeing the positive one costs a reboot
-# into NET and nobody has spent one on the easy case. If the real output words
-# it differently this returns "cannot tell" rather than "no driver" -- which is
-# the safe direction, and is the whole reason the function has three values.
+#     Scanning :
+#     Details for driver at software interrupt: 0x7E
+#     Name: ODIPKT
+#     Entry point: 1256:08DD
+#     Version: 21 Class: 1 Type: 71 Interface Number: 0
+#     ...
+#
+# `Name:` is chosen over `Details for driver at software interrupt:` for one
+# reason: the latter carries a hex value, and `0x7E` came back off the glass as
+# `@x7E`. EVERY MARKER HERE IS LETTERS. On this console a check that reads a
+# number has a failure rate rather than a result.
 _PKT_FOUND = ("name:", "odipkt")
+
+# `C:\MTCP` IS NOT ON THE PATH IN THE NET PROFILE. `PKTTOOL SCAN` gives
+# "Bad command or file name" on a machine whose driver is loaded and whose EXE
+# is present -- it only appears to work after a `CD \MTCP`. Use the full path.
+#
+# This string contains no driver marker and no failure marker, so the matcher
+# correctly answers "cannot tell" and the gate refuses. Correct, and maddening
+# to debug: a perfectly configured machine, refused because the command was
+# spelled without its directory. Recognised separately so the answer names the
+# fix instead of leaving somebody to find it.
+_PKT_NOT_RUN = "bad command or file name"
 
 
 def packet_driver_seen(text, expect=None):
@@ -3985,7 +4001,11 @@ def packet_driver_seen(text, expect=None):
     `expect` names the driver this rig should see, so a profile can be
     specific where the generic marker is loose. It only ever ADDS a way to
     recognise a driver; it never turns an unrecognised answer into a refusal,
-    because a driver by another name is still a driver.
+    because a driver by another name is still a driver -- `ODIPKT` is the ODI
+    shim specifically, and a rig with a different NIC reports a different name.
+
+    Pair a None with packet_driver_reason(), which names the causes it can
+    recognise. Chief among them: the command not having run at all.
     """
     if not text:
         return None
@@ -3996,6 +4016,28 @@ def packet_driver_seen(text, expect=None):
         return True
     if _PKT_NONE in low:
         return False
+    return None
+
+
+def packet_driver_reason(text):
+    """Why packet_driver_seen() could not tell, where that is recognisable.
+
+    A None from that function is a refusal, and a refusal whose cause is
+    invisible is an outage with good manners. This turns the one cause we have
+    actually met into an instruction.
+
+    Returns None when there is nothing useful to add -- deliberately, rather
+    than inventing a plausible explanation for output nobody has seen.
+    """
+    if not text or not str(text).strip():
+        return ("nothing came back from the check at all, so this says the "
+                "screen could not be read rather than anything about the "
+                "target")
+    low = " ".join(str(text).split()).lower()
+    if _PKT_NOT_RUN in low:
+        return ("the command did not run: C:\\MTCP is not on the PATH in the "
+                "NET profile. Use the full path, C:\\MTCP\\PKTTOOL.EXE SCAN "
+                "-- the driver may well be loaded")
     return None
 
 
