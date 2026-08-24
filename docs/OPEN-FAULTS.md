@@ -841,13 +841,30 @@ check is:
     SET | FIND /I "BLASTER" | FIND /C "="
 
 **Presence, one or zero.** It proves *a* profile that sets `BLASTER` is loaded.
-It cannot distinguish `PGSB` from `PGADLIB`, `PGGUS` or `VIBRA`, and the card
-has four such profiles plus a `CLEAN` recovery boot that sets nothing.
+
+**CORRECTED 2026-08-24, from `g2k:AUTOEXEC.BAT` rather than from a screen
+read.** The first version of this section said four of the six profiles set
+`BLASTER`. **Only TWO do**, and their strings differ:
+
+    :VIBRA    SET BLASTER=A220 I5 D1 H5 T6 P330
+    :PGSB     SET BLASTER=A220 I7 D3 P330 T3
+    :PGADLIB  :PGGUS  :NET  :CLEAN   -- none
+
+**That is a correction in the SAFE direction and it narrows the fault
+sharply.** A cell booted into `PGADLIB` or `PGGUS` does not silently report
+`PGSB` — it gets `count: 0` and the guard REFUSES, correctly. **The only
+profile that can masquerade as `PGSB` is `VIBRA`**, and the two are
+distinguishable by the value the check throws away.
+
+I reached "four of six" by reading two `SET BLASTER` lines off a `FIND` on the
+screen and assuming the sound profiles each had one. **The file was in a git
+repo the whole time** (`g2k:AUTOEXEC.BAT`), exact and greppable, and reading it
+took one command.
 
 **The information to do better is already on screen and thrown away.**
-`C:\AUTOEXEC.BAT` carries at least two DIFFERENT `BLASTER` strings —
-`A220 I5 D1 H5 T6 P330` and `A220 I7 D3 P330 T3` among them — so the VALUE
-distinguishes profiles where the presence does not. Reading the value instead
+`AUTOEXEC.BAT` carries exactly two `BLASTER` strings and they are distinct, so
+the VALUE names the profile UNIQUELY where the presence cannot. This is now
+strong enough to build on rather than merely suggestive. Reading the value instead
 of counting it would turn a label into a measurement, at no extra round trip.
 
 **Why it has not bitten yet:** the menu default is `PGSB` (`menudefault=PGSB,5`,
