@@ -6372,3 +6372,179 @@ def test_the_liveness_check_dials_the_address_the_card_dials():
     cap.settings = {"target_host": "192.0.2.11", "target_port": "not-a-port"}
     check("an unparseable port is absent rather than silently 2121",
           cap._server() is None, cap._server())
+
+
+def _mkfiles(tmp):
+    cap = vcctrld.FilesCapability(None)
+    cap.backend_name = "mtcp-ftp"
+    cap.settings = {"stage_dir": os.path.join(tmp, "stage"),
+                    "target_host": "192.0.2.11"}
+    return cap
+
+
+def _send(cap, name, data, chunk=None, sha=None, **kw):
+    """Push bytes through file_stage the way a client would."""
+    import base64 as b64, hashlib as hl
+    chunk = chunk or len(data) or 1
+    h = hl.sha256(data).hexdigest() if sha is None else sha
+    sent, resp = 0, None
+    while True:
+        block = data[sent:sent + chunk]
+        final = sent + len(block) >= len(data)
+        req = {"name": name, "total": len(data), "offset": sent,
+               "data": b64.b64encode(block).decode(), "final": final}
+        if final:
+            req["sha256"] = h
+        req.update(kw)
+        resp = cap._file_stage(req)
+        if not resp.get("ok") or final:
+            return resp
+        sent += len(block)
+
+
+def test_staging_never_exposes_a_partial_file():
+    """The FTP root holds complete, verified files and nothing else.
+
+    The target GETs by name, and a name that exists is a name it will fetch.
+    `GET.BAT` cannot tell a short file from a whole one -- its own comment
+    concedes it reports an attempt and says to confirm with DIR -- so the only
+    place the distinction can be enforced is here, before the file is
+    reachable at all. Bytes therefore arrive in a directory that is not served
+    and are promoted by rename, which is atomic: there is no instant at which
+    a half-written file is visible under a fetchable name.
+    """
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    cap = _mkfiles(tmp)
+    root, partial, meta = cap._dirs()
+    payload = b"MENU 1\r\nMENU 2\r\n" * 500
+
+    # Mid-upload: bytes exist, and NOT where the target could reach them.
+    r = cap._file_stage({"name": "boot.bat", "total": len(payload),
+                         "offset": 0, "data": __import__("base64")
+                         .b64encode(payload[:100]).decode(), "final": False})
+    check("a chunk is accepted", r["ok"] and r["complete"] is False, r)
+    check("and it is NOT in the served root", os.listdir(root) == [], 
+          os.listdir(root))
+    check("it is in the partial directory instead",
+          os.listdir(partial) == ["BOOT.BAT"], os.listdir(partial))
+
+    r = _send(cap, "boot.bat", payload, chunk=100)
+    check("the completed file lands in the served root",
+          os.listdir(root) == ["BOOT.BAT"], os.listdir(root))
+    check("the partial directory is emptied by the promotion",
+          os.listdir(partial) == [], os.listdir(partial))
+    check("and the bytes are the bytes",
+          open(os.path.join(root, "BOOT.BAT"), "rb").read() == payload)
+    check("the queue reports it once", r["count"] == 1, r.get("queue"))
+
+
+def test_staging_refuses_rather_than_repairing():
+    """Every refusal here is a caller error or a transit error, kept apart.
+
+    The sha is checked BEFORE the file is promoted, and that is what makes the
+    transfer's later round trip mean anything: that check pulls the file back
+    off the target and compares it against the staged copy. If the staged copy
+    were already wrong it would compare a wrong file against itself and pass --
+    confirming the transport while saying nothing about the payload.
+    """
+    import base64 as b64, tempfile
+    tmp = tempfile.mkdtemp()
+    cap = _mkfiles(tmp)
+    root, partial, _meta = cap._dirs()
+    payload = b"x" * 2048
+
+    r = _send(cap, "photo.jpg", payload, sha="0" * 64)
+    check("a sha mismatch is refused", r["ok"] is False, r)
+    check("and named as such", r["why"] == "sha-mismatch", r)
+    check("THE BAD BYTES ARE NOT LEFT WHERE THE TARGET COULD FETCH THEM",
+          os.listdir(root) == [], os.listdir(root))
+    check("nor left as a partial to be resumed into a wrong file",
+          os.listdir(partial) == [], os.listdir(partial))
+
+    # A hole would be silently filled with zeroes by a seek, and the sha
+    # would fail at the end with nothing saying which chunk was lost.
+    cap._file_stage({"name": "a.txt", "total": 100, "offset": 0,
+                     "data": b64.b64encode(b"12345").decode(), "final": False})
+    r = cap._file_stage({"name": "a.txt", "total": 100, "offset": 90,
+                         "data": b64.b64encode(b"xyz").decode(),
+                         "final": False})
+    check("a chunk that does not start where the last ended is refused",
+          r["ok"] is False and r["why"] == "offset-mismatch", r)
+    check("and it says how much actually arrived", r["have"] == 5, r)
+
+    r = cap._file_stage({"name": "b.txt", "total": 100, "offset": 0,
+                         "data": b64.b64encode(b"short").decode(),
+                         "final": True, "sha256": "0" * 64})
+    check("a final chunk that leaves the file undersized is refused",
+          r["ok"] is False and r["why"] == "short", r)
+
+    # TWO PHOTOS THAT DIFFER AFTER THE EIGHTH CHARACTER ARE ONE 8.3 NAME.
+    _send(cap, "holiday-beach.jpg", b"first")
+    r = _send(cap, "holiday-boat.jpg", b"second")
+    check("a colliding 8.3 name is refused rather than silently overwritten",
+          r["ok"] is False and r["why"] == "name-taken", r)
+    # HOLIDAY-.JPG, with the hyphen: it is legal in an 8.3 name and came from
+    # the original, so only the underscores that REPLACED illegal characters
+    # are stripped. Both source names truncate to the same eight characters,
+    # which is the collision under test.
+    check("and the first file is untouched",
+          open(os.path.join(root, "HOLIDAY-.JPG"), "rb").read() == b"first")
+    r = _send(cap, "holiday-boat.jpg", b"second", replace=True)
+    check("replace makes the overwrite deliberate", r["ok"] is True, r)
+
+    # THE CALLER SENDS A NAME AND NEVER A PATH.
+    for evil in ("../../etc/passwd", "/etc/passwd", "..\\\\..\\\\boot.ini"):
+        r = _send(cap, evil, b"x")
+        staged = r.get("name")
+        check("%r cannot escape the staging directory" % evil,
+              staged is None or ("/" not in staged and "\\\\" not in staged
+                                 and ".." not in staged), r)
+
+
+def test_the_queue_ceiling_counts_the_queue():
+    """Three 30 MB files walk past a 64 MB refusal one at a time otherwise.
+
+    Checked against the DECLARED total before any bytes are written, so a file
+    over the ceiling is refused without first spending the time to receive it.
+    """
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    cap = _mkfiles(tmp)
+    root, _p, meta = cap._dirs()
+
+    _send(cap, "a.bin", b"a" * 1000)
+    _send(cap, "b.bin", b"b" * 1000)
+    q = cap._file_queue({"action": "list"})
+    check("the queue lists what is staged", q["count"] == 2, q)
+    check("with a size verdict over the whole queue",
+          q["size"]["total"] == 2000, q["size"])
+
+    r = cap._file_stage({"name": "big.bin",
+                         "total": vcctrld.REFUSE_BYTES + 1, "offset": 0,
+                         "data": "", "final": False})
+    check("a file over the ceiling is refused before any bytes are written",
+          r["ok"] is False and r["why"] == "too-large", r)
+    check("and nothing was created for it",
+          not os.path.exists(os.path.join(root, "BIG.BIN")))
+
+    # AN ORPHAN IS REPORTED AND LEFT ALONE. A file in the FTP root that this
+    # capability did not stage is still something the target can fetch, so
+    # hiding it would be the more dangerous tidiness -- and deleting it is how
+    # a recovery copy somebody put there by hand disappears.
+    with open(os.path.join(root, "HANDMADE.BAT"), "w") as f:
+        f.write("@ECHO OFF\r\n")
+    q = cap._file_queue({"action": "list"})
+    orphans = [r for r in q["queue"] if r.get("orphan")]
+    check("an unaccounted file in the root is reported, not hidden",
+          len(orphans) == 1 and orphans[0]["name"] == "HANDMADE.BAT", q)
+
+    c = cap._file_queue({"action": "clear"})
+    check("clear removes what we staged",
+          sorted(c["removed"]) == ["A.BIN", "B.BIN"], c)
+    check("and leaves alone what we did not",
+          c["left_alone"] == ["HANDMADE.BAT"], c)
+    check("the orphan is still on disk", 
+          os.path.exists(os.path.join(root, "HANDMADE.BAT")))
+    check("and the metadata went with the files we removed",
+          os.listdir(meta) == [], os.listdir(meta))

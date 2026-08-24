@@ -596,6 +596,13 @@ class WebCapability(object):
         # Nothing here moves data or touches the target -- the commands that
         # do are deliberately NOT exposed yet.
         "files", "file_name", "file_check",
+        # Staging WRITES, and is exposed anyway because the browser upload is
+        # the whole point of the feature. What bounds it: the caller sends a
+        # NAME and never a path, the name is forced to DOS 8.3, the size
+        # policy applies to the file and to the queue total, and the
+        # destination directory is decided here. It writes to the daemon
+        # host's staging directory and touches the target not at all.
+        "file_stage", "file_queue",
         # The page names the boot profile in its title, so it needs to read
         # the reading. Read-only from here: `set`, `clear` and `blaster` are
         # reachable over the socket and from the CLI, but a browser must not

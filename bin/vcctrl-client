@@ -98,6 +98,14 @@ USAGE = """usage: vcctrl <command> [args]
                             place with nothing to say the machine underneath
                             it changed. `blaster` is the only form that is a
                             measurement; `set` is an assertion and says so.
+  stage-file PATH [NAME] [--replace]
+                            put a local file in the queue for the next
+                            transfer. Chunked, sha256-verified on arrival, and
+                            it lands under a DOS 8.3 name -- see file-name.
+                            Nothing is sent to the target: this stages it.
+  file-queue [list|clear [NAME]]
+                            what is staged. `clear` drops staged files and
+                            leaves alone anything this tool did not put there.
   files                     can the attached machine be sent a file at all?
                             Answers with a WORD, not a boolean: available,
                             unsupported (a Macintosh has no packet driver --
@@ -308,6 +316,74 @@ def write_burst(resp, outdir):
     meta["seqs"] = [int(f["seq"]) for f in frames]
     sys.stdout.write(json.dumps(meta, indent=2, sort_keys=True) + "\n")
     return 0
+
+
+def stage_file(path, as_name=None, replace=False):
+    """Read a local file and hand it to the daemon in chunks.
+
+    CHUNKED BECAUSE THE SIZE POLICY ADMITS FILES FAR LARGER THAN ONE MESSAGE
+    SHOULD CARRY. The whole file base64'd into a single request would be a
+    third larger again and held entirely in memory at both ends, on a Pi with
+    under a gigabyte.
+
+    The sha256 goes with the LAST chunk, so the daemon can verify what it
+    assembled against what this read off disk. That check is the reason the
+    later round trip means anything: the transfer's verification compares the
+    target's copy against the staged copy, and if the staged copy were already
+    wrong it would compare a wrong file against itself and pass.
+    """
+    import base64 as _b64
+    import hashlib as _hl
+    if not os.path.isfile(path):
+        sys.stderr.write("stage-file: %s is not a file\n" % path)
+        return 3
+    total = os.path.getsize(path)
+    name = as_name or os.path.basename(path)
+    CHUNK = 4 * 1024 * 1024
+    h = _hl.sha256()
+    sent = 0
+    try:
+        with open(path, "rb") as f:
+            while True:
+                block = f.read(CHUNK)
+                h.update(block)
+                final = sent + len(block) >= total
+                req = {"cmd": "file_stage", "name": name, "total": total,
+                       "offset": sent,
+                       "data": _b64.b64encode(block).decode("ascii"),
+                       "final": final}
+                if replace:
+                    req["replace"] = True
+                if final:
+                    req["sha256"] = h.hexdigest()
+                resp = call(req)
+                if resp is None:
+                    sys.stderr.write("stage-file: the daemon did not answer\n")
+                    return 1
+                if not resp.get("ok"):
+                    sys.stderr.write("error: %s\n" % resp.get("error"))
+                    # `why` distinguishes a caller mistake from a fault. A
+                    # name that cannot be a DOS filename, a size over the
+                    # ceiling and a name already staged are all things the
+                    # CALLER must change -- exit 3. A short or mismatched
+                    # transfer is a real failure -- exit 1.
+                    return 3 if resp.get("why") in (
+                        "bad-name", "too-large", "name-taken") else 1
+                sent += len(block)
+                if final:
+                    sys.stdout.write(
+                        json.dumps(resp, indent=2, sort_keys=True) + "\n")
+                    return 0
+                if not block:
+                    # An empty read before `final` means the file shrank under
+                    # us. Loud, because the declared total is now a lie and
+                    # the daemon would reject the sha anyway.
+                    sys.stderr.write("stage-file: %s shrank while reading\n"
+                                     % path)
+                    return 1
+    except OSError as exc:
+        sys.stderr.write("stage-file: %s\n" % exc)
+        return 3
 
 
 def file_check_exit(resp):
@@ -898,6 +974,16 @@ def main(argv):
         req = {"cmd": "profile", "action": rest[0] if rest else "state"}
         if len(rest) > 1:
             req["name" if rest[0] == "set" else "value"] = rest[1]
+    elif cmd in ("file-queue", "file_queue"):
+        req = {"cmd": "file_queue", "action": rest[0] if rest else "list"}
+        if len(rest) > 1:
+            req["name"] = rest[1]
+    elif cmd in ("stage-file", "file_stage"):
+        if not rest:
+            sys.stderr.write("stage-file needs a local file to stage\n")
+            return 3
+        return stage_file(rest[0], rest[1] if len(rest) > 1 else None,
+                          replace="--replace" in argv)
     elif cmd == "files":
         req = {"cmd": "files"}
     elif cmd in ("file-name", "file_name"):

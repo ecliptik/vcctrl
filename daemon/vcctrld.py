@@ -22,6 +22,7 @@ import collections
 import errno
 import faulthandler
 import glob
+import base64
 import hashlib
 import io
 import json
@@ -3957,7 +3958,8 @@ class FilesCapability(Capability):
 
     def commands(self):
         return {"files": self._files, "file_check": self._file_check,
-                "file_name": self._file_name}
+                "file_name": self._file_name, "file_stage": self._file_stage,
+                "file_queue": self._file_queue}
 
     # -- does this even apply -------------------------------------------------
 
@@ -4104,6 +4106,279 @@ class FilesCapability(Capability):
                     s.close()
                 except OSError:
                     pass
+
+    # -- staging --------------------------------------------------------------
+    #
+    # THREE DIRECTORIES, AND THE SEPARATION IS THE SAFETY.
+    #
+    #   stage/          THE FTP ROOT. Served to the target. Nothing incomplete
+    #                   or unverified ever appears here.
+    #   stage-partial/  bytes arriving. NOT served, NOT under the root.
+    #   stage-meta/     sha and size per staged file. NOT served either.
+    #
+    # A partial file inside the served root is a truncated transfer waiting to
+    # happen: the target GETs by name, and a name that exists is a name it will
+    # fetch. `GET.BAT` already cannot tell a short file from a whole one -- its
+    # own comment concedes it reports an attempt -- so the only place that
+    # distinction can be enforced is here, before the file is reachable.
+
+    STAGE_CHUNK_MAX = 4 * 1024 * 1024
+
+    def _dirs(self):
+        st = self.settings or {}
+        root = st.get("stage_dir") or os.path.join(STATE_DIR, "stage")
+        return (root, root + "-partial", root + "-meta")
+
+    def _ensure_dirs(self):
+        dirs = self._dirs()
+        for d in dirs:
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as exc:
+                raise RuntimeError("cannot create %s: %s" % (d, exc))
+        return dirs
+
+    def _queued(self):
+        """What is staged and ready, read FROM DISK rather than remembered.
+
+        One source of truth, deliberately. An in-memory queue beside a
+        directory of files is two records of one fact that drift the first
+        time the daemon restarts -- and the failure is the bad direction: the
+        queue forgets a file that is still sitting in the FTP root, reachable
+        by a target that was told to fetch it.
+        """
+        root, _partial, meta = self._dirs()
+        out = []
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            return out
+        for n in names:
+            p = os.path.join(root, n)
+            if not os.path.isfile(p):
+                continue
+            rec = {"name": n, "bytes": os.path.getsize(p), "sha256": None,
+                   "source": None, "staged_at": None}
+            try:
+                with open(os.path.join(meta, n + ".json")) as f:
+                    rec.update(json.load(f))
+            except Exception:
+                # A file in the root with no metadata was not put there by
+                # this capability. Reported rather than hidden or deleted:
+                # it is still something the target can fetch, so pretending
+                # it is absent would be the more dangerous tidiness.
+                rec["source"] = None
+                rec["orphan"] = True
+            out.append(rec)
+        return out
+
+    def _file_queue(self, req):
+        """List what is staged, or drop it.
+
+        `clear` removes staged files AND their metadata. It refuses to touch
+        anything it did not stage -- an orphan in the FTP root is reported by
+        `_queued()` and left alone, because deleting a file this capability
+        cannot account for is how a recovery copy somebody put there by hand
+        disappears.
+        """
+        action = (req.get("action") or "list").lower()
+        try:
+            root, partial, meta = self._ensure_dirs()
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        q = self._queued()
+        if action == "list":
+            v = size_verdict([r["bytes"] for r in q]) if q else \
+                {"ok": True, "why": None, "reason": None, "total": 0}
+            return {"ok": True, "queue": q, "count": len(q), "size": v,
+                    "stage_dir": root}
+        if action != "clear":
+            return {"ok": False, "error": "unknown queue action: %r" % action}
+        only = req.get("name")
+        removed, kept = [], []
+        for r in q:
+            if only and r["name"] != only:
+                continue
+            if r.get("orphan"):
+                kept.append(r["name"])
+                continue
+            for p in (os.path.join(root, r["name"]),
+                      os.path.join(meta, r["name"] + ".json")):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            removed.append(r["name"])
+        return {"ok": True, "removed": removed, "left_alone": kept,
+                "queue": self._queued(),
+                "note": ("files this capability did not stage are left in "
+                         "place and named in left_alone") if kept else None}
+
+    def _file_stage(self, req):
+        """Receive bytes and put a COMPLETE, VERIFIED file into the FTP root.
+
+        Chunked, because the size policy admits files far larger than one
+        JSON message should carry: `offset` says where this chunk belongs and
+        must equal what has already arrived, so a dropped or reordered call
+        fails loudly instead of writing a hole.
+
+        THE SHA IS CHECKED HERE, AND THAT IS WHAT MAKES THE LATER ROUND TRIP
+        MEAN ANYTHING. The transfer's verification pulls the file back off the
+        target and compares it against this staged copy. If the staged copy is
+        already wrong, that comparison compares a wrong file against itself
+        and passes -- a check that confirms the transport while saying nothing
+        about the payload. Verifying the source at the moment it lands is the
+        only point where that can be caught, because afterwards there is
+        nothing left to compare against.
+
+        The caller does NOT choose a path. It sends a name; this decides where
+        it goes. A caller-supplied path into the FTP root is a write-anywhere
+        primitive on the daemon host, reachable from a browser.
+
+        REFUSALS, and the set is NOT CLOSED. Five words, split across a line
+        the caller has to care about -- the first three are things the CALLER
+        must change and the last two are things that went wrong in transit:
+
+            bad-name         not expressible as a DOS 8.3 filename
+            too-large        over the ceiling, alone or with the queue
+            name-taken       something is already staged under that 8.3 name
+            offset-mismatch  a chunk did not start where the last one ended
+            short            the final chunk arrived and the file is undersized
+            sha-mismatch     the assembled bytes are not the declared ones
+
+        `offset-mismatch` is loud rather than patched. Seeking to the offset
+        would leave a hole full of zeroes and the sha would fail at the end
+        with nothing saying which chunk was lost -- the failure would be real
+        and the diagnosis absent.
+        """
+        try:
+            root, partial, meta = self._ensure_dirs()
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        try:
+            name, notes = dos_filename(req.get("name"))
+        except ValueError as exc:
+            return {"ok": False, "why": "bad-name", "error": str(exc)}
+
+        try:
+            total = int(req.get("total"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "total (the whole file's size in "
+                                          "bytes) is required"}
+
+        # THE POLICY IS CHECKED AGAINST THE DECLARED TOTAL, BEFORE ANY BYTES
+        # ARE WRITTEN, AND AGAINST THE QUEUE IT WOULD JOIN. Checking only at
+        # the end would mean refusing a file after spending the time to
+        # receive all of it, and checking only this file would let three
+        # 30 MB uploads walk past a 64 MB ceiling one at a time.
+        others = [r["bytes"] for r in self._queued() if r["name"] != name]
+        verdict = size_verdict(others + [total])
+        if not verdict["ok"]:
+            return {"ok": False, "why": verdict["why"],
+                    "error": verdict["reason"], "size": verdict}
+
+        existing = {r["name"] for r in self._queued()}
+        if name in existing and not req.get("replace"):
+            # TWO PHOTOS OFF A PHONE THAT DIFFER AFTER THE EIGHTH CHARACTER
+            # BECOME ONE FILE. Refused rather than resolved: renaming behind
+            # the operator's back means the file they look for on the target
+            # is not the one that arrived.
+            return {"ok": False, "why": "name-taken",
+                    "error": ("%s is already staged. Two different files can "
+                              "mangle to one 8.3 name -- pass replace to "
+                              "overwrite deliberately." % name)}
+
+        try:
+            offset = int(req.get("offset") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "offset must be a byte offset"}
+
+        try:
+            chunk = base64.b64decode(req.get("data") or "", validate=True)
+        except Exception as exc:
+            return {"ok": False, "error": "data is not valid base64: %s" % exc}
+        if len(chunk) > self.STAGE_CHUNK_MAX:
+            return {"ok": False, "error": "chunk is %d bytes; the limit is %d"
+                                          % (len(chunk), self.STAGE_CHUNK_MAX)}
+
+        part = os.path.join(partial, name)
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        if offset == 0 and have:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            have = 0
+        if offset != have:
+            # LOUD, NOT PATCHED. Seeking to the offset would happily leave a
+            # hole full of zeroes, and the sha would then fail at the end with
+            # nothing saying which chunk was lost.
+            return {"ok": False, "why": "offset-mismatch",
+                    "error": ("this chunk starts at %d and %d bytes have "
+                              "arrived" % (offset, have)),
+                    "have": have}
+        if have + len(chunk) > total:
+            return {"ok": False, "error": ("this chunk would take %s past its "
+                                           "declared total of %d bytes"
+                                           % (name, total))}
+        try:
+            with open(part, "ab") as f:
+                f.write(chunk)
+            have += len(chunk)
+        except OSError as exc:
+            return {"ok": False, "error": "cannot write %s: %s" % (part, exc)}
+
+        if not req.get("final"):
+            return {"ok": True, "name": name, "notes": notes,
+                    "have": have, "total": total, "complete": False}
+
+        if have != total:
+            return {"ok": False, "why": "short",
+                    "error": ("final chunk received but %s is %d bytes, not "
+                              "the declared %d" % (name, have, total)),
+                    "have": have}
+
+        h = hashlib.sha256()
+        try:
+            with open(part, "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+        except OSError as exc:
+            return {"ok": False, "error": "cannot read back %s: %s"
+                                          % (part, exc)}
+        digest = h.hexdigest()
+        want = (req.get("sha256") or "").strip().lower()
+        if want and want != digest:
+            # NOT PROMOTED. The bytes that arrived are not the bytes that were
+            # sent, and putting them where the target can fetch them would
+            # make the later round-trip compare a wrong file against itself.
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return {"ok": False, "why": "sha-mismatch",
+                    "error": ("%s arrived with sha256 %s, not the declared %s "
+                              "-- discarded rather than staged"
+                              % (name, digest[:16], want[:16]))}
+
+        # PROMOTED BY RENAME, which is atomic within a filesystem. There is no
+        # instant at which a half-written file is visible under a name the
+        # target could be told to fetch.
+        try:
+            os.replace(part, os.path.join(root, name))
+            with open(os.path.join(meta, name + ".json"), "w") as f:
+                json.dump({"name": name, "bytes": total, "sha256": digest,
+                           "source": req.get("name"),
+                           "staged_at": time.time()}, f)
+        except OSError as exc:
+            return {"ok": False, "error": "cannot stage %s: %s" % (name, exc)}
+
+        q = self._queued()
+        return {"ok": True, "name": name, "notes": notes, "complete": True,
+                "bytes": total, "sha256": digest,
+                "queue": q, "count": len(q),
+                "size": size_verdict([r["bytes"] for r in q])}
 
     # -- the contract ---------------------------------------------------------
 

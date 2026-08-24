@@ -82,6 +82,57 @@ if [[ $# -eq 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# stage-file TAKES A PATH ON THE CALLER'S DISK -- the mirror image of --out.
+#
+# Everything here forwards argv over ssh, so a local path arrives on the Pi as
+# a string naming a file that is not there. The failing case is a confusing
+# ENOENT; the DANGEROUS case is the same one --out has, a path that exists on
+# BOTH machines, which stages whatever the PI's copy happens to hold and
+# reports success. That is the identical defect one direction over, so it gets
+# the identical treatment: move the bytes, rewrite the argument.
+#
+# THE ORIGINAL BASENAME MUST TRAVEL SEPARATELY. The remote copy has a unique
+# temp name so two callers cannot collide, and the daemon derives the DOS 8.3
+# name from what it is given -- so without this every staged file would be
+# called VCCTRL-STAGE.<pid> and the operator would find nothing they
+# recognised on the target.
+if [[ "$1" == "stage-file" || "$1" == "file_stage" ]]; then
+  if [[ $# -lt 2 ]]; then
+    echo "vcctrl: stage-file needs a local file to stage" >&2
+    exit 3
+  fi
+  src="$2"
+  if [[ ! -f "$src" ]]; then
+    echo "vcctrl: $src is not a file on this machine" >&2
+    exit 3
+  fi
+  if [[ ! -r "$src" ]]; then
+    echo "vcctrl: $src is not readable" >&2
+    exit 3
+  fi
+  # Named by the caller if they gave one, otherwise the file's own name --
+  # decided HERE, while the original path still exists.
+  name="${3:-$(basename -- "$src")}"
+  rtmp="/tmp/vcctrl-stage.$$.$RANDOM"
+  extra=()
+  for a in "$@"; do [[ "$a" == "--replace" ]] && extra+=(--replace); done
+  cleanup_stage() {
+    ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" "rm -f -- $(printf '%q' "$rtmp")" \
+      >/dev/null 2>&1 || true
+  }
+  trap cleanup_stage EXIT
+  if ! scp -q "${SSH_OPTS[@]}" -- "$src" "$VCCTRL_HOST:$rtmp" 2>/dev/null; then
+    echo "vcctrl: could not copy $src to $VCCTRL_HOST" >&2
+    exit 3
+  fi
+  rc=0
+  ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" \
+    "vcctrl stage-file $(printf '%q' "$rtmp") $(printf '%q' "$name") ${extra[*]}" \
+    || rc=$?
+  exit $rc
+fi
+
+# ---------------------------------------------------------------------------
 # --out / --out-dir MEAN THE CALLER'S DISK.
 #
 # Everything above forwards to the Pi, so before this the client's `--out` was
