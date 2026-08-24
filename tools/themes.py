@@ -721,11 +721,65 @@ def css():
         # same rule has to hold, and it did not -- ibm-5151, dec-amber and the
         # vt220 pair all came out with a bright green bar lamp, which is the
         # one thing those themes must never have.
-        if delta_e(rrow["green"], rrow["red"]) < 1.0:
+        # MUTED, NOT MAXIMISED. fit_max_chroma proved the bar COULD carry a
+        # vivid green -- chroma 98 at 7:1, where a light panel caps out near
+        # 50 -- and that was the point worth proving. Shipping it made every
+        # theme's lamp the same neon, which reads as an alert rather than as
+        # "this is fine", and threw away the palette's own character on the
+        # way.
+        #
+        # The bar is the theme's dark half, so the dark half's own green is
+        # the colour that belongs on it. Lifted only as far as the floor
+        # requires and no further, keeping its chroma: tokyo-night keeps
+        # #9ece6a exactly, and the four whose authored green misses 7:1 on the
+        # lifted bar rise just enough to clear it. Chroma now spans 28-99
+        # across the themes, which is the palettes talking rather than the
+        # fitter.
+        # EVERY ROLE ON THE BAR IS FITTED AGAINST THE BAR.
+        #
+        # This is the cost of lifting the surface from `panel` to `rule`, and
+        # it was nearly missed. The palettes are fitted against bg and panel;
+        # `rule` is lighter than both, so a colour that cleared its floor on
+        # panel does not necessarily clear it here. Dracula's red came out at
+        # 3.48:1 on its own bar -- a fault lamp harder to read than the state
+        # it reports. Fitting only `green` fixed the colour that was asked
+        # about and left the other five sitting on a surface nobody had
+        # checked them against.
+        mono = delta_e(rrow["green"], rrow["red"]) < 1.0
+        if mono:
             row_green = rrow["green"]
         else:
-            row_green, _c = fit_max_chroma(rrow["green"], row_surfaces,
-                                           STATE_FLOOR, True, hue=136)
+            row_green, _c = fit_keep_chroma(rrow["green"], row_surfaces,
+                                            STATE_FLOOR, True)
+        row_red = rrow["red"] if mono else fit_keep_chroma(
+            rrow["red"], row_surfaces, STATE_FLOOR, True)[0]
+        # Text and its two quieter levels, against the same surface.
+        row_text = fit(rrow["text"], row_surfaces, STATE_FLOOR, "#ffffff")[0]
+        row_muted = fit(rrow["muted"], row_surfaces, STATE_FLOOR, "#ffffff")[0]
+        row_dim = fit(rrow["dim"], row_surfaces, ACCENT_FLOOR, "#ffffff")[0]
+        # AND THE ROW NEEDS THE SEPARATION FLOOR TOO.
+        #
+        # Third time a rule written for the main tokens had to be written
+        # again for the row: the monochrome exemption, the lightness cap, and
+        # now this. everforest came out with the bar's green and yellow dE22.5
+        # apart -- two soft pastels a reader cannot tell apart at 10px, which
+        # is the exact defect the separation floor exists to prevent, arriving
+        # through the one code path that did not enforce it.
+        #
+        # Nudged the same way and in the same direction as the main pass:
+        # green is what a reader calibrates on, so yellow moves. Toward white,
+        # because this surface is dark.
+        row_yellow = rrow["yellow"] if mono else fit_keep_chroma(
+            rrow["yellow"], row_surfaces, STATE_FLOOR, True)[0]
+        if not mono:
+            for _ in range(40):
+                if delta_e(row_green, row_yellow) >= STATE_SEPARATION:
+                    break
+                nxt = _mix(row_yellow, "#ffffff", 0.05)
+                if nxt == row_yellow:
+                    break
+                row_yellow = nxt
+
         # The border has to separate the bar from the page, so it cannot be
         # the bar's own colour -- which `rule` now is.
         row_edge = _mix(bar, rrow["dim"], 0.45)
@@ -733,6 +787,11 @@ def css():
         vals["panel"] = bar
         vals["bg"] = bar
         vals["green"] = row_green
+        vals["yellow"] = row_yellow
+        vals["red"] = row_red
+        vals["text"] = row_text
+        vals["muted"] = row_muted
+        vals["dim"] = row_dim
         vals["edge"] = row_edge
         vals["rule"] = row_edge
         for r in ("bg", "panel", "text", "muted", "dim", "edge", "rule",

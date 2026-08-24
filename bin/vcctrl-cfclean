@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vcctrl-cfclean -- decide what may be deleted from the CF card, and refuse
+r"""vcctrl-cfclean -- decide what may be deleted from the CF card, and refuse
 to delete anything not PROVEN collected.
 
 STATUS: THE READ HALF IS WIRED AND EXERCISED AGAINST THE REAL CARD. THE DELETE
