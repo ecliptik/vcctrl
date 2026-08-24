@@ -1112,6 +1112,50 @@ Validate on, in order of sensitivity:
 Pick a workload that is already gated end to end, so apparatus effects are
 not confounded with envelope or precondition failures.
 
+### 10.0e An acceptance band must be derived from the base rate, not the metric
+
+**Requirement: before a round is run, express its acceptance band in the
+raw counted unit and compare it against the archive's spread for
+same-configuration pairs. If the band is not comfortably wider than that
+spread, the round cannot deliver its verdict and the design must change
+before any cell runs.**
+
+This is a design-time gate, not an analysis step. It costs one query
+against data already held.
+
+**The failure it prevents runs in both directions and neither is visible
+in the result.** A band tighter than the base rate produces a
+NOT-CONFIRMED that says nothing about the effect, and a CONFIRMED that
+could not have failed. Both look like verdicts.
+
+    acceptance band              10.3 counts
+    same-config pair spread      0 to 16 counts
+    effect A                      112 counts   7x the spread -- unambiguous
+    effect B                       40 counts   2.5x          -- real, size unpinned
+    two rounds' answers for B   differ by 10 counts
+
+Effect A passed and effect B failed. **Neither verdict carried
+information**: the test could not resolve 10 counts on a rig whose
+identical pairs differ by 16. Effect A is trustworthy because it is seven
+times the noise, which is a property of the effect and not of the band it
+was measured against.
+
+**State effect sizes in the raw counted unit alongside the derived
+metric.** The comparison against the noise floor is legible in counts and
+invisible in a derived rate -- the band above reads as a reassuring "0.10"
+and as an impossible "10.3 counts" describing the same test.
+
+**Where an unusable band is discovered after the fact, report the verdict
+as pre-registered AND the reason it cannot be trusted.** Recomputing
+against an exact value the round did not commit to is comparing against a
+threshold chosen after seeing the data, even when it is more accurate.
+The verdict stands; the finding is that the test was not capable.
+
+**A band inherited from a previous round is inherited with its
+assumptions.** Confirm it against the base rate each time, because the
+figure may have come from an unusually quiet sitting or, as below, from
+the metric's own resolution rather than from any measurement.
+
 ### 10.0b A repeatability figure can be an artifact of its own binning
 
 10.0 requires two bands. This is a named way one of them can be neither a
