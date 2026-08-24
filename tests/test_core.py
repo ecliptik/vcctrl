@@ -4827,9 +4827,23 @@ def test_no_rig_identifiers_in_the_code():
                     hits.append("%s:%d" % (rel, i))
         check("no %s in tracked code" % label, not hits, hits[:4])
 
-    # A control: the guard must be capable of finding something.
+    # A CONTROL THAT MUST KEEP A REAL IDENTIFIER IN IT.
+    #
+    # This caught the scrub blinding the guard, which is the exact failure the
+    # guard exists to prevent, arriving via the operation that was supposed to
+    # make it necessary. The phase-7 tree scrub rewrote every occurrence of the
+    # lab subnet -- including the SAMPLE STRING here -- so the pattern stopped
+    # matching its own control and the check could no longer fail for the right
+    # reason. Five green assertions above it, and the only honest line in the
+    # test was this one going red.
+    #
+    # The sample is assembled from parts so a literal-string replacement cannot
+    # reach it. Anything that rewrites identifiers in this file must leave both
+    # `pats` and this control alone; a guard whose control has been scrubbed
+    # passes because it has been made incapable of failing.
+    sample = "addr " + "192." + "168." + "7." + "46 here"
     check("control: the patterns do match when present",
-          bool(re.search(pats["the lab subnet"], "addr 192.0.2.46 here")))
+          bool(re.search(pats["the lab subnet"], sample)), sample)
 
 
 def test_shell_power_backend_never_invents_off():
