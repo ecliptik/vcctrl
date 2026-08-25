@@ -727,6 +727,33 @@ same keyboard with a few keys missing.
   hidden there. Tapping the picture already raises the system keyboard through
   `#ghost`, and a 24px QWERTY would be the third way to type the same letter.
 
+**The geometry was measured in an engine, and the numbers are here because
+they are the evidence for decisions somebody will otherwise re-tune by eye:**
+
+| | |
+|---|---|
+| desktop panel | 559 × 442, every block row **540.7 px** |
+| phone, a true 390 px viewport | 374 × 586, no row overflowing, 46 px keys |
+| the block on a phone | `display:none` — rendered, not omitted |
+
+Three of those are load-bearing rather than decorative:
+
+- **Equal row widths are what make it a keyboard.** Key units, not flex-grow:
+  a 2u key must span two 1u keys *and the gap between them*, or every row
+  drifts left by a gap per wide key and the columns stop lining up.
+  `test_keyboard_chords_in_a_browser` asserts the rows are equal, so the
+  number above is the evidence and the test is the guard.
+- **The phone padding is 9 px, and that is a measurement not a preference.**
+  13 px put the F-row on three lines and the whole panel at 639 px of an
+  844 px phone — a control surface that has eaten the picture it controls.
+  9 px is two lines and 586 px, with the 46 px touch target untouched.
+- **Rendered-and-hidden, not omitted**, so there is one DOM and one code path
+  and dragging a desktop window down to phone width needs no re-render.
+
+Taken inside an **iframe**: headless chromium clamps a top-level viewport to
+500 px however `--window-size` is set, so every "390 px phone" figure measured
+directly is a 500 px figure wearing a phone's name.
+
 **Two live defects were found writing it, and both are fixed.** They are
 recorded because each is a shape that recurs here:
 
