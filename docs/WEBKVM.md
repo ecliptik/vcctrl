@@ -875,10 +875,11 @@ scan code, AL = ASCII, from ordinary foreground code. What that buys:
   a file; a hook needs a RAM buffer plus a foreground flush — more moving
   parts inside the one component the whole table's correctness rests on.
 - **It settles the keypad**, which was the sharpest case here: row `5` and
-  `kp5` carry different scan codes even though they produce the same ASCII, so
-  identity comes free. *(The two codes differing is itself something this
-  sweep measures. If they come back identical, the instrument cannot separate
-  them and the 16 keypad rows are `no-witness`, not `arrives`.)*
+  `kp5` carry different scan codes even though they produce the same ASCII.
+  **MEASURED 2026-08-25: true for `kp5`, and it does NOT generalise.** See
+  sec. 5.2c — identity is the pair `(scan, AL)`, not the scan, for 10 of the
+  105. This bullet is left as written because the generalisation from it was
+  the error, and the error is the useful part.
 - **It collapses most of group five.** The 10 nav and arrow keys return
   distinct extended scan codes, so they stop being "nothing at a bare prompt"
   and join the directly-witnessed set.
@@ -996,7 +997,8 @@ truncation check. The OCR argument arriving through the protocol instead of
 the instrument.
 
 **So a sentinel — a key already PROVEN to arrive — goes between every key
-under test:**
+under test.** *(An earlier draft here said "the scan code in that slot IS its
+identity". It is not, for 10 of the 105 — see sec. 5.2c.)*
 
     S k1 S k2 S k3 ... S k105 S      106 sentinels + 105 keys = 211 injections
 
@@ -1143,6 +1145,69 @@ and confirm the witness agrees before trusting it on a key without. The
 control set already exists — the three lock keys have the LED channel, and
 `TIMING-FIXES.md` bug 1 closed the loop through `key 5 enter` against
 `PKTTOOL`.
+
+### 5.2c The sweep ran — 2026-08-25, and it falsified the identity claim
+
+**Step 7 is done.** Two independent runs, 100 keys, **100/100 agreement**,
+zero `unstable`, zero desync. Both artifacts 3860 bytes, 192 records,
+`END 00C0`, remainder 0. Controls passed and the sweep was gated on them:
+`NEG.LOG` is 20 bytes and `END 0000` — zero records, and the Enter that
+launched it did not leak into the buffer; `POS.LOG` is 11 injections, 11
+records, 6/6 sentinels, every scan matching the emulation values.
+
+    91  arrive
+     9  silent: the 8 structurally-invisible modifiers, plus `menu`
+     3  lock keys arrive, witnessed on the LED channel (caps 14->15,
+        numlock 16->17, scrolllock 18->19)
+     2  VOID: prtsc and break
+
+#### The identity is `(scan, AL)`, not the scan — for 10 of the 105
+
+The design said the scan code in a slot IS the key's identity. **It is not.**
+Ten keypad keys share a scan code with a nav key and are separated only by AL:
+
+    47  kp7 = 47 37    home   = 47 E0        4F  kp1 = 4F 31    end    = 4F E0
+    48  kp8 = 48 38    up     = 48 E0        50  kp2 = 50 32    down   = 50 E0
+    49  kp9 = 49 39    pgup   = 49 E0        51  kp3 = 51 33    pgdn   = 51 E0
+    4B  kp4 = 4B 34    left   = 4B E0        52  kp0 = 52 30    insert = 52 E0
+    4D  kp6 = 4D 36    right  = 4D E0        53  kpdot = 53 2E  del    = 53 E0
+    E0  kpenter = E0 0D    kpslash = E0 2F
+
+`kp5` versus row `5` does separate on scan alone — `4C` against `06` — which
+is the case the premise was built on. **The premise was true and the
+generalisation from it was false**, which is the more dangerous shape: a
+correct instance licensing a wrong rule.
+
+**AND THE SEPARATION IS NUMLOCK-DEPENDENT, WHICH IS WHY THE PER-RECORD `LL`
+WAS LOAD-BEARING RATHER THAN THOROUGH.** Every record above carries `LL=30` —
+Num Lock on. With Num Lock off the keypad half of each pair reports `E0` too
+and **the pair collapses entirely**: `kp7` and `home` become the same two
+bytes. So these ten identities hold *given a lock state*, and a table that
+recorded `kp7 = 47/37` without recording the condition would be asserting an
+identity that is only sometimes one. The header-only version of `LL` could not
+have carried that; it was argued for on principle and is now justified by
+measurement.
+
+#### Two corrections to what this document said before the run
+
+- **`102nd` ARRIVES, scan 56.** 5.2b proposed it should be `unsupported`
+  because a US layout does not physically have the key. That is right about
+  the keyboard and wrong about this rig: **the KVM is a virtual keyboard, so
+  it can emit the scancode and the BIOS produces it.** The rule is dropped —
+  it would have greyed a key that demonstrably works.
+- **`menu` is a real `arrives: false`**, not a `no-witness`. It is not
+  structurally incapable of producing a keystroke; this 1993 BIOS simply does
+  not translate it. For the question this table answers — does pressing it
+  reach DOS as a key — the answer is no.
+
+#### `prtsc` and `break` are void, and the protocol did that deliberately
+
+Sent `a prtsc a break a`: 3 sentinels expected, 2 recorded. **Sentinel
+shortfall voids the run for both keys.** The mechanism is the merged-slot case
+the design predicted: `break` is Pause, which halts until a keypress, so it
+swallowed the closing sentinel. Two holes rather than two guesses. They need a
+frame that does not use a following keystroke — which is a design problem, not
+a measurement, and it is not solved here.
 
 ### 5.3 What the browser cannot capture, in Firefox and Safari
 
