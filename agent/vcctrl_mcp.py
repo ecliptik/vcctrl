@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""vcctrl_mcp -- MCP server for vcctrl. One tool per CLI verb. See
+"""vcctrl_mcp -- the vcctrl-mcp server. One tool per CLI verb. See
 internal/MCP-PLAN.md for the design this implements -- Phases 1-5, PC/DOS
 only for now (Mac Plus testing is deferred; see the note on JOBS and on
 `vcctrl_power` below).
 
-TWO DEPLOYMENT MODES, same file, chosen by VCCTRL_MCP_ROLE:
+TWO DEPLOYMENT MODES, same file, chosen by VCCTRL_MCP_ROLE. Named after
+vcctrl.yaml's own `control:`/`daemon:` sections, not after a specific board
+-- the daemon host has already changed hardware once
+(docs/PI5-MIGRATION.md), and a role called "pi" would be a lie the next
+time it does.
 
-  vm (default) -- runs on the control host, stdio transport, shells out to
-    bin/vcctrl (which SSHes to the Pi). This is the original shape and needs
-    no environment variables set at all.
+  control (default) -- runs on the control host, stdio transport, shells
+    out to bin/vcctrl (which SSHes to the daemon host). This is the
+    original shape and needs no environment variables set at all.
 
-  pi -- runs ON THE DAEMON HOST itself, alongside (NOT inside) vcctrld, as
-    its own systemd service. Talks to /usr/local/bin/vcctrl directly -- no
-    SSH hop, so bin/vcctrl's ControlMaster and --out host-boundary fixes
+  daemon -- runs ON THE DAEMON HOST itself, alongside (NOT inside) vcctrld,
+    as its own systemd service. Talks to /usr/local/bin/vcctrl directly --
+    no SSH hop, so bin/vcctrl's ControlMaster and --out host-boundary fixes
     (see below) are simply not needed here; there is no host boundary to
     cross. Serves MCP over streamable-http instead of stdio, so it can be
     reached over the network (see docs/MCP-SERVER.md for why this gives up
@@ -26,32 +30,34 @@ TWO DEPLOYMENT MODES, same file, chosen by VCCTRL_MCP_ROLE:
     code must not be able to take down the process that owns the uinput
     devices and the input lock -- today a crashed MCP layer means "the
     tools stop working"; built into vcctrld it would mean "input control
-    stops working," a much bigger blast radius. The Pi is a Pi 5 now (4GB
-    RAM, docs/PI5-MIGRATION.md) -- the old Pi-3 memory-pressure concern
-    that shaped a lot of this project's caution does not apply to the
-    dependency footprint; the coupling/stability risk is the real reason.
+    stops working," a much bigger blast radius. The daemon host is a Pi 5
+    now (4GB RAM, docs/PI5-MIGRATION.md) -- the old Pi-3 memory-pressure
+    concern that shaped a lot of this project's caution does not apply to
+    the dependency footprint; the coupling/stability risk is the real
+    reason.
 
     THE HARNESS TOOLS (Phase 5) ARE EXCLUDED IN THIS MODE. `harness/
-    vcctrl-cell`, `-sweep` and `-collect` are VM-side orchestration
-    scripts -- bin/vcctrl_common.py's vc()/vc_json() always resolve to the
-    bin/vcctrl SSH-wrapper sitting next to them (VCCTRL = os.path.join(HERE,
-    "vcctrl")), so running them on the Pi would mean either SSHing to
-    itself (fragile, nothing this project does elsewhere) or a separate fix
-    to that resolution -- not done. Phases 1-4 (status, capture, input,
-    power, file transfer) are genuine vcctrld capabilities and port over
-    with no code changes beyond the binary path and the transport.
+    vcctrl-cell`, `-sweep` and `-collect` are control-host-side
+    orchestration scripts -- bin/vcctrl_common.py's vc()/vc_json() always
+    resolve to the bin/vcctrl SSH-wrapper sitting next to them (VCCTRL =
+    os.path.join(HERE, "vcctrl")), so running them on the daemon host would
+    mean either SSHing to itself (fragile, nothing this project does
+    elsewhere) or a separate fix to that resolution -- not done. Phases 1-4
+    (status, capture, input, power, file transfer) are genuine vcctrld
+    capabilities and port over with no code changes beyond the binary path
+    and the transport.
 
 WHY IT SHELLS OUT TO vcctrl RATHER THAN SPEAKING vcctrld'S SOCKET DIRECTLY
-(true in both modes): in vm mode, bin/vcctrl carries two hard-won fixes --
-SSH ControlMaster/ControlPersist (without it, a fresh ssh per call
+(true in both modes): in control mode, bin/vcctrl carries two hard-won
+fixes -- SSH ControlMaster/ControlPersist (without it, a fresh ssh per call
 saturated journald on the Pi 3 and took it off the network for 30 minutes,
 2026-08-19), and the --out/--out-dir host-boundary rewrite (a local path is
 meaningless on the far side of an ssh call, and the dangerous failure is
-the one that returns 0). In pi mode there is no SSH hop, but /usr/local/bin/
-vcctrl is still the same tested CLI with the same two-valued exit-code
-contracts -- reimplementing vcctrld's JSON socket protocol here would still
-be a second place those contracts could disagree with themselves. See
-MCP-PLAN.md sec. 2.
+the one that returns 0). In daemon mode there is no SSH hop, but
+/usr/local/bin/vcctrl is still the same tested CLI with the same
+two-valued exit-code contracts -- reimplementing vcctrld's JSON socket
+protocol here would still be a second place those contracts could disagree
+with themselves. See MCP-PLAN.md sec. 2.
 
 File-transfer commands (Phase 4) need no job-manager machinery in either
 mode: `send-file`/`get-file`/`file-refresh` already "return at once" from
@@ -91,23 +97,25 @@ from mcp.server.mcpserver import MCPServer
 
 # ---------------------------------------------------------------- transport
 
-ROLE = os.environ.get("VCCTRL_MCP_ROLE", "vm")
-if ROLE not in ("vm", "pi"):
-    raise SystemExit("VCCTRL_MCP_ROLE must be 'vm' or 'pi', got %r" % ROLE)
+ROLE = os.environ.get("VCCTRL_MCP_ROLE", "control")
+if ROLE not in ("control", "daemon"):
+    raise SystemExit(
+        "VCCTRL_MCP_ROLE must be 'control' or 'daemon', got %r" % ROLE)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# vm mode: bin/vcctrl next to this checkout, which SSHes to the daemon host.
-# pi mode: /usr/local/bin/vcctrl, the same vcctrl-client pi/install.sh
-# already places there -- called directly, no SSH, no host boundary.
-# VCCTRL_MCP_BIN overrides either default explicitly, for a nonstandard
-# install layout.
-_DEFAULT_BIN = ({"vm": os.path.join(REPO_ROOT, "bin", "vcctrl"),
-                 "pi": "/usr/local/bin/vcctrl"})[ROLE]
+# control mode: bin/vcctrl next to this checkout, which SSHes to the
+# daemon host. daemon mode: /usr/local/bin/vcctrl, the same vcctrl-client
+# pi/install.sh already places there -- called directly, no SSH, no host
+# boundary. VCCTRL_MCP_BIN overrides either default explicitly, for a
+# nonstandard install layout.
+_DEFAULT_BIN = ({"control": os.path.join(REPO_ROOT, "bin", "vcctrl"),
+                 "daemon": "/usr/local/bin/vcctrl"})[ROLE]
 VCCTRL_BIN = os.environ.get("VCCTRL_MCP_BIN", _DEFAULT_BIN)
 
-# Harness workflows (Phase 5) are VM-only -- see the module docstring.
-HARNESS_DIR = os.path.join(REPO_ROOT, "harness") if ROLE == "vm" else None
+# Harness workflows (Phase 5) are control-mode-only -- see the module
+# docstring.
+HARNESS_DIR = os.path.join(REPO_ROOT, "harness") if ROLE == "control" else None
 
 # One MCP server process is one Arbiter identity. Two concurrent tool calls
 # from the same Claude Code session are "the same owner" as far as the lock
@@ -307,7 +315,7 @@ def _gated_run(args, timeout=60.0):
 # ------------------------------------------------------------------ server
 
 mcp = MCPServer(
-    "vcctrl",
+    "vcctrl-mcp",
     instructions=(
         "Controls real hardware over vcctrl/vcctrld: keyboard, mouse, "
         "video/audio capture, and status for the g2k (IBM PC, PS/2) and "
@@ -792,8 +800,9 @@ def vcctrl_file_bats() -> dict:
     whichever host runs the command, and unlike shot/frame/record that path
     is NOT covered by bin/vcctrl's --out host-boundary rewrite (it takes a
     bare positional DIR, not a --out flag), so a naive wrapper here would
-    silently write on the Pi while a VM-side caller expected its own disk.
-    Getting the returned text onto a card is a manual follow-up step."""
+    silently write on the daemon host while a control-mode caller expected
+    its own disk. Getting the returned text onto a card is a manual
+    follow-up step."""
     return _run_vcctrl(["file-bats"])
 
 
@@ -926,20 +935,19 @@ def vcctrl_pulled_save(name: str) -> dict:
 
 
 # ---- Phase 5: harness workflows, and the job manager they need --------
-# vcctrl-cell/-sweep/-collect run ON THE VM and block for their real
-# duration (a sweep is 12-23 minutes, profiles/doskutsu.yaml) -- see the
-# module docstring for why that's a different shape from Phase 4. Launched
-# detached, polled by job id. THE HARNESS SCRIPTS' OWN GUARDS ARE NOT
-# DUPLICATED HERE: vcctrl-cell already refuses to run concurrently with
+# vcctrl-cell/-sweep/-collect run ON THE CONTROL HOST and block for their
+# real duration (a sweep is 12-23 minutes, profiles/doskutsu.yaml) -- see
+# the module docstring for why that's a different shape from Phase 4.
+# Launched detached, polled by job id. THE HARNESS SCRIPTS' OWN GUARDS ARE
+# NOT DUPLICATED HERE: vcctrl-cell already refuses to run concurrently with
 # another poller (its own lock file, per its docstring point 4), and
 # vcctrl-sweep already refuses keyboard probing mid-sweep by construction.
 # This layer's only job is process supervision and result shaping.
 #
-# UNTESTED AGAINST REAL HARDWARE IN THIS PASS. Actually running a cell or
-# sweep needs the g2k powered on, DOSKUTSU installed, and several minutes
-# of exclusive rig time -- a bigger commitment than anything exercised so
-# far this session. Built and ready; confirm with the operator before the
-# first real run.
+# PROVEN LIVE, 2026-08-25: a real cell (Mach64, POD-83, visually confirmed
+# running mid-cell), a real sweep (MINE, 2 cells, DOS-side completion
+# banner confirmed), and collect (both cell logs fetched, size-verified).
+# See docs/MCP-SERVER.md sec. 6 for the full status table.
 
 class Job(object):
     def __init__(self, job_id, argv):
@@ -954,7 +962,8 @@ class Job(object):
 
 
 class JobManager(object):
-    """Launch a long-running VM-side script detached, poll it by id.
+    """Launch a long-running control-host-side script detached, poll it by
+    id.
 
     Output is streamed line-by-line into the job's own buffer as it is
     produced (not collected at the end via communicate()), so a poll mid-run
@@ -1046,11 +1055,12 @@ def vcctrl_preflight(no_input: bool = False) -> dict:
     return _gated_run(["preflight"], timeout=30.0)
 
 
-# VM-ONLY: harness/vcctrl-cell, -sweep, -collect are VM-side orchestration
-# scripts (see the module docstring) -- there is nothing correct for them to
-# do in pi mode, so they are not registered as tools there at all, rather
-# than registered and left to fail on every call.
-if ROLE == "vm":
+# CONTROL-MODE-ONLY: harness/vcctrl-cell, -sweep, -collect are control-
+# host-side orchestration scripts (see the module docstring) -- there is
+# nothing correct for them to do in daemon mode, so they are not registered
+# as tools there at all, rather than registered and left to fail on every
+# call.
+if ROLE == "control":
     @mcp.tool()
     def vcctrl_sweep_list() -> dict:
         """Every sweep name this rig's profile knows, with its cell count and
@@ -1214,7 +1224,8 @@ def vcctrl_job_cancel(job_id: str, confirm: "str | None" = None) -> dict:
 
 if __name__ == "__main__":
     transport = os.environ.get(
-        "VCCTRL_MCP_TRANSPORT", "stdio" if ROLE == "vm" else "streamable-http")
+        "VCCTRL_MCP_TRANSPORT",
+        "stdio" if ROLE == "control" else "streamable-http")
     if transport == "stdio":
         mcp.run()
     else:
@@ -1231,8 +1242,8 @@ if __name__ == "__main__":
         # a real network listener, so this always builds explicit settings
         # rather than relying on it.
         #
-        # Reached directly at 127.0.0.1:PORT (local testing on the Pi
-        # itself) the loopback host:port below covers it. Reached through
+        # Reached directly at 127.0.0.1:PORT (local testing on the daemon
+        # host itself) the loopback host:port below covers it. Reached through
         # `tailscale serve`'s proxy, the Host header the proxy forwards is
         # the tailnet hostname, not 127.0.0.1:PORT, and the request is
         # refused (measured: HTTP 421 "Invalid Host header") until that

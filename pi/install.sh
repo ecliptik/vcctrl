@@ -84,7 +84,7 @@ Wants=vcctrld.service
 [Service]
 Type=simple
 ExecStart=/opt/vcctrl/agent/.venv/bin/python3 /opt/vcctrl/agent/vcctrl_mcp.py
-Environment=VCCTRL_MCP_ROLE=pi
+Environment=VCCTRL_MCP_ROLE=daemon
 Environment=VCCTRL_MCP_TRANSPORT=streamable-http
 Environment=VCCTRL_MCP_HOST=127.0.0.1
 Environment=VCCTRL_MCP_PORT=8090
