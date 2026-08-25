@@ -1037,6 +1037,25 @@ HARNESS = r"""
     emit(`view-${m} ${sc.clientWidth} ${sc.clientHeight}`);
     say(m, `${sc.scrollWidth > sc.clientWidth + 1 ? 1 : 0}${sc.scrollHeight > sc.clientHeight + 1 ? 1 : 0}`);
   }
+  // FIT NEVER SCROLLS, CROP OR NOT. A crop used to make the full,
+  // letterboxed frame deliberately larger than the box and let it overflow
+  // -- "that overflow is the thing you scroll" -- but the part hanging off
+  // the edges is the letterbox border, which is black on every mode this
+  // rig has, and "fit" is a promise that nothing needs scrolling to be
+  // seen. Reported as a scrollbar appearing right when Fit finally caught
+  // up with a mode switch and adopted a crop.
+  {
+    arm();
+    zoomMode = 'fit'; crop = {x0: 160, y0: 120, bw: 320, bh: 240};
+    applyZoom(true);
+    // NOT scrollWidth > clientWidth -- that is true BY DESIGN now: the full
+    // letterboxed frame really is bigger than the box, it is just clipped
+    // rather than offered as something to scroll to. Whether a scrollbar
+    // can appear at all is the overflow style, not the content size.
+    const scrollable = getComputedStyle(sc).overflow !== 'hidden' ? 1 : 0;
+    emit(`fitcrop ${scrollable} 0`);
+    crop = null;
+  }
   // RECENTRING ON A WIDTH CHANGE, not just resizing. showPanel() used to call
   // applyZoom() with no recentre argument, so opening or closing the side
   // column resized the picture into the new width and left scrollLeft at
@@ -1861,6 +1880,12 @@ def test_zoom_layout_in_a_browser():
     check("fit fills one axis exactly",
           abs(w - W) < 0.5 or abs(h - H) < 0.5, (w, h))
     check("fit raises no scrollbars", bars.get("fit") == "00", bars.get("fit"))
+
+    # A crop used to make fit overflow on purpose, "so the excess is
+    # something to scroll to" -- it isn't, the excess is a black letterbox
+    # border, and fit no longer offers it as something to pan to.
+    check("fit with an adopted crop is not scrollable",
+          got["fitcrop"][0] == 0.0, got["fitcrop"])
 
     check("original is exactly 640x480 on screen",
           abs(got["1"][0] - 640) < 0.5 and abs(got["1"][1] - 480) < 0.5,

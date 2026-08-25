@@ -6823,7 +6823,19 @@ function applyZoom(recentre) {
   // so the container is not scrollable at all, and there is nothing left for
   // a rounding error to reach. Set first, because a scrollbar present during
   // the measurement is what made the two-pass loop necessary.
-  const canScroll = !(zoomMode === 'fit' && !crop);
+  //
+  // FIT NEVER SCROLLS, CROP OR NOT. It used to: a crop made the full,
+  // letterboxed frame deliberately larger than the box and let it overflow,
+  // on the idea that the overflow was "the thing you scroll" to. It never
+  // was -- the part hanging off the edges is the letterbox border, which is
+  // black on every mode this rig has, and "fit" is a promise that nothing
+  // needs scrolling to be seen. Reported as a scrollbar showing up right
+  // when Fit finally caught up with a mode switch, which is this: the crop
+  // adopts, and the thing "fit" is now fitting is the cropped region, so
+  // the frame around it is clipped instead of offered as something to pan.
+  // Explicit zoom (Original/200%/400%) is a different promise and keeps its
+  // scrollbar exactly as before.
+  const canScroll = zoomMode !== 'fit';
   sc.style.overflow = canScroll ? 'auto' : 'hidden';
   let scale = 0, pw = 0, ph = 0;
   for (let pass = 0; pass < 2; pass++) {
