@@ -810,16 +810,28 @@ feeds is a UI that looks authoritative. Written now because deciding a schema
 with a powered machine waiting is how the cheaper option wins — the `vcctrl`
 session's point, and it is the right one.
 
-**One witness cannot see 129 keys, and that is the thing the sweep design
-turns on.** Sorted by what would actually witness the key at a DOS prompt:
+**IT IS 105 KEYS, NOT 129.** `NAMED_KEYS` has 129 entries and 105 distinct
+keycodes: 22 codes carry more than one name (`ctrl`/`lctrl`, `enter`/`return`,
+`del`/`delete`, `esc`/`escape`, `period`/`dot`, `prtsc`/`printscreen`, and the
+printed-keycap aliases `-`/`minus`, `;`/`semicolon` …). The sweep measures
+PHYSICAL KEYS. Counted, not estimated:
 
-| group | ~n | witness |
+| group | n | witness |
 |---|---|---|
-| letters, digits, punctuation, shifted | ~90 | echoes a character. Direct. |
-| caps / num / scroll | 3 | the PS/2 LED channel — non-video, and the one round trip here that has never lied |
-| F1–F6, Ctrl-Break, Pause, Bksp, Tab, Esc, Enter | ~12 | a BEHAVIOUR, not a character. Each needs its own designed observation. |
-| arrows, nav cluster, both metas, `102nd`, `sysrq` | ~15 | **nothing at a bare prompt** |
-| the keypad | 17 | echoes, but `kp5` and row `5` echo the SAME character |
+| letters, digits, punctuation | **47** | echoes a character. Direct and unambiguous. |
+| the keypad | **16** | echoes — but `kp5` and row `5` echo the SAME character |
+| caps / num / scroll | **3** | the PS/2 LED channel — non-video, and the one round trip here that has never lied |
+| F1–F12, Enter, Esc, Tab, Backspace, Space | **17** | a BEHAVIOUR, not a character. Each needs its own designed observation. |
+| 8 modifiers, 10 nav + arrows, `sysrq`, `pause`, `menu`, `102nd` | **22** | **nothing at a bare prompt** |
+| | **105** | accounted, none left over |
+
+**And the record must be keyed by KEYCODE, not by name, or it can contradict
+itself.** A table with a row per name has 129 rows for 105 facts: `ctrl` and
+`lctrl` are one physical key, and nothing stops one row saying `arrives: true`
+and the other `arrives: false` for it. Key the record by one canonical name
+per keycode and resolve aliases into it — the page draws by name and looks the
+name up. A table with more rows than facts is a table that will eventually
+disagree with itself, and this one greys keys in a UI.
 
 Two consequences that decide the shape:
 
@@ -833,7 +845,7 @@ Two consequences that decide the shape:
 
 So the sweep wants a witness that reads scancodes rather than characters —
 an INT 9 hook, the same shape as `dos/rdypulse.asm`, `nasm -f bin`, delivered
-by the CF or FTP path. With one it is a single loop over all 129 and the
+by the CF or FTP path. With one it is a single loop over all 105 and the
 marginal cost of the boring keys is near zero. Without one, the classes "most
 likely to differ" are exactly the classes the witness cannot see, so that
 ordering produces the least trustworthy rows first — and they are the rows
