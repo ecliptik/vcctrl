@@ -663,7 +663,15 @@
   #scroll {
     position:absolute; inset:0; overflow:auto; display:flex;
     scrollbar-width:thin; scrollbar-color:var(--rule) transparent;
+    /* A GAP FROM THE CHROME, on every mode. Flush against the top edge the
+       picture had no border against the toolbar above it -- nothing said
+       where the video ended and the menu began. #frame's margin:auto
+       centres inside this padding for free; applyZoom() subtracts it from
+       the box it fits INTO, so "fit" leaves the gap rather than filling it.
+       Full screen has no chrome to separate from, so it drops to zero below. */
+    padding:10px;
   }
+  body.fs #scroll { padding:0; }
   #scroll::-webkit-scrollbar { width:10px; height:10px; }
   #scroll::-webkit-scrollbar-track { background:transparent; }
   #scroll::-webkit-scrollbar-thumb {
@@ -1630,6 +1638,16 @@
   }
   .pop[hidden] { display:none; }
   #pop-sound { width:min(320px, calc(100vw - 16px)); }
+  /* SAME HEIGHT AS CAPTURE, not a coincidence of content. Sound and Power sit
+     in the same row of buttons as Capture and used to open to whatever height
+     their own rows added up to -- shorter than #scrub, so the one panel that
+     happened to have more in it read as a different kind of control. openPop()
+     sets --pop-match-h from #scrub's own measured height; centring the rows
+     in the extra room reads as intentional rather than as leftover space. */
+  #pop-sound, #pop-power {
+    min-height:var(--pop-match-h, 0px);
+    display:flex; flex-direction:column; justify-content:center;
+  }
   .poprow { display:flex; gap:6px; flex-wrap:wrap; }
   #setback[hidden] { display:none; }
   #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
@@ -2099,7 +2117,7 @@
               title="Sound and volume"><span class="bi" aria-hidden="true">🔊</span><span class="bl">Sound</span><span class="caret dn" aria-hidden="true"></span></button>
     </span>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
-            title="Mains power: on, off, cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret dn" aria-hidden="true"></span></button>
+            title="Mains power: on, off, power cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret dn" aria-hidden="true"></span></button>
   </div>
 
   <!-- A POPOVER, like Sound and Power. As a row in the flow it took ~40px of
@@ -2132,9 +2150,9 @@
            this panel has always had. -->
       <label id="kbdstickywrap"><input type="checkbox" id="kbdsticky">Sticky</label>
       <button id="kbdsend" hidden
-              title="Send this chord to the target">Send</button>
+              title="Send these keys together">Send</button>
       <button id="kbdclear" hidden
-              title="Let go of everything latched">Clear</button>
+              title="Let go of everything held">Clear</button>
     </div>
     <!-- WHAT IS LATCHED, IN WORDS. A held chord is invisible state that fires
          on the next tap, and one of the things it can spell reboots the
@@ -2294,7 +2312,7 @@
        picker natively from a label, and the scripted path is the one that
        silently did nothing. -->
   <label for="fileinput" id="fi-type"
-         title="Typed as keystrokes, exactly as if you typed it">Copy/Paste from text file</label>
+         title="Type commands in from a text file, new lines are enter">Copy/Paste from text file</label>
   <label for="xferinput" id="fi-xfer"
          title="Move the bytes over the network (reboots the target)">Upload file</label>
   <!-- A BUTTON, NOT A LABEL, AND THE DIFFERENCE IS REAL. The two above open
@@ -2544,15 +2562,10 @@ function setXport(x) {
   // exactly one thing again and the marker is honest.
   setLamp('lamp-link',
     x === 'ws' ? 'on' : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
-    // NUMBERS, NOT ADJECTIVES. "High performance" and "low performance" are
-    // claims nobody has measured; these two are measured and they are what
-    // actually differs. The WebSocket carries frames the client can retune
-    // live, so it converges on whatever the link and the source allow -- 30
-    // fps here. The mjpeg stream's rate is fixed in the URL at connect time
-    // and cannot be changed without reconnecting.
-    x === 'ws' ? 'WebSocket, up to 30 fps and the rate follows the link'
-    : x === 'mjpeg' ? 'mjpeg, fixed ' + MJPEG_FPS + ' fps but it works '
-                    + 'through any proxy. Click to try the websocket now'
+    // Just the transport name -- the label already carries which one, and
+    // the fps difference between them is not worth a hover explanation.
+    x === 'ws' ? 'WebSocket'
+    : x === 'mjpeg' ? 'mjpeg'
     : x === 'connecting' ? 'Connecting…'
     : 'Disconnected');
 }
@@ -2618,7 +2631,7 @@ setInterval(() => {
   const here = live
     ? 'receiving frames · last ' + Math.round(Date.now() - lastFrameAt) + ' ms ago'
     : xport === 'connecting' ? 'connecting…'
-    : 'no frames here in the last 2 s, so what is on screen may be old';
+    : 'no frames in the last 2 s';
   el.title = (stateWord ? stateWord + '\n' : '') + here;
 }, 700);
 
@@ -2826,8 +2839,7 @@ setInterval(() => {
   rateStep(starved ? 0 : got);
 }, 3000);
 
-// The rate the mjpeg stream is asked for, named once so the tooltip that
-// quotes it cannot drift from the URL that sets it.
+// The rate the mjpeg stream is asked for.
 const MJPEG_FPS = 12;
 // IT NEVER CAME BACK BY ITSELF, and that was the actual bug. ws.onclose only
 // reconnects while `xport !== 'mjpeg'`, so the first fallback was permanent:
@@ -3443,8 +3455,7 @@ function isReboot(keys) {
 function rebootWarning() {
   return 'Send Ctrl + Alt + Delete'
     + (boardNow.target ? ' to the ' + boardNow.target : '') + '?'
-    + '\n\nThis reboots the machine. Anything unsaved is lost, and a sweep in '
-    + 'progress is destroyed.'
+    + '\n\nThis reboots the machine. Close all programs and save all work first.'
     + '\n\nNote it is not a reliable reboot on this rig: it is swallowed while '
     + 'the game is running. If nothing happens, the machine did not get it. '
     + 'Do not assume it rebooted.';
@@ -3461,7 +3472,7 @@ function sendChord(keys) {
   // is the one that reboots the machine is exactly the unconfirmed reboot this
   // whole path exists to prevent. Try the table again and say why.
   if (reboot === null && keys.length > 1) {
-    hint('the daemon has not sent its key table, chords are held until it does');
+    hint('waiting for the key table, chord held');
     loadKeymap();
     return false;
   }
@@ -3505,10 +3516,9 @@ function paintLatched() {
   send.classList.toggle('danger', danger);
   send.disabled = blind;
   send.title = blind
-    ? 'Waiting for the daemon\'s key table, until it arrives this page '
-      + 'cannot tell whether a chord is the one that reboots the machine'
-    : danger ? 'This chord reboots the machine, and you will be asked to confirm'
-    : 'Send this chord to the target';
+    ? 'Waiting for the key table -- can\'t yet tell if this reboots the machine'
+    : danger ? 'This reboots the machine, and you will be asked to confirm'
+    : 'Send these keys together';
 }
 
 // A tap on any key. The two paths differ only in whether a non-modifier
@@ -3576,14 +3586,14 @@ function keyButton(spec) {
   const label = spec.aria || spec.cap;
   b.title = spec.mod
     ? 'Hold ' + label + ' for the next key, tap again to release'
-    : 'Send ' + label + ' to the target';
+    : 'Send ' + label + ' to ' + targetName();
   // MEASURED NOT TO ARRIVE, and only that. Disabled rather than dimmed: the
   // page has a rule against dimming text with opacity, and a key that cannot
   // reach the target should not be pressable rather than merely look sad.
   const cov = coverageOf(spec.mod || spec.k);
   if (cov && cov.arrives === false) {
     b.disabled = true;
-    b.title = label + ' does not reach the target, measured '
+    b.title = label + ' does not reach ' + targetName() + ', measured '
             + (keymap.coverage_meta && keymap.coverage_meta.measured_at
                ? 'on ' + keymap.coverage_meta.measured_at : '')
             + (cov.reason ? '. ' + cov.reason : '');
@@ -3667,12 +3677,12 @@ function drawKeyboard(id) {
       // is whether it gets there.
       const cc = chordCoverage(c.keys);
       const said = isReboot(c.keys)
-        ? 'Send Ctrl+Alt+Delete, reboots the target and asks first'
-        : (c.title || 'Send ' + c.cap + ' to the target');
+        ? 'Send Ctrl+Alt+Delete, reboots ' + targetName() + ' and asks first'
+        : (c.title || 'Send ' + c.cap + ' to ' + targetName());
       b.title = said + (
         !cc ? ''
         : cc.arrives === true
-          ? '\n\nMEASURED: it reaches the target'
+          ? '\n\nMEASURED: it reaches ' + targetName()
             + (cc.scan ? ' as scan ' + cc.scan + ', AL ' + cc.al : '')
             + (cc.how === 'in-use' ? ', proven by use rather than swept' : '')
             + (cc.reason ? '. ' + cc.reason : '')
@@ -3808,11 +3818,13 @@ document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   const plug = powerNow.alias
     ? `"${powerNow.alias}"${powerNow.model ? ' (' + powerNow.model + ')' : ''}`
     : 'the target\'s mains socket';
-  const board = boardNow.target ? `\n\nBoard fitted: ${boardNow.target}.` : '';
+  const boardName = boardNow.target || boardNow.name || null;
+  const board = boardName ? `\n\nBoard fitted: ${boardName}.` : '';
+  const shuttingDown = boardName ? `, shutting down ${boardName}` : '';
   const WARN = {
     on:    `Switch mains ON at ${plug}?\n\nMake sure the case is closed and nobody is working inside it.${board}`,
-    off:   `Cut mains at ${plug}?\n\nNo clean shutdown. If a sweep is running this destroys it.${board}`,
-    cycle: `Cycle mains at ${plug}?\n\nRails drop for 15s and it takes ~90s to reach a prompt. No clean shutdown. If a sweep is running this destroys it.${board}`,
+    off:   `Powers off ${plug}${shuttingDown}.\n\nClose all programs and save all work first.`,
+    cycle: `Power cycle ${plug}?\n\nRails drop for 15s and it takes ~90s to reach a prompt. Close all programs and save all work first.${board}`,
   };
   if (!confirm(WARN[a] || `Power ${a}?`)) return;
   post('power', {action:a});
@@ -3840,11 +3852,11 @@ async function typeFile(file) {
   const secs = Math.round(text.length * 0.012 + lines.length * 0.12);
   const mins = secs > 90 ? ' (about ' + Math.round(secs / 60) + ' minutes)'
                          : ' (about ' + secs + ' seconds)';
-  if (!confirm('Type ' + file.name + ' into the target?\n\n'
+  if (!confirm('Type ' + file.name + ' into ' + targetName() + '?\n\n'
       + lines.length + ' lines, ' + text.length + ' characters' + mins
       + '.\n\nIt is typed as keystrokes, exactly as if you typed it: whatever '
-      + 'is on screen receives it, and there is no undo. Make sure the target '
-      + 'is at a prompt that expects this.')) return;
+      + 'is on screen receives it, and there is no undo. Make sure ' + targetName()
+      + ' is at a prompt that expects this.')) return;
 
   return typeFileLines(file.name, lines);
 }
@@ -3928,7 +3940,7 @@ function showFiles(f) {
   why.hidden = ok;
   if (!ok) why.textContent = filesNow.reason || 'not available';
   item.title = ok
-    ? 'Send files to ' + (filesNow.dest || 'the target')
+    ? 'Send files to ' + (filesNow.dest || targetName())
       + ' (reboots the machine)'
     : (filesNow.reason || 'not available');
   // THE SAME ANSWER GOVERNS BOTH DIRECTIONS. Availability is about the
@@ -3939,7 +3951,7 @@ function showFiles(f) {
   g.classList.toggle('off', !ok);
   g.disabled = !ok;
   g.title = ok
-    ? 'Fetch files from ' + (filesNow.out_dir || 'the target')
+    ? 'Fetch files from ' + (filesNow.out_dir || targetName())
       + ' (reboots the machine)'
     : (filesNow.reason || 'not available');
 }
@@ -3995,8 +4007,8 @@ $('xferinput').onchange = async () => {
   // costs their session, and it takes about two minutes.
   const names = picked.map(f => f.name).join(', ');
   let msg = 'Upload ' + fmtBytes(total) + ' to '
-    + (filesNow.dest || 'the target') + '?\n\n' + names + '\n\n'
-    + 'This REBOOTS the target: anything running is lost, and it comes back '
+    + (filesNow.dest || targetName()) + '?\n\n' + names + '\n\n'
+    + 'This REBOOTS ' + targetName() + ': anything running is lost, and it comes back '
     + 'on the default profile. About 2 minutes.';
   if (warn && total > warn) {
     msg += '\n\nOver ' + fmtBytes(warn) + ' is untested here.';
@@ -4114,7 +4126,7 @@ async function paintGet() {
       ? f.name + ', ' + f.bytes + ' bytes, ' + (f.date || '') + ' '
         + (f.time || '')
       : (f.bytes > 0
-         ? 'That name does not survive DOS 8.3, so it cannot be fetched'
+         ? 'Name too long for DOS to use, so it cannot be fetched'
          : 'Zero bytes on the card, and a zero-byte arrival cannot be told '
            + 'from no arrival at all');
     list.append(row);
@@ -4161,8 +4173,8 @@ async function startPull(body, said) {
 
 $('get-refresh').onclick = () => {
   closePop();
-  if (!confirm('Read ' + (filesNow.out_dir || "the target's outgoing directory")
-      + '?\n\nThis REBOOTS the target: anything running is lost, and it comes '
+  if (!confirm('Read ' + (filesNow.out_dir || (targetName() + "'s outgoing directory"))
+      + '?\n\nThis REBOOTS ' + targetName() + ': anything running is lost, and it comes '
       + 'back on the default profile. About 2 minutes.')) return;
   startPull({refresh: true}, 'reading the directory');
 };
@@ -4181,10 +4193,10 @@ $('get-go').onclick = () => {
   const names = picked.map(c => c.value);
   closePop();
   let msg = 'Fetch ' + fmtBytes(total) + ' from '
-    + (filesNow.out_dir || 'the target') + '?\n\n' + names.join(', ') + '\n\n'
-    + 'This REBOOTS the target: anything running is lost, and it comes back '
+    + (filesNow.out_dir || targetName()) + '?\n\n' + names.join(', ') + '\n\n'
+    + 'This REBOOTS ' + targetName() + ': anything running is lost, and it comes back '
     + 'on the default profile. About 2 minutes.\n\n'
-    + 'Nothing is deleted from the target.';
+    + 'Nothing is deleted from ' + targetName() + '.';
   if (warn && total > warn) {
     msg += '\n\nOver ' + fmtBytes(warn) + ' is untested here.';
   }
@@ -4324,8 +4336,7 @@ function setArmed(v, opts) {
   // you is the invisible-state failure this button already has history with.
   // Releasing is never refused -- letting go must always work.
   if (v && inputHeldBy) {
-    hint('input is held by "' + inputHeldBy + '", keystrokes from here '
-         + 'would be refused');
+    hint('input held by "' + inputHeldBy + '"');
     if (!armed) return;
     v = false;                    // held while armed: let go, do not re-grab
   }
@@ -4341,9 +4352,8 @@ function setArmed(v, opts) {
   // button itself, and the one-time instruction is a toast over the picture,
   // which costs no layout at all.
   setLamp('lamp-kbd', v ? 'on' : null,
-    v ? 'Keys typed here go to the target. Ctrl + Alt + Shift releases'
-      : 'Keys typed here stay in the browser. Click the picture, or press '
-        + 'Grab keyboard, to send them to the target.');
+    v ? 'Keys go to ' + targetName()
+      : 'Keys stay in the browser');
   // One word, and the lit state carries the rest -- the two-word label was
   // the only one on the strip and read as an instruction rather than a
   // control. "Capture" is spoken for by screenshots and recording.
@@ -4355,9 +4365,8 @@ function setArmed(v, opts) {
   // release-all.
   $('grabbtn').querySelector('.bl').textContent = v ? 'Release' : 'Grab';
   $('grabbtn').classList.toggle('on', v);
-  $('grabbtn').title = v ? 'Keys are going to the target: click, or press '
-                           + 'Ctrl+Alt+Shift, to stop'
-                         : 'Send what you type straight to the target';
+  $('grabbtn').title = v ? 'Click or press Ctrl+Alt+Shift to stop'
+                         : 'Send what you type straight to ' + targetName();
   if (v) {
     // Must happen synchronously inside the tap handler: iOS ignores focus()
     // called from a timer or after an await.
@@ -4759,6 +4768,19 @@ function closePop() {
 // Popups anchored here use the same number so Capture does not read as
 // farther from the bar than Sound and Power are.
 const POP_GAP = 10;
+// SAME HEIGHT AS CAPTURE, MEASURED, NOT ASSUMED. #scrub is the tallest of
+// this row's three panels; a constant here would drift the moment its own
+// content does. Briefly un-hidden at zero visibility to measure -- display
+// keeps its layout height (unlike `hidden`), and nothing paints because
+// visibility is off, so there is nothing to see happen.
+function matchPopHeight() {
+  const scrub = $('scrub');
+  const wasHidden = scrub.hidden;
+  if (wasHidden) { scrub.hidden = false; scrub.style.visibility = 'hidden'; }
+  const h = scrub.offsetHeight;
+  if (wasHidden) { scrub.hidden = true; scrub.style.visibility = ''; }
+  if (h) document.documentElement.style.setProperty('--pop-match-h', h + 'px');
+}
 function openPop(name) {
   if (openPopName === name) { closePop(); return; }
   closePop();
@@ -4856,6 +4878,7 @@ function measureBars() {
   st.setProperty('--bar-top', Math.max(0, Math.round(top)) + 'px');
   st.setProperty('--bar-bottom',
                  Math.max(0, Math.round(window.innerHeight - bot)) + 'px');
+  matchPopHeight();
 }
 addEventListener('resize', measureBars);
 measureBars();
@@ -5599,9 +5622,8 @@ function poll_render_veil(state, uni) {
   const live = state === 'frozen' && !uni;
   $('dimbtn').textContent = live ? 'Show live picture' : 'Show frame';
   $('dimbtn').title = live
-    ? 'Hide this notice and show the stream itself: identical frames are '
-      + 'what a DOS prompt looks like, and typing will prove it'
-    : 'Hide this notice and show the kept frame at full brightness';
+    ? 'Show the live stream'
+    : 'Show the kept frame at full brightness';
 }
 
 let veilHidden = false;
@@ -5805,7 +5827,7 @@ async function showStale() {
         el.src = URL.createObjectURL(staleBlob);
         el.style.display = '';
         applyStale();
-        $('veil-age').textContent = 'last live picture · ' + fmtAge(age) + ' old';
+        $('veil-age').textContent = 'Last live capture was ' + fmtAgeWords(age) + ' ago';
         return;
       }
     } catch (e) {}
@@ -5824,6 +5846,11 @@ function hideStale() {
 // ------------------------------------------------------------------ status
 const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
   : s < 5400 ? (s/60).toFixed(1)+'m' : (s/3600).toFixed(1)+'h';
+// Same thresholds as fmtAge, spelled out: this one is prose on the No Signal
+// screen, not a compact chip, so it reads as a sentence instead of units.
+const fmtAgeWords = s => s == null ? 'unknown time' : s < 90
+  ? Math.round(s) + ' second' + (Math.round(s) === 1 ? '' : 's')
+  : s < 5400 ? (s/60).toFixed(1) + ' minutes' : (s/3600).toFixed(1) + ' hours';
 // The old API set six coloured pills. The rail now has one state WORD plus
 // small labelled chips: colour never carries meaning alone, which the
 // monochrome themes force and colour-blind users need anyway.
@@ -5949,7 +5976,7 @@ async function pollState() {
     $('veil-sub').textContent = t ? t[1]
       : v.state === 'frozen'
         ? (uni
-           ? 'Capturing, but the target is powered off or the mode is '
+           ? 'Capturing, but ' + targetName() + ' is powered off or the mode is '
              + 'outside the capture range.'
            : 'Receiving identical frames, showing buffer.')
       : v.state === 'nosignal' ? 'No frames are arriving at all.' : '';
@@ -6026,9 +6053,9 @@ async function pollState() {
     // "the ALSA device died" look identical otherwise.
     // What the button DOES first, then what the capture path is up to:
     // "silent" and "the ALSA device died" look identical from here otherwise.
-    $('sbtn').title = 'Turn the sound on: ' + (A.state === 'capturing'
-      ? 'the capture path is alive'
-      : 'audio ' + (A.state || 'unavailable'));
+    $('sbtn').title = A.state === 'capturing'
+      ? 'Turn the sound on'
+      : 'Turn the sound on (audio ' + (A.state || 'unavailable') + ')';
   }
 }
 // The daemon caches the plug and refreshes it on a heartbeat, so the page
@@ -6037,6 +6064,11 @@ async function pollState() {
 // machine behind one network request per tab per interval, and a backoff
 // hand-rolled here to stop a dead plug filling the log.
 let powerNow = {}, boardNow = {};
+// The system's own name where the daemon has reported one, rather than the
+// generic word every one of these strings used to say regardless of what was
+// actually fitted. Falls back to the generic word only when nothing is known
+// -- the same rule the plug wording already follows below.
+const targetName = () => boardNow.target || boardNow.name || 'the target';
 function showPower(p) {
   powerNow = p || {};
   // TRI-STATE. `on: null` means the last refresh failed -- "the machine is
@@ -6217,8 +6249,7 @@ function setInputHeld(owner) {
   if (owner === inputHeldBy) return;
   inputHeldBy = owner;
   const why = owner
-    ? 'The input lock is held by "' + owner + '", keystrokes from here would '
-      + 'be refused until it is released.'
+    ? 'Input locked by "' + owner + '"'
     : '';
   $('line').placeholder = owner ? 'input held by ' + owner : 'type a command';
   // A <label> has no disabled state, so while input is held it stops being a
@@ -6252,7 +6283,7 @@ function setInputHeld(owner) {
   else paintLatched();
   if (owner && armed) setArmed(false);
   if (!owner) {
-    $('sendline').title = 'Type this line at the target and press Enter';
+    $('sendline').title = 'Type this line at ' + targetName() + ' and press Enter';
     $('line').title = '';
   }
 }
@@ -6531,9 +6562,8 @@ function showAudioDevice(a) {
     a.state === 'capturing' ? 'on'
       : a.device_present === true ? 'bad' : 'stale',
     a.state === 'capturing'
-      ? 'Audio is being captured from ' + (a.device || 'the stick')
-        + ', the speaker button controls whether this browser plays it'
-      : t ? t[0] + ', ' + t[1]
+      ? 'Audio is active'
+      : t ? t[0]
       : 'Audio ' + (a.state || 'unknown'));
   // Controls that cannot do anything should not look as though they can. The
   // daemon does not yet distinguish "no audio on this board" from "the audio
@@ -6593,6 +6623,27 @@ function showTitle(b, p) {
   if (document.title !== text) document.title = text;
 }
 
+// THE HANDFUL OF LABELS WRITTEN ONCE IN MARKUP, not recomputed by some other
+// poll-driven function -- everything else that names the target is already
+// inside a function that runs every poll and picks up targetName() for free.
+// fi-xfer and fi-get are deliberately left alone here: showFiles() owns their
+// title, including the "not available" reason, and running both would race.
+function applyTargetLabels() {
+  const name = targetName();
+  $('ghost').setAttribute('aria-label', 'type at ' + name);
+  $('filebtn').title = 'Put a file into ' + name;
+  if (!inputHeldBy) $('sendline').title = 'Type this line at ' + name + ' and press Enter';
+  if (!armed) $('grabbtn').title = 'Send what you type straight to ' + name;
+  const off = document.querySelector('[data-power="off"]');
+  if (off) off.title = 'Cut mains power (' + name + ' does not shut down first)';
+  const typeTab = document.querySelector('[data-tab="keys"]');
+  if (typeTab) typeTab.title = 'Type at ' + name;
+  const getPop = $('pop-get');
+  if (getPop) getPop.setAttribute('aria-label', 'Download from ' + name);
+  if ($('get-refresh')) $('get-refresh').title = 'Read the directory again (reboots ' + name + ')';
+  if ($('get-go')) $('get-go').title = 'Fetch the ticked files (reboots ' + name + ')';
+}
+
 function showBoard(b) {
   // Kept for the power confirmation, which names the board fitted beside the
   // plug it is about to switch. The row no longer carries it: it is already
@@ -6600,6 +6651,7 @@ function showBoard(b) {
   // answer is in Settings -> Rig, in that confirmation, and in the log when
   // it changes -- none of which is a place you have to hunt.
   boardNow = b || {};
+  applyTargetLabels();
   // And the key panel, which draws a whole keyboard now and needs to know
   // WHICH one. Called on every poll rather than only on a change: applyLayout
   // redraws only when the resolved id actually moves, and routing it through
@@ -6837,9 +6889,14 @@ function applyZoom(recentre) {
   // scrollbar exactly as before.
   const canScroll = zoomMode !== 'fit';
   sc.style.overflow = canScroll ? 'auto' : 'hidden';
+  // #scroll's own CSS padding is the gap from the chrome (zero in full screen,
+  // which has none to separate from) -- clientWidth/Height report the padded
+  // box whole, so the space actually left to fit INTO is smaller by twice
+  // that padding, on every side.
+  const pad = document.body.classList.contains('fs') ? 0 : 10;
   let scale = 0, pw = 0, ph = 0;
   for (let pass = 0; pass < 2; pass++) {
-    const W = sc.clientWidth, H = sc.clientHeight;
+    const W = sc.clientWidth - pad * 2, H = sc.clientHeight - pad * 2;
     if (!W || !H) return;
     const want = (zoomMode === 'fit') ? Math.min(W / r.bw, H / r.bh)
                                       : Number(zoomMode);
@@ -6863,7 +6920,7 @@ function applyZoom(recentre) {
     }
   }
 
-  const over = canScroll && (pw > sc.clientWidth + 1 || ph > sc.clientHeight + 1);
+  const over = canScroll && (pw > sc.clientWidth - pad * 2 + 1 || ph > sc.clientHeight - pad * 2 + 1);
   fr.classList.toggle('zoomed', over);
   // Only on a deliberate change. Re-centring on every re-measure would drag
   // the view back under the operator every five seconds.
@@ -7402,17 +7459,15 @@ function lamps(leds, videoState, verified) {
                   scrolllock: 'Scroll Lock'};
     el.title = NAME[key] + ': ' + (
       why   ? (leds.reason || 'no LED reading: ' + why)
-      : blind ? 'The daemon is not reporting LED values'
+      : blind ? 'not reported'
       : (v === 1 ? 'lit' : 'dark')
         // WHEN IT LAST MOVED, which is the only thing that separates a live
         // reading from a retained one on a channel with no heartbeat.
         + (leds.changed_at
-           ? ' · last changed ' + fmtAge((Date.now() / 1000) - leds.changed_at)
-             + ' ago'
-           : ' · unchanged since the daemon started')
-        + (unproven ? ', the input link is unproven, so this describes the '
-                    + 'Pi rather than the target'
-           : stale ? ', retained, the target is not showing a picture' : ''));
+           ? ' · changed ' + fmtAge((Date.now() / 1000) - leds.changed_at) + ' ago'
+           : ' · unchanged since start')
+        + (unproven ? ', link unproven'
+           : stale ? ', retained' : ''));
   }
   // AND THE KEY PANEL, which is where somebody is about to click a letter.
   // Only on a reading that is present, applicable, proven and current: every
@@ -7424,7 +7479,7 @@ function lamps(leds, videoState, verified) {
     const lit = !why && !blind && !stale && leds && leds.capslock === 1;
     capsPanel.hidden = !lit;
     capsPanel.textContent = lit
-      ? 'Caps Lock is lit at the target. The letter keys will type capitals.'
+      ? 'Caps Lock is lit at ' + targetName() + '. The letter keys will type capitals.'
       : '';
   }
   $('lamps').title =
@@ -7432,18 +7487,14 @@ function lamps(leds, videoState, verified) {
           + (leds.reason || why)
     : LAMP_ATTESTS
       + (noVerify
-         ? '\n\n' + (verified.reason
-            || 'This board has no round-trip verification.')
+         ? '\n\n' + (verified.reason || 'No round-trip verification.')
          : vWhy
-         ? '\n\n' + (verified.reason || 'The link is not proven: ' + vWhy)
+         ? '\n\n' + (verified.reason || 'Link not proven: ' + vWhy)
          : verified
-         ? `\n\nLink last proven by round trip ${fmtAge(verified.age_s)} ago: `
-           + (verified.ok ? 'the target answered.' : 'NO ANSWER: keystrokes are not arriving.')
-         : '\n\nThe link has not been proven this session. Tap VERIFY to send a '
-           + 'key and watch for the LED to come back.')
-      + (stale
-      ? '\n\nDashed: the target is not showing a picture, so these values are '
-        + 'retained from whenever it last published them.' : '');
+         ? `\n\nLink proven ${fmtAge(verified.age_s)} ago: `
+           + (verified.ok ? 'answered.' : 'NO ANSWER.')
+         : '\n\nNot proven this session. Tap VERIFY.')
+      + (stale ? '\n\nDashed: target not showing a picture.' : '');
 }
 
 // Name what the signal ATTESTS, not what it resembles. These lamps prove a
@@ -7455,12 +7506,10 @@ function lamps(leds, videoState, verified) {
 // exactly this channel and was trusted as "DOS is at a prompt". Putting it on
 // the control means nobody else has to learn it the same way.
 const LAMP_ATTESTS =
-  'PS/2 keyboard LEDs: the return channel from the target.\n\n'
-  + 'Lit means the keystroke reached the target\'s KEYBOARD CONTROLLER.\n'
-  + 'It does NOT mean DOS read it: Caps Lock is handled by the BIOS interrupt '
-  + 'handler, so these toggle during a file transfer too.\n\n'
-  + 'The level is retained: a powered-off host keeps publishing its last '
-  + 'value, so the lamps are dashed when the picture says nothing is running.';
+  'PS/2 keyboard LEDs.\n\n'
+  + 'Lit means the keystroke reached the keyboard controller -- NOT that DOS '
+  + 'read it.\n\n'
+  + 'Dashed: retained from before power-off, may not describe the target now.';
 
 $('lamps').title = LAMP_ATTESTS;
 $('lamps').onclick = () => {
