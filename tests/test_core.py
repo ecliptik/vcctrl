@@ -6658,7 +6658,7 @@ def test_a_resolution_change_refits_immediately():
     for a while before "Fit to Screen" caught up.
 
     The periodic letterbox check (see the crop test above) is deliberately
-    slow now: three agreeing samples, 10-15s, because it is a HEURISTIC that
+    slow now: three agreeing samples, 4-8s, because it is a HEURISTIC that
     cannot tell a real letterbox from a dark scene held still. A mode switch
     is not that question. The capture device reporting a different frame
     size -- cv.width/cv.height actually changing between frames -- is not a

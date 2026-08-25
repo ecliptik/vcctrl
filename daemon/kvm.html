@@ -2579,7 +2579,7 @@ function gotFrame() {
   if (xport === 'ws') wsRetryDelay = 60000;
   // FIRST FRAME, OR A GENUINE RESOLUTION CHANGE -- both need an immediate
   // refit, not the periodic letterbox check. That check is deliberately
-  // slow now (three agreeing samples, 10-15s -- see the crop interval
+  // slow now (three agreeing samples, 4-8s -- see the crop interval
   // below) because it cannot tell a real letterbox from a dark scene held
   // still. This is a different question: the CAPTURE DEVICE itself
   // reporting a different frame size -- a DOS mode switch, a target that
@@ -7114,7 +7114,7 @@ function isSymmetric(b) {
 function isPlausibleSize(b) {
   return b.bw >= b.w * 0.4 && b.bh >= b.h * 0.4;
 }
-const CROP_STABLE_TICKS = 3;   // ticks (5s each) the union must hold still
+const CROP_STABLE_TICKS = 3;   // ticks (2s each) the union must hold still
 setInterval(() => {
   if (document.hidden) return;   // a readback nobody can see is just battery
   const m = measureCrop();
@@ -7137,7 +7137,7 @@ setInterval(() => {
     crop = cropUnion;
   }
   applyZoom(true);               // a real change, so re-centre on it
-}, 5000);
+}, 2000);
 
 // Drag to pan, which is the same thing as scrolling now that the picture
 // lives in a real scroller -- so it moves the scroller rather than keeping a
