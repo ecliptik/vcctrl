@@ -2928,17 +2928,29 @@ def test_coverage_is_scoped_and_absence_is_not_a_negative():
     check("rows without a verdict carry no `arrives` field",
           all("arrives" not in rows[k] for k in noverdict), noverdict[:3])
     check("and there are some -- the check is not passing on an empty set",
-          len(noverdict) == 10, len(noverdict))
+          len(noverdict) == 4, len(noverdict))
     check("every row names its witness",
           all("how" in r for r in rows.values()),
           [k for k, r in rows.items() if "how" not in r][:5])
-    # The 8 modifiers are no-witness, NOT arrives:false. Confusing those is
-    # what would grey six keys the page draws on a measurement never taken.
+    # THE SIX MODIFIERS THE PAGE DRAWS NOW HAVE VERDICTS, BY A THIRD WITNESS.
+    # This block asserted they had NONE until the BDA pass ran on 2026-08-25,
+    # and it failed when the data arrived -- which is the test noticing, not
+    # the test being wrong. What must stay true is the thing it was protecting:
+    # their verdict may NEVER come from `int16`, because a modifier enqueues no
+    # keystroke and an empty INT 16h slot for one says nothing at all.
     for k in ("lshift", "rshift", "lctrl", "rctrl", "lalt", "ralt"):
         c = can[k]
-        check("%s has no verdict, not a negative" % k,
-              rows[c].get("arrives") is None and rows[c].get("why") == "no-witness",
+        check("%s arrives, and NOT on the int16 witness" % k,
+              rows[c].get("arrives") is True and rows[c].get("how") == "bda",
               rows[c])
+        check("  and it names the bit it was read from",
+              "bit" in rows[c] and "observed" in rows[c], rows[c])
+    # The two metas were not in that pass -- the layout does not draw them --
+    # so they stay no-witness rather than inheriting the six's result.
+    for k in ("leftmeta", "rightmeta"):
+        check("%s was not swept and says so" % k,
+              rows[can[k]].get("arrives") is None
+              and rows[can[k]].get("why") == "no-witness", rows[can[k]])
     check("menu IS a measured negative",
           rows[can["menu"]].get("arrives") is False, rows[can["menu"]])
 
@@ -2986,6 +2998,32 @@ def test_coverage_is_scoped_and_absence_is_not_a_negative():
               row is not None and why is None, why)
     finally:
         vcctrld.COVERAGE_FILE = orig_cov
+
+    # EVERY CHORD THE PAGE SHIPS MUST RESOLVE TO A ROW. Not a "two tables
+    # agree" check -- it asserts that nothing the operator can press is absent
+    # from the table the tooltip reads, which is a real coverage question.
+    chords = cov["boards"]["1"]["chords"]
+    page_src = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                    encoding="utf-8").read()
+    blk = re.search(r"^const LAYOUTS = \{$(.*?)^\};$", page_src, re.S | re.M).group(1)
+    pc = blk[:blk.index("'mac-plus'")]
+    declared = [re.findall(r"'((?:[^'\\]|\\.)*)'", lst)
+                for lst in re.findall(r"\bkeys:\s*\[([^\]]*)\]", pc)]
+    check("the pc layout declares chords", len(declared) == 7, len(declared))
+    for keys in declared:
+        name = "+".join(can[k] for k in keys)
+        check("chord %s has a coverage row" % "+".join(keys), name in chords,
+              sorted(chords))
+    # THE CONDITIONS THE MEASUREMENTS WERE TAKEN UNDER, and the ones that
+    # WEAKEN them, are recorded beside them. The BDA and chord passes were
+    # single runs and the input lock was not held; a table that carried only
+    # the flattering half of that would be a worse record than none.
+    conf = cov["boards"]["1"]["confidence"]
+    check("single-run passes say so",
+          "SINGLE RUN" in conf["modifiers_bda"] and "SINGLE RUN" in conf["chords"],
+          conf)
+    check("and the unheld input lock is on the record",
+          "NOT HELD" in conf["input_lock"], conf.get("input_lock"))
 
     # AND THE DEPLOY MUST ACTUALLY CARRY IT. The tar ships daemon/ wholesale
     # but install.sh copies named files, so a new data file reaches the Pi's

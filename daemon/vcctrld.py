@@ -445,6 +445,11 @@ def keymap():
         # looks wrong.
         "canonical": canonical_key_names(),
         "coverage": (cov or {}).get("keys") or None,
+        # Chords are their own table: they are not keys and cannot be keyed by
+        # keycode. Keyed by the canonical names joined with "+", in the order
+        # `combo` sends them -- which is why every chord row here begins
+        # `lctrl`: measured on 2026-08-25, `combo` sends the LEFT ctrl.
+        "chords": (cov or {}).get("chords") or None,
         "coverage_meta": {k: v for k, v in (cov or {}).items() if k != "keys"}
                          or None,
         # WHY there is no coverage, in the daemon's own words. Null when there

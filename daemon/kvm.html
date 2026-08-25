@@ -3123,11 +3123,11 @@ const LAYOUTS = {
       // sweep voided `pause`: it halts until a keypress and swallowed the
       // sentinel that framed it. So this control is offered and says it is
       // unproven, rather than being removed or being presented as working.
+      // Its coverage row carries what the 2026-08-25 chord pass learned, so
+      // this title says only what the control DOES. It is the one chord with
+      // no verdict, and structurally so rather than by accident.
       {keys:['ctrl','pause'], cap:'Ctrl-Break',
-       title:'The harder break, caught in places Ctrl-C is not. UNMEASURED: '
-           + 'its Pause component is one of only two keys the sweep could '
-           + 'not give a verdict for, so if nothing happens the target may '
-           + 'simply not have received it.'},
+       title:'The harder break, caught in places Ctrl-C is not'},
       {keys:['ctrl','z'], cap:'Ctrl-Z',
        title:'^Z, end-of-file — this is what ends COPY CON'},
       {keys:['ctrl','s'], cap:'Ctrl-S',
@@ -3263,6 +3263,14 @@ function coverageOf(key) {
   // wrong. `canon()` is the CHORD alias table and is a different question.
   const n = (keymap.canonical && keymap.canonical[key]) || key;
   return keymap.coverage[n] || null;
+}
+// A CHORD IS NOT A KEY and cannot be looked up as one. Keyed by the canonical
+// names joined in the order `combo` sends them, which the daemon publishes.
+function chordCoverage(keys) {
+  if (!keymap || !keymap.chords) return null;
+  const n = keys.map(k => (keymap.canonical && keymap.canonical[k]) || k)
+                .join('+');
+  return keymap.chords[n] || null;
 }
 function keyIsDead(key) {
   const r = coverageOf(key);
@@ -3591,9 +3599,23 @@ function drawKeyboard(id) {
       if (c.danger) b.classList.add('danger');
       // The reboot's tooltip is not written per layout: it comes from the
       // same place as its confirmation, so the two cannot drift apart.
-      b.title = isReboot(c.keys)
+      // WHAT IS KNOWN ABOUT THIS CHORD, from the measured table rather than
+      // from the layout's hand-written title. The title is what it DOES; this
+      // is whether it gets there.
+      const cc = chordCoverage(c.keys);
+      const said = isReboot(c.keys)
         ? 'Send Ctrl+Alt+Delete — reboots the target, and asks first'
         : (c.title || 'Send ' + c.cap + ' to the target');
+      b.title = said + (
+        !cc ? ''
+        : cc.arrives === true
+          ? '\n\nMEASURED: it reaches the target'
+            + (cc.scan ? ' as scan ' + cc.scan + ', AL ' + cc.al : '')
+            + (cc.how === 'in-use' ? ' — proven by use rather than swept' : '')
+            + (cc.reason ? '. ' + cc.reason : '')
+        : '\n\nNO VERDICT: ' + (cc.reason || cc.why));
+      // Same rule as the keys: only a measured negative disables anything.
+      if (cc && cc.arrives === false) b.disabled = true;
       b.onclick = () => {
         // Straight to sendChord: a pre-built chord is not a latch, and a
         // pending latch must not silently ride along with it.

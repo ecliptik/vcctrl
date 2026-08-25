@@ -1,6 +1,58 @@
 {
  "boards": {
   "1": {
+   "chords": {
+    "lctrl+a": {
+     "al": "01",
+     "arrives": true,
+     "how": "int16",
+     "scan": "1E"
+    },
+    "lctrl+break": {
+     "how": "int16",
+     "reason": "the BIOS raises INT 1Bh inside its INT 9 handler and enqueues nothing, so INT 16h structurally cannot see it. It did NOT swallow the framing sentinel -- plain `pause` does, via the pause-wait loop, which is a different mechanism. Witnessing it needs the BIOS break flag at 0040:0071 bit 7.",
+     "why": "no-witness"
+    },
+    "lctrl+c": {
+     "al": "03",
+     "arrives": true,
+     "how": "int16",
+     "reason": "did not terminate the witness: consumed before DOS could read it, and an INT 23h stub covered the path where DOS might still have fired",
+     "scan": "2E"
+    },
+    "lctrl+lalt+delete": {
+     "arrives": true,
+     "how": "in-use",
+     "reason": "not swept: pressing it would end the run. It is the most exercised input on this rig -- the harness reboots with it, and _combo matches it to fire PROFILE.invalidate. Proven by use."
+    },
+    "lctrl+p": {
+     "al": "10",
+     "arrives": true,
+     "how": "int16",
+     "reason": "no printer hang, same mechanism as ctrl+s",
+     "scan": "19"
+    },
+    "lctrl+s": {
+     "al": "13",
+     "arrives": true,
+     "how": "int16",
+     "reason": "no XOFF hang: KEYWIT consumes it via INT 16h before DOS can read it and pause the console",
+     "scan": "1F"
+    },
+    "lctrl+z": {
+     "al": "1A",
+     "arrives": true,
+     "how": "int16",
+     "scan": "2C"
+    }
+   },
+   "confidence": {
+    "chords": "SINGLE RUN. Same caveat as the BDA pass.",
+    "input_lock": "NOT HELD for the 100-key sweep, its controls, or the BDA and chord passes. No interference signature was found in any artifact, which is weaker than having been protected from it. Taken as `vcctrl-keysweep` only at the end.",
+    "keys_int16": "two independent runs, 100/100 agreement, zero unstable",
+    "keys_leds": "single pass, one observed transition per lock key, state restored",
+    "modifiers_bda": "SINGLE RUN. Not protected by the two-run agreement that covers the 100-key sweep. Clean-looking rather than defended."
+   },
    "keys": {
     "0": {
      "al": "30",
@@ -459,14 +511,18 @@
      "scan": "26"
     },
     "lalt": {
-     "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
-     "why": "no-witness"
+     "arrives": true,
+     "bit": "0040:0018 bit1",
+     "how": "bda",
+     "observed": "LL 38, MM 02",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; witnessed by holding it under a sentinel and reading the BIOS shift flags"
     },
     "lctrl": {
-     "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
-     "why": "no-witness"
+     "arrives": true,
+     "bit": "0040:0018 bit0",
+     "how": "bda",
+     "observed": "LL 34, MM 01",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; witnessed by holding it under a sentinel and reading the BIOS shift flags"
     },
     "left": {
      "al": "E0",
@@ -484,13 +540,15 @@
     },
     "leftmeta": {
      "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "reason": "a modifier generates no keystroke; not included in the BDA pass, which covered the six the layout draws",
      "why": "no-witness"
     },
     "lshift": {
-     "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
-     "why": "no-witness"
+     "arrives": true,
+     "bit": "0040:0017 bit1",
+     "how": "bda",
+     "observed": "LL 30->32",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; witnessed by holding it under a sentinel and reading the BIOS shift flags"
     },
     "m": {
      "al": "6D",
@@ -573,14 +631,18 @@
      "scan": "13"
     },
     "ralt": {
-     "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
-     "why": "no-witness"
+     "arrives": true,
+     "bit": "0040:0096 bit3",
+     "how": "bda",
+     "observed": "LL 38, NN 18",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; witnessed by holding it under a sentinel and reading the BIOS shift flags"
     },
     "rctrl": {
-     "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
-     "why": "no-witness"
+     "arrives": true,
+     "bit": "0040:0096 bit2",
+     "how": "bda",
+     "observed": "LL 34, NN 14",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; witnessed by holding it under a sentinel and reading the BIOS shift flags"
     },
     "return": {
      "al": "0D",
@@ -605,13 +667,15 @@
     },
     "rightmeta": {
      "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "reason": "a modifier generates no keystroke; not included in the BDA pass, which covered the six the layout draws",
      "why": "no-witness"
     },
     "rshift": {
-     "how": "int16",
-     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
-     "why": "no-witness"
+     "arrives": true,
+     "bit": "0040:0017 bit0",
+     "how": "bda",
+     "observed": "LL 30->31",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; witnessed by holding it under a sentinel and reading the BIOS shift flags"
     },
     "s": {
      "al": "73",
@@ -712,7 +776,7 @@
    },
    "measured_at": "2026-08-25",
    "source": "docs/WEBKVM.md sec. 5.2b-5.2c",
-   "witness": "INT 16h AH=10h/11h, plus the PS/2 LED channel for the lock keys"
+   "witness": "INT 16h AH=10h/11h for keystrokes; the PS/2 LED channel for the lock keys; the BIOS shift flags at 0040:0017/0018/0096 for the modifiers. Rows with different `how` answer different questions and are not comparable."
   }
  },
  "note": "Measured coverage per protocol board. Keyed by CANONICAL key name, one per keycode -- aliases resolve to these. `how` names the witness and rows with different `how` are not comparable. A row with no `arrives` has no verdict; absent is never false.",
