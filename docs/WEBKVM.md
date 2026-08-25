@@ -931,6 +931,137 @@ remove-the-dependency move rather than the tune-the-probe one, applied to an
 instrument that had not been written yet — which is the cheapest moment to
 apply it.
 
+#### The artifact: `KEYWIT03`, and it emits EVENTS, never verdicts
+
+Settled with the `vcctrl` session 2026-08-25 and tested in emulation before
+anything touched the rig. `dos/keywit.asm` writes `C:\XFER\OUT\KEYWIT.LOG`,
+CREATE/TRUNCATE — never append, because a stale file from an earlier run read
+as current is a failure this rig has already had.
+
+    KEYWIT03<CR><LF>                 10 bytes
+    SSSS AA CC LL TTTT<CR><LF>       20 bytes, fixed, one per EVENT
+    END NNNN<CR><LF>                 10 bytes
+
+    SSSS  sequence, hex
+    AA    BIOS scan code, INT 16h AH=10h (AH)
+    CC    AL -- ASCII, or E0 marking an extended key. NOT named "ASCII":
+          a reader who trusts that header decodes E0 as a character.
+    LL    the raw BDA keyboard-flags byte at 0040:0017, AT THIS RECORD
+    TTTT  low word of the BIOS tick at 0040:006C. Wraps every ~65 min; a
+          DECREASE is a wrap, not an error.
+
+`LL` bits: 0 right shift · 1 left shift · 2 ctrl · 3 alt · 4 Scroll Lock ·
+5 Num Lock · 6 Caps Lock · 7 Insert. A non-zero low nibble in record 0 means
+something was held down when the run began — a finding there would otherwise
+be no way to see.
+
+**`LL` is per-record and NOT in the header**, and both halves of that are
+deliberate. Per-record because a header value asserts the lock state was
+constant across the run, and this sweep falsifies that the moment it presses
+NumLock — header-only is correct solely under a scheduling discipline, and a
+discipline is a premise that stops holding the day somebody reorders the
+sweep, silently, with the header still claiming otherwise. Measured:
+
+    0001 4C 00 00 4BAE     kp_5, NumLock off
+    0004 4C 35 20 4BCF     kp_5, NumLock ON -- AL moved, scan did not
+
+Not in the header as well, because that is two copies of one fact and two
+copies drift. Record 0 carries the start-of-run state.
+
+**Truncation check: `(size - 20) / 20 == NNNN`.** It can only run if there is
+a well-formed `END` to read `NNNN` from, so **a missing or malformed `END` is
+truncated, full stop, before the arithmetic is reached** — that is the case
+the trailer exists for. A crash before any record gives 10 bytes and a
+negative result, void by the same rule.
+
+**KEYWIT EMITS EVENTS AND NEVER VERDICTS**, and the verdict is formed in the
+analysis where the static key-class table lives. That is what keeps the
+instrument free of a classification it could get wrong, and it is why all 105
+keys are injected including the 11 below: a modifier that DID produce a
+keystroke is a surprise worth seeing, and only an instrument that reports
+events can show it to you.
+
+#### The sentinel frame, and why counting the unknowns cannot work
+
+The first design reconciled expected against recorded count and voided the
+run on a mismatch. **That voids exactly the finding the sweep exists to
+record:** send 105, record 104 because one key genuinely does not arrive, and
+the run destroys itself. It reconciles the count of the things whose arrival
+is the open question — and a control has to be something you already know.
+
+Worse, correlation was POSITIONAL — record N is key N — so a drop in the
+middle shifts every row after it. Key 3's scan code filed under key 2, all the
+way down: rows of **wrong identity**, self-consistent, and invisible to the
+truncation check. The OCR argument arriving through the protocol instead of
+the instrument.
+
+**So a sentinel — a key already PROVEN to arrive — goes between every key
+under test:**
+
+    S k1 S k2 S k3 ... S k105 S      106 sentinels + 105 keys = 211 injections
+
+`a` is the sentinel: scan `1E`, and scan is invariant under Caps Lock so it
+holds however the lock state drifts. Verdicts become per-slot rather than
+positional — nothing between two sentinels means that key did not arrive, and
+the frame re-establishes at every sentinel so no row can shift. Reconciliation
+moves to the **sentinel count**, where it can carry weight. Measured, with two
+true negatives in it:
+
+    a lshift a b a lctrl a  ->  7 injections, 5 records, sentinel count 4/4,
+                                RUN VALID, two `arrives: false` preserved
+
+Two corners: when `k_i` IS the sentinel, use a different sentinel for that
+slot and record which; a dropped sentinel merges two slots and shows as a slot
+holding two non-sentinel records, so it is detectable rather than silent.
+
+**THE SENTINEL DID NOT FIX THE DROPPED-KEY PROBLEM AND IT MADE IT QUIETER.**
+Under the count rule a drop announced itself as a broken run. Under this one a
+drop is an empty slot — a well-formed `arrives: false` in a run that passes
+every check here. So a single run still cannot separate *does not arrive* from
+*the injection dropped it*, and **two independent runs that must agree is the
+only discriminator there is.** It survived the redesign; it did not become
+redundant. Disagreement is `why: "unstable"`, with both verdicts in `reason`.
+
+This is not hypothetical: one emulation run sent six keys and recorded three,
+never reproduced in six attempts, and **the file was internally consistent** —
+three records, `END 0003`. The instrument did not lie about what it had. Had
+the send count not been known, that run would have produced three confident
+negatives.
+
+#### Eleven keys INT 16h cannot see, and they must not get a verdict
+
+**8 modifiers and 3 lock keys — 11 of 105, 10.5% — never enqueue an INT 16h
+keystroke at all.** They set BDA flags or toggle state. An empty slot for one
+of them says *nothing whatever* about whether the board delivered it.
+
+    lshift rshift lctrl rctrl lalt ralt leftmeta rightmeta
+    capslock numlock scrolllock
+
+`how` alone is not enough here. A row reading `arrives: false, how: "int16"`
+for `numlock` is a **true statement about the wrong question**, and the reader
+is a greying rule — a label is a thing that can be skipped. So the analysis
+emits no verdict for these at all: empty slot plus can-produce-a-keystroke is
+`arrives: false`; empty slot plus structurally-invisible is `why:
+"no-witness"` naming the mechanism. **Better that the artifact never contains
+the wrong verdict than that it contains one correctly labelled.**
+
+Which one applies is a static property of the key, known before the run — so
+it belongs in the protocol, not in the reader.
+
+*(This was found in the demonstration run above: `lshift` and `lctrl` were
+labelled "does not arrive" two paragraphs before the same session diagnosed
+the identical error for `numlock`. Having named a hazard produces the feeling
+of coverage that replaces the check.)*
+
+#### Sweep order, pinned rather than assumed
+
+The lock keys go **last** and their states are pinned and recorded. Two
+reasons, and only the first was previously written down: `FINDINGS.md` sec. 3
+says never send a lock key mid-sweep because they are the harness's own
+signalling; and, measured above, NumLock moves the AL column of all 16 keypad
+keys. The per-record `LL` makes a reordering visible rather than silently
+wrong, but the order is still the right one to keep.
+
 #### The record
 
 Modelled on `LedsCapability.snapshot()`, which solved this exact problem, and
