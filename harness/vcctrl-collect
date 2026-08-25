@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""vcctrl-collect -- bring a sweep's logs back off the g2k, unattended.
+r"""vcctrl-collect -- bring a sweep's logs back off the g2k, unattended.
 
 Runs on the VM, after a sweep has finished and the machine is sitting at a
-prompt. Reboots into the NET profile, runs PUT for each of the sweep's cell
-tags, and confirms each file by watching the FTP server's incoming directory.
+prompt. Asks the daemon to fetch the sweep's logs off C:\DOSKUTSU\LOGS -- the
+same transfer machinery the KVM and `vcctrl get-file` use -- and saves them
+into the FTP server's incoming directory, where cfclean and everything else
+already look for them.
+
+WHAT THAT BUYS OVER THE PUT.BAT PATH IT REPLACED, which is still here behind
+`--via-put`: the card's own DIR is read BEFORE anything is typed, so a log
+that was never written is reported as `not-listed` rather than as a transfer
+that timed out. Those are different faults with different fixes and PUT could
+not tell them apart -- it "fails quietly when asked to send a file that is not
+there". Sizes are checked against what DIR reported, so a short transfer is
+caught. And the reboot sequence now has one implementation instead of two.
 
 Two design choices worth knowing before changing anything here.
 
@@ -31,7 +41,13 @@ Usage:
   vcctrl-collect --tags GMN,GMF          [options]
 
   --power-on        bring the target up if it is off, instead of refusing
-  --already-net     skip the reboot; the machine is already in NET
+  --already-net     skip the reboot; the machine is already in NET. The
+                    network is still PROVED by arrival either way -- a
+                    skipped reboot is not a skipped check
+  --via-put         use the legacy PUT.BAT path instead of the fetch job.
+                    PUT sends a fixed pair of names and cannot tell a log
+                    that was never written from a transfer that failed;
+                    the default reads the card's own DIR first and can
   --stay-net        leave it in NET afterwards (default: reboot to the
                     menu default, which is measurement-clean)
   --incoming <dir>  FTP landing directory
@@ -54,8 +70,8 @@ BIN = os.path.join(os.path.dirname(HERE), "bin")
 sys.path.insert(0, BIN)
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
-    vc, vc_json, leds, wait_led, at_prompt, wait_for_prompt, arm_leds,
-    ensure_powered, spam_menu, flush_input_line, MENU_MAX_KEYS,
+    vc, vc_json, cfg_get, leds, wait_led, at_prompt, wait_for_prompt,
+    arm_leds, ensure_powered, spam_menu, flush_input_line, MENU_MAX_KEYS,
     KBD_BUFFER_KEYS)
 
 # grab() comes from the sweep runner rather than being copied. Since the KVM
@@ -80,6 +96,18 @@ grab = _m.grab
 # a different profile without editing the runner. Falls back to the doskutsu
 # profile beside this file, which is what a checkout with no config has.
 def _profile_path():
+    # `cfg_get` WAS NEVER IMPORTED HERE, and the `except Exception` below ate
+    # the NameError and returned the fallback. So `harness.profile` has been
+    # silently ignored by this script for as long as it has existed, while
+    # vcctrl-sweep -- which imports it -- honoured it. Two runners, one key,
+    # and only one of them reading it: on a rig that points the key somewhere
+    # other than the default, the sweep and the collector would disagree about
+    # the machine table and the tags, and nothing would say so.
+    #
+    # It was invisible on this rig because both paths resolve to the same
+    # file. It was found by pointing the unbound-name guard at harness/, which
+    # it had never covered -- a broad `except` cannot report the fault it is
+    # catching, so the only thing that can find this class is a reader.
     try:
         p = cfg_get("harness.profile", "") or ""
     except Exception:
@@ -375,6 +403,174 @@ def put_manifest(incoming, name, src, before, label):
     return False
 
 
+# ---------------------------------------------------------------------------
+# THE FETCH PATH: the same transfer machinery the KVM and the CLI use, instead
+# of this script's own copy of it.
+#
+# WHAT CHANGES, AND WHY IT IS AN IMPROVEMENT RATHER THAN A REWRITE FOR ITS OWN
+# SAKE:
+#
+#   THE CARD'S OWN DIR DECIDES WHAT IS THERE. `PUT.BAT <tag>` sends a fixed
+#   pair of names and "fails quietly when asked to send a file that is not
+#   there" -- this file's own closing paragraph says so. The fetch job reads
+#   the directory first, so a missing log is reported as `not-listed` BEFORE
+#   anything is typed, and it is distinguishable from a transfer that failed.
+#   That is the difference between "the network broke" and "the cell never
+#   wrote one", which is the first question anybody asks of a missing log.
+#
+#   THE SIZE IS CHECKED. A short transfer cannot match the length the card's
+#   own DIR reported. PUT had no such check in either direction.
+#
+#   ONE COPY OF THE REBOOT SEQUENCE. The arming, the blind menu selection, the
+#   readiness pulse and the return reboot lived here AND in the daemon. They
+#   are now in one place -- and the daemon's copy is the one that got the
+#   return-reboot edge fix, which this script's copy never had.
+#
+# WHAT DOES NOT CHANGE: files still land in `incoming/` on THIS host, because
+# `vcctrl-cfclean` and `inspect_logs` read that directory and a collector that
+# quietly moved its output would break both. The bytes come off the target
+# onto the daemon host and are then saved down to `incoming/` by name.
+#
+# THE OLD PATH IS STILL HERE, behind `--via-put`. It is the one with the
+# hardware history; this one has considerably less. Deleting it the day the
+# replacement was written would leave nothing to fall back to on the night it
+# matters.
+
+PULL_POLL_S = 3.0
+PULL_JOB_TIMEOUT_S = 900.0
+
+
+def _pull_job(want, from_dir, already_net, do_return, label):
+    """Run one fetch job and follow it. Returns the finished job record.
+
+    Names are passed EXPLICITLY rather than using --all: this collector knows
+    exactly which files it is entitled to, and a sweep directory holds logs
+    from every run that has ever been on the card.
+    """
+    print("  %s: %d file(s) from %s" % (label, len(want), from_dir))
+    args = ["get-file", "--from", from_dir]
+    args += list(want)
+    args.append("--return" if do_return else "--stay")
+    if already_net:
+        args.append("--already-net")
+    vc(*args)
+
+    t0, seen = time.time(), 0
+    while time.time() - t0 < PULL_JOB_TIMEOUT_S:
+        raw = vc("file-status", "400", check=False)
+        try:
+            job = (json.loads(raw) if raw else {}).get("job") or {}
+        except ValueError:
+            job = {}
+        for e in job.get("log", [])[seen:]:
+            print("      %-7s %s" % (e.get("phase"), e.get("text")))
+        seen = len(job.get("log", []))
+        if job and not job.get("running"):
+            return job
+        time.sleep(PULL_POLL_S)
+    print("      TIMEOUT: the fetch job did not finish within %ds"
+          % PULL_JOB_TIMEOUT_S)
+    return {}
+
+
+def save_into_incoming(incoming, job, want):
+    """Bring this run's files down to incoming/, and REMOVE anything stale.
+
+    THE STALE FILE IS THE HAZARD HERE, not the missing one. `inspect_logs`
+    reads by path, so a log left over from a PREVIOUS collect is read as this
+    run's the moment this run fails to fetch it -- an artifact that is real,
+    and about a different run. The old path guarded this by snapshotting
+    incoming/ and requiring a NEW arrival; the guarantee has to survive the
+    change of mechanism, so it is restated here as an action:
+
+        fetched this run  ->  written
+        NOT fetched       ->  the destination is DELETED
+
+    Either the file in incoming/ belongs to this run or it is not there. Same
+    two-valued rule as `--out` everywhere else in this tool.
+    """
+    ok = {f["name"] for f in (job.get("files") or []) if f.get("ok")}
+    saved, lost = [], []
+    for name in want:
+        dest = os.path.join(incoming, name)
+        if name not in ok:
+            try:
+                os.unlink(dest)
+                print("      removed stale %s -- it was NOT collected this run"
+                      % name)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print("      WARNING: %s is stale and could not be removed: %s"
+                      % (dest, exc))
+            lost.append(name)
+            continue
+        # THE OUTCOME IS CHECKED, NOT THE REPORT. `pulled save` is two-valued
+        # by contract -- either `dest` holds this file and it exited 0, or
+        # `dest` does not exist -- so asking the filesystem tests the thing
+        # that matters instead of trusting the exit code to describe it.
+        vc("pulled", "save", name, "--out", dest, check=False)
+        if not os.path.exists(dest):
+            print("      WARNING: %s was fetched onto the daemon host but did "
+                  "not save here" % name)
+            lost.append(name)
+            continue
+        print("      %-16s %8d bytes" % (name, os.path.getsize(dest)))
+        saved.append(name)
+    return saved, lost
+
+
+def pull_transfer(incoming, tags, manifest, already_net, stay_net):
+    r"""Collect a sweep over the fetch path. Returns (ok_tags, failed).
+
+    TWO DIRECTORIES, ONE REBOOT PAIR. The logs and the sweep manifest live in
+    C:\DOSKUTSU\LOGS; BINARY.NFO lives one level up in C:\DOSKUTSU. Two
+    directories would normally be two jobs and two reboot pairs -- so the
+    first job STAYS in NET and the second is told `--already-net`, which skips
+    the reboot and NOT the proof: the arrival gate runs again, so the second
+    job establishes for itself that the machine is still where the first one
+    left it rather than assuming it.
+    """
+    logs = []
+    for tag in tags:
+        logs += ["%s.LOG" % tag, "%sSDL.LOG" % tag]
+    if manifest:
+        logs.append(manifest)
+
+    # The second job returns the machine unless the caller asked to stay; if
+    # there is no second job, the first one does.
+    second = bool(manifest)
+    job = _pull_job(logs, "C:\\DOSKUTSU\\LOGS", already_net,
+                    do_return=(not stay_net and not second), label="logs")
+    saved, lost = save_into_incoming(incoming, job, logs)
+
+    if second:
+        # BINARY.NFO describes what is actually installed on the card. The
+        # engine logs binary_sha12=UNKNOWN, so this is the only record of
+        # binary identity that travels with a run.
+        nfo = _pull_job(["BINARY.NFO"], "C:\\DOSKUTSU", True,
+                        do_return=(not stay_net), label="binary")
+        s2, l2 = save_into_incoming(incoming, nfo, ["BINARY.NFO"])
+        saved += s2
+        # BINARY.NFO missing is not a collection failure -- the old path did
+        # not count it either, and a card without one is a real state.
+        if l2:
+            print("      BINARY.NFO not collected; binary identity is unrecorded")
+
+    ok, failed = [], []
+    for tag in tags:
+        pair = ["%s.LOG" % tag, "%sSDL.LOG" % tag]
+        if all(n in saved for n in pair):
+            ok.append(tag)
+        else:
+            failed.append(tag)
+            print("  %-6s MISSING %s" % (tag, ", ".join(n for n in pair
+                                                        if n not in saved)))
+    if manifest and manifest not in saved:
+        failed.append(manifest)
+    return ok, failed
+
+
 def inspect_logs(incoming, tags):
     """Read each collected log for evidence the cell actually ran.
 
@@ -467,6 +663,11 @@ def main(argv):
     already_net = "--already-net" in argv
     allow_power_on = "--power-on" in argv
     stay_net = "--stay-net" in argv
+    # THE OLD PATH, KEPT AND NOT DEFAULT. `PUT.BAT` to the control host is the
+    # mechanism with the hardware history; the fetch path has far less of one.
+    # Keeping it costs a branch and buys somewhere to go on the night the new
+    # one misbehaves.
+    via_put = "--via-put" in argv
 
     if argv[0] == "--tags":
         tags = [t.strip().upper() for t in argv[1].split(",") if t.strip()]
@@ -505,78 +706,98 @@ def main(argv):
     if not ensure_powered(allow_power_on):
         return 2
 
-    if not already_net:
-        if not at_prompt():
-            raise SystemExit("REFUSED: target did not answer the LED probe. It is "
-                             "not at a\n  prompt, or something is still running. "
-                             "Not rebooting that.")
-        print("  target is at a prompt: ok")
-        reboot_into_net()
+    # TWO PATHS, AND THE DEFAULT IS THE FETCH JOB. The old one drives
+    # PUT.BAT from here and confirms arrival in the control host's
+    # incoming/; the new one asks the daemon to fetch, which reads the
+    # card's own DIR first and so can tell a log that was never written
+    # from a transfer that failed. Both land the files in the same place.
+    if not via_put:
+        # THE PRE-CHECK STAYS ON THIS SIDE. The fetch job refuses plenty,
+        # but it does not know whether something is RUNNING on the target
+        # -- and rebooting a machine mid-cell is the one mistake that
+        # cannot be undone by trying again.
+        if not already_net and not at_prompt():
+            raise SystemExit(
+                "REFUSED: target did not answer the LED probe. It is not "
+                "at a\n  prompt, or something is still running. Not "
+                "rebooting that.")
+        print("\n== transfer (fetch path) ==")
+        ok, failed = pull_transfer(incoming, tags, manifest, already_net,
+                                   stay_net)
     else:
-        print("  --already-net: assuming the NET profile is booted")
-        if not at_prompt():
-            raise SystemExit("REFUSED: target did not answer the LED probe.")
-
-    before = snapshot(incoming)
-
-    print("\n== transfer ==")
-    ok, failed = [], []
-    for tag in tags:
-        print("  PUT %s" % tag)
-        good, got = put_tag(incoming, tag, before)
-        if good:
-            ok.append(tag)
+        print("\n  --via-put: the legacy PUT.BAT path")
+        if not already_net:
+            if not at_prompt():
+                raise SystemExit("REFUSED: target did not answer the LED probe. It is "
+                                 "not at a\n  prompt, or something is still running. "
+                                 "Not rebooting that.")
+            print("  target is at a prompt: ok")
+            reboot_into_net()
         else:
-            failed.append(tag)
-            missing = [n for n in ("%s.LOG" % tag, "%sSDL.LOG" % tag) if n not in got]
-            print("      TIMEOUT after %ds -- missing %s"
-                  % (PUT_TIMEOUT_S, ", ".join(missing)))
+            print("  --already-net: assuming the NET profile is booted")
+            if not at_prompt():
+                raise SystemExit("REFUSED: target did not answer the LED probe.")
+
         before = snapshot(incoming)
 
-    # The manifest carries config=%config%, which is the only artifact that
-    # proves which boot profile produced these logs. Pull it in the same NET
-    # session -- a second trip costs another reboot.
-    if manifest:
-        print("\n== provenance ==")
-        if not put_manifest(incoming, manifest,
-                            "C:\\DOSKUTSU\\LOGS\\" + manifest, before,
-                            "manifest"):
-            failed.append(manifest)
-        before = snapshot(incoming)
-        # BINARY.NFO describes what is actually installed on the card. The
-        # engine logs binary_sha12=UNKNOWN, so this is the only record of
-        # binary identity that travels with a run.
-        put_manifest(incoming, "BINARY.NFO", "C:\\DOSKUTSU\\BINARY.NFO",
-                     before, "binary  ")
-        before = snapshot(incoming)
-
-    if not stay_net:
-        print("\n== return to the menu default ==")
-        # The last PUT confirmed its file ARRIVED, which happened while DOS was
-        # still inside FTP.EXE. Wait for the prompt to come back before typing
-        # at it, or the keystrokes buffer and arming times out on a machine
-        # that is perfectly healthy -- and the machine is then left in NET.
-        waited = wait_for_prompt(90)
-        if waited is None:
-            print("  WARNING: no prompt within 90s; leaving the machine in NET.")
-            print("  DO NOT start a measured run without rebooting it first.")
-        else:
-            print("  prompt back after %.1fs" % waited)
-        # No digit: the 5 s menu timeout lands on PGSB, which is
-        # measurement-clean. Leaving the machine in NET would mean the next
-        # sweep ran with the packet driver resident.
-        if arm_leds():
-            vc("combo", "ctrl", "alt", "delete")
-            if wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S) is None:
-                print("  WARNING: no reboot edge; machine may still be in NET.")
-            elif wait_led("scrolllock", True, READY_TIMEOUT_S) is None:
-                print("  WARNING: no RDYPULSE; machine may not have reached a prompt.")
-            elif wait_for_prompt(60) is None:
-                print("  WARNING: RDYPULSE fired but no prompt within 60s.")
+        print("\n== transfer ==")
+        ok, failed = [], []
+        for tag in tags:
+            print("  PUT %s" % tag)
+            good, got = put_tag(incoming, tag, before)
+            if good:
+                ok.append(tag)
             else:
-                print("  back at a prompt on the default profile.")
-        else:
-            print("  WARNING: could not arm LEDs; skipped the return reboot.")
+                failed.append(tag)
+                missing = [n for n in ("%s.LOG" % tag, "%sSDL.LOG" % tag) if n not in got]
+                print("      TIMEOUT after %ds -- missing %s"
+                      % (PUT_TIMEOUT_S, ", ".join(missing)))
+            before = snapshot(incoming)
+
+        # The manifest carries config=%config%, which is the only artifact that
+        # proves which boot profile produced these logs. Pull it in the same NET
+        # session -- a second trip costs another reboot.
+        if manifest:
+            print("\n== provenance ==")
+            if not put_manifest(incoming, manifest,
+                                "C:\\DOSKUTSU\\LOGS\\" + manifest, before,
+                                "manifest"):
+                failed.append(manifest)
+            before = snapshot(incoming)
+            # BINARY.NFO describes what is actually installed on the card. The
+            # engine logs binary_sha12=UNKNOWN, so this is the only record of
+            # binary identity that travels with a run.
+            put_manifest(incoming, "BINARY.NFO", "C:\\DOSKUTSU\\BINARY.NFO",
+                         before, "binary  ")
+            before = snapshot(incoming)
+
+        if not stay_net:
+            print("\n== return to the menu default ==")
+            # The last PUT confirmed its file ARRIVED, which happened while DOS was
+            # still inside FTP.EXE. Wait for the prompt to come back before typing
+            # at it, or the keystrokes buffer and arming times out on a machine
+            # that is perfectly healthy -- and the machine is then left in NET.
+            waited = wait_for_prompt(90)
+            if waited is None:
+                print("  WARNING: no prompt within 90s; leaving the machine in NET.")
+                print("  DO NOT start a measured run without rebooting it first.")
+            else:
+                print("  prompt back after %.1fs" % waited)
+            # No digit: the 5 s menu timeout lands on PGSB, which is
+            # measurement-clean. Leaving the machine in NET would mean the next
+            # sweep ran with the packet driver resident.
+            if arm_leds():
+                vc("combo", "ctrl", "alt", "delete")
+                if wait_led("capslock", False, REBOOT_EDGE_TIMEOUT_S) is None:
+                    print("  WARNING: no reboot edge; machine may still be in NET.")
+                elif wait_led("scrolllock", True, READY_TIMEOUT_S) is None:
+                    print("  WARNING: no RDYPULSE; machine may not have reached a prompt.")
+                elif wait_for_prompt(60) is None:
+                    print("  WARNING: RDYPULSE fired but no prompt within 60s.")
+                else:
+                    print("  back at a prompt on the default profile.")
+            else:
+                print("  WARNING: could not arm LEDs; skipped the return reboot.")
 
     unhealthy = inspect_logs(incoming, ok) if ok else []
 
@@ -597,9 +818,12 @@ def main(argv):
 
   A missing log is a real signal, not necessarily a transfer fault. The
   likeliest cause is that the cell never wrote one -- it died at sdl_init, or
-  the sweep stopped early. Look for the tag under C:\\DOSKUTSU\\LOGS on the
-  card before assuming the network was at fault; PUT cannot send a file that
-  is not there, and it fails quietly when asked to.""")
+  the sweep stopped early. On the default fetch path you do not have to guess:
+  a log that is not on the card is reported as `not-listed`, which is the
+  card's own DIR saying it was never written, while a transfer that failed is
+  reported as `no-return` or `size-mismatch`. Under `--via-put` that
+  distinction does not exist -- PUT cannot send a file that is not there, and
+  it fails quietly when asked to.""")
         return 1
     return 0
 

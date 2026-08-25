@@ -149,19 +149,20 @@ USAGE = """usage: vcctrl <command> [args]
                             FTP.EXE on the target cannot be interrupted from
                             here, and between files is the only honest
                             boundary.
-  file-list                 what the target's C:\\XFER\\OUT held WHEN IT WAS
+  file-list [--from DIR]    what the target's C:\\XFER\\OUT held WHEN IT WAS
                             LAST READ, with the age of that reading. Touches
                             nothing: reading that directory means rebooting
                             the machine, so this is the last answer rather
                             than a current one, and an unread directory is not
                             an empty one.
-  file-refresh (--return|--stay)
+  file-refresh (--return|--stay) [--from DIR] [--already-net]
                             go and read C:\\XFER\\OUT. REBOOTS the target, and
                             the listing comes back as a FILE -- a DIR
                             redirected and sent over FTP -- because this
                             console reads 13,800 as 13,808. Returns at once;
                             watch it with file-status.
   get-file (--all | NAME...) (--return|--stay) [--paranoid]
+                            [--from DIR] [--already-net]
                             fetch files out of C:\\XFER\\OUT. REBOOTS the
                             target. Reads the directory first and fetches only
                             what its own DIR lists, so a name that is not
@@ -176,6 +177,16 @@ USAGE = """usage: vcctrl <command> [args]
                             repeatable and still not that either copy equals
                             what is on the card.
                             NOTHING IS DELETED FROM THE TARGET, ever.
+                            --from names a different directory on the target
+                            (default C:\\XFER\\OUT) -- this is how the harness
+                            collects C:\\DOSKUTSU\\LOGS. It must be an absolute
+                            DOS 8.3 path; anything a command line would eat is
+                            refused rather than repaired, because the string is
+                            typed at a machine with no quoting.
+                            --already-net skips the REBOOT and not the PROOF:
+                            the arrival gate still runs, so being wrong about
+                            where the machine is costs a refusal rather than a
+                            command typed into a profile with no network.
   pulled [list|clear [NAME]|save NAME --out F]
                             what has been fetched off the target and is
                             sitting on the daemon host. `save` writes one file
@@ -1209,6 +1220,9 @@ def main(argv):
                 req["dest"] = rest[i + 1]
     elif cmd in ("file-list", "file_listing"):
         req = {"cmd": "file_listing"}
+        for i, a in enumerate(rest):
+            if a == "--from" and i + 1 < len(rest):
+                req["dir"] = rest[i + 1]
     elif cmd in ("file-refresh", "get-file", "file_pull"):
         # THE SAME RULE AS send-file, AND FOR THE SAME REASON. Both reboot the
         # target; --stay leaves it in NET, where the ODI stack is resident and
@@ -1226,10 +1240,26 @@ def main(argv):
                 "  --stay    leave the machine in NET (NO measured run may\n"
                 "            start from there)\n" % cmd)
             return 3
+        # WHICH DIRECTORY ON THE TARGET, and it is validated by the daemon
+        # rather than here: the string is about to be typed at a machine with
+        # no quoting, so the check belongs beside the thing that types it.
+        for i, a in enumerate(rest):
+            if a == "--from" and i + 1 < len(rest):
+                req["dir"] = rest[i + 1]
+        # SKIPS THE REBOOT, NOT THE PROOF. The arrival gate still runs, so a
+        # caller who is wrong about where the machine is gets a refusal rather
+        # than a fetch typed into a profile with no network stack.
+        if "--already-net" in argv:
+            req["already_net"] = True
         if cmd == "file-refresh":
             req["refresh"] = True
         else:
-            names = [a for a in rest if not a.startswith("-")]
+            skip = set()
+            for i, a in enumerate(rest):
+                if a == "--from":
+                    skip.add(i + 1)
+            names = [a for i, a in enumerate(rest)
+                     if not a.startswith("-") and i not in skip]
             if "--all" in argv:
                 req["all"] = True
             elif not names:

@@ -2223,13 +2223,28 @@ def test_no_unbound_names():
         if os.path.isdir(p):
             files += [os.path.join(p, f) for f in sorted(os.listdir(p))
                       if f.endswith(".py")]
-    for f in sorted(os.listdir(os.path.join(root, "bin"))):
-        path = os.path.join(root, "bin", f)
-        if not os.path.isfile(path):
+    # bin/ AND harness/. The harness moved out of bin/ in phase 6 and this
+    # list did not follow, so vcctrl-cell, -sweep and -collect were unread by
+    # the one check that exists for code paths nothing exercises -- which is
+    # exactly what they are: unattended scripts whose error branches run at
+    # three in the morning with nobody watching.
+    #
+    # FOUND BY WRITING THE BUG, NOT BY AUDITING THE LIST. A NameError was
+    # introduced into vcctrl-collect (VCCTRL, used and never imported), the
+    # suite was run, and it PASSED. A guard is worth what its coverage is, and
+    # coverage has to be counted by something other than the guard's own
+    # opinion of itself.
+    for d in ("bin", "harness"):
+        base = os.path.join(root, d)
+        if not os.path.isdir(base):
             continue
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            if fh.readline().startswith("#!/usr/bin/env python"):
-                files.append(path)
+        for f in sorted(os.listdir(base)):
+            path = os.path.join(base, f)
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                if fh.readline().startswith("#!/usr/bin/env python"):
+                    files.append(path)
 
     bad = []
     for path in files:
@@ -8850,3 +8865,165 @@ def test_the_return_reboot_is_witnessed_by_an_edge_not_by_a_level():
     rS = vcctrld.TransferJob(capS, dS, do_return=True).run()
     check("a send whose return reboot is unseen says so too",
           rS["left_in_net"] is True, rS)
+
+
+def test_a_directory_that_will_be_typed_is_whitelisted_not_filtered():
+    """The harness names C:\\DOSKUTSU\\LOGS, so the directory became INPUT.
+
+    While `out_dir` came from config it was trusted. The moment a caller can
+    name one -- the collector, or a browser, since file_pull is on the web
+    allowlist -- that string is about to be interpolated into
+    `VCLIST.BAT %s` and `VCCHK.BAT %s\\%s` on a machine with NO QUOTING OF ANY
+    KIND. The caret escapes nothing on DOS 6.22; that is established on this
+    hardware. So there is no safe way to escape a bad path, and the only
+    defence is a whitelist.
+
+    Written as a SECURITY test rather than a usability one, for the same
+    reason dos_filename's traversal test is: somebody relaxing this for a
+    future target with long filenames is also relaxing a boundary, and should
+    trip this deliberately.
+    """
+    print("\nDOS directory validation")
+    f = vcctrld.dos_dir_path
+
+    check("the ordinary case survives unchanged",
+          f("C:\\XFER\\OUT") == "C:\\XFER\\OUT")
+    check("and is canonicalised rather than second-guessed",
+          f("c:/doskutsu/logs/") == "C:\\DOSKUTSU\\LOGS", f("c:/doskutsu/logs/"))
+
+    # EVERY ONE OF THESE ENDS UP ON A COMMAND LINE. A filter that stripped
+    # them would produce a path that is safe and WRONG, which is worse: it
+    # would list some other directory and report the answer under the name the
+    # caller asked for.
+    for evil, why in (
+            ("C:\\XFER\\OUT > NUL", "redirection into a typed command"),
+            ("C:\\MY DIR", "a space ends the argument"),
+            ("C:\\XFER\\..\\..\\DOS", "a relative component"),
+            ("C:\\CON", "a DOS device name"),
+            ("C:\\XFER\\*", "a wildcard"),
+            ("C:\\VERYLONGNAME\\X", "a name past 8 characters"),
+            ("XFER\\OUT", "not absolute, so it depends where DOS happens to be"),
+            ("C:\\", "the root of the boot drive"),
+            ("", "nothing at all")):
+        try:
+            got = f(evil)
+        except ValueError:
+            continue
+        check("%r is refused (%s)" % (evil, why), False, "accepted as %r" % got)
+    check("all of the above were refused", True)
+
+    # AND IT MUST STILL ACCEPT THE THING THE HARNESS NEEDS, or the check above
+    # passes on a function that refuses everything.
+    check("the harness's own log directory is accepted",
+          f("C:\\DOSKUTSU\\LOGS") == "C:\\DOSKUTSU\\LOGS")
+    check("as is a deeper path on another drive",
+          f("D:\\A\\B\\C") == "D:\\A\\B\\C")
+
+    # The refusal has to be actionable: a person reading it should know what
+    # to change.
+    try:
+        f("C:\\MY DIR")
+    except ValueError as exc:
+        check("the reason names the character rather than saying invalid",
+              "' '" in str(exc), str(exc))
+
+
+def test_already_net_skips_the_reboot_and_not_the_proof():
+    """A skipped reboot must never become a skipped check.
+
+    The collector fetches from two directories in one NET session -- logs,
+    then BINARY.NFO one level up -- and the second job is told the machine is
+    already in NET so it does not pay a second pair of reboots. That is a
+    CLAIM by the caller, and a claim is not a reading. So the arrival gate
+    still runs: a file has to come back off the target before anything is
+    fetched, which proves the packet driver, the address, the credentials and
+    the client exactly as it does after a real reboot.
+
+    Get this wrong and the failure is quiet and expensive: a caller who is
+    wrong about where the machine is types VCCHK at a profile with no network
+    stack and waits out the timeout on every file.
+    """
+    print("\nalready-net")
+    cap, d = _mkpull(card={"A.DAT": b"z" * 32})
+    r = vcctrld.PullJob(cap, d, names=["A.DAT"], already_net=True,
+                        do_return=False).run()
+
+    check("it fetched without rebooting first", r["ok"] is True, r)
+    check("NOTHING WAS REBOOTED", d.combos == [], d.combos)
+    check("and it did not arm a witness it was not going to use",
+          d.arms == 0, d.arms)
+    check("but the network was still PROVED by arrival",
+          any(e["phase"] == "attest" and "NET confirmed" in e["text"]
+              for e in r["log"]), [e["text"] for e in r["log"]])
+    check("and it says out loud that it took the caller's word on the profile",
+          any("already in NET" in e["text"] for e in r["log"]),
+          [e["text"] for e in r["log"]])
+    check("the machine is known to be in NET, so leaving it there is reported",
+          r["left_in_net"] is True, r)
+
+    # THE CLAIM BEING WRONG IS THE CASE THAT MATTERS. A machine that is not in
+    # NET sends nothing back, and that must refuse rather than proceed.
+    cap2, d2 = _mkpull(card={"A.DAT": b"z" * 32}, net=False)
+    r2 = vcctrld.PullJob(cap2, d2, names=["A.DAT"], already_net=True).run()
+    check("a caller who is wrong about the profile is refused",
+          r2["ok"] is False and r2["why"] == "no-net", r2)
+    check("and no file was typed for after the gate failed",
+          not any("A.DAT" in t for t in d2.typed), d2.typed)
+
+
+def test_a_listing_belongs_to_the_directory_it_is_of():
+    """One slot answered for every directory, and the picker would have lied.
+
+    The harness reads C:\\DOSKUTSU\\LOGS; the KVM's picker reads C:\\XFER\\OUT.
+    With a single stored listing, whichever ran last answers for both -- so
+    the File menu would show a list of sweep logs under a heading naming the
+    transfer directory, with an age that belonged to somebody else's reading.
+    A reading belongs to the thing it is a reading OF.
+    """
+    print("\nlistings by directory")
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+
+    def listing(where, names, when):
+        return {"ok": True, "why": None, "reason": None, "dir": where,
+                "read_at": when, "entries": [], "reported": {}, "bytes": 0,
+                "files": [{"name": n, "bytes": 4, "fetchable": True}
+                          for n in names]}
+
+    cap._save_listing(listing("C:\\XFER\\OUT", ["A.TXT"], time.time() - 100))
+    cap._save_listing(listing("C:\\DOSKUTSU\\LOGS", ["GMN.LOG", "GMNSDL.LOG"],
+                              time.time()))
+
+    out = cap._file_listing({})
+    check("the default directory still answers for itself",
+          [f["name"] for f in out["files"]] == ["A.TXT"], out["files"])
+    logs = cap._file_listing({"dir": "C:\\DOSKUTSU\\LOGS"})
+    check("and the harness's directory answers for itself",
+          sorted(f["name"] for f in logs["files"]) == ["GMN.LOG", "GMNSDL.LOG"],
+          logs["files"])
+    check("each carries its own age", out["age_s"] > logs["age_s"],
+          (out["age_s"], logs["age_s"]))
+    check("and what is known is listed rather than guessed at",
+          sorted(out["known"]) == ["C:\\DOSKUTSU\\LOGS", "C:\\XFER\\OUT"],
+          out.get("known"))
+
+    unread = cap._file_listing({"dir": "C:\\NOWHERE"})
+    check("a directory nobody has read says so, rather than borrowing another",
+          unread["listing"] is None and "not an empty one" in unread["note"],
+          unread)
+    bad = cap._file_listing({"dir": "C:\\MY DIR"})
+    check("and an untypeable directory is refused here too",
+          bad["ok"] is False and bad["why"] == "bad-dir", bad)
+
+    # THE OLD SINGLE-SLOT STORE MUST NOT BECOME "never read". There is one on
+    # the rig, written before this change; discarding it would turn a real
+    # reading into the one answer this whole area keeps distinct.
+    import json as _json
+    with open(cap._listing_file(), "w") as fh:
+        _json.dump({"listing": listing("C:\\XFER\\OUT", ["OLD.TXT"],
+                                       time.time() - 50),
+                    "attempt": {"at": time.time() - 50, "ok": True}}, fh)
+    migrated = cap._file_listing({})
+    check("a store written by the single-slot version still reads",
+          [f["name"] for f in migrated["files"]] == ["OLD.TXT"],
+          migrated["files"])

@@ -83,6 +83,57 @@ never hears a name it did not itself report:
   and settling, so **a zero-byte file cannot be told from one that never
   came**; there is no reading of the wait that means "it worked".
 
+### Reading a directory other than `C:\XFER\OUT`
+
+    vcctrl get-file --from C:\DOSKUTSU\LOGS GMN.LOG --return
+    vcctrl file-list --from C:\DOSKUTSU\LOGS
+
+**The directory is now input, and it is whitelisted rather than filtered.** It
+ends up inside `VCLIST.BAT %s` and `VCCHK.BAT %s\%s` on a machine with no
+quoting of any kind — the caret escapes nothing on DOS 6.22 — so there is no
+safe way to escape a bad path. `dos_dir_path()` accepts an absolute DOS 8.3
+path and refuses everything else: a space (which ends the argument), a
+redirect (which would write to the card), a relative component, a device name,
+a wildcard, and the root of a drive. **Refused rather than repaired** — a path
+this had to alter is not the path the caller meant.
+
+`--already-net` **skips the reboot and not the proof.** The arrival gate still
+runs, so a caller who is wrong about where the machine is gets a refusal
+instead of a fetch typed at a profile with no network stack. That is what lets
+two directories be read in one reboot pair: the first job stays in NET, the
+second is told so and re-establishes it for itself.
+
+**PRECONDITION: the card needs the CURRENT `VCLIST.BAT`.** The version
+installed on 2026-08-24 creates the directory it is asked to list. That is
+right for the default `C:\XFER\OUT` and wrong for a named one, because it
+turns a mistyped path into an **empty listing** — which reads as "that
+directory has nothing in it" when the truth is "that directory does not
+exist". The generated BAT now only creates the default. **Until it is
+reinstalled, a wrong `--from` will be reported as empty rather than as
+missing.**
+
+### The harness collects over this path now
+
+`vcctrl-collect` asks the daemon to fetch `C:\DOSKUTSU\LOGS` instead of
+driving `PUT.BAT` from the control host. The old path is still there behind
+`--via-put`.
+
+**What that buys is a distinction PUT could not make.** `PUT.BAT <tag>` sends a
+fixed pair of names and "fails quietly when asked to send a file that is not
+there" — its own documentation says so — so a missing log and a broken
+transfer looked identical. The fetch path reads the card's own `DIR` first, so
+a log that was never written comes back as `not-listed` and a transfer that
+failed comes back as `no-return` or `size-mismatch`. That is the first
+question anybody asks of a missing log, answered by the tool instead of by a
+trip to the card.
+
+**Files still land in `~/doskutsu-netiter/incoming`**, because `cfclean` and
+the collector's own log inspection read that directory. The bytes come off the
+target onto the daemon host and are saved down by name — and **a file that was
+not collected this run is deleted from `incoming/` rather than left**, because
+`inspect_logs` reads by path and a log from a previous collect would otherwise
+be read as this one's.
+
 ### Where the bytes land, and where they do not stay
 
 They arrive in the server's `incoming/`, which is inside the FTP root and
@@ -233,6 +284,17 @@ backslash on the destination is rejected. The install instructions printed by
 `vcctrl file-bats` carried one from the day they were written; they now do
 not. `COPY x C:\MTCP` works.
 
+**And `COPY` prompts `Overwrite … (Yes/No/All)?` on this machine.** Which
+matters more than it sounds, because **a DOS prompt waiting for a key
+consumes a typed command looking for a valid answer, and finds one inside an
+ordinary word** — the `Y` in `COPY` answered Yes, and the rest of the line
+queued against the next prompt. That is the failure this whole feature is
+built to avoid (one typed command, one arrival to wait for, no second command
+whose readiness nobody can establish), reproduced by hand at a prompt ten
+minutes after deploying the thing that avoids it. **If a keypress appears not
+to reach the target, look at the screen before concluding the keyboard is
+dead: something on it may be eating them.**
+
 **The return reboot was never witnessed, in either direction.** `wait_boot()`
 waits for Scroll Lock to READ 1, and RDYPULSE had already left it at 1 — so on
 the return leg it returned on its first poll and the log said *the machine
@@ -256,6 +318,15 @@ Named because a feature that works is the easiest thing to over-claim.
   mid-queue.
 - **`--paranoid` has not run on the hardware.** Both its outcomes are covered
   by the fake target, and neither has met a real transfer.
+- **NOTHING IN THE `--from` PATH HAS RUN ON THE HARDWARE**, and that includes
+  the whole of `vcctrl-collect`'s new default. The rig was powered down before
+  it was written. What has run is the suite, and the card is still carrying
+  the older `VCLIST.BAT`. **The first real use should be a `file-list --from
+  C:\DOSKUTSU\LOGS`, which reads and fetches nothing**, before anything is
+  asked to collect a sweep.
+- **`--already-net` has not run on the hardware either.** Its refusal path is
+  covered — a caller wrong about the profile gets `no-net` — but no real
+  session has skipped a reboot yet.
 - **No transfer with a viewer attached to the KVM.** The Pi's video stream and
   the target's transfer share the wifi, and this is the one place a viewer
   measurably costs the harness something.

@@ -3881,6 +3881,73 @@ def size_verdict(sizes):
 # screen through OCR and must survive `file<s)`; this reads a file. Importing
 # that tolerance here would buy nothing and would hide the one thing this is
 # actually checked for: a listing that arrived short.
+def dos_dir_path(path):
+    r"""A DOS directory a command may be built around -> canonical, or raise.
+
+    THIS EXISTS BECAUSE THE STRING IS TYPED AT THE TARGET. `out_dir` came from
+    config and was trusted; the moment a caller can name a directory -- the
+    harness fetching C:\DOSKUTSU\LOGS, a browser asking for anything -- it is
+    input, and it ends up inside `VCLIST.BAT %s` and `VCCHK.BAT %s\%s` on a
+    machine with no quoting whatsoever.
+
+    DOS HAS NO ESCAPE CHARACTER. The caret escapes nothing on 6.22 -- that is
+    an established fact about this rig, learned the expensive way -- so there
+    is no such thing as quoting a bad name safely. The only defence is a
+    whitelist, and this is it: a drive letter, a colon, and 8.3 components
+    made of characters DOS accepts. Anything else is refused rather than
+    repaired, because a path this had to alter is a path that will not name
+    what the caller meant.
+
+    A SPACE IS THE CASE THAT LOOKS INNOCENT AND IS NOT: FAT permits one and a
+    command line does not, so `DIR C:\MY DIR` lists C:\MY. Refused here.
+
+    Redirection characters are refused for the same reason but with a louder
+    consequence -- `> file` inside a typed command writes to the card.
+
+    Returns the path uppercased with no trailing separator. Raises ValueError
+    with a reason a person can act on.
+    """
+    raw = str(path or "").strip()
+    if not raw:
+        raise ValueError("no directory given")
+    if len(raw) > 64:
+        # DOS's own limit is 66 for a full path; well before that, a long
+        # command line is the thing the BIOS buffer truncates.
+        raise ValueError("%r is too long to type safely at this machine" % raw)
+    # NOT rstrip()ed BEFORE THE MATCH: "C:\\" would become "C:" and fail as
+    # "not an absolute path", which is a confusing thing to say about a path
+    # that is absolutely fine and merely names the root. The root gets its own
+    # refusal below, in its own words.
+    up = raw.upper().replace("/", "\\")
+    m = re.match(r"^([A-Z]):\\(.*)$", up)
+    if not m:
+        raise ValueError("%r is not an absolute DOS path like C:\\XFER\\OUT"
+                         % raw)
+    drive, rest = m.group(1), m.group(2).rstrip("\\")
+    parts = [p for p in rest.split("\\") if p != ""]
+    if not parts:
+        # THE ROOT IS REFUSED DELIBERATELY. Listing C:\ is a legitimate wish
+        # and this is not the tool for it: everything downstream fetches what
+        # it lists, and a fetch-everything against the root of the boot drive
+        # is not an operation anybody should reach by accident.
+        raise ValueError("refusing the root of drive %s: name a directory "
+                         "under it" % drive)
+    for part in parts:
+        if part in (".", ".."):
+            raise ValueError("%r contains a relative component" % raw)
+        base, dot, ext = part.partition(".")
+        if not base or len(base) > 8 or len(ext) > 3 or "." in ext:
+            raise ValueError("%r is not a DOS 8.3 directory name" % part)
+        if base.rstrip(".") in _DOS_DEVICES:
+            raise ValueError("%r is a DOS device name, not a directory" % part)
+        bad = set(part) & (_DOS_ILLEGAL | {"*", "?"})
+        if bad:
+            raise ValueError("%r contains %s, which cannot appear in a typed "
+                             "command on this machine"
+                             % (part, " ".join(sorted(repr(c) for c in bad))))
+    return "%s:\\%s" % (drive, "\\".join(parts))
+
+
 def dos_dir_listing(text):
     """DOS 6.22 `DIR` output -> what is in that directory, or why not.
 
@@ -4799,6 +4866,11 @@ class NetJob(object):
             nothing-asked a fetch that named nothing. It will not guess
                           between "everything" and "the listing", because both
                           readings cost a reboot
+            bad-dir       the directory asked for cannot be typed at this
+                          machine -- not an absolute DOS path, not 8.3, or it
+                          contains something a command line would eat. Refused
+                          rather than repaired: a path we had to alter is not
+                          the path the caller meant
             unsequenced   no registry to drive input through
             crashed       the job raised; the target is very likely still in
                           NET, which nothing downstream can otherwise tell
@@ -5000,17 +5072,40 @@ class PullJob(NetJob):
     LISTING_NAME = "VCLIST.TXT"
 
     def __init__(self, cap, driver, names=None, want_all=False,
-                 refresh_only=False, paranoid=False, do_return=True, log=None):
+                 refresh_only=False, paranoid=False, do_return=True, log=None,
+                 out_dir=None, already_net=False):
         NetJob.__init__(self, cap, driver, do_return=do_return, log=log)
         self.names = list(names or ())
         self.want_all = bool(want_all)
         self.refresh_only = bool(refresh_only)
         self.paranoid = bool(paranoid)
-        self.out_dir = cap._out_dir()
+        # VALIDATED BY THE CALLER, NOT HERE, and the caller is `_file_pull`.
+        # This constructor is also used directly by tests, so it accepts what
+        # it is given -- but every path a request can reach runs the string
+        # through dos_dir_path() first, because it is about to be typed at a
+        # machine with no quoting.
+        self.out_dir = out_dir or cap._out_dir()
+        self.already_net = bool(already_net)
 
     def run(self):
         """{"ok", "why", "files": [...], "listing": {...}, "log": [...]}."""
-        gate = self._enter_net()
+        if self.already_net:
+            # THE REBOOT IS SKIPPED. THE PROOF IS NOT. `--already-net` says
+            # where the caller believes the machine is, and a belief is not a
+            # reading -- so the arrival gate still runs, and it is the same
+            # gate: a file landing here proves the packet driver, the address,
+            # the credentials and the client, whether or not we rebooted to
+            # get them. A skipped reboot must not become a skipped check.
+            self._say("attest", "told the machine is already in NET; "
+                                "not rebooting, still proving it")
+            gate = self._prove_net()
+            if gate is True:
+                # PROVED, THEREFORE IN NET, and `in_net` has to say so or the
+                # return leg would reason from "we never rebooted in" and
+                # report a machine it left in NET as one that was never there.
+                self.in_net = True
+        else:
+            gate = self._enter_net()
         if gate is not True:
             return gate
 
@@ -5108,7 +5203,7 @@ class PullJob(NetJob):
         to that question cost this project a command truncated to fifteen
         characters, and there is still no honest way to ask it.
         """
-        self._say("list", "reading %s" % self.out_dir)
+        self._say("list", "reading %s" % self.out_dir, dir=self.out_dir)
         before = time.time()
         self.d.type_line("C:\\MTCP\\VCLIST.BAT %s" % self.out_dir)
         if not self.cap._await_incoming(self.LISTING_NAME, before,
@@ -5439,13 +5534,21 @@ REM directory has to reach it as bytes or not at all.
 REM Requires the NET boot profile. C:\\MTCP is NOT on the PATH there, so this
 REM uses full paths throughout.
 SET VLD=%1
-IF "%VLD%"=="" SET VLD=@@DESTOUT@@
+IF NOT "%VLD%"=="" GOTO LIST
+SET VLD=@@DESTOUT@@
 REM MD ON 6.22 WILL NOT CREATE A NESTED PATH IN ONE GO, so the parent comes
-REM first. Creating the directory rather than reporting File not found is
-REM deliberate: an empty directory is an answer, and a missing one is a
+REM first. Creating the DEFAULT directory rather than reporting File not found
+REM is deliberate: an empty directory is an answer, and a missing one is a
 REM question.
 IF NOT EXIST @@DESTPARENT@@\\NUL MD @@DESTPARENT@@
 IF NOT EXIST %VLD%\\NUL MD %VLD%
+:LIST
+REM A DIRECTORY NAMED BY THE CALLER IS NEVER CREATED, and that asymmetry is
+REM the point. MD-ing it would turn a mistyped path into an EMPTY LISTING --
+REM which reads as "that directory has nothing in it" when the truth is "that
+REM directory does not exist". One of those is an answer and the other is a
+REM question, and a tool that cannot tell them apart will confidently report
+REM the wrong one.
 REM WRITTEN TO THE PARENT, NOT INTO THE DIRECTORY BEING LISTED. A listing
 REM that lands inside its own subject appears in the NEXT one, as a file the
 REM operator never put there and might well try to fetch.
@@ -5517,6 +5620,12 @@ SET VLD=
                     "  answers `COPY x C:\\MTCP\\` with Invalid directory,",
                     "  and these lines carried one until it was typed at the",
                     "  real machine on 2026-08-24:",
+                    "AND COPY PROMPTS `Overwrite ... (Yes/No/All)?` HERE when",
+                    "  the destination exists, which it will for VCGET and",
+                    "  VCCHK if you are replacing them. Answer A. Do NOT type",
+                    "  the next command into that prompt -- it consumes a",
+                    "  typed line looking for a valid answer and finds one",
+                    "  inside an ordinary word (the Y in COPY answers Yes).",
                     "  COPY C:\\DOSKUTSU\\VCGET.BAT C:\\MTCP",
                     "  COPY C:\\DOSKUTSU\\VCCHK.BAT C:\\MTCP",
                     "  COPY C:\\DOSKUTSU\\VCLIST.BAT C:\\MTCP",
@@ -5621,6 +5730,16 @@ SET VLD=
             names = [str(n) for n in (req.get("names") or []) if str(n).strip()]
             want_all = bool(req.get("all"))
             refresh = bool(req.get("refresh"))
+            # VALIDATED HERE, BEFORE THE JOB EXISTS, because this string is
+            # typed at a machine with no quoting and the caller may be a
+            # browser. dos_dir_path is a whitelist, not a filter -- see its
+            # docstring for why a filter cannot work when the caret escapes
+            # nothing.
+            try:
+                where = (dos_dir_path(req.get("dir")) if req.get("dir")
+                         else self._out_dir())
+            except ValueError as exc:
+                return {"ok": False, "why": "bad-dir", "error": str(exc)}
             if not (names or want_all or refresh):
                 return {"ok": False, "why": "nothing-asked",
                         "error": ("say what to fetch: `names`, `all`, or "
@@ -5629,16 +5748,18 @@ SET VLD=
                                   "which of those you meant")}
             job = {"kind": "pull", "running": True, "started_at": time.time(),
                    "log": [], "files": [], "ok": None, "why": None,
-                   "reason": None, "out_dir": self._out_dir(),
+                   "reason": None, "out_dir": where,
                    "names": names, "all": want_all, "refresh": refresh,
                    "paranoid": bool(req.get("paranoid")),
+                   "already_net": bool(req.get("already_net")),
                    "return": bool(req.get("return", True))}
             FilesCapability._job = job
 
         def run():
             drv = RegistryDriver(self.registry, pace=req.get("pace"))
             pj = PullJob(self, drv, names=names, want_all=want_all,
-                         refresh_only=refresh,
+                         refresh_only=refresh, out_dir=where,
+                         already_net=job["already_net"],
                          paranoid=job["paranoid"], do_return=job["return"],
                          log=job["log"])
             try:
@@ -6441,7 +6562,34 @@ SET VLD=
         except Exception:
             return None
 
-    def _save_listing(self, listing):
+    def _listing_store(self):
+        """The whole store: {"listings": {DIR: ...}, "attempts": {DIR: ...}}.
+
+        KEYED BY DIRECTORY BECAUSE THERE IS MORE THAN ONE NOW. The harness
+        reads C:\\DOSKUTSU\\LOGS and the KVM picker reads C:\\XFER\\OUT; with a
+        single slot, whichever ran last would answer for both -- and the
+        picker would show a list of log files under a heading naming the
+        transfer directory. A reading belongs to the thing it is a reading OF.
+
+        MIGRATES THE OLD SHAPE RATHER THAN DISCARDING IT. There is a live
+        store on the rig written by the single-slot version; dropping it would
+        silently turn a real reading into "never read", which is the one
+        answer this whole area is careful to keep distinct.
+        """
+        raw = self._listing_raw() or {}
+        if "listings" in raw or "attempts" in raw:
+            return {"listings": raw.get("listings") or {},
+                    "attempts": raw.get("attempts") or {}}
+        out = {"listings": {}, "attempts": {}}
+        old_listing, old_attempt = raw.get("listing"), raw.get("attempt")
+        for rec, key in ((old_listing, "listings"), (old_attempt, "attempts")):
+            if not rec:
+                continue
+            where = (old_listing or {}).get("dir") or self._out_dir()
+            out[key][where] = rec
+        return out
+
+    def _save_listing(self, listing, where=None):
         """Keep the last READABLE listing and the last ATTEMPT, separately.
 
         STALE CLOSES THE QUESTION, AND SO DOES OVERWRITING. A read that came
@@ -6460,18 +6608,18 @@ SET VLD=
             self._ensure_pulled()
         except RuntimeError:
             return
-        cur = self._listing_raw() or {}
-        rec = {"listing": cur.get("listing"),
-               "attempt": {"at": listing.get("read_at") or time.time(),
-                           "ok": bool(listing.get("ok")),
-                           "why": listing.get("why"),
-                           "reason": listing.get("reason"),
-                           "raw": listing.get("raw")}}
+        where = where or listing.get("dir") or self._out_dir()
+        store = self._listing_store()
+        store["attempts"][where] = {"at": listing.get("read_at") or time.time(),
+                                    "ok": bool(listing.get("ok")),
+                                    "why": listing.get("why"),
+                                    "reason": listing.get("reason"),
+                                    "raw": listing.get("raw")}
         if listing.get("ok"):
-            rec["listing"] = listing
+            store["listings"][where] = listing
         try:
             with open(self._listing_file(), "w") as f:
-                json.dump(rec, f)
+                json.dump(store, f)
         except OSError:
             pass
 
@@ -6489,10 +6637,17 @@ SET VLD=
         fact and the judgement is the operator's, rather than a boolean with a
         constant behind it that nothing measured.
         """
-        rec = self._listing_raw() or {}
-        listing, attempt = rec.get("listing"), rec.get("attempt")
-        out = {"ok": True, "out_dir": self._out_dir(), "listing": listing,
-               "attempt": attempt, "age_s": None, "note": None}
+        store = self._listing_store()
+        try:
+            where = (dos_dir_path(req.get("dir")) if req.get("dir")
+                     else self._out_dir())
+        except ValueError as exc:
+            return {"ok": False, "why": "bad-dir", "error": str(exc)}
+        listing = store["listings"].get(where)
+        attempt = store["attempts"].get(where)
+        out = {"ok": True, "out_dir": where, "listing": listing,
+               "attempt": attempt, "age_s": None, "note": None,
+               "known": sorted(store["listings"])}
         if listing:
             out["age_s"] = round(time.time() - (listing.get("read_at") or 0), 1)
             out["files"] = listing.get("files") or []
@@ -6501,8 +6656,7 @@ SET VLD=
             out["files"], out["count"] = [], 0
             out["note"] = ("nothing has read %s yet. `vcctrl file-refresh` "
                            "reboots the target into NET and reads it -- an "
-                           "unread directory is not an empty one"
-                           % self._out_dir())
+                           "unread directory is not an empty one" % where)
         if attempt and not attempt.get("ok"):
             out["attempt_note"] = ("the most recent read failed (%s): %s"
                                    % (attempt.get("why"),
