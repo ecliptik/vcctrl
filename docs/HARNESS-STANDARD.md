@@ -861,6 +861,18 @@ reported absence for a variable that was set.
 - Any case-sensitive matcher driven through a synthetic input path MUST be
   made case-insensitive, or the case MUST be asserted before use.
 
+**A related failure in the same subsystem: a state field that was never a
+reading at all.** The same harness reported the lock key as SET while the
+target's was clear -- not a stale reading, not a mutation, but the
+controller's own virtual-keyboard default, which no transition had ever
+overwritten. **The tell was in the same payload**: a transition count of
+zero and a null timestamp beside the value. Where a state field is
+maintained by observing changes, publish the change count and the time of
+the last one next to it, and **treat a value with zero observed
+transitions as UNKNOWN rather than as its initial value.** This is 7.2.2f
+in its strongest form -- not a reading from the wrong epoch, but one that
+belongs to no epoch.
+
 **The general form: a probe that writes is part of the system under test.**
 Look for this wherever readiness is established by doing something rather
 than by reading something.
