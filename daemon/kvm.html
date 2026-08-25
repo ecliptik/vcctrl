@@ -2263,7 +2263,6 @@
     </div>
     <span id="mdb">—</span>
   </div>
-  <div class="hint" id="audioid" style="margin:0 0 7px">—</div>
   <div id="volrow">
     <button id="sbtn" class="ibtn" title="Turn the sound on">🔇</button>
     <button id="voldn" title="Volume down 5%">−</button>
@@ -4742,6 +4741,10 @@ function closePop() {
   openPopName = null;
   if ($('settings').hidden) $('setback').hidden = true;
 }
+// #scrub's own gap off the strip (see its CSS: left/right/bottom:10px).
+// Popups anchored here use the same number so Capture does not read as
+// farther from the bar than Sound and Power are.
+const POP_GAP = 10;
 function openPop(name) {
   if (openPopName === name) { closePop(); return; }
   closePop();
@@ -4783,14 +4786,14 @@ function openPop(name) {
     // The anchor is not on screen -- on a phone the power chip is hidden and
     // the tab bar opens this instead. Anchored to a zero-size rect it would
     // land in the top-left corner, over the picture, pointing at nothing.
-    el.style.left = Math.max(8, (window.innerWidth - w) / 2) + 'px';
+    el.style.left = Math.max(POP_GAP, (window.innerWidth - w) / 2) + 'px';
     el.style.top = '';
     el.style.bottom = 'calc(58px + env(safe-area-inset-bottom, 0px))';
     setCaret(name, true);
     return;
   }
   el.style.bottom = '';
-  const left = Math.max(8, Math.min(window.innerWidth - w - 8,
+  const left = Math.max(POP_GAP, Math.min(window.innerWidth - w - POP_GAP,
                                     a.left + a.width / 2 - w / 2));
   el.style.left = left + 'px';
   // Below the anchor, unless there is no room below it -- these controls sit
@@ -4802,11 +4805,16 @@ function openPop(name) {
   // overlap, which is small but is the same rule the settings drawer and the
   // mobile sheet both had to be taught: an overlay must never cover the
   // control that opens it.
+  //
+  // THE SAME GAP #scrub USES. It floated 10px off the strip while this used
+  // 6 and 8, so the capture panel sat visibly farther from the bar than
+  // Sound and Power did -- three numbers naming what is supposed to be one
+  // distance. POP_GAP is #scrub's own 10px, not a new one invented here.
   const h = el.offsetHeight;
   const bar = anchor.closest('header, #cmdbar');
   const br = bar ? bar.getBoundingClientRect() : a;
-  el.style.top = (br.bottom + 6 + h > window.innerHeight - 8
-                  ? Math.max(8, br.top - h - 6) : br.bottom + 6) + 'px';
+  el.style.top = (br.bottom + POP_GAP + h > window.innerHeight - POP_GAP
+                  ? Math.max(POP_GAP, br.top - h - POP_GAP) : br.bottom + POP_GAP) + 'px';
   setCaret(name, true);        // after placing it: the caret follows the menu
 }
 
@@ -6029,19 +6037,8 @@ function showPower(p) {
     on === true ? 'Mains at ' + who + ' is ON' + when
     : on === false ? 'Mains at ' + who + ' is OFF' + when
     : 'Cannot tell: ' + (powerNow.reason || 'the plug is not answering'));
-  const bits = [];
-  if (powerNow.alias) bits.push('"' + powerNow.alias + '"');
-  if (powerNow.model) bits.push(powerNow.model);
-  if (powerNow.host) bits.push(powerNow.host);
-  // Aged, never presented as instantaneous: it is a cache, and saying so is
-  // the difference between a reading and a claim.
-  const age = powerNow.stale ? 'not answering'
-            : powerNow.age_s != null ? 'read ' + fmtAge(powerNow.age_s) + ' ago'
-            : null;
   $('plugid').textContent =
-    (bits.join(' · ') || 'plug identity unknown')
-    + (age ? ' · ' + age : '')
-    + (powerNow.reason ? ' · ' + powerNow.reason : '');
+    powerNow.alias ? '"' + powerNow.alias + '"' : 'plug identity unknown';
 }
 // Everything in the rig table comes from the daemon, and some of it comes
 // from ffmpeg and from a device's own name string. Neither is a place to
@@ -6524,11 +6521,6 @@ function showAudioDevice(a) {
         + ', the speaker button controls whether this browser plays it'
       : t ? t[0] + ', ' + t[1]
       : 'Audio ' + (a.state || 'unknown'));
-  const line = a.state === 'capturing'
-    ? (a.device || 'audio') + ' · capturing'
-    : t ? (a.device || 'audio') + ', ' + t[1]
-    : (a.device || 'audio') + ', ' + (a.state || 'unknown');
-  $('audioid').textContent = line;
   // Controls that cannot do anything should not look as though they can. The
   // daemon does not yet distinguish "no audio on this board" from "the audio
   // device is broken", so this says neither -- only that nothing is arriving.

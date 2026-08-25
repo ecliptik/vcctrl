@@ -1355,10 +1355,12 @@ HARNESS = r"""
     const b = word();
     showPower({alias: 'retro-rig-plug', on: null, age_s: 212, stale: true,
                reason: 'EHOSTUNREACH'});
-    const c = word(), plug = document.getElementById('plugid').textContent
-                              + ' ' + document.getElementById('lamp-pwr').title;
+    const c = word(),
+          plugName = document.getElementById('plugid').textContent,
+          lampTitle = document.getElementById('lamp-pwr').title;
     emit(`power3 ${a === 'on' && b === 'off' && c === 'unknown' ? 1 : 0} ` +
-             `${plug.includes('retro-rig-plug') && plug.includes('not answering') ? 1 : 0}`);
+             `${plugName === '"retro-rig-plug"' && !plugName.includes('not answering')
+               && lampTitle.includes('EHOSTUNREACH') ? 1 : 0}`);
 
     // The board left the rail but must still reach the power confirmation,
     // which names the board fitted beside the plug it is about to switch.
@@ -1960,7 +1962,7 @@ def test_zoom_layout_in_a_browser():
 
     check("power reads on / off / unknown, not on / off",
           got["power3"][0] == 1.0, got["power3"])
-    check("control: the plug names itself and says when it stopped answering",
+    check("control: the popup shows only the plug's name, the lamp keeps the reason",
           got["power3"][1] == 1.0, got["power3"])
     check("the board still reaches the power confirmation",
           got["board2"][0] == 1.0, got["board2"])
