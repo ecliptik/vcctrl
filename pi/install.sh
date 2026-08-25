@@ -6,6 +6,132 @@ set -euo pipefail
 PREFIX=/opt/vcctrl
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# ---------------------------------------------------------------------------
+# THE MCP SERVER -- a function, not inline, so `--mcp-only` (below, and
+# pi/deploy.sh --mcp) can install/restart it WITHOUT touching vcctrld at all.
+# vcctrld is the thing this whole file exists to keep running; the MCP
+# server is additive and unrelated, and forcing a vcctrld restart to ship an
+# unrelated change is exactly the "safe path not available, so the unsafe
+# path gets used out of impatience" failure pi/deploy.sh's --page and
+# --client modes already exist to avoid for the page and the client.
+#
+# FAULT-ISOLATED FROM vcctrld regardless of which caller runs it: every
+# fallible step is wrapped in its own `if`/`|| true` rather than trusted to
+# this script's top-level `set -e`, because a full install still calls this
+# AFTER vcctrld is already up, and a failure here must not undo that.
+#
+# Runs as a SEPARATE service from vcctrld, deliberately -- see the module
+# docstring in agent/vcctrl_mcp.py for why (asyncio/uvicorn vs vcctrld's
+# plain threading, and blast radius: a bug here must not be able to take
+# down the process that owns the uinput devices and the input lock).
+install_mcp() {
+  if [ ! -f "$SRC/agent/vcctrl_mcp.py" ]; then
+    echo "vcctrl-mcp: agent/vcctrl_mcp.py not in this checkout, skipping" >&2
+    return 0
+  fi
+  sudo mkdir -p "$PREFIX/agent"
+  sudo install -m 0755 "$SRC/agent/vcctrl_mcp.py" "$PREFIX/agent/vcctrl_mcp.py"
+  sudo install -m 0644 "$SRC/agent/requirements.txt" "$PREFIX/agent/requirements.txt"
+
+  mcp_ready=0
+  if [ -x "$PREFIX/agent/.venv/bin/python3" ] || \
+     sudo python3 -m venv "$PREFIX/agent/.venv" 2>/tmp/vcctrl-mcp-venv.err; then
+    if sudo "$PREFIX/agent/.venv/bin/pip" install --quiet \
+         -r "$PREFIX/agent/requirements.txt" 2>/tmp/vcctrl-mcp-pip.err; then
+      mcp_ready=1
+    else
+      echo "vcctrl-mcp: pip install failed, service not (re)installed:" >&2
+      cat /tmp/vcctrl-mcp-pip.err >&2
+    fi
+  else
+    # Seen on a fresh Debian/Ubuntu Pi image: ensurepip missing until
+    # python3-venv (or the version-suffixed package it names) is installed.
+    # A rig that has not run that apt command yet still gets a working
+    # vcctrld from everything else in this script -- this step degrades, it
+    # does not fail the deploy.
+    echo "vcctrl-mcp: could not create a venv, service not (re)installed:" >&2
+    cat /tmp/vcctrl-mcp-venv.err >&2
+    echo "  try: sudo apt install python3-venv (or the version-suffixed" >&2
+    echo "  package it names), then re-run this script." >&2
+  fi
+
+  if [ "$mcp_ready" = "1" ]; then
+    # QUERIED BEFORE THE UNIT IS WRITTEN, so VCCTRL_MCP_ALLOWED_HOSTS can be
+    # set correctly on first install rather than needing a second run.
+    # Without this, the mcp package's own DNS-rebinding protection (which
+    # agent/vcctrl_mcp.py always enables explicitly -- see its module
+    # docstring) refuses every request that arrives via the tailscale proxy:
+    # measured, HTTP 421 "Invalid Host header", because the Host header the
+    # proxy forwards is the tailnet hostname, not 127.0.0.1:8090.
+    MCP_TS_NAME=""
+    if command -v tailscale >/dev/null 2>&1; then
+      MCP_TS_NAME="$(tailscale status --json 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+    fi
+
+    # UNQUOTED heredoc delimiter -- deliberately, so $MCP_TS_NAME expands.
+    # Every other line here is a literal systemd directive with no `$` in
+    # it, so this is safe; if a future edit adds one, it will need escaping.
+    sudo tee /etc/systemd/system/vcctrl-mcp.service >/dev/null <<UNIT
+[Unit]
+Description=vcctrl MCP server (Pi-hosted, streamable-http)
+# Talks to /usr/local/bin/vcctrl, which talks to vcctrld's socket -- start
+# after, though it degrades to per-call connection errors rather than
+# failing outright if vcctrld is not up yet or restarts later.
+After=vcctrld.service
+Wants=vcctrld.service
+
+[Service]
+Type=simple
+ExecStart=/opt/vcctrl/agent/.venv/bin/python3 /opt/vcctrl/agent/vcctrl_mcp.py
+Environment=VCCTRL_MCP_ROLE=pi
+Environment=VCCTRL_MCP_TRANSPORT=streamable-http
+Environment=VCCTRL_MCP_HOST=127.0.0.1
+Environment=VCCTRL_MCP_PORT=8090
+Environment=VCCTRL_MCP_ALLOWED_HOSTS=${MCP_TS_NAME},${MCP_TS_NAME}:443
+Restart=always
+RestartSec=2
+# Does not need uinput or any device access -- it only ever shells out to
+# /usr/local/bin/vcctrl, the same as any other local caller. Unprivileged on
+# purpose, unlike vcctrld. The \`pi\` user (usb4vc.service's own user, see
+# /home/pi/usb4vc/rpi_app above) rather than \`nobody\`, which on some images
+# has no home directory and can trip up a venv's own assumptions.
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo systemctl daemon-reload
+    sudo systemctl enable vcctrl-mcp
+    sudo systemctl restart vcctrl-mcp
+    sleep 1
+    sudo systemctl --no-pager --lines=10 status vcctrl-mcp || true
+
+    # Same tailnet-only HTTPS boundary as the daemon's own web UI (below,
+    # main install flow) -- a DIFFERENT PATH on the SAME hostname/port, not a
+    # new port exposed on its own. `--set-path` is additive: re-running
+    # neither of the two `tailscale serve --https=443` calls in this file
+    # disturbs the other's path, the same "idempotent, re-running only
+    # re-asserts" property the daemon's own mapping already relies on.
+    # NOT fatal if it fails -- the service is still reachable at
+    # 127.0.0.1:8090 on the Pi itself either way, which is what
+    # --mcp-only needs to be useful even before tailscale is set up.
+    if [ -n "$MCP_TS_NAME" ]; then
+      if sudo tailscale serve --bg --https=443 --set-path=/mcp \
+           "http://127.0.0.1:8090/mcp" >/dev/null 2>&1; then
+        echo "https://${MCP_TS_NAME}/mcp  -> vcctrl-mcp (streamable-http)"
+      else
+        echo "note: could not add the /mcp tailscale serve path -- vcctrl-mcp is still reachable at 127.0.0.1:8090 on the Pi itself"
+      fi
+    fi
+  fi
+}
+
+if [ "${1:-}" = "--mcp-only" ]; then
+  install_mcp
+  exit 0
+fi
+
 sudo mkdir -p "$PREFIX"
 sudo install -m 0755 "$SRC/daemon/vcctrld.py"    "$PREFIX/vcctrld.py"
 sudo install -m 0644 "$SRC/daemon/vcweb.py"      "$PREFIX/vcweb.py"
@@ -417,3 +543,7 @@ sudo systemctl enable vcctrld
 sudo systemctl restart vcctrld
 sleep 3
 sudo systemctl --no-pager --lines=15 status vcctrld || true
+
+# Same function --mcp-only uses above, run here so a full install also
+# picks up the MCP server without a second code path to keep in sync.
+install_mcp

@@ -1,33 +1,65 @@
 #!/usr/bin/env python3
-"""vcctrl_mcp -- MCP server for vcctrl. Runs on the control host (the VM),
-stdio transport, one tool per CLI verb. See internal/MCP-PLAN.md for the
-design this implements -- Phases 1-5, PC/DOS only for now (Mac Plus testing
-is deferred; see the note on JOBS and on `vcctrl_power` below).
+"""vcctrl_mcp -- MCP server for vcctrl. One tool per CLI verb. See
+internal/MCP-PLAN.md for the design this implements -- Phases 1-5, PC/DOS
+only for now (Mac Plus testing is deferred; see the note on JOBS and on
+`vcctrl_power` below).
 
-WHY IT SHELLS OUT TO bin/vcctrl RATHER THAN SPEAKING vcctrld'S SOCKET
-DIRECTLY: bin/vcctrl already carries two hard-won fixes -- SSH
-ControlMaster/ControlPersist (without it, a fresh ssh per call saturated
-journald on the Pi 3 and took it off the network for 30 minutes, 2026-08-19),
-and the --out/--out-dir host-boundary rewrite (a local path is meaningless on
-the far side of an ssh call, and the dangerous failure is the one that
-returns 0). Reimplementing vcctrld's JSON socket protocol here would be a
-second place either bug could reappear differently. See MCP-PLAN.md sec. 2.
+TWO DEPLOYMENT MODES, same file, chosen by VCCTRL_MCP_ROLE:
 
-THE HARNESS TOOLS (Phase 5) ARE DIFFERENT: `harness/vcctrl-cell`,
-`-sweep` and `-collect` run ON THE VM already (see each script's own
-docstring) -- they are not vcctrld commands, they ARE the thing that calls
-bin/vcctrl repeatedly to orchestrate a whole cell or sweep. They are invoked
-directly as local subprocesses, not through bin/vcctrl, and because they
-block for their real duration (a sweep is 12-23 minutes per
-profiles/doskutsu.yaml), they run through the JOB MANAGER below rather than
-_run_vcctrl -- launch, get a job_id back immediately, poll
-vcctrl_job_status(). File-transfer commands (Phase 4) needed no such thing:
-`send-file`/`get-file`/`file-refresh` already "return at once" from the
-DAEMON's own job model (TransferJob/PullJob) -- the CLI call itself is fast,
-only the underlying transfer is slow, and `file-status` polls the daemon's
-existing tracking. Confirmed by reading daemon/vcctrld.py: neither job class
-calls `self.devs.key`/`type_text`/`combo`, which is also why file transfer
-is not in GATED_COMMANDS -- it never touches the input lock at all.
+  vm (default) -- runs on the control host, stdio transport, shells out to
+    bin/vcctrl (which SSHes to the Pi). This is the original shape and needs
+    no environment variables set at all.
+
+  pi -- runs ON THE DAEMON HOST itself, alongside (NOT inside) vcctrld, as
+    its own systemd service. Talks to /usr/local/bin/vcctrl directly -- no
+    SSH hop, so bin/vcctrl's ControlMaster and --out host-boundary fixes
+    (see below) are simply not needed here; there is no host boundary to
+    cross. Serves MCP over streamable-http instead of stdio, so it can be
+    reached over the network (see docs/MCP-SERVER.md for why this gives up
+    stdio's "no listener at all" security property, and what replaces it).
+
+    DELIBERATELY A SEPARATE PROCESS FROM vcctrld, not built into it. Two
+    reasons, decided 2026-08-25: vcctrld is threading-based (plain
+    http.server for its own web UI, daemon/vcweb.py); the `mcp` package's
+    HTTP transport is Starlette+uvicorn, a genuinely different (asyncio)
+    runtime model, not just an extra route. And a bug in the MCP-serving
+    code must not be able to take down the process that owns the uinput
+    devices and the input lock -- today a crashed MCP layer means "the
+    tools stop working"; built into vcctrld it would mean "input control
+    stops working," a much bigger blast radius. The Pi is a Pi 5 now (4GB
+    RAM, docs/PI5-MIGRATION.md) -- the old Pi-3 memory-pressure concern
+    that shaped a lot of this project's caution does not apply to the
+    dependency footprint; the coupling/stability risk is the real reason.
+
+    THE HARNESS TOOLS (Phase 5) ARE EXCLUDED IN THIS MODE. `harness/
+    vcctrl-cell`, `-sweep` and `-collect` are VM-side orchestration
+    scripts -- bin/vcctrl_common.py's vc()/vc_json() always resolve to the
+    bin/vcctrl SSH-wrapper sitting next to them (VCCTRL = os.path.join(HERE,
+    "vcctrl")), so running them on the Pi would mean either SSHing to
+    itself (fragile, nothing this project does elsewhere) or a separate fix
+    to that resolution -- not done. Phases 1-4 (status, capture, input,
+    power, file transfer) are genuine vcctrld capabilities and port over
+    with no code changes beyond the binary path and the transport.
+
+WHY IT SHELLS OUT TO vcctrl RATHER THAN SPEAKING vcctrld'S SOCKET DIRECTLY
+(true in both modes): in vm mode, bin/vcctrl carries two hard-won fixes --
+SSH ControlMaster/ControlPersist (without it, a fresh ssh per call
+saturated journald on the Pi 3 and took it off the network for 30 minutes,
+2026-08-19), and the --out/--out-dir host-boundary rewrite (a local path is
+meaningless on the far side of an ssh call, and the dangerous failure is
+the one that returns 0). In pi mode there is no SSH hop, but /usr/local/bin/
+vcctrl is still the same tested CLI with the same two-valued exit-code
+contracts -- reimplementing vcctrld's JSON socket protocol here would still
+be a second place those contracts could disagree with themselves. See
+MCP-PLAN.md sec. 2.
+
+File-transfer commands (Phase 4) need no job-manager machinery in either
+mode: `send-file`/`get-file`/`file-refresh` already "return at once" from
+the DAEMON's own job model (TransferJob/PullJob) -- the CLI call itself is
+fast, only the underlying transfer is slow, and `file-status` polls the
+daemon's existing tracking. Confirmed by reading daemon/vcctrld.py: neither
+job class calls `self.devs.key`/`type_text`/`combo`, which is also why file
+transfer is not in GATED_COMMANDS -- it never touches the input lock at all.
 
 WHAT IS DELIBERATELY NOT HERE:
   - `lock break`. Force-taking a lock a human or peer holds is exactly the
@@ -59,9 +91,23 @@ from mcp.server.mcpserver import MCPServer
 
 # ---------------------------------------------------------------- transport
 
+ROLE = os.environ.get("VCCTRL_MCP_ROLE", "vm")
+if ROLE not in ("vm", "pi"):
+    raise SystemExit("VCCTRL_MCP_ROLE must be 'vm' or 'pi', got %r" % ROLE)
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VCCTRL_BIN = os.path.join(REPO_ROOT, "bin", "vcctrl")
-HARNESS_DIR = os.path.join(REPO_ROOT, "harness")
+
+# vm mode: bin/vcctrl next to this checkout, which SSHes to the daemon host.
+# pi mode: /usr/local/bin/vcctrl, the same vcctrl-client pi/install.sh
+# already places there -- called directly, no SSH, no host boundary.
+# VCCTRL_MCP_BIN overrides either default explicitly, for a nonstandard
+# install layout.
+_DEFAULT_BIN = ({"vm": os.path.join(REPO_ROOT, "bin", "vcctrl"),
+                 "pi": "/usr/local/bin/vcctrl"})[ROLE]
+VCCTRL_BIN = os.environ.get("VCCTRL_MCP_BIN", _DEFAULT_BIN)
+
+# Harness workflows (Phase 5) are VM-only -- see the module docstring.
+HARNESS_DIR = os.path.join(REPO_ROOT, "harness") if ROLE == "vm" else None
 
 # One MCP server process is one Arbiter identity. Two concurrent tool calls
 # from the same Claude Code session are "the same owner" as far as the lock
@@ -1000,129 +1046,140 @@ def vcctrl_preflight(no_input: bool = False) -> dict:
     return _gated_run(["preflight"], timeout=30.0)
 
 
-@mcp.tool()
-def vcctrl_sweep_list() -> dict:
-    """Every sweep name this rig's profile knows, with its cell count and
-    timeout -- from profiles/doskutsu.yaml. Safe, fast, no hardware
-    touched."""
-    proc = subprocess.run(
-        [os.path.join(HARNESS_DIR, "vcctrl-sweep"), "--list"],
-        capture_output=True, text=True, timeout=30.0)
-    return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
-            "output": proc.stdout.strip()}
+# VM-ONLY: harness/vcctrl-cell, -sweep, -collect are VM-side orchestration
+# scripts (see the module docstring) -- there is nothing correct for them to
+# do in pi mode, so they are not registered as tools there at all, rather
+# than registered and left to fail on every call.
+if ROLE == "vm":
+    @mcp.tool()
+    def vcctrl_sweep_list() -> dict:
+        """Every sweep name this rig's profile knows, with its cell count and
+        timeout -- from profiles/doskutsu.yaml. Safe, fast, no hardware
+        touched."""
+        proc = subprocess.run(
+            [os.path.join(HARNESS_DIR, "vcctrl-sweep"), "--list"],
+            capture_output=True, text=True, timeout=30.0)
+        return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
+                "output": proc.stdout.strip()}
 
+    @mcp.tool()
+    def vcctrl_run_cell(tag: str, card: str,
+                        set_vars: "list[str] | None" = None,
+                        forbid: "list[str] | None" = None,
+                        expect_log: "list[str] | None" = None,
+                        ticks: "int | None" = None, cfg: "str | None" = None,
+                        shot_at: "int | None" = None,
+                        hw: "str | None" = None,
+                        confirm: "str | None" = None) -> dict:
+        """Run ONE doskutsu cell by hand -- the diagnostic single-cell shape,
+        not a sweep. Launched detached; poll with vcctrl_job_status(job_id).
 
-@mcp.tool()
-def vcctrl_run_cell(tag: str, card: str, set_vars: "list[str] | None" = None,
-                    forbid: "list[str] | None" = None,
-                    expect_log: "list[str] | None" = None,
-                    ticks: "int | None" = None, cfg: "str | None" = None,
-                    shot_at: "int | None" = None, hw: "str | None" = None,
-                    confirm: "str | None" = None) -> dict:
-    """Run ONE doskutsu cell by hand -- the diagnostic single-cell shape,
-    not a sweep. Launched detached; poll with vcctrl_job_status(job_id).
+        tag: the cell's identifier. card: mach64|virge|cirrus. set_vars: list
+        of "VAR=VAL" strings, set BEFORE launch. forbid: variable names that
+        must NOT be set, verified positively (a count of 0 read back, not
+        absence). expect_log: strings the ENGINE's own log must contain --
+        the guard that survives a lever nobody enumerated (see the script's
+        own docstring point 4 in the source for why this exists). hw: what is
+        PHYSICALLY FITTED right now, if different from the standing
+        configuration.
 
-    tag: the cell's identifier. card: mach64|virge|cirrus. set_vars: list
-    of "VAR=VAL" strings, set BEFORE launch. forbid: variable names that
-    must NOT be set, verified positively (a count of 0 read back, not
-    absence). expect_log: strings the ENGINE's own log must contain --
-    the guard that survives a lever nobody enumerated (see the script's own
-    docstring point 4 in the source for why this exists). hw: what is
-    PHYSICALLY FITTED right now, if different from the standing
-    configuration.
+        Types at the target and typically power-cycles it, so this requires
+        confirm="run"."""
+        if confirm != "run":
+            return {"ok": False,
+                    "error": ('drives the target -- pass confirm="run" to '
+                              'launch')}
+        argv = [os.path.join(HARNESS_DIR, "vcctrl-cell"), tag, "--card", card]
+        for v in (set_vars or []):
+            argv += ["--set", v]
+        for v in (forbid or []):
+            argv += ["--forbid", v]
+        for v in (expect_log or []):
+            argv += ["--expect-log", v]
+        if ticks is not None:
+            argv += ["--ticks", str(ticks)]
+        if cfg is not None:
+            argv += ["--cfg", cfg]
+        if shot_at is not None:
+            argv += ["--shot-at", str(shot_at)]
+        if hw is not None:
+            argv += ["--hw", hw]
+        job_id = JOBS.launch(argv, cwd=REPO_ROOT)
+        return {"ok": True, "job_id": job_id, "argv": argv}
 
-    Types at the target and typically power-cycles it, so this requires
-    confirm="run"."""
-    if confirm != "run":
-        return {"ok": False,
-                "error": 'drives the target -- pass confirm="run" to launch'}
-    argv = [os.path.join(HARNESS_DIR, "vcctrl-cell"), tag, "--card", card]
-    for v in (set_vars or []):
-        argv += ["--set", v]
-    for v in (forbid or []):
-        argv += ["--forbid", v]
-    for v in (expect_log or []):
-        argv += ["--expect-log", v]
-    if ticks is not None:
-        argv += ["--ticks", str(ticks)]
-    if cfg is not None:
-        argv += ["--cfg", cfg]
-    if shot_at is not None:
-        argv += ["--shot-at", str(shot_at)]
-    if hw is not None:
-        argv += ["--hw", hw]
-    job_id = JOBS.launch(argv, cwd=REPO_ROOT)
-    return {"ok": True, "job_id": job_id, "argv": argv}
+    @mcp.tool()
+    def vcctrl_run_sweep(sweep: str, machine_digit: str,
+                         dry_run: bool = False,
+                         no_power_recovery: bool = False,
+                         collect: bool = False, power_on: bool = False,
+                         confirm: "str | None" = None) -> dict:
+        """Run a full unattended QA sweep -- 12 to 23 minutes per
+        profiles/doskutsu.yaml, one of the sweep names from
+        vcctrl_sweep_list. Launched detached; poll with
+        vcctrl_job_status(job_id). Ties up the rig for its full duration, so
+        this requires confirm="run".
 
-
-@mcp.tool()
-def vcctrl_run_sweep(sweep: str, machine_digit: str, dry_run: bool = False,
-                     no_power_recovery: bool = False, collect: bool = False,
-                     power_on: bool = False,
-                     confirm: "str | None" = None) -> dict:
-    """Run a full unattended QA sweep -- 12 to 23 minutes per
-    profiles/doskutsu.yaml, one of the sweep names from vcctrl_sweep_list.
-    Launched detached; poll with vcctrl_job_status(job_id). Ties up the rig
-    for its full duration, so this requires confirm="run".
-
-    power_on: bring the target up if it's off, instead of refusing.
-    collect: on completion, hand off to vcctrl-collect automatically
-    (reboot into NET, PUT every cell log, confirm each landed)."""
-    if confirm != "run":
-        return {"ok": False,
-                "error": ('ties up the rig for the sweep\'s full duration -- '
-                          'pass confirm="run" to launch')}
-    argv = [os.path.join(HARNESS_DIR, "vcctrl-sweep"), sweep, machine_digit]
-    if dry_run:
-        argv.append("--dry-run")
-    if no_power_recovery:
-        argv.append("--no-power-recovery")
-    if collect:
-        argv.append("--collect")
-    if power_on:
-        argv.append("--power-on")
-    job_id = JOBS.launch(argv, cwd=REPO_ROOT)
-    return {"ok": True, "job_id": job_id, "argv": argv}
-
-
-@mcp.tool()
-def vcctrl_collect(sweep: "str | None" = None,
-                   machine_digit: "str | None" = None,
-                   tags: "list[str] | None" = None, power_on: bool = False,
-                   already_net: bool = False, via_put: bool = False,
-                   stay_net: bool = False, incoming: "str | None" = None,
-                   confirm: "str | None" = None) -> dict:
-    """Bring a sweep's logs back off the target, unattended. Pass either
-    (sweep, machine_digit) or tags (a list like ["GMN","GMF"]). Reboots the
-    target (unless already_net) -- CONFIRMATION COMES FROM THE FILESYSTEM,
-    not the screen: arrival of each log in the FTP server's incoming/ is
-    what's checked, which also proves everything upstream of it (the
-    reboot took, NET loaded, the packet driver answered). Launched
-    detached; poll with vcctrl_job_status(job_id). Requires confirm="run"."""
-    if confirm != "run":
-        return {"ok": False,
-                "error": 'reboots the target -- pass confirm="run" to launch'}
-    if tags:
-        argv = [os.path.join(HARNESS_DIR, "vcctrl-collect"), "--tags",
-                ",".join(tags)]
-    elif sweep and machine_digit:
-        argv = [os.path.join(HARNESS_DIR, "vcctrl-collect"), sweep,
+        power_on: bring the target up if it's off, instead of refusing.
+        collect: on completion, hand off to vcctrl-collect automatically
+        (reboot into NET, PUT every cell log, confirm each landed)."""
+        if confirm != "run":
+            return {"ok": False,
+                    "error": ("ties up the rig for the sweep's full "
+                              'duration -- pass confirm="run" to launch')}
+        argv = [os.path.join(HARNESS_DIR, "vcctrl-sweep"), sweep,
                 machine_digit]
-    else:
-        return {"ok": False,
-                "error": "pass either tags, or both sweep and machine_digit"}
-    if power_on:
-        argv.append("--power-on")
-    if already_net:
-        argv.append("--already-net")
-    if via_put:
-        argv.append("--via-put")
-    if stay_net:
-        argv.append("--stay-net")
-    if incoming is not None:
-        argv += ["--incoming", incoming]
-    job_id = JOBS.launch(argv, cwd=REPO_ROOT)
-    return {"ok": True, "job_id": job_id, "argv": argv}
+        if dry_run:
+            argv.append("--dry-run")
+        if no_power_recovery:
+            argv.append("--no-power-recovery")
+        if collect:
+            argv.append("--collect")
+        if power_on:
+            argv.append("--power-on")
+        job_id = JOBS.launch(argv, cwd=REPO_ROOT)
+        return {"ok": True, "job_id": job_id, "argv": argv}
+
+    @mcp.tool()
+    def vcctrl_collect(sweep: "str | None" = None,
+                       machine_digit: "str | None" = None,
+                       tags: "list[str] | None" = None,
+                       power_on: bool = False, already_net: bool = False,
+                       via_put: bool = False, stay_net: bool = False,
+                       incoming: "str | None" = None,
+                       confirm: "str | None" = None) -> dict:
+        """Bring a sweep's logs back off the target, unattended. Pass either
+        (sweep, machine_digit) or tags (a list like ["GMN","GMF"]). Reboots
+        the target (unless already_net) -- CONFIRMATION COMES FROM THE
+        FILESYSTEM, not the screen: arrival of each log in the FTP server's
+        incoming/ is what's checked, which also proves everything upstream
+        of it (the reboot took, NET loaded, the packet driver answered).
+        Launched detached; poll with vcctrl_job_status(job_id). Requires
+        confirm="run"."""
+        if confirm != "run":
+            return {"ok": False,
+                    "error": ('reboots the target -- pass confirm="run" to '
+                              'launch')}
+        if tags:
+            argv = [os.path.join(HARNESS_DIR, "vcctrl-collect"), "--tags",
+                    ",".join(tags)]
+        elif sweep and machine_digit:
+            argv = [os.path.join(HARNESS_DIR, "vcctrl-collect"), sweep,
+                    machine_digit]
+        else:
+            return {"ok": False,
+                    "error": "pass either tags, or both sweep and machine_digit"}
+        if power_on:
+            argv.append("--power-on")
+        if already_net:
+            argv.append("--already-net")
+        if via_put:
+            argv.append("--via-put")
+        if stay_net:
+            argv.append("--stay-net")
+        if incoming is not None:
+            argv += ["--incoming", incoming]
+        job_id = JOBS.launch(argv, cwd=REPO_ROOT)
+        return {"ok": True, "job_id": job_id, "argv": argv}
 
 
 @mcp.tool()
@@ -1156,4 +1213,43 @@ def vcctrl_job_cancel(job_id: str, confirm: "str | None" = None) -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    transport = os.environ.get(
+        "VCCTRL_MCP_TRANSPORT", "stdio" if ROLE == "vm" else "streamable-http")
+    if transport == "stdio":
+        mcp.run()
+    else:
+        # host defaults to loopback -- same security posture as
+        # daemon/vcweb.py's own web UI (`daemon.web.bind: 127.0.0.1` in
+        # vcctrl.yaml): a reverse proxy (tailscale serve) is the
+        # authentication boundary, not this process. Do not change this
+        # default to 0.0.0.0 without adding one.
+        #
+        # DNS-REBINDING PROTECTION, EXPLICITLY ENABLED. The mcp package's own
+        # default (transport_security=None) is Host/Origin validation OFF --
+        # its own source: "disable DNS rebinding protection by default for
+        # backwards compatibility." That default is wrong for a service with
+        # a real network listener, so this always builds explicit settings
+        # rather than relying on it.
+        #
+        # Reached directly at 127.0.0.1:PORT (local testing on the Pi
+        # itself) the loopback host:port below covers it. Reached through
+        # `tailscale serve`'s proxy, the Host header the proxy forwards is
+        # the tailnet hostname, not 127.0.0.1:PORT, and the request is
+        # refused (measured: HTTP 421 "Invalid Host header") until that
+        # hostname is added via VCCTRL_MCP_ALLOWED_HOSTS (comma-separated) --
+        # deliberately not auto-trusted from something this process could
+        # infer about itself, since that would mean any Host header CLAIMING
+        # to be this rig's hostname gets waved through by a value a caller
+        # also controls.
+        from mcp.server.transport_security import TransportSecuritySettings
+        mcp_host = os.environ.get("VCCTRL_MCP_HOST", "127.0.0.1")
+        mcp_port = int(os.environ.get("VCCTRL_MCP_PORT", "8090"))
+        allowed = ["%s:%d" % (mcp_host, mcp_port), "localhost:%d" % mcp_port]
+        allowed += [h.strip() for h in
+                   os.environ.get("VCCTRL_MCP_ALLOWED_HOSTS", "").split(",")
+                   if h.strip()]
+        security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=allowed, allowed_origins=allowed)
+        mcp.run(transport=transport, host=mcp_host, port=mcp_port,
+                transport_security=security)

@@ -8261,9 +8261,11 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
         "dos": "DOS sources; built elsewhere and delivered on the CF card",
         "internal": "gitignored planning work, not part of any deployment",
         "tests": "run against a checkout, never on the daemon host",
-        "agent": "the MCP server -- runs on the control host (the VM), "
-                 "shells out to bin/vcctrl over ssh exactly as a human "
-                 "would; nothing about it runs on, or belongs on, the Pi",
+        # agent/ USED TO be listed here ("runs on the control host, nothing
+        # about it belongs on the Pi") until the Pi-hosted MCP server
+        # (2026-08-25) made half of that false -- it now ships and installs
+        # its own systemd service there too. Removed rather than corrected
+        # in place: it is SHIPPED now, which this dict is not for.
     }
 
     present = {d for d in os.listdir(root)
