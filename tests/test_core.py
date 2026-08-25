@@ -6515,47 +6515,44 @@ def test_lamp_states_are_tellable_apart():
                     page) is not None)
 
 
-def test_a_crop_needs_three_agreeing_samples_to_adopt():
-    """Reported from the rig: in Firefox, with Cave Story running, "Fit to
-    Screen" would zoom in, sit off-centre and grow scrollbars -- then change
-    again when the player walked into another cave, sometimes resetting and
-    sometimes not.
+def test_a_letterbox_is_a_union_that_stops_growing():
+    """Reported from the rig, twice. First: in Firefox, with Cave Story
+    running, "Fit to Screen" would zoom in, sit off-centre and grow
+    scrollbars, then change again when the player walked into another cave.
+    Fixed by requiring several agreeing samples before adopting a crop.
 
-    measureCrop() finds the bounding box of non-black pixels, and its comment
-    justified using one frame: "the letterbox only changes when the target
-    changes video mode, which is rare and visible." THAT PREMISE IS FALSE
-    WHILE A GAME IS RUNNING. In a dark cave the bounding box IS the scene: it
-    measures small, lands roughly symmetric, passes the symmetry guard written
-    to reject text screens, and is adopted as a letterbox. Fit then fits the
-    drawn region and overflows the real frame on purpose, which is every
-    symptom in the report.
+    Reported AGAIN after that fix shipped: "still not fitting". Watched live
+    against the real rig, in a real Cave Story session: the crop adopted
+    correctly at 165s -- and was DROPPED again by 260s, because the player
+    took a few steps. A short streak of agreeing samples cannot survive a
+    moving picture: measureCrop()'s bounding box is the CURRENTLY LIT scene,
+    which shrinks, grows and goes asymmetric constantly during real play even
+    though the letterbox under it never moves. Comparing frame N to frame
+    N-1 is the wrong question of a moving target regardless of how many times
+    it is asked.
 
-    A real letterbox is identical in every frame; live content is not. So the
-    discriminator is TIME, not any property of a single sample -- the same
-    shape as a poll that caught a file mid-write and reported a real number
-    about the wrong moment.
+    The fix is a different shape, not a bigger number: track the UNION of
+    every sample since it was last cleared. A union can only grow, never
+    wrongly shrink because one frame's content didn't reach an edge, so it
+    converges toward the true boundary as more of it gets explored. Adopt it
+    once it has gone a few ticks without growing -- "the player has explored
+    as much of this as they're going to for now" is what growth stopping
+    looks like from outside, and it is the only signal available to something
+    that can only ever watch, never ask the target what mode it is in.
 
-    TWO agreeing samples was the first fix, and the report came back: a title
-    card or a player standing still is a static, symmetric, dark scene held
-    for exactly the 5-10s two samples 5s apart need, so two was not a rare
-    coincidence for a game, it was most menus. Adopting now needs THREE,
-    spanning 10-15s -- real letterboxing is trivially the same in every frame
-    forever, and something on screen moves within 15s far more reliably than
-    within 5. Dropping stays at two, asymmetrically: showing the full frame
-    is never wrong, so recovering from a bad crop is not held to the bar
-    adopting one is.
+    Symmetry is still checked, once, against the union -- but as a RATIO, not
+    the ~6px tolerance a single exact frame could meet. A union built from
+    twenty seconds of a starting room is close to centred without ever being
+    exact the way one fully-lit frame is; the DOS-prompt case the original
+    check existed for ("551 of 640 columns, all the slack on one side") is
+    0px against 89px, a ratio of 0 at any threshold, still caught.
     """
-    print("\nletterbox needs confirming")
+    print("\nletterbox is a union that stops growing")
     import shutil
     import subprocess
     page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
                 encoding="utf-8").read()
 
-    # Search EXECUTABLE lines only. The replacement comment quotes the old
-    # line verbatim, on purpose -- naming what a change removed is most of why
-    # the comment is worth having -- and a guard that cannot tell code from
-    # prose would force that explanation out of the file. This is the same
-    # distinction the page-targets guard makes.
     live = "\n".join(ln for ln in page.splitlines()
                       if not ln.lstrip().startswith(("//", "*", "/*")))
     check("applyZoom no longer adopts a crop from a single frame",
@@ -6563,71 +6560,58 @@ def test_a_crop_needs_three_agreeing_samples_to_adopt():
     check("control: the removed line is still QUOTED in a comment, so the "
           "search above is not passing because the text vanished",
           "if (!crop) crop = measureCrop()" in page)
-    check("the interval drives its decision through cropStep, not inline",
-          "cropStep(m, cropCand, cropStreak, crop)" in page)
-    check("and setZoom no longer throws the crop away, which re-opened it",
-          re.search(r"crop = null;\s+// re-measure on the next frame", page)
-          is None)
+    check("measureCrop no longer rejects an asymmetric single sample",
+          "if (Math.abs(lm - rm) > w * 0.06" not in live)
+    check("the interval drives its decision through unionStep and "
+          "isSymmetric, not a short streak of raw samples",
+          "unionStep(m, cropUnion)" in page and "isSymmetric(cropUnion)" in page)
 
-    ma = re.search(r"^function cropsAgree\(a, b\) \{.*?^\}", page, re.S | re.M)
-    ms = re.search(r"^function cropStep\(m, cand, streak, adopted\) \{.*?^\}",
-                    page, re.S | re.M)
-    check("cropsAgree is extractable for testing", ma is not None)
-    check("cropStep is extractable for testing", ms is not None)
-    if not ma or not ms:
+    ms = re.search(r"^function unionStep\(m, union\) \{.*?^\}", page, re.S | re.M)
+    isym = re.search(r"^function isSymmetric\(b\) \{.*?^\}", page, re.S | re.M)
+    check("unionStep is extractable for testing", ms is not None)
+    check("isSymmetric is extractable for testing", isym is not None)
+    if not ms or not isym:
         return
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         print("  SKIP  no node available")
         return
-    js = ma.group(0) + "\n" + ms.group(0) + """
-const L  = {x0:80,  y0:60, bw:480, bh:360};
-const L2 = {x0:82,  y0:62, bw:478, bh:358};
-const S1 = {x0:100, y0:40, bw:200, bh:300};
-const S2 = {x0:220, y0:90, bw:180, bh:260};
-console.log(JSON.stringify([
-  ['two nulls agree -- a stable absence is a result too',
-   cropsAgree(null, null), true],
-  ['a letterbox agrees with itself', cropsAgree(L, L), true],
-  ['and tolerates the few px measureCrop can jitter by',
-   cropsAgree(L, L2), true],
-  ['TWO DIFFERENT GAME SCENES DO NOT AGREE, so neither is adopted',
-   cropsAgree(S1, S2), false],
-  ['a scene does not agree with nothing', cropsAgree(S1, null), false],
-  ['nothing does not agree with a scene', cropsAgree(null, S1), false],
-]));
+    js = ms.group(0) + "\n" + isym.group(0) + """
+// A REAL LETTERBOX: identical every sample, so the union never grows past
+// the first one, and it is well-centred.
+const L  = {x0:80, y0:60, bw:480, bh:360, w:640, h:480};
 
-// REPLAY A SEQUENCE, the way the 5s interval would drive it -- this is the
-// only way to test "three, not two" as BEHAVIOUR rather than as a number
-// sitting in the source that nothing runs.
-function simulate(samples) {
-  let cand = null, streak = 0, crop = null;
-  const seen = [];
-  for (const m of samples) {
-    const step = cropStep(m, cand, streak, crop);
-    streak = step.streak;
-    cand = m;
-    if (step.changed) crop = m;
-    seen.push(crop);
-  }
-  return seen;
+// A STARTING ROOM, explored a little at a time -- these are the actual
+// numbers measured live against the rig, Cave Story, first room. Never
+// symmetric on their own; the union of all three is.
+const room1 = {x0:172, y0:132, bw:211, bh:159, w:640, h:480};
+const room2 = {x0:172, y0:132, bw:215, bh:159, w:640, h:480};  // grew a touch
+const room3 = {x0:158, y0:126, bw:263, bh:237, w:640, h:480};  // grew more
+
+// A DOS PROMPT: short lines, ALL the slack on one side, every sample. The
+// union of these never gets more centred no matter how many ticks pass --
+// this is exactly the case isSymmetric exists to keep unadopted.
+const prompt1 = {x0:0, y0:400, bw:551, bh:16, w:640, h:480};
+const prompt2 = {x0:0, y0:416, bw:480, bh:16, w:640, h:480};
+
+function unionOf(samples) {
+  let u = null;
+  for (const m of samples) u = unionStep(m, u);
+  return u;
 }
-const real = simulate([L, L, L, L]);
-// A static scene held for exactly two ticks -- Cave Story's dark cave, a
-// title card -- then the player moves and the next sample is nothing like
-// it: this must never be adopted, at any point in the sequence.
-const X = {x0:400, y0:10, bw:50, bh:60};
-const twoThenGone = simulate([S1, S1, X, null]);
-const dropSeq = simulate([L, L, L, null, null, null]);
+const letterboxUnion = unionOf([L, L, L]);
+const roomUnion = unionOf([room1, room2, room3]);
+const promptUnion = unionOf([prompt1, prompt2, prompt1, prompt2]);
+
 console.log(JSON.stringify([
-  ['a real letterbox is not adopted after two agreeing samples',
-   real[1] === null, true],
-  ['but is adopted on the third', real[2] !== null, true],
-  ['a scene held for only two samples is never adopted',
-   twoThenGone.every(c => c === null), true],
-  ['an adopted crop survives a single differing sample',
-   dropSeq[3] !== null, true],
-  ['and drops on the second agreeing one', dropSeq[4] === null, true],
+  ['a union of one sample is that sample', JSON.stringify(unionStep(L, null)) === JSON.stringify(L), true],
+  ['a union only ever grows, matching the widest sample seen',
+   roomUnion.bw >= room3.bw && roomUnion.bh >= room3.bh, true],
+  ['a stable, identical letterbox is symmetric', isSymmetric(letterboxUnion), true],
+  ['a partly-explored room, close but not exact, still reads as symmetric',
+   isSymmetric(roomUnion), true],
+  ['a lopsided DOS prompt is never symmetric, however long it is watched',
+   isSymmetric(promptUnion), false],
 ]));
 """
     r = subprocess.run([node, "-e", js], capture_output=True, text=True)
@@ -6635,13 +6619,8 @@ console.log(JSON.stringify([
     if r.returncode != 0:
         return
     import json as _json
-    out = r.stdout.strip().split("\n")
-    check("control: the script printed both result sets", len(out) == 2,
-          len(out))
-    if len(out) != 2:
-        return
-    rows = _json.loads(out[0]) + _json.loads(out[1])
-    check("control: every case reported", len(rows) == 11, len(rows))
+    rows = _json.loads(r.stdout)
+    check("control: every case reported", len(rows) == 5, len(rows))
     for name, got, want in rows:
         check(name, got == want, (got, want))
 

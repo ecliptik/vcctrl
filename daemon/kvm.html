@@ -2590,7 +2590,7 @@ function gotFrame() {
   const el = mediaEl();
   const nw = el.naturalWidth || el.width, nh = el.naturalHeight || el.height;
   if (!frames || (nw > 1 && nh > 1 && (nw !== capW || nh !== capH))) {
-    crop = null; cropCand = null; cropStreak = 0;
+    crop = null; cropUnion = null; cropStableTicks = 0; cropNullStreak = 0;
     setTimeout(() => applyZoom(true), 60);  // sizes known now
   }
   frames++;
@@ -6716,11 +6716,11 @@ let zoomMode = localStorage.getItem('vcctrl.zoom2') || 'fit';
 // still applying the vanished factor.
 if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
 let crop = null, lastHinted = null, hintTimer = null;
-// The last MEASUREMENT, which is not the same thing as the adopted crop, and
-// how many times in a row it has repeated. See cropsAgree() and the
-// re-measure interval for why one sample is not enough -- and why two was
-// not always enough either.
-let cropCand = null, cropStreak = 0;
+// The running UNION of every letterbox sample since it was last cleared, how
+// many ticks it has gone without growing, and how many ticks in a row have
+// found no letterbox at all. See the re-measure interval below for why a
+// union rather than a single sample or a short streak of agreeing ones.
+let cropUnion = null, cropStableTicks = 0, cropNullStreak = 0;
 
 // Do two crop measurements describe the same letterbox?
 //
@@ -6771,15 +6771,15 @@ function measureCrop() {
   const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
   if (bw < 32 || bh < 32) return null;     // implausibly small: ignore
   if (bw > w * 0.94 && bh > h * 0.94) return null;  // no letterbox to crop
-  // A letterbox is SYMMETRIC: a smaller mode centred in the capture leaves
-  // equal margins on both sides. A text screen whose lines happen to be short
-  // ALSO has a bounding box smaller than the frame, and cropping to that is
-  // wrong -- it trims live screen, and it moves every time the text does.
-  // Requiring the margins to match tells the two apart. Measured against a
-  // real DOS prompt: 551 of 640 columns drawn, all of the slack on one side,
-  // correctly rejected.
-  const lm = x0, rm = w - 1 - x1, tm = y0, bm = h - 1 - y1;
-  if (Math.abs(lm - rm) > w * 0.06 || Math.abs(tm - bm) > h * 0.06) return null;
+  // NOT SYMMETRY-CHECKED HERE ANY MORE. That used to be tested on every
+  // single sample: reject the box unless its margins match on both sides,
+  // to tell a real centred letterbox apart from a DOS prompt whose lines
+  // happen to be short on one side. It is the right question asked of the
+  // wrong thing -- a single frame of a MOVING picture has no reason to be
+  // symmetric even when the letterbox under it is, because gameplay lights
+  // up an asymmetric slice of a centred play area at any given instant.
+  // Checked once now, in isSymmetric() below, against the UNION of many
+  // samples once it has stopped growing -- see the interval that builds it.
   return {x0, y0, bw, bh, w, h};
 }
 
@@ -7042,47 +7042,88 @@ setBufOpen(false);
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.
 //
-// TWO AGREEING MEASUREMENTS WAS THE FIRST FIX, AND IT WAS STILL NOT ENOUGH.
-// The comment this replaced said why it thought one sample was enough: "the
-// letterbox only changes when the target changes video mode, which is rare
-// and visible". THAT PREMISE IS FALSE WHILE A GAME IS RUNNING. measureCrop
-// finds the bounding box of non-black pixels, and in Cave Story that box is
-// the SCENE: a dark cave measures small, lands roughly symmetric, passes the
-// symmetry guard meant to reject text screens, and gets treated as a
-// letterbox. Fit then fits the "drawn region", overflows the real frame on
-// purpose, and the picture jumps in, off-centre, with scrollbars -- then
-// changes again five or ten seconds later, or when the player walks into a
-// differently-lit cave. Reported from the rig, in Firefox, playing Cave
-// Story -- and reported AGAIN after the two-sample fix shipped, because a
-// title card, a loading screen or a player standing still is a dark
-// symmetric scene held steady for exactly the 5-10s two agreeing samples
-// need. Two consecutive samples 5s apart is not a rare coincidence for a
-// game; it is most menus.
+// A SHORT STREAK OF AGREEING SAMPLES WAS THE SECOND FIX, AND IT WAS STILL
+// NOT ENOUGH EITHER. The comment this replaced said one sample was fine
+// because "the letterbox only changes when the target changes video mode,
+// which is rare and visible" -- false while a game is running, since
+// measureCrop's bounding box is the SCENE, not the mode, and a dark cave
+// held still for two samples 5s apart is not a rare coincidence, it is most
+// menus. Requiring three instead of two closed that, but opened the door it
+// was standing next to: a MOVING picture never produces even two agreeing
+// samples, so the crop this whole mechanism exists to find -- the real
+// letterbox under actual gameplay -- got detected once, on a lucky still
+// frame, and dropped again the moment the player so much as moved. Watched
+// live: adopted at 165s, dropped again by 260s, because the character
+// walking three steps changed which slice of a symmetric play area was lit
+// enough to measure. Reported as "still not fitting" and it wasn't, because
+// unlike a title card a game is never still for three ticks in a row.
 //
-// So ADOPTING now needs THREE, spanning 10-15s -- a bar real letterboxing
-// clears easily, since it is the same in every frame forever, and a bar that
-// a static game scene usually does not clear, since something on screen
-// moves within 15s far more reliably than within 5. DROPPING stays at two,
-// on purpose and asymmetrically -- showing the full frame is never wrong, so
-// recovering from a bad crop should not be held to the same bar as adopting
-// one.
+// So this no longer asks "do two recent samples agree" at all. It keeps a
+// running UNION of every sample since the union was last cleared -- the
+// bounding box can only grow, never wrongly shrink because one frame's
+// content happened not to reach an edge -- and adopts it once the union has
+// gone a few ticks WITHOUT growing, which is what "the player has explored
+// as much of this letterbox as they're going to for now" looks like from
+// outside. A real letterbox border converges this way even though no single
+// frame inside it is symmetric; growth stopping is the signal a single
+// frame's symmetry used to try and fail to be. Symmetry is still checked --
+// on the union, once it has stopped growing, which is the question it was
+// always the right question for.
+//
+// Dropping stays fast and independent of all this: two consecutive samples
+// with NO letterbox at all clear the union outright, because showing the
+// full frame is never wrong and recovering from a bad guess should not wait
+// on the same patience adopting one needs.
 //
 // PURE, so a sequence of samples can be replayed in a test rather than
 // asserted about by reading the source -- the same reason cropsAgree is its
 // own function instead of being inlined here.
-function cropStep(m, cand, streak, adopted) {
-  const newStreak = cropsAgree(m, cand) ? streak + 1 : 1;
-  const changed = !cropsAgree(m, adopted) && newStreak >= (m ? 3 : 2);
-  return {streak: newStreak, changed};
+function unionStep(m, union) {
+  if (!union) return m;
+  const x0 = Math.min(union.x0, m.x0), y0 = Math.min(union.y0, m.y0);
+  const x1 = Math.max(union.x0 + union.bw, m.x0 + m.bw);
+  const y1 = Math.max(union.y0 + union.bh, m.y0 + m.bh);
+  return {x0, y0, bw: x1 - x0, bh: y1 - y0, w: m.w, h: m.h};
 }
+// The question measureCrop() used to ask of every sample, now asked once of
+// a union that has had time to be explored instead of of whatever asymmetric
+// slice happened to be lit on one frame -- and asked as a RATIO, not a fixed
+// pixel tolerance, because a union built from a partly-explored room is
+// close to centred without ever being exact the way one still, fully-lit
+// frame can be. Measured live, in Cave Story: a union built from the first
+// twenty seconds of a starting room came out margins 172px/253px and
+// 132px/189px -- 0.68 and 0.70 by this ratio, nowhere near the ~6px a single
+// frame gets, but not remotely what an off-centre screen looks like either.
+// The case this guards against is still caught: "551 of 640 columns, all the
+// slack on one side" -- the DOS-prompt example the original check was
+// written for -- is 0px against 89px, a ratio of 0 whatever the threshold.
+function isSymmetric(b) {
+  const lm = b.x0, rm = b.w - b.x0 - b.bw, tm = b.y0, bm = b.h - b.y0 - b.bh;
+  const hRatio = Math.min(lm, rm) / Math.max(lm, rm, 1);
+  const vRatio = Math.min(tm, bm) / Math.max(tm, bm, 1);
+  return hRatio >= 0.5 && vRatio >= 0.5;
+}
+const CROP_STABLE_TICKS = 3;   // ticks (5s each) the union must hold still
 setInterval(() => {
   if (document.hidden) return;   // a readback nobody can see is just battery
   const m = measureCrop();
-  const step = cropStep(m, cropCand, cropStreak, crop);
-  cropStreak = step.streak;
-  cropCand = m;
-  if (!step.changed) return;
-  crop = m;
+  if (m === null) {
+    cropNullStreak++;
+    if (cropNullStreak >= 2) { cropUnion = null; cropStableTicks = 0; }
+  } else {
+    cropNullStreak = 0;
+    const grown = unionStep(m, cropUnion);
+    cropStableTicks = cropsAgree(grown, cropUnion) ? cropStableTicks + 1 : 0;
+    cropUnion = grown;
+  }
+  if (cropUnion === null) {
+    if (crop === null) return;
+    crop = null;
+  } else {
+    if (cropStableTicks < CROP_STABLE_TICKS || !isSymmetric(cropUnion)) return;
+    if (cropsAgree(cropUnion, crop)) return;
+    crop = cropUnion;
+  }
   applyZoom(true);               // a real change, so re-centre on it
 }, 5000);
 
