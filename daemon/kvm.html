@@ -924,12 +924,11 @@
      in the two-button form. In every other mode the word is enough. */
   #bufbtn .bi, #soundbtn .bi { display:none; }
   #cmdbar #soundbtn { gap:6px; }
-  /* A BUTTON THAT RESIZES WHEN PRESSED SHOVES THE ROW IT IS IN. Grab and
-     Release are different lengths, so the four controls to its right moved
-     every time the keyboard was taken or given back -- and moving targets
-     under a pointer that is about to click is worse than the width it costs.
-     Sized for the longer of the two words and held there. */
-  #cmdbar #grabbtn .bl { min-width:52px; text-align:left; }
+  /* SIZED TO ITS OWN WORD, not held at Release's width while showing Grab --
+     the fixed width read as padding around short copy. Reintroduces the
+     button-that-resizes-when-pressed effect the min-width existed to avoid
+     (the controls to its right shift when Grab becomes Release), which is
+     the trade this was asked for by name, not an oversight. */
 
   .popmenu { padding:5px; min-width:150px; }
   /* 500, STATED. `font:` is a shorthand and resets every part it does not
