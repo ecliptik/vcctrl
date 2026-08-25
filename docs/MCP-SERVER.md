@@ -196,6 +196,17 @@ claude mcp get vcctrl-mcp-daemon    # or vcctrl-mcp
 
 Remove with `claude mcp remove <name>`.
 
+**If you register from a shell while a Claude Code session is already open
+in the same project, that session's own `/mcp` will not show the new
+server.** `claude mcp add` writes to `~/.claude.json` immediately -- `claude
+mcp list` reads that file fresh every time and shows it connected right
+away -- but a session that was already running read its server list once
+at startup and does not reload it. Restart the session (exit and run
+`claude` again in the same directory); `/mcp` picks it up from there.
+Measured 2026-08-25: registered both servers from a running session's own
+Bash tool, `claude mcp list` showed both Connected immediately, and that
+same session's `/mcp` stayed empty until it was restarted.
+
 **Running both at once is fine and arguably the right setup**:
 `vcctrl-mcp-daemon` for device control with no SSH hop, `vcctrl-mcp`
 (control mode) for the harness-workflow tools daemon mode doesn't have.
