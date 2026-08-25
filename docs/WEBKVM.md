@@ -853,15 +853,32 @@ Four properties, three of them stolen wholesale:
    The greying rule is a consumer of exactly this kind: it must degrade on a
    value it has never heard of, and adding one is a seam event announced to
    consumers rather than left to be discovered by reading.
-4. **The two absence rules in this daemon are not in conflict, and a coverage
-   table needs both at once.** `PowerCapability.snapshot()` says *every key
-   always present, null where unknown*; `LedsCapability.snapshot()` says
-   *value keys absent when unavailable, never zero*. The distinction is
-   descriptive versus measured: an identity field is always present because
-   null is a real answer the consumer wants, and a measured value is absent
-   because a plausible default reads as data. So: **every key in the layout
-   has an entry** (a consumer can enumerate, and a missing entry is a bug),
-   **and an entry with no verdict carries no `arrives` field.**
+4. **The daemon has two opposite absence rules and it is four to one, not a
+   pair — a coverage table needs both at once.** Counted rather than assumed:
+
+       every key always present, null where unknown
+           PowerCapability, BoardCapability, TargetProfile, FilesCapability
+       value keys ABSENT when unavailable, never zero
+           LedsCapability, and only LedsCapability
+
+   Both are correct and the line between them is **descriptive versus
+   measured**. A status field keeps its key and carries null, because null is
+   a real answer somebody wants and a consumer that branches on which keys
+   EXIST re-encodes the daemon's internal states. A SAMPLED MEASUREMENT loses
+   its key, because a plausible default is indistinguishable from data —
+   `{"capslock": 0}` on a channel never read says *the lamp is off* to anyone
+   who forgot to check `available`. Leds is the exception because it is the
+   only capability publishing sampled values at all.
+
+   This matters here because the LEDs shape is the natural one to copy for a
+   coverage table and **copying it alone would be half wrong**. A coverage
+   table needs both at once and gets both rather than choosing: **every key in
+   the layout has an entry** (a consumer can enumerate, and a missing entry is
+   a bug), **and an entry with no verdict carries no `arrives` field.**
+
+   The fork is now recorded in `Capability`'s own docstring in `vcctrld.py`,
+   because the next person to hit it will be writing a `snapshot()` rather
+   than reading this section.
 
 #### What the page does with it, and what it will not do
 

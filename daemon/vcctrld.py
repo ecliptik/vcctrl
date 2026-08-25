@@ -997,6 +997,48 @@ class Capability(object):
     as the watchdog reaching for `pinned_at` on a class that never defined it:
     an attribute that exists on some siblings and not others, with nothing
     saying which.
+
+    ----------------------------------------------------------------------
+    WRITING A `snapshot()`? THE ABSENCE RULE IS NOT WHICHEVER SIBLING YOU
+    HAPPENED TO OPEN FIRST.
+
+    Two rules are in force in this file and they are OPPOSITE, so a schema
+    copied from one sibling alone is half wrong with no way to tell which
+    half. It is not an even split -- it is four to one:
+
+        every key always present, null where unknown
+            PowerCapability, BoardCapability, TargetProfile, FilesCapability
+        value keys ABSENT when unavailable, never zero
+            LedsCapability -- and only LedsCapability
+
+    Both are correct, and the line between them is DESCRIPTIVE versus
+    MEASURED:
+
+      * A descriptive or status field keeps its key and carries null, because
+        null is a real answer somebody wants. "The plug did not answer", "no
+        layout is declared for this board", "the profile is not known" are
+        information, and a consumer that has to branch on which keys EXIST
+        ends up re-encoding this daemon's internal states -- which has broken
+        the KVM more than once.
+
+      * A SAMPLED MEASUREMENT loses its key entirely, because a plausible
+        default is indistinguishable from data. LedsCapability is the only
+        capability here that publishes sampled values at all, which is why it
+        is the only exception: `{"capslock": 0}` on a channel that was never
+        read says "the lamp is off" to a consumer that forgot to check
+        `available`, and it is confidently wrong. Absent gives undefined and
+        a dash.
+
+    A surface that needs BOTH -- enumerability and absence-means-absence --
+    gets both rather than choosing: every expected entry is present so a
+    consumer can enumerate and a missing one is a bug, and an entry with no
+    measurement carries no measured field. The keyboard coverage table is the
+    first of these; docs/WEBKVM.md sec. 5.2b works it through.
+
+    Found writing that table, recorded here instead, because this is where it
+    bites: the next person to hit the fork will be writing a snapshot, not a
+    coverage schema.
+    ----------------------------------------------------------------------
     """
 
     name = None
@@ -1518,6 +1560,16 @@ class LedsCapability(Capability):
         confidently wrong, where a missing key gives it undefined and it shows
         a dash. Half a schema is worse than none, and this is the half that
         usually gets skipped.
+
+        **AND THAT RULE IS THIS CLASS'S ALONE -- DO NOT COPY IT BLIND.** The
+        other four snapshots here (power, board, profile, files) do the
+        OPPOSITE and are right to: every key always present, null where
+        unknown. This one differs because it is the only capability that
+        publishes SAMPLED MEASUREMENTS rather than status, and a plausible
+        default in a measured field is indistinguishable from data. It was
+        offered to another session as the house style; it is the exception to
+        it. See Capability's docstring for the fork and which side a new
+        surface belongs on.
         """
         supported, reason = self.support()
         if supported is False:
