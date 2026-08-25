@@ -918,6 +918,12 @@
      visible event of its own, so the button says it happened. */
   #cmdbar .split #snapbtn.flash { background:var(--green); }
   #cmdbar #bufbtn { gap:6px; padding-right:9px; padding-left:8px; }
+  /* Hidden here by default: these exist for icon-only mode, where the
+     quick-action half of the split (snapbtn/mutebtn) is gone and this
+     button is the only one left, so it needs the icon it never carried
+     in the two-button form. In every other mode the word is enough. */
+  #bufbtn .bi, #soundbtn .bi { display:none; }
+  #cmdbar #soundbtn { gap:6px; }
   /* A BUTTON THAT RESIZES WHEN PRESSED SHOVES THE ROW IT IS IN. Grab and
      Release are different lengths, so the four controls to its right moved
      every time the keyboard was taken or given back -- and moving targets
@@ -1373,6 +1379,24 @@
     touch-action:manipulation;
   }
   @media (pointer:fine) { button, select { min-height:36px; } }
+  /* A FIXED ARROW, not the browser's. The native one ignores this button's
+     own right padding -- some render it flush against the border with
+     nothing spent on it, others reserve a wide OS-controlled strip before
+     it -- so the gap before the arrow and the gap after it never matched
+     each other, or the same 11px this page spends everywhere else. Drawn at
+     a fixed position instead: same triangle shape as `.caret`, same 11px
+     the left padding already uses. Not theme-coloured -- a background-image
+     cannot read a CSS variable -- so it is a mid grey rather than var(--dim);
+     that reads acceptably on every theme tried, but is worth a look on the
+     extremes (near-white and near-black) rather than taking on faith. */
+  select {
+    -webkit-appearance:none; appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='7'%3E%3Cpath d='M0 0h11L5.5 7z' fill='%23888'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;
+    background-position:right 11px center;
+    background-size:11px 7px;
+    padding-right:30px;
+  }
   /* A control that cannot act must not look like one that can. The lock
      disables Grab, Send, the key rail and the file clip, and until now the
      only sign was that pressing them did nothing. */
@@ -1706,9 +1730,33 @@
      of one). */
   @media (min-width:1100px) {
     body.btn-icon #zoomlabel, body.btn-icon header .lbtn .bl,
-    body.btn-icon #grabbtn .bl, body.btn-icon #powerbtn .bl { display:none; }
+    body.btn-icon #grabbtn .bl, body.btn-icon #powerbtn .bl,
+    body.btn-icon #sendline .bl,
+    body.btn-icon #bufbtn .bl, body.btn-icon #soundbtn .bl { display:none; }
     body.btn-text header .lbtn .bi, body.btn-text #zoombtn .bi,
     body.btn-text #grabbtn .bi, body.btn-text #powerbtn .bi { display:none; }
+    /* The divider between icon and label is drawn by the icon half, so an
+       icon with no label beside it keeps a rule on its own free edge unless
+       this comes off too. */
+    body.btn-icon header .lbtn .bi, body.btn-icon #zoombtn .bi,
+    body.btn-icon #grabbtn .bi, body.btn-icon #powerbtn .bi,
+    body.btn-icon #bufbtn .bi, body.btn-icon #soundbtn .bi {
+      border-right:0; padding-right:0;
+    }
+    /* CAPTURE AND SOUND ARE TWO BUTTONS, NOT ONE -- a quick-action icon
+       (snap the frame, toggle mute) beside a button that opens the menu.
+       Icon-only and text-only both collapse that to the menu button alone:
+       there is no icon form of "opens a menu" versus "acts now" to preserve,
+       so the choice is the same shape Grab and Power already are -- one
+       control, and the quick action is a feature "Icon + Text" mode still
+       has, not one every mode is required to keep. */
+    body.btn-icon #snapbtn, body.btn-icon #mutebtn,
+    body.btn-text #snapbtn, body.btn-text #mutebtn { display:none; }
+    body.btn-icon #bufbtn .bi, body.btn-icon #soundbtn .bi { display:flex; }
+    /* Sized for "Fit to Screen" beside its icon AND its label -- wider than
+       either alone needs, so dropping either left the button still that
+       wide, with the freed space sitting empty past the caret. */
+    body.btn-icon #zoombtn, body.btn-text #zoombtn { min-width:52px; }
   }
 
   /* ── desktop ─────────────────────────────────────────────────────────── */
@@ -2012,7 +2060,7 @@
       <button id="sendline" title="Type this line at the target and press Enter"><span class="bl">Send</span><span class="ret">↵</span></button>
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
-    <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
+    <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- ALWAYS RECORDING, so this does not start anything -- which is why it
          is not called Record. The ring has been rolling since the daemon came
          up; the button opens a window onto what it is already holding. It
@@ -2029,7 +2077,7 @@
               title="Save a picture of the screen right now">📷</button>
       <button id="bufbtn" class="bl" aria-haspopup="true" aria-expanded="false"
               aria-controls="scrub"
-              title="Look back through the last half minute the daemon kept">Capture<span class="caret dn" aria-hidden="true"></span></button>
+              title="Look back through the last half minute the daemon kept"><span class="bi" aria-hidden="true">📷</span><span class="bl">Capture</span><span class="caret dn" aria-hidden="true"></span></button>
     </span>
     <!-- NOT display:none. A file input that is display:none is not focusable,
          and .click() on it is ignored outright by some browsers -- which is
@@ -2049,7 +2097,7 @@
     <span class="split" id="soundwrap">
       <button id="mutebtn" class="bi" title="Turn the sound on">🔇</button>
       <button id="soundbtn" class="bl" aria-haspopup="true" aria-expanded="false"
-              title="Sound and volume">Sound<span class="caret dn" aria-hidden="true"></span></button>
+              title="Sound and volume"><span class="bi" aria-hidden="true">🔊</span><span class="bl">Sound</span><span class="caret dn" aria-hidden="true"></span></button>
     </span>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
             title="Mains power: on, off, cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret dn" aria-hidden="true"></span></button>
@@ -5741,13 +5789,7 @@ async function showStale() {
     } catch (e) {}
     el.style.display = 'none';
     staleBlob = null;
-    // THE NEGATIVE OF THE LINE ABOVE IT. Its sibling names what we have --
-    // "last live picture · 12s old" -- so this one names what we do not, and
-    // that is the single fact the two lines above have not already said: the
-    // black behind this notice is not a dimmed old frame, it is all there is.
-    // "yet" was the problem with the old wording. It promises a picture is
-    // coming, which is false when the stick is unplugged.
-    $('veil-age').textContent = 'no earlier frame to fall back on';
+    $('veil-age').textContent = '';
   }
 }
 function hideStale() {
