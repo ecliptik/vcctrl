@@ -905,10 +905,34 @@
      contrast floor -- it measures tokens, and an alpha applied on top of one
      is not the token. A not-applicable lamp rendered at 1.5:1 that way while
      every check stayed green. --dim is fitted, so this stays legible. */
-  .popmenu label.off {
+  .popmenu label.off, .popmenu button.off {
     color:var(--dim); cursor:not-allowed; pointer-events:none;
   }
   #fi-why { padding:4px 9px 2px; max-width:280px; line-height:1.35; }
+  /* WIDER THAN A MENU AND IT SCROLLS. A file list is not three verbs: it can
+     be twenty names with sizes and dates beside them, and a popup that grows
+     with its content walks off the bottom of a phone. */
+  #pop-get { min-width:min(340px, 92vw); max-width:min(420px, 92vw); }
+  #getlist, #getdone { max-height:38vh; overflow:auto; margin:2px 0; }
+  #getlist:empty::after, #getdone:empty::after {
+    content:"nothing"; color:var(--dim);
+    font:var(--t-micro)/2 var(--sans); padding-left:9px;
+  }
+  .getrow {
+    display:flex; align-items:center; gap:8px; padding:3px 9px;
+    border-radius:5px; font:500 var(--t-micro)/1.6 var(--sans);
+  }
+  .getrow:hover { background:var(--rule); }
+  .getrow input { flex:none; margin:0; }
+  .getrow .nm { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis;
+                white-space:nowrap; font-family:var(--mono, ui-monospace); }
+  .getrow .sz { flex:none; color:var(--dim); }
+  /* A COLOUR TOKEN, NOT AN ALPHA -- the same rule as .popmenu label.off: an
+     alpha over a fitted token is invisible to the contrast floor. */
+  .getrow.off { color:var(--dim); }
+  .getrow.off input { pointer-events:none; }
+  .getrow a { color:var(--green); text-decoration:none; flex:none; }
+  .getrow a:hover { text-decoration:underline; }
   .popmenu button.sel { color:var(--green); }
   /* Says "drag to move" once, when a mode first spills past the edges. */
   /* THEME TOKENS BOTH SIDES, AND OPAQUE.
@@ -2022,10 +2046,39 @@
          title="Typed as keystrokes, exactly as if you typed it">Copy/Paste from text file</label>
   <label for="xferinput" id="fi-xfer"
          title="Move the bytes over the network — reboots the target">Upload file</label>
+  <!-- A BUTTON, NOT A LABEL, AND THE DIFFERENCE IS REAL. The two above open
+       the browser's own file picker, which only a label can do from a click
+       the page did not script. This one opens a picker of OUR files -- what
+       is sitting on the target -- so there is no native control to borrow. -->
+  <button id="fi-get"
+          title="Fetch files the target left in its outgoing directory — reboots it">Download from target</button>
   <!-- Greyed WITH THE REASON, never hidden and never left clickable to fail.
        A control that vanishes is indistinguishable from one that never
        existed, and one that fails on click teaches people the page lies. -->
   <div class="hint" id="fi-why" hidden></div>
+</div>
+
+<!-- THE DOWNLOAD PICKER. Fed from the LAST READING of the target's outgoing
+     directory rather than from a live one: reading it means rebooting the
+     machine, so a picker that refreshed itself on open would reboot the
+     target every time somebody looked at the menu. The age of the reading is
+     on screen beside the list, always, because a list with no date on it gets
+     read as current. -->
+<div id="pop-get" class="pop popmenu" role="dialog"
+     aria-label="Download from the target" hidden>
+  <div class="hint" id="get-where">—</div>
+  <div id="getlist"></div>
+  <div class="hint" id="get-note" hidden></div>
+  <hr>
+  <div class="poprow">
+    <button id="get-refresh"
+            title="Read the directory again — reboots the target">Refresh list — reboots</button>
+    <button id="get-go"
+            title="Fetch the ticked files — reboots the target">Download ticked — reboots</button>
+  </div>
+  <hr>
+  <div class="hint" style="margin-left:9px">Already fetched, on the daemon host</div>
+  <div id="getdone"></div>
 </div>
 
 <div id="pop-power" class="pop" role="dialog" aria-label="Power" hidden>
@@ -2996,6 +3049,17 @@ function showFiles(f) {
     ? 'Send files to ' + (filesNow.dest || 'the target')
       + ' — reboots the machine'
     : (filesNow.reason || 'not available');
+  // THE SAME ANSWER GOVERNS BOTH DIRECTIONS. Availability is about the
+  // channel -- a packet driver, a server that answers -- and not about which
+  // way the bytes go, so a rig that cannot be sent a file cannot be read
+  // from either, and it says so in the same words rather than in new ones.
+  const g = $('fi-get');
+  g.classList.toggle('off', !ok);
+  g.disabled = !ok;
+  g.title = ok
+    ? 'Fetch files from ' + (filesNow.out_dir || 'the target')
+      + ' — reboots the machine'
+    : (filesNow.reason || 'not available');
 }
 
 async function sha256Hex(buf) {
@@ -3092,6 +3156,161 @@ $('xferinput').onchange = async () => {
   watchTransfer();
 };
 
+// ── FETCH FILES FROM THE TARGET ───────────────────────────────────────────
+// The mirror of the upload, and it costs the same two reboots -- so the list
+// you pick from is the LAST READING of the target's outgoing directory rather
+// than a live one. A picker that refreshed itself on open would reboot the
+// machine every time somebody looked at the File menu. Refreshing is its own
+// button, and the age of the reading sits beside the list because a list with
+// no date on it gets read as current.
+//
+// THE VERDICT IS WEAKER IN THIS DIRECTION AND THE PAGE SAYS SO. An upload is
+// proved byte for byte against a sha256 taken here before anything moved;
+// nothing on DOS 6.22 can hash a file, so a download is proved against the
+// size the card's own DIR reported -- which a short transfer cannot match,
+// and which is not the same claim. The word "verified" is not reused for
+// both, in the log line or in the tooltips.
+
+$('fi-get').onclick = () => {
+  if (!filesNow.available) { hint(filesNow.reason || 'not available'); return; }
+  openPop('get');
+  paintGet();
+};
+
+// TEXT NODES, NEVER innerHTML. Every name here came off a 1995 machine's DIR
+// and through an FTP transfer -- it is data from somewhere else, and the one
+// rule that makes that safe is that it is never parsed as markup.
+function getRow(name, size, extra) {
+  const row = document.createElement(extra === 'check' ? 'label' : 'div');
+  row.className = 'getrow';
+  const nm = document.createElement('span');
+  nm.className = 'nm';
+  nm.textContent = name;
+  const sz = document.createElement('span');
+  sz.className = 'sz';
+  sz.textContent = size;
+  row.append(nm, sz);
+  return row;
+}
+
+async function paintGet() {
+  const list = $('getlist'), done = $('getdone');
+  const where = $('get-where'), note = $('get-note');
+  const r = await post('file_listing', {});
+  list.textContent = '';
+  if (!r || !r.ok) {
+    where.textContent = 'the daemon did not answer';
+    return;
+  }
+  where.textContent = (r.out_dir || '') + ' — '
+    // fmtAge IS THE PAGE'S, NOT A SECOND ONE. It already renders every age on
+    // this page -- the power reading, the LED change, the stale frame -- and
+    // a listing that measured its age in a different vocabulary would read as
+    // a different kind of number.
+    + (r.listing ? 'read ' + fmtAge(r.age_s) + ' ago' : 'never read');
+  // BOTH SENTENCES, WHEN THERE ARE BOTH. "Here is what was there at 14:02"
+  // and "the 15:40 read failed" are two facts, and collapsing them would
+  // either hide that the newest look failed or throw away the only account of
+  // the directory anybody has.
+  const msgs = [];
+  if (r.note) msgs.push(r.note);
+  if (r.attempt_note) msgs.push(r.attempt_note);
+  note.hidden = !msgs.length;
+  note.textContent = msgs.join(' — ');
+  for (const f of (r.files || [])) {
+    const usable = f.fetchable && f.bytes > 0;
+    const row = getRow(f.name, f.bytes > 0 ? fmtBytes(f.bytes) : 'empty',
+                       'check');
+    if (!usable) row.classList.add('off');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = f.name;
+    cb.dataset.bytes = f.bytes;
+    cb.disabled = !usable;
+    row.prepend(cb);
+    row.title = usable
+      ? f.name + ' — ' + f.bytes + ' bytes, ' + (f.date || '') + ' '
+        + (f.time || '')
+      : (f.bytes > 0
+         ? 'That name does not survive DOS 8.3, so it cannot be fetched'
+         : 'Zero bytes on the card, and a zero-byte arrival cannot be told '
+           + 'from no arrival at all');
+    list.append(row);
+  }
+  const p = await post('file_pulled', {action: 'list'});
+  done.textContent = '';
+  for (const f of ((p && p.pulled) || [])) {
+    const row = getRow(f.name, fmtBytes(f.bytes));
+    const a = document.createElement('a');
+    // THE BYTES COME OVER /pulled, NOT THROUGH JSON. Rebuilding a 10 MB file
+    // out of base64 in a phone browser is a lot of work to arrive at what a
+    // Content-Disposition does for free.
+    a.href = '/pulled?name=' + encodeURIComponent(f.name);
+    a.setAttribute('download', f.name);
+    a.textContent = 'Save';
+    row.append(a);
+    row.title = f.verified === 'size+repeat'
+      ? 'fetched twice and the two copies agree'
+      : (f.verified === 'size'
+         ? 'came back the size the card says it is'
+         : 'this capability cannot account for where it came from');
+    done.append(row);
+  }
+}
+
+// RETURN IS THE DEFAULT AND DECLINING IT IS DELIBERATE, exactly as it is for
+// the upload: NET loads the network stack as TSRs and no measured run may
+// start from there.
+async function startPull(body, said) {
+  const stay = !confirm('Reboot back afterwards?\n\n'
+    + 'OK — come back (recommended)\n'
+    + 'Cancel — stay on the network profile\n\n'
+    + 'No measured run may start from the network profile.');
+  body.return = !stay;
+  const started = await post('file_pull', body);
+  if (!started || !started.ok) {
+    addLine(new Date(), 'file', 'refused: '
+      + ((started && started.error) || 'no answer'), 'k-warn');
+    return;
+  }
+  addLine(new Date(), 'file', said + ' — the reboots are the wait', 'k-cmd');
+  watchTransfer();
+}
+
+$('get-refresh').onclick = () => {
+  closePop();
+  if (!confirm('Read ' + (filesNow.out_dir || "the target's outgoing directory")
+      + '?\n\nThis REBOOTS the target — anything running is lost, and it comes '
+      + 'back on the default profile. About 2 minutes.')) return;
+  startPull({refresh: true}, 'reading the directory');
+};
+
+$('get-go').onclick = () => {
+  const picked = [...$('getlist').querySelectorAll('input:checked')];
+  if (!picked.length) { hint('tick a file first'); return; }
+  const total = picked.reduce((n, c) => n + (+c.dataset.bytes || 0), 0);
+  const refuse = filesNow.refuse_bytes, warn = filesNow.warn_bytes;
+  if (refuse && total > refuse) {
+    alert('Too large: ' + fmtBytes(total) + '.\n\n'
+      + 'Nothing above ' + fmtBytes(refuse) + ' has been moved over this path, '
+      + 'and a stuck transfer cannot be interrupted.');
+    return;
+  }
+  const names = picked.map(c => c.value);
+  closePop();
+  let msg = 'Fetch ' + fmtBytes(total) + ' from '
+    + (filesNow.out_dir || 'the target') + '?\n\n' + names.join(', ') + '\n\n'
+    + 'This REBOOTS the target — anything running is lost, and it comes back '
+    + 'on the default profile. About 2 minutes.\n\n'
+    + 'Nothing is deleted from the target.';
+  if (warn && total > warn) {
+    msg += '\n\nOver ' + fmtBytes(warn) + ' is untested here.';
+  }
+  if (!confirm(msg)) return;
+  startPull({names: names}, 'fetching ' + names.length + ' file'
+            + (names.length > 1 ? 's' : ''));
+};
+
 let xferTimer = null;
 function watchTransfer() {
   if (xferTimer) return;
@@ -3108,12 +3327,32 @@ function watchTransfer() {
     if (!j.running) {
       clearInterval(xferTimer); xferTimer = null;
       const bad = (j.files || []).filter(f => !f.ok);
+      // THE TWO DIRECTIONS DO NOT GET THE SAME SENTENCE. "Verified byte for
+      // byte" is earned on the way out, where the staged copy was sha256'd
+      // before anything moved. Coming back there is no such copy to compare
+      // against, and borrowing the phrase would be claiming the stronger
+      // check by writing it down.
+      const pull = j.kind === 'pull';
+      const win = pull
+        ? (j.refresh
+           ? 'the directory was read'
+           : 'fetched — every file came back the size the card says it is')
+        : 'transfer complete — every file verified byte for byte';
       addLine(new Date(), 'file',
-        j.ok ? 'transfer complete — every file verified byte for byte'
-             : 'transfer finished with ' + (bad.length || 1) + ' problem'
+        j.ok ? win
+             : (pull ? 'fetch' : 'transfer') + ' finished with '
+               + (bad.length || 1) + ' problem'
                + (bad.length === 1 ? '' : 's')
                + (j.reason ? ' — ' + j.reason : ''),
         j.ok ? 'k-vid' : 'k-warn');
+      for (const f of bad) {
+        addLine(new Date(), 'file', f.name + ': ' + (f.reason || f.why),
+                'k-warn');
+      }
+      // The picker is now out of date in two ways at once -- the listing was
+      // refreshed and files may have arrived -- so it is repainted rather
+      // than left showing the state that produced the job.
+      if (pull) paintGet();
       if (j.left_in_net) {
         addLine(new Date(), 'file',
           'THE MACHINE IS IN NET. No measured run may start from there.',
@@ -3580,7 +3819,7 @@ for (const k of Object.keys(OPTS)) {
 // and clamped to the window -- a menu that opens off the right edge of a
 // phone is a menu you cannot use.
 const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn',
-             keys: 'keysbtn', file: 'filebtn'};
+             keys: 'keysbtn', file: 'filebtn', get: 'filebtn'};
 // The scrub overlay is a menu too, but it is not a .pop -- it is anchored to
 // the picture rather than to its button, because a timeline the width of a
 // button would be a timeline you cannot use. So it drives its own caret and

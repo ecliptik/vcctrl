@@ -30,6 +30,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -273,6 +274,50 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, blob, "video/x-msvideo", {
                     "Content-Disposition": 'attachment; filename="%s"' % name,
                     "X-Buffer-Meta": json.dumps(meta),
+                })
+            if path == "/pulled":
+                # A REAL DOWNLOAD, NOT BASE64 THROUGH JSON. The page can
+                # already read these bytes over /cmd, and doing it that way
+                # means holding a 10 MB file in a string in a phone browser
+                # and rebuilding it into a Blob. A Content-Disposition lets
+                # the browser do what browsers do.
+                #
+                # THE NAME IS NOT A PATH AND IS NOT TREATED AS ONE. It goes
+                # through the capability's own 8.3 conversion -- which is the
+                # path-traversal guard, stated as such on dos_filename -- and
+                # the bytes are read by the capability rather than by joining
+                # anything here.
+                name = ""
+                if "?" in self.path:
+                    for part in self.path.split("?", 1)[1].split("&"):
+                        k, _, v = part.partition("=")
+                        if k == "name":
+                            name = urllib.parse.unquote_plus(v)
+                files = self.cap.registry.caps.get("files")
+                if files is None:
+                    return self._json({"ok": False,
+                                       "error": "no files capability"}, 503)
+                blob, r = b"", {}
+                while True:
+                    r = files._file_pulled({"action": "read", "name": name,
+                                            "offset": len(blob)})
+                    if not r.get("ok"):
+                        # 404 for "there is no such file", 500 for a read that
+                        # broke -- a browser retrying the first would be
+                        # wasting its time, and the second may well work.
+                        return self._json(r, 404 if r.get("why") in
+                                          ("not-here", "bad-name") else 500)
+                    blob += base64.b64decode(r.get("data") or "")
+                    if r.get("eof"):
+                        break
+                    if not r.get("len"):
+                        return self._json({"ok": False, "error":
+                                           "the file stopped short at %d of "
+                                           "%d bytes" % (len(blob),
+                                                         r.get("total"))}, 500)
+                return self._send(200, blob, "application/octet-stream", {
+                    "Content-Disposition":
+                        'attachment; filename="%s"' % r.get("name", "file"),
                 })
             if path == "/frame.jpg":
                 seq = 0
@@ -591,6 +636,14 @@ class WebCapability(object):
         # `file_status` is how the page follows it, so no request is held open
         # across two reboots.
         "file_send", "file_status", "file_cancel",
+        # THE OTHER DIRECTION. `file_pull` reboots exactly as `file_send`
+        # does and is behind the same confirmation; `file_listing` is
+        # read-only and touches nothing at all -- it is the last reading of
+        # the target's outgoing directory, which is what the picker is built
+        # from. `file_pulled` reads bytes that are already on this host, and
+        # the browser downloads them through /pulled rather than through
+        # base64 in JSON.
+        "file_pull", "file_listing", "file_pulled",
         # The page names the boot profile in its title, so it needs to read
         # the reading. Read-only from here: `set`, `clear` and `blaster` are
         # reachable over the socket and from the CLI, but a browser must not

@@ -28,6 +28,7 @@ import io
 import json
 import math
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -3861,6 +3862,196 @@ def size_verdict(sizes):
     return {"ok": True, "why": None, "total": total, "reason": None}
 
 
+# The target's own account of what is in C:\XFER\OUT, and the ONLY view of it
+# that does not go through the glass. `VCLIST.BAT` redirects a DIR into a file
+# and sends that file here, so what is parsed below arrived over FTP byte for
+# byte rather than off a console that reads 13,800 as 13,808.
+#
+#     Volume in drive C is DOSKUTSU
+#     Directory of C:\XFER\OUT
+#
+#    .            <DIR>        08-24-26  10:12a
+#    ..           <DIR>        08-24-26  10:12a
+#    SCORES   DAT         1310 08-24-26  10:13a
+#            3 file(s)          1310 bytes
+#                           8994816 bytes free
+#
+# STRICT, WHERE bin/vcctrl-cfclean PARSES THE SAME LINES LENIENTLY, and the
+# difference is not taste -- it is where the bytes came from. cfclean reads a
+# screen through OCR and must survive `file<s)`; this reads a file. Importing
+# that tolerance here would buy nothing and would hide the one thing this is
+# actually checked for: a listing that arrived short.
+def dos_dir_listing(text):
+    """DOS 6.22 `DIR` output -> what is in that directory, or why not.
+
+        {"ok": True,  "why": None, "dir": "C:\\XFER\\OUT",
+         "entries": [...], "files": [...], "bytes": 1310,
+         "reported": {"count": 3, "bytes": 1310}}
+
+    THE TRAILER IS THE CHECK, and it is the reason this returns a verdict
+    rather than a list. `DIR` states its own totals, so a listing can be
+    reconciled against itself: bytes that do not add up, or a trailer that is
+    not there at all, mean the text is not a whole listing -- and a SHORT
+    LISTING IS THE DANGEROUS FAILURE, because it reads as a directory with
+    fewer files in it and nothing looks wrong. That is the same shape as the
+    truncated transfer the staging side exists to prevent, one direction over.
+
+    THE COUNT IS RECONCILED PERMISSIVELY AND THE BYTES ARE NOT. `.` and `..`
+    ARE counted by `file(s)` -- measured on the card 2026-08-24, where a
+    directory holding two files reported `4 file(s)`. That was an assumption
+    when this was written and is now a reading, and the permissive check is
+    kept anyway: it costs nothing, and the byte total is the one that can
+    refuse. Individual file sizes carry thousands separators on this DOS
+    (`2,434`), which was the other thing this had to guess and no longer does.
+
+    NAMES ARE NOT TRUSTED, and this is the boundary. The text arrives from the
+    target, and every name in it is about to be joined onto a path on this
+    host and typed into a command on that one. So each is put through
+    `dos_filename()` and must come back UNCHANGED; anything that does not is
+    listed and marked unfetchable rather than silently corrected, because a
+    name we had to alter is a name that will not match the file on the card.
+
+    The `why` set here is NOT CLOSED:
+
+        unreadable    nothing that looks like DIR output
+        no-dir        DIR said File not found -- the directory is not there
+        truncated     no `N file(s)` trailer, so the listing may be short
+        unreconciled  the sizes do not add up to the total DIR reported
+        unsafe-name   (per entry) the name does not survive the 8.3 round
+                      trip, so it is shown but cannot be fetched
+    """
+    raw = text.decode("cp437", "replace") if isinstance(text, bytes) else \
+        (text or "")
+    lines = raw.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    where, entries = None, []
+    reported = {"count": None, "bytes": None}
+    not_found = False
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        low = s.lower()
+        if low.startswith("directory of"):
+            where = s.split(None, 2)[-1].strip()
+            continue
+        if low.startswith("file not found"):
+            not_found = True
+            continue
+        m = re.match(r"^([\d,]+)\s+file\(s\)\s+([\d,]+)\s+bytes\s*$", s, re.I)
+        if m:
+            reported = {"count": int(m.group(1).replace(",", "")),
+                        "bytes": int(m.group(2).replace(",", ""))}
+            continue
+        if low.endswith("bytes free") or low.startswith("volume in drive") \
+                or low.startswith("volume serial"):
+            continue
+        rec = _dos_dir_entry(s)
+        if rec is not None:
+            entries.append(rec)
+
+    files = [e for e in entries if e["kind"] == "file"]
+    total = sum(e["bytes"] for e in files)
+    out = {"ok": False, "why": None, "reason": None, "dir": where,
+           "entries": entries, "files": files, "bytes": total,
+           "reported": reported}
+
+    if (where is None and not entries and reported["count"] is None
+            and not not_found):
+        # NOT A SHORT LISTING -- NOT A LISTING AT ALL. `DIR` failing writes its
+        # complaint into the same file the good output would have gone to, so
+        # what arrives is a sentence rather than a truncated table. Calling
+        # that `truncated` would send somebody looking for the missing half of
+        # something that was never there.
+        out["why"] = "unreadable"
+        out["reason"] = ("nothing in this file looks like DIR output -- no "
+                         "directory header, no entries and no total. Whatever "
+                         "ran on the target, it was not a listing")
+        return out
+    if not_found and not entries:
+        out["why"] = "no-dir"
+        out["reason"] = ("DIR said File not found: %s does not exist on the "
+                         "target" % (where or "the directory"))
+        return out
+    if reported["count"] is None:
+        # NOT "an empty directory". An empty one still prints its trailer --
+        # `2 file(s) 0 bytes` for the . and .. entries -- so a listing with no
+        # trailer is a listing that stopped early, and treating it as empty
+        # would report a directory of files as containing none.
+        out["why"] = "truncated"
+        out["reason"] = ("no `N file(s)` line, so this is not a whole DIR "
+                         "listing -- it stopped early rather than being empty")
+        return out
+    if total != reported["bytes"]:
+        out["why"] = "unreconciled"
+        out["reason"] = ("the file sizes add up to %d bytes and DIR reported "
+                         "%d -- a line is missing or was misparsed"
+                         % (total, reported["bytes"]))
+        return out
+    # PERMISSIVE, AND SAID SO. Whether `.` and `..` are inside DIR's own count
+    # is a fact about MS-DOS 6.22 that is asserted here rather than measured,
+    # so both readings pass and neither is called wrong.
+    dirs = len(entries) - len(files)
+    if reported["count"] not in (len(entries), len(files),
+                                 len(entries) - dirs):
+        out["why"] = "unreconciled"
+        out["reason"] = ("DIR counted %d entries and %d were parsed"
+                         % (reported["count"], len(entries)))
+        return out
+    out["ok"] = True
+    return out
+
+
+def _dos_dir_entry(s):
+    """One DIR line -> a record, or None if the line is not one.
+
+    Tokens rather than columns. The column layout is fixed on 6.22 and a
+    fixed-column parser is still the more brittle choice: it fails silently by
+    slicing a name in half, where a token parser that does not recognise a
+    line returns None and the reconciliation above then refuses the listing.
+    """
+    parts = s.split()
+    if len(parts) < 3:
+        return None
+    # The last two tokens are the date and the time. Anchoring on the END is
+    # what lets `.` and `..` parse with the same rule as everything else.
+    if not re.match(r"^\d\d-\d\d-\d\d$", parts[-2]):
+        return None
+    if not re.match(r"^\d{1,2}:\d\d[apAP]?m?$", parts[-1]):
+        return None
+    size_tok = parts[-3]
+    head = parts[:-3]
+    if not head:
+        return None
+    if size_tok.upper() == "<DIR>":
+        kind, nbytes = "dir", 0
+    elif re.match(r"^[\d,]+$", size_tok):
+        kind, nbytes = "file", int(size_tok.replace(",", ""))
+    else:
+        return None
+    base = head[0]
+    ext = head[1] if len(head) > 1 else ""
+    if len(head) > 2:
+        # A name with a space in it. FAT permits one and every command line
+        # that carries the name does not, so this is reported as seen and
+        # refused as fetchable rather than being joined back up into a name
+        # that would arrive as two arguments.
+        base, ext = " ".join(head[:-1]), head[-1]
+    name = base + ("." + ext if ext else "")
+    rec = {"name": name, "bytes": nbytes, "kind": kind,
+           "date": parts[-2], "time": parts[-1],
+           "fetchable": kind == "file", "why": None}
+    if rec["fetchable"]:
+        try:
+            safe, _notes = dos_filename(name)
+        except ValueError:
+            safe = None
+        if safe != name:
+            rec["fetchable"] = False
+            rec["why"] = "unsafe-name"
+    return rec
+
+
 class TargetProfile(object):
     """The boot profile the target is currently running -- as a READING.
 
@@ -4341,8 +4532,8 @@ class RegistryDriver(object):
         return None
 
 
-class TransferJob(object):
-    """One transfer: reboot into NET, send the queue, verify, come back.
+class NetJob(object):
+    """The spine both directions share: reboot into NET, prove it, come back.
 
     NO OCR IN ANY VERDICT, AND THAT IS THE DESIGN RATHER THAN AN ECONOMY.
     Every witness here is either a hardware LED edge or a byte arriving on
@@ -4352,6 +4543,7 @@ class TransferJob(object):
         the boot completed         Scroll Lock 0 -> 1   (RDYPULSE, ~16 s)
         NET really booted          a file arrives in incoming/
         the payload really landed  its bytes come back and the sha matches
+        what is on the card        a DIR arrives in incoming/ as a FILE
 
     The earlier design gated on reading `PKTTOOL SCAN` off the screen. That
     needed OCR in the daemon -- which lives in the client, not here -- and it
@@ -4368,6 +4560,13 @@ class TransferJob(object):
     happen, not the gate. Which is the right way round -- a diagnostic that
     cannot fail the run cannot mislead it either.
 
+    ONE CLASS BECAUSE THE SEQUENCE IS ONE FACT. Sending files and fetching
+    them differ only in what gets typed once the prompt is there: the arming,
+    the reboot, the blind menu selection, the readiness pulse, the arrival
+    that proves the network and the reboot back are identical in both. Held as
+    two copies, the next fix would land in one of them -- and the half that
+    did not get it would be the half nobody ran that week.
+
     The driver is injected so the whole sequence is testable without a rig.
     """
 
@@ -4378,10 +4577,9 @@ class TransferJob(object):
     PROOF_SOURCE = "C:\\MTCP\\TCP.CFG"
     PROOF_NAME = "NETPROOF.TXT"
 
-    def __init__(self, cap, driver, dest=None, do_return=True, log=None):
+    def __init__(self, cap, driver, do_return=True, log=None):
         self.cap = cap
         self.d = driver
-        self.dest = dest or (cap.settings or {}).get("dest", DEFAULT_DEST)
         self.do_return = do_return
         # THE CALLER'S LIST, NOT A PRIVATE ONE. This kept its own and the job
         # record was only updated when run() returned -- so file_status showed
@@ -4389,21 +4587,30 @@ class TransferJob(object):
         # once. Live progress is the whole reason this is a job rather than a
         # blocking call, and it was the one thing it did not do.
         self.log = [] if log is None else log
+        # WHETHER THE MACHINE IS IN NET RIGHT NOW, tracked rather than
+        # inferred from `do_return`. The successful paths already reported it;
+        # the REFUSALS did not, and half of them can only happen after the
+        # reboot -- a listing that never came back, a selection over the
+        # ceiling. "The run failed" and "the target is sitting in the profile
+        # no measured run may start from" are two facts, and the second one is
+        # the one that costs somebody a cell.
+        self.in_net = False
 
     def _say(self, phase, text, **kw):
         rec = dict(kw, phase=phase, text=text, t=time.time())
         self.log.append(rec)
         return rec
 
-    def run(self):
-        """{"ok", "why", "files": [...], "log": [...]}."""
-        queue = self.cap._queued()
-        if not queue:
-            # A CHECK MAY NOT PASS ON NOTHING. An empty queue that rebooted the
-            # machine and reported success would be the purest form of it.
-            return self._fail("empty-queue",
-                              "nothing is staged, so there is nothing to send")
+    # -- getting there, and back ----------------------------------------------
 
+    def _enter_net(self):
+        """True, or the refusal that stopped it. Leaves a proved NET prompt.
+
+        THE ORDER IS THE POINT RATHER THAN THE LIST. Everything checkable from
+        this host is checked from this host, because a refusal after the
+        reboot has already cost two minutes and the target's entire
+        environment for a fault a shell command would have fixed.
+        """
         snap = self.cap.snapshot()
         if not snap["available"]:
             return self._fail(snap["why"], snap["reason"])
@@ -4426,6 +4633,12 @@ class TransferJob(object):
                               "blind")
         self._say("reboot", "rebooting into the NET profile")
         PROFILE.invalidate("rebooting for a file transfer")
+        # SET BEFORE THE KEYSTROKE, NOT AFTER THE BOOT. From here on the
+        # machine is rebooting towards NET, and every refusal below this line
+        # leaves it there or somewhere unknown -- which is the state worth
+        # reporting. Setting it once the boot succeeded would have said False
+        # on exactly the paths where it matters most.
+        self.in_net = True
         self.d.combo(["ctrl", "alt", "delete"])
 
         # BLIND, AND TIMED. The CONFIG.SYS menu is text mode 03h at 70 Hz and
@@ -4448,7 +4661,202 @@ class TransferJob(object):
                               "machine did not finish booting, or "
                               "RDYPULSE.COM is missing from the card")
 
-        gate = self._prove_net()
+        return self._prove_net()
+
+    def _prove_net(self):
+        """One arrival proves four things. Nothing else here proves any."""
+        self._say("attest", "proving NET by making the target send a file back")
+        before = time.time()
+        self.d.type_line("C:\\MTCP\\VCCHK.BAT %s %s"
+                         % (self.PROOF_SOURCE, self.PROOF_NAME))
+        if self.cap._await_incoming(self.PROOF_NAME, before,
+                                    self.d.transfer_timeout()):
+            self._say("attest", "NET confirmed: the target reached this host")
+            return True
+        # The gate has failed. NOW ask the screen why -- as a diagnosis, which
+        # cannot promote a failure into a pass because it runs only on this
+        # path and its answer is never a verdict.
+        detail = ""
+        try:
+            text = self.d.screen()
+        except Exception:
+            text = None
+        seen = packet_driver_seen(text)
+        if seen is False:
+            detail = (" PKTTOOL says no packet driver is loaded, so the menu "
+                      "selection did not land on NET.")
+        else:
+            hint = packet_driver_reason(text)
+            if hint:
+                detail = " " + hint
+        return self._fail("no-net",
+                          "nothing arrived from the target, so NET is not up, "
+                          "or it cannot reach this host, or the credentials on "
+                          "the card do not match.%s" % detail)
+
+    def _leave_net(self):
+        """The reboot back, or the sentence that says why there was not one.
+
+        ARMED, LIKE THE OUTWARD LEG, AND IT WAS NOT -- WHICH MADE THIS WHOLE
+        BRANCH A CHECK THAT COULD NOT FAIL. Measured on the rig 2026-08-24, in
+        the first real fetch:
+
+            +69.5 s  return   returning to the menu default
+            +69.5 s  return   the machine booted; which profile is unread
+
+        Zero seconds apart, on a machine that takes about forty to come back.
+        `wait_boot()` waits for Scroll Lock to READ 1, and RDYPULSE from the
+        boot we were already in had left it at 1 -- so it returned on its first
+        poll, before the reset had even happened. The line said the machine had
+        booted; nothing had been observed at all.
+
+        The cost is not the wrong log line. It is that `left_in_net` was set
+        false on the strength of it, and that the failure branch below --
+        the one that warns the target may still be in NET -- was unreachable
+        for as long as this code has existed. A witness that cannot fail is
+        not a witness, and this one was reporting on the ONE state the whole
+        feature is careful about.
+
+        So the return leg now uses the same two edges the outward leg does:
+        arm, then 1 -> 0 (POST cleared it, so a reset really happened), then
+        0 -> 1 (RDYPULSE ran, so a boot really finished). Nothing is typed at
+        the menu -- the timeout landing on the default is the point.
+
+        WHEN IT CANNOT SEE, IT SAYS SO AND STAYS PESSIMISTIC. `in_net` is only
+        cleared by a boot that was actually witnessed; an unarmed or unseen
+        return leaves it standing, because "I could not look" is not a reading
+        of "the machine came back".
+        """
+        if not self.do_return:
+            self._say("stay", "left in NET at your request -- a measured run "
+                              "must not start from here")
+            return
+        armed = self.d.arm() if hasattr(self.d, "arm") else False
+        self._say("return", "returning to the menu default")
+        PROFILE.invalidate("returning from a file transfer")
+        self.d.combo(["ctrl", "alt", "delete"])
+        if not armed:
+            self._say("return", "COULD NOT SET SCROLL LOCK BEFORE THE RETURN "
+                                "REBOOT, so nothing here can see whether the "
+                                "machine came back. It was told to; that is "
+                                "all this can say", warn=True)
+            return
+        if not self.d.wait_menu():
+            self._say("return", "NO RESET AFTER THE RETURN REBOOT -- Scroll "
+                                "Lock never cleared, so the machine may still "
+                                "be in NET, which no measured run may start "
+                                "from", warn=True)
+            return
+        if self.d.wait_boot():
+            # DELIBERATELY NOT ASSERTING WHICH PROFILE. The timeout lands on
+            # the default and that is what we typed nothing to change -- but
+            # nothing here READ it, and a name written down without a reading
+            # behind it is the hardcoded "(profile is PGSB)" all over again.
+            #
+            # WHAT IT DOES SAY is that the machine is no longer in NET, which
+            # is a weaker claim and an honest one: it rebooted, and nothing
+            # selected NET this time. A missing pulse leaves in_net standing,
+            # which is what the warning below is about.
+            self.in_net = False
+            self._say("return", "the machine booted; which profile is unread")
+        else:
+            self._say("return", "NO READINESS PULSE AFTER THE RETURN REBOOT -- "
+                                "the machine may still be in NET, which no "
+                                "measured run may start from", warn=True)
+
+    def _cancelled(self):
+        job = FilesCapability._job
+        return bool(job and job.get("cancel"))
+
+    def _fail(self, why, reason):
+        """Refuse the run, naming which gate stopped it.
+
+        THE VOCABULARY, AND IT IS NOT CLOSED. What stopped the RUN:
+
+            empty-queue   nothing staged -- a run that rebooted and reported
+                          success on an empty queue would be the purest form
+                          of a check passing on nothing
+            unreachable   the file server is not answering (checked BEFORE
+                          anything reboots)
+            unchecked     that check could not be made
+            no-witness    Scroll Lock could not be set, so a reboot would be
+                          invisible -- refusing beats rebooting blind
+            no-reset      Scroll Lock never cleared, so the reboot did not
+                          happen at all
+            no-boot       no readiness pulse: the machine did not finish
+                          booting, or RDYPULSE.COM is missing
+            no-net        nothing arrived from the target -- NET is not up, or
+                          it cannot reach this host, or the card's credentials
+                          do not match. One arrival would have proved all three
+            no-listing    the DIR of the target's OUT directory never came
+                          back, so what is on the card is unknown -- and an
+                          unknown directory is not an empty one
+            too-large     the selection is over the ceiling (checked BEFORE
+                          anything is typed, and against the total)
+            busy          a transfer is already running -- refused rather than
+                          queued, because two runs interleaving their reboots
+                          would each misread the other's machine state
+            nothing-asked a fetch that named nothing. It will not guess
+                          between "everything" and "the listing", because both
+                          readings cost a reboot
+            unsequenced   no registry to drive input through
+            crashed       the job raised; the target is very likely still in
+                          NET, which nothing downstream can otherwise tell
+
+        And what stopped ONE FILE, which never stops the run on its own:
+
+            no-prompt     the prompt did not come back; the machine's state is
+                          unknown and the next command would be typed blind.
+                          This one DOES stop the run, because everything after
+                          it would be typed into the dark
+            no-return     a file did not come back, so whether it arrived on
+                          the target is unknown
+            sha-mismatch  it came back different: the copy on the target is
+                          not the file that was staged
+            not-listed    asked for by name, and the target's own DIR does not
+                          have it. Never typed at the machine
+            unsafe-name   the name does not survive the 8.3 round trip, so it
+                          cannot be joined onto a path here or typed there
+            empty         zero bytes on the card. A zero-byte arrival cannot
+                          be told from no arrival at all, so it is refused
+                          rather than reported as a success
+            size-mismatch what came back is not the size the target's DIR said
+                          it was -- a short transfer, which is the failure
+                          GET.BAT could never see
+            unstable      two fetches of the same file disagree
+
+        `unsupported`, `unknown` and `not_configured` reach here unchanged
+        from FilesCapability.snapshot(), which is where they are defined, and
+        the listing's own words are defined on dos_dir_listing().
+        """
+        self._say("refused", reason, why=why)
+        return {"ok": False, "why": why, "reason": reason, "files": [],
+                "left_in_net": self.in_net, "log": self.log}
+
+
+class TransferJob(NetJob):
+    """One transfer: reboot into NET, send the queue, verify, come back.
+
+    THE VERIFICATION IS A ROUND TRIP AND IT IS THE STRONG DIRECTION. The
+    staged copy was sha256'd when it landed here, so pulling the target's copy
+    back and comparing proves the payload rather than the transport. PullJob
+    is the same sequence with a weaker verdict available to it, and says so.
+    """
+
+    def __init__(self, cap, driver, dest=None, do_return=True, log=None):
+        NetJob.__init__(self, cap, driver, do_return=do_return, log=log)
+        self.dest = dest or (cap.settings or {}).get("dest", DEFAULT_DEST)
+
+    def run(self):
+        """{"ok", "why", "files": [...], "log": [...]}."""
+        queue = self.cap._queued()
+        if not queue:
+            # A CHECK MAY NOT PASS ON NOTHING. An empty queue that rebooted the
+            # machine and reported success would be the purest form of it.
+            return self._fail("empty-queue",
+                              "nothing is staged, so there is nothing to send")
+
+        gate = self._enter_net()
         if gate is not True:
             return gate
 
@@ -4490,38 +4898,13 @@ class TransferJob(object):
                 # it here made run() incomplete for anyone not going through
                 # the job wrapper.
                 "files": results, "log": self.log,
-                "left_in_net": not self.do_return}
-
-    def _prove_net(self):
-        """One arrival proves four things. Nothing else here proves any."""
-        self._say("attest", "proving NET by making the target send a file back")
-        before = time.time()
-        self.d.type_line("C:\\MTCP\\VCCHK.BAT %s %s"
-                         % (self.PROOF_SOURCE, self.PROOF_NAME))
-        if self.cap._await_incoming(self.PROOF_NAME, before,
-                                    self.d.transfer_timeout()):
-            self._say("attest", "NET confirmed: the target reached this host")
-            return True
-        # The gate has failed. NOW ask the screen why -- as a diagnosis, which
-        # cannot promote a failure into a pass because it runs only on this
-        # path and its answer is never a verdict.
-        detail = ""
-        try:
-            text = self.d.screen()
-        except Exception:
-            text = None
-        seen = packet_driver_seen(text)
-        if seen is False:
-            detail = (" PKTTOOL says no packet driver is loaded, so the menu "
-                      "selection did not land on NET.")
-        else:
-            hint = packet_driver_reason(text)
-            if hint:
-                detail = " " + hint
-        return self._fail("no-net",
-                          "nothing arrived from the target, so NET is not up, "
-                          "or it cannot reach this host, or the credentials on "
-                          "the card do not match.%s" % detail)
+                # THE TRACKED FACT, NOT THE INTENTION. This was
+                # `not self.do_return`, which reports a run that asked to come
+                # back and got no readiness pulse as one that came back -- in
+                # the same result whose log says the machine may still be in
+                # NET. Two statements, one of them read by consumers, and they
+                # disagreed exactly when it mattered.
+                "left_in_net": self.in_net}
 
     def _send_one(self, rec):
         name = rec["name"]
@@ -4577,67 +4960,308 @@ class TransferJob(object):
         for r in results:
             if r["ok"]:
                 self.cap._file_queue({"action": "clear", "name": r["name"]})
-        if not self.do_return:
-            self._say("stay", "left in NET at your request -- a measured run "
-                              "must not start from here")
-            return
-        self._say("return", "returning to the menu default")
-        PROFILE.invalidate("returning from a file transfer")
-        self.d.combo(["ctrl", "alt", "delete"])
-        if self.d.wait_boot():
-            # DELIBERATELY NOT ASSERTING WHICH PROFILE. The timeout lands on
-            # the default and that is what we typed nothing to change -- but
-            # nothing here READ it, and a name written down without a reading
-            # behind it is the hardcoded "(profile is PGSB)" all over again.
-            self._say("return", "the machine booted; which profile is unread")
-        else:
-            self._say("return", "NO READINESS PULSE AFTER THE RETURN REBOOT -- "
-                                "the machine may still be in NET, which no "
-                                "measured run may start from", warn=True)
+        self._leave_net()
 
-    def _cancelled(self):
-        job = FilesCapability._job
-        return bool(job and job.get("cancel"))
 
-    def _fail(self, why, reason):
-        """Refuse the run, naming which gate stopped it.
+class PullJob(NetJob):
+    """One fetch: reboot into NET, read C:\\XFER\\OUT, bring files back, return.
 
-        THE VOCABULARY, AND IT IS NOT CLOSED:
+    THE MIRROR OF TransferJob, AND ITS VERDICT IS WEAKER BY ONE STEP. That is
+    written here rather than left to be inferred, because the two directions
+    look symmetric and are not. A push is proved against a known quantity: the
+    staged copy was sha256'd when it landed on this host, so the round trip
+    compares the target's copy against something whose bytes are certain.
+    Nothing on a DOS 6.22 machine can hash a file, so a pull has no such
+    quantity to compare against. What it has instead:
 
-            empty-queue   nothing staged -- a run that rebooted and reported
-                          success on an empty queue would be the purest form
-                          of a check passing on nothing
-            unreachable   the file server is not answering (checked BEFORE
-                          anything reboots)
-            unchecked     that check could not be made
-            no-witness    Scroll Lock could not be set, so a reboot would be
-                          invisible -- refusing beats rebooting blind
-            no-reset      Scroll Lock never cleared, so the reboot did not
-                          happen at all
-            no-boot       no readiness pulse: the machine did not finish
-                          booting, or RDYPULSE.COM is missing
-            no-net        nothing arrived from the target -- NET is not up, or
-                          it cannot reach this host, or the card's credentials
-                          do not match. One arrival would have proved all three
-            no-prompt     the prompt did not come back; the machine's state is
-                          unknown and the next command would be typed blind
-            no-return     a file did not come back, so whether it arrived on
-                          the target is unknown
-            sha-mismatch  it came back different: the copy on the target is
-                          not the file that was staged
-            busy          a transfer is already running -- refused rather than
-                          queued, because two runs interleaving their reboots
-                          would each misread the other's machine state
-            unsequenced   no registry to drive input through
-            crashed       the job raised; the target is very likely still in
-                          NET, which nothing downstream can otherwise tell
+        THE LISTING'S SIZE. `DIR` states the file's length, and that number
+        reaches this host AS A FILE -- not off a console that reads 13,800 as
+        13,808. A transfer that arrives short cannot match it, and short is
+        the failure that otherwise looks exactly like success.
 
-        `unsupported`, `unknown` and `not_configured` reach here unchanged
-        from FilesCapability.snapshot(), which is where they are defined.
+        OPTIONALLY, A SECOND FETCH, compared against the first. That proves
+        the path is repeatable. It does NOT prove either copy equals what is
+        on the card, and calling it "byte for byte" would be borrowing a
+        phrase from the other direction, where it is earned.
+
+    So the result says WHICH check ran -- `size` or `size+repeat` -- rather
+    than letting one word cover both. The card's own account of the file is
+    the strongest witness available in this direction; it is not the same
+    claim as the upload path's, and the vocabulary keeps them apart.
+
+    THE LISTING IS ALSO THE SAFETY. Nothing is typed at the target that did
+    not come out of its own DIR: a name asked for and not listed is refused
+    here, never sent, so a typo cannot become an FTP session for a file that
+    does not exist -- and a name that does not survive the 8.3 round trip is
+    shown to the operator and refused, because a name we had to alter is one
+    that would not match the file on the card anyway.
+    """
+
+    LISTING_NAME = "VCLIST.TXT"
+
+    def __init__(self, cap, driver, names=None, want_all=False,
+                 refresh_only=False, paranoid=False, do_return=True, log=None):
+        NetJob.__init__(self, cap, driver, do_return=do_return, log=log)
+        self.names = list(names or ())
+        self.want_all = bool(want_all)
+        self.refresh_only = bool(refresh_only)
+        self.paranoid = bool(paranoid)
+        self.out_dir = cap._out_dir()
+
+    def run(self):
+        """{"ok", "why", "files": [...], "listing": {...}, "log": [...]}."""
+        gate = self._enter_net()
+        if gate is not True:
+            return gate
+
+        listing = self._read_listing()
+        if listing is None:
+            self._leave_net()
+            return self._fail("no-listing",
+                              "the target never sent back a DIR of %s, so "
+                              "what is on the card is unknown -- which is not "
+                              "the same as it being empty" % self.out_dir)
+        # STORED WHETHER OR NOT IT PARSED, and the store keeps the last
+        # readable one separately. A failed read must not delete a good
+        # listing (it is older, not wrong), and it must not be hidden either
+        # -- "could not look" is a fact about this attempt and belongs beside
+        # the answer it failed to refresh.
+        self.cap._save_listing(listing)
+        if not listing["ok"]:
+            self._leave_net()
+            return self._fail(listing["why"], listing["reason"])
+
+        n = len(listing["files"])
+        self._say("list", "%s holds %d file%s" % (self.out_dir, n,
+                                                  "" if n == 1 else "s"),
+                  listing=True)
+        if self.refresh_only:
+            # A LISTING IS A RESULT. Nothing was fetched because nothing was
+            # asked for, so this is complete rather than empty-handed.
+            self._leave_net()
+            return {"ok": True, "why": None, "complete": True,
+                    "cancelled": False, "remaining": [], "files": [],
+                    "listing": listing, "log": self.log,
+                    "left_in_net": self.in_net}
+
+        selected, refused = self._select(listing)
+        if not selected and not refused:
+            # NOTHING TO FETCH IS NOT A FAILED FETCH. The run rebooted, read
+            # the directory and found it empty; reporting that as ok=False
+            # with no failing file in it would be a refusal nobody can act on,
+            # and the pressure it creates is to fetch something to make the
+            # run look successful.
+            self._say("list", "nothing to fetch: %s is empty" % self.out_dir)
+            self._leave_net()
+            return {"ok": True, "why": None, "complete": True,
+                    "cancelled": False, "remaining": [], "files": [],
+                    "listing": listing, "log": self.log,
+                    "left_in_net": self.in_net}
+        if selected:
+            verdict = size_verdict([r["bytes"] for r in selected])
+            if not verdict["ok"]:
+                # BEFORE ANYTHING IS TYPED, and against the total rather than
+                # the biggest -- the same rule the staging side applies, for
+                # the same reason: files walk past a per-file ceiling one at a
+                # time.
+                self._leave_net()
+                return self._fail("too-large", verdict["reason"])
+            if verdict["why"]:
+                self._say("size", verdict["reason"], warn=True)
+
+        results = list(refused)
+        done = []
+        for rec in selected:
+            if self._cancelled():
+                self._say("cancel", "stopped between files, as asked")
+                break
+            r = self._fetch_one(rec)
+            results.append(r)
+            done.append(rec["name"])
+            if r.get("why") == "no-prompt":
+                self._say("abort", "the prompt did not come back; stopping "
+                                   "rather than typing blind")
+                break
+
+        cancelled = self._cancelled()
+        self._leave_net()
+        left = [r["name"] for r in selected if r["name"] not in done]
+        # THE SAME TWO FACTS THE SEND SIDE KEEPS APART. `ok` answers "did
+        # everything I attempted succeed" and is vacuously true when nothing
+        # was attempted -- a run cancelled before the first file. `complete`
+        # is what says the job was done, and it cannot be true on nothing:
+        # an empty selection has already returned above, saying so positively.
+        return {"ok": all(r["ok"] for r in results), "why": None,
+                "complete": not cancelled and not left and not refused,
+                "cancelled": cancelled, "remaining": left,
+                "files": results, "listing": listing, "log": self.log,
+                "left_in_net": self.in_net}
+
+    # -- reading the directory ------------------------------------------------
+
+    def _read_listing(self):
+        """The target's DIR of its OUT directory, parsed, or None if none came.
+
+        ONE TYPED COMMAND, for the reason the whole feature is built this way:
+        `VCLIST.BAT` redirects the DIR into a file and sends it, so nothing
+        here has to decide when DOS is ready for a second command. The answer
+        to that question cost this project a command truncated to fifteen
+        characters, and there is still no honest way to ask it.
         """
-        self._say("refused", reason, why=why)
-        return {"ok": False, "why": why, "reason": reason, "files": [],
-                "log": self.log}
+        self._say("list", "reading %s" % self.out_dir)
+        before = time.time()
+        self.d.type_line("C:\\MTCP\\VCLIST.BAT %s" % self.out_dir)
+        if not self.cap._await_incoming(self.LISTING_NAME, before,
+                                        self.d.transfer_timeout()):
+            return None
+        path = self.cap._incoming_path(self.LISTING_NAME)
+        if path is None:
+            return None
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError:
+            return None
+        # CONSUMED. incoming/ is inside the FTP root and the target can write
+        # it, so a listing left lying there is a file a later read could find
+        # and mistake for its own -- the mtime guard already refuses that, and
+        # not leaving the trap is cheaper than trusting the guard twice.
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        out = dos_dir_listing(raw)
+        out["raw"] = raw.decode("cp437", "replace")[:64 * 1024]
+        out["read_at"] = time.time()
+        return out
+
+    def _select(self, listing):
+        """(what to fetch, what is refused before anything is typed).
+
+        THE REFUSALS ARE RESULTS, NOT SILENCE. A name that is not on the card,
+        a name that cannot be spelled and a zero-byte file are each reported
+        as a failed file rather than quietly dropped -- otherwise a pull of
+        four names that fetched two would read as a success with two files in
+        it, which is the shape of half-truth this rig keeps producing.
+        """
+        by_name = {}
+        for rec in listing["files"]:
+            by_name.setdefault(rec["name"].upper(), rec)
+
+        wanted, refused = [], []
+        if self.want_all:
+            asked = [r["name"] for r in listing["files"]]
+        else:
+            asked = self.names
+        seen = set()
+        for raw in asked:
+            key = str(raw or "").strip().upper()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            rec = by_name.get(key)
+            if rec is None:
+                refused.append({"name": key, "ok": False, "why": "not-listed",
+                                "reason": ("%s is not in the target's own DIR "
+                                           "of %s, so it was never typed at "
+                                           "the machine" % (key, self.out_dir))})
+                continue
+            if not rec["fetchable"]:
+                refused.append({"name": rec["name"], "ok": False,
+                                "why": rec["why"] or "unsafe-name",
+                                "bytes": rec["bytes"],
+                                "reason": ("%r does not survive the DOS 8.3 "
+                                           "round trip, so it cannot be "
+                                           "joined onto a path here or typed "
+                                           "as one argument there"
+                                           % rec["name"])})
+                continue
+            if rec["bytes"] <= 0:
+                # A ZERO CLOSES THE QUESTION IN THE WRONG DIRECTION. Arrival
+                # is proved by bytes appearing and settling, so a zero-byte
+                # file is indistinguishable from one that never came -- there
+                # is no reading of the wait that means "it worked".
+                refused.append({"name": rec["name"], "ok": False,
+                                "why": "empty", "bytes": 0,
+                                "reason": ("%s is zero bytes on the card, and "
+                                           "a zero-byte arrival cannot be "
+                                           "told from no arrival at all"
+                                           % rec["name"])})
+                continue
+            wanted.append(rec)
+        return wanted, refused
+
+    # -- bringing one file back -----------------------------------------------
+
+    def _fetch_one(self, rec):
+        name, want = rec["name"], rec["bytes"]
+        src = self.out_dir.rstrip("\\") + "\\" + name
+        self._say("fetch", "fetching %s (%d bytes)" % (name, want), name=name)
+
+        path, why = self._leg(src, name)
+        if why:
+            return {"name": name, "ok": False, "why": why, "bytes": want,
+                    "reason": ("%s did not come back, so whether it left the "
+                               "target is unknown" % name) if why == "no-return"
+                              else ("%s did not come back and the machine is "
+                                    "not responding to a keystroke either"
+                                    % name)}
+        got = os.path.getsize(path)
+        if got != want:
+            self.cap._drop_incoming(path)
+            return {"name": name, "ok": False, "why": "size-mismatch",
+                    "bytes": got, "listed_bytes": want,
+                    "reason": ("%s arrived as %d bytes and the target's own "
+                               "DIR says it is %d -- a short transfer, which "
+                               "is exactly what a copy that looks fine would "
+                               "hide" % (name, got, want))}
+        sha = self.cap._sha_of(path)
+        verified = "size"
+        if self.paranoid:
+            second, why2 = self._leg(src, name + ".CH2")
+            if why2:
+                self.cap._drop_incoming(path)
+                return {"name": name, "ok": False, "why": why2, "bytes": want,
+                        "reason": ("the second fetch of %s never came back, "
+                                   "so the pair could not be compared" % name)}
+            again = self.cap._sha_of(second)
+            self.cap._drop_incoming(second)
+            if again != sha:
+                self.cap._drop_incoming(path)
+                return {"name": name, "ok": False, "why": "unstable",
+                        "bytes": got, "sha256": sha, "sha256_second": again,
+                        "reason": ("two fetches of %s disagree, so the path "
+                                   "is not repeatable and neither copy can be "
+                                   "trusted" % name)}
+            verified = "size+repeat"
+        dest, replaced = self.cap._promote_pulled(path, name, {
+            "name": name, "bytes": got, "sha256": sha, "verified": verified,
+            "source": src, "listed_bytes": want, "pulled_at": time.time()})
+        self._say("verify", "%s came back %s%s"
+                  % (name, "the size the card says it is" if verified == "size"
+                     else "twice, and the two copies agree",
+                     " (replacing an earlier copy)" if replaced else ""),
+                  name=name)
+        return {"name": name, "ok": True, "why": None, "bytes": got,
+                "sha256": sha, "verified": verified, "path": dest,
+                "source": src}
+
+    def _leg(self, src, server_name):
+        """Type one VCCHK and wait for the bytes. (path, None) or (None, why).
+
+        The readiness probe is used HERE and nowhere else -- as a tiebreaker
+        after something has already gone wrong, never as a gate in the happy
+        path. It tests whether the BIOS keyboard ISR is alive, not whether DOS
+        is reading, which is worth having only when the alternative is
+        guessing between "the transfer failed" and "the machine is wedged".
+        """
+        before = time.time()
+        self.d.type_line("C:\\MTCP\\VCCHK.BAT %s %s" % (src, server_name))
+        if not self.cap._await_incoming(server_name, before,
+                                        self.d.transfer_timeout()):
+            return None, ("no-return" if self.d.wait_prompt() else "no-prompt")
+        path = self.cap._incoming_path(server_name)
+        return (path, None) if path else (None, "no-return")
 
 
 class FilesCapability(Capability):
@@ -4672,7 +5296,15 @@ class FilesCapability(Capability):
                 "file_name": self._file_name, "file_stage": self._file_stage,
                 "file_queue": self._file_queue, "file_send": self._file_send,
                 "file_status": self._file_status,
-                "file_cancel": self._file_cancel, "file_bats": self._file_bats}
+                "file_cancel": self._file_cancel, "file_bats": self._file_bats,
+                # The other direction. `file_pull` is the job -- it reboots,
+                # and it is the only one here that touches the target;
+                # `file_listing` reads what the last one learned, and
+                # `file_pulled` is what has already been brought back and
+                # lives on this host.
+                "file_pull": self._file_pull,
+                "file_listing": self._file_listing,
+                "file_pulled": self._file_pulled}
 
     # -- the two BATs the card needs ------------------------------------------
     #
@@ -4775,6 +5407,62 @@ ECHO Usage: VCCHK source-path name-on-server
 :END
 """
 
+    # THE THIRD BAT, AND THE ONE THAT MAKES A DOWNLOAD POSSIBLE AT ALL.
+    #
+    # Fetching a file needs no new batch file -- VCCHK already puts a named
+    # path back on this host, which is exactly a download. What has no answer
+    # without this one is KNOWING WHAT IS THERE. The only other way to read a
+    # directory on that machine is to look at the screen, and this console
+    # reads `13,800` as `13,808` and `10 file(s)` as `18 file(s)`. A file
+    # picker built on those numbers would offer files that do not exist and
+    # hide ones that do.
+    #
+    # So the DIR is redirected into a file and the file is sent. It arrives
+    # byte for byte, it states its own totals, and it can be reconciled
+    # against itself -- none of which is true of a photograph of a screen.
+    #
+    # ONE TYPED COMMAND, for the reason every other command here is one: DOS
+    # runs a batch file's lines in order and needs no help doing it, and there
+    # is still no honest way to ask this machine whether it is ready for a
+    # second one.
+    VCLIST_BAT = """@ECHO OFF
+REM VCLIST [dir] -- writes a DIR of the target's outgoing directory into a
+REM file and sends that file to the vcctrl daemon host.
+REM NO ANGLE BRACKETS ANYWHERE IN THIS FILE, not even in a comment: DOS 6.22
+REM parses redirection INSIDE REM, so a usage line written the obvious way
+REM creates a file named after the following word.
+REM Generated by `vcctrl file-bats`. Do not hand-edit: the address here must
+REM match capabilities.files.settings.target_host.
+REM THE LISTING IS A FILE AND NOT A SCREEN, which is the whole point. The
+REM harness cannot read this console -- it turns 13,800 into 13,808 -- so the
+REM directory has to reach it as bytes or not at all.
+REM Requires the NET boot profile. C:\\MTCP is NOT on the PATH there, so this
+REM uses full paths throughout.
+SET VLD=%1
+IF "%VLD%"=="" SET VLD=@@DESTOUT@@
+REM MD ON 6.22 WILL NOT CREATE A NESTED PATH IN ONE GO, so the parent comes
+REM first. Creating the directory rather than reporting File not found is
+REM deliberate: an empty directory is an answer, and a missing one is a
+REM question.
+IF NOT EXIST @@DESTPARENT@@\\NUL MD @@DESTPARENT@@
+IF NOT EXIST %VLD%\\NUL MD %VLD%
+REM WRITTEN TO THE PARENT, NOT INTO THE DIRECTORY BEING LISTED. A listing
+REM that lands inside its own subject appears in the NEXT one, as a file the
+REM operator never put there and might well try to fetch.
+DIR %VLD% > @@DESTPARENT@@\\VCLIST.TXT
+SET MTCPCFG=C:\\MTCP\\TCP.CFG
+ECHO @@USER@@> C:\\MTCP\\VCLIST.RSP
+ECHO @@PASS@@>> C:\\MTCP\\VCLIST.RSP
+ECHO binary>> C:\\MTCP\\VCLIST.RSP
+ECHO cd incoming>> C:\\MTCP\\VCLIST.RSP
+ECHO put @@DESTPARENT@@\\VCLIST.TXT VCLIST.TXT>> C:\\MTCP\\VCLIST.RSP
+ECHO quit>> C:\\MTCP\\VCLIST.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCLIST.RSP
+ECHO.
+ECHO VCLIST attempted: %VLD%
+SET VLD=
+"""
+
     def _file_bats(self, req):
         """Render the two BATs the card needs, for this rig's configuration.
 
@@ -4795,15 +5483,15 @@ ECHO Usage: VCCHK source-path name-on-server
                     "error": "no credentials: set control.fileserver.user and "
                              "the variable control.fileserver.password_env "
                              "names"}
-        dest = (self.settings or {}).get("dest", DEFAULT_DEST)
+        dest = self._dest()
         # The parent is needed because DOS MD takes one level at a time, and
         # the sibling OUT because a convention nobody can see is not one.
         parent = dest.rsplit("\\", 1)[0] if "\\" in dest.rstrip("\\") else dest
-        out_dir = (self.settings or {}).get("out_dir") or (
-            parent + "\\OUT" if parent != dest else DEFAULT_OUT)
+        out_dir = self._out_dir()
         out = {}
         for name, tpl in (("VCGET.BAT", self.VCGET_BAT),
-                          ("VCCHK.BAT", self.VCCHK_BAT)):
+                          ("VCCHK.BAT", self.VCCHK_BAT),
+                          ("VCLIST.BAT", self.VCLIST_BAT)):
             text = (tpl.replace("@@HOST@@", host)
                        .replace("@@PORT@@", str(port))
                        .replace("@@USER@@", user)
@@ -4817,22 +5505,32 @@ ECHO Usage: VCCHK source-path name-on-server
         return {"ok": True, "bats": out, "host": host, "port": port,
                 "dest": dest, "out_dir": out_dir,
                 "install": [
-                    "Put both files in the CONTROL host's stage/ directory",
-                    "  (~/doskutsu-netiter/stage/), NOT this host's -- the",
-                    "  card's existing GET.BAT is the only way onto the card",
-                    "  and it dials the control host.",
+                    "Put all three files in the CONTROL host's stage/",
+                    "  directory (~/doskutsu-netiter/stage/), NOT this host's",
+                    "  -- the card's existing GET.BAT is the only way onto the",
+                    "  card and it dials the control host.",
                     "At a NET prompt on the target:",
                     "  C:\\MTCP\\GET.BAT VCGET.BAT",
                     "  C:\\MTCP\\GET.BAT VCCHK.BAT",
-                    "  COPY C:\\DOSKUTSU\\VCGET.BAT C:\\MTCP\\",
-                    "  COPY C:\\DOSKUTSU\\VCCHK.BAT C:\\MTCP\\",
+                    "  C:\\MTCP\\GET.BAT VCLIST.BAT",
+                    "NO TRAILING BACKSLASH ON THE DESTINATION. DOS 6.22",
+                    "  answers `COPY x C:\\MTCP\\` with Invalid directory,",
+                    "  and these lines carried one until it was typed at the",
+                    "  real machine on 2026-08-24:",
+                    "  COPY C:\\DOSKUTSU\\VCGET.BAT C:\\MTCP",
+                    "  COPY C:\\DOSKUTSU\\VCCHK.BAT C:\\MTCP",
+                    "  COPY C:\\DOSKUTSU\\VCLIST.BAT C:\\MTCP",
                     "  DEL C:\\DOSKUTSU\\VCGET.BAT",
                     "  DEL C:\\DOSKUTSU\\VCCHK.BAT",
-                    "Then verify before relying on either:",
+                    "  DEL C:\\DOSKUTSU\\VCLIST.BAT",
+                    "Then verify before relying on any of them:",
                     "  C:\\MTCP\\CHK.BAT C:\\MTCP\\VCGET.BAT VCGET.chk",
                     "  and sha256 that against what this printed.",
-                    "NEITHER OVERWRITES GET.BAT. It stays the known-good",
-                    "  bootstrap, and it is the only way to fix these two",
+                    "VCLIST.BAT IS ONLY NEEDED FOR THE DOWNLOAD DIRECTION.",
+                    "  Uploads work without it; `vcctrl file-refresh` is what",
+                    "  fails, and it fails as a listing that never arrives.",
+                    "NONE OVERWRITES GET.BAT. It stays the known-good",
+                    "  bootstrap, and it is the only way to fix these three",
                     "  without a card swap."]}
 
     # -- the transfer, as a job rather than a call ----------------------------
@@ -4858,8 +5556,14 @@ ECHO Usage: VCCHK source-path name-on-server
             if self.registry is None:
                 return {"ok": False, "why": "unsequenced",
                         "error": "no registry to sequence input through"}
-            job = {"running": True, "started_at": time.time(), "log": [],
-                   "files": [], "ok": None, "why": None, "reason": None,
+            # `kind` SO A WATCHER CAN TELL THEM APART. One job slot holds
+            # either direction -- deliberately, because two runs interleaving
+            # their reboots would each misread the other's machine -- and a
+            # page polling file_status has to know whether "3 files" means
+            # sent or fetched.
+            job = {"kind": "send", "running": True, "started_at": time.time(),
+                   "log": [], "files": [], "ok": None, "why": None,
+                   "reason": None,
                    "dest": req.get("dest") or (self.settings or {}).get(
                        "dest", DEFAULT_DEST),
                    "return": bool(req.get("return", True))}
@@ -4883,6 +5587,74 @@ ECHO Usage: VCCHK source-path name-on-server
             # THE MACHINE'S STATE AFTER A CRASH IS THE PART WORTH SAYING. A
             # transfer that died between the two reboots has left the target
             # in NET, and nothing downstream can tell that from a tidy exit.
+            if out.get("why") == "crashed":
+                job["left_in_net"] = True
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "started": True, "status": FilesCapability._job}
+
+    def _file_pull(self, req):
+        """Fetch from the target's outgoing directory. Same slot, same watcher.
+
+        THE SAME JOB RECORD AS `file_send`, AND THAT IS THE POINT. Both
+        directions reboot the machine, so they cannot run at once -- two runs
+        interleaving their reboots would each read the other's machine state
+        and both would be wrong about it. One slot makes that structural
+        rather than remembered, and `file_status` and `file_cancel` work
+        unchanged for either.
+
+        WHAT IS ASKED FOR IS EXPLICIT, AND THERE IS NO DEFAULT. `all`,
+        `names`, or `refresh` -- a bare call fetching everything would be a
+        reboot nobody asked for, and a bare call fetching nothing would be a
+        reboot for no reason. Both are refused with the same sentence.
+        """
+        with FilesCapability._job_lock:
+            cur = FilesCapability._job
+            if cur and cur.get("running"):
+                return {"ok": False, "why": "busy",
+                        "error": ("a transfer is already running -- the two "
+                                  "directions share one machine"),
+                        "status": cur}
+            if self.registry is None:
+                return {"ok": False, "why": "unsequenced",
+                        "error": "no registry to sequence input through"}
+            names = [str(n) for n in (req.get("names") or []) if str(n).strip()]
+            want_all = bool(req.get("all"))
+            refresh = bool(req.get("refresh"))
+            if not (names or want_all or refresh):
+                return {"ok": False, "why": "nothing-asked",
+                        "error": ("say what to fetch: `names`, `all`, or "
+                                  "`refresh` for the listing alone. This "
+                                  "reboots the target, so it will not guess "
+                                  "which of those you meant")}
+            job = {"kind": "pull", "running": True, "started_at": time.time(),
+                   "log": [], "files": [], "ok": None, "why": None,
+                   "reason": None, "out_dir": self._out_dir(),
+                   "names": names, "all": want_all, "refresh": refresh,
+                   "paranoid": bool(req.get("paranoid")),
+                   "return": bool(req.get("return", True))}
+            FilesCapability._job = job
+
+        def run():
+            drv = RegistryDriver(self.registry, pace=req.get("pace"))
+            pj = PullJob(self, drv, names=names, want_all=want_all,
+                         refresh_only=refresh,
+                         paranoid=job["paranoid"], do_return=job["return"],
+                         log=job["log"])
+            try:
+                out = pj.run()
+            except Exception as exc:
+                out = {"ok": False, "why": "crashed",
+                       "reason": "%s: %s" % (type(exc).__name__, exc),
+                       "files": [], "log": pj.log}
+                sys.stderr.write("pull crashed: %s\n" % exc)
+            out.pop("log", None)        # already live in job["log"]
+            job.update(out)
+            job["running"] = False
+            job["finished_at"] = time.time()
+            # THE MACHINE'S STATE AFTER A CRASH IS THE PART WORTH SAYING. A
+            # run that died between the two reboots has left the target in
+            # NET, and nothing downstream can tell that from a tidy exit.
             if out.get("why") == "crashed":
                 job["left_in_net"] = True
 
@@ -5223,6 +5995,40 @@ ECHO Usage: VCCHK source-path name-on-server
         except (TypeError, ValueError):
             return None
 
+    # -- the two directories on the TARGET, and one derivation of each --------
+
+    def _dest(self):
+        """Where a pushed file lands on the card."""
+        return (self.settings or {}).get("dest", DEFAULT_DEST)
+
+    def _out_dir(self):
+        """Where the card leaves files for us -- DERIVED ONCE, USED EVERYWHERE.
+
+        THREE CONSUMERS AND THEY MUST NOT DISAGREE:
+
+            1. the `MD` and the default argument inside VCLIST.BAT
+            2. the DIR that batch file takes, which is the file picker
+            3. the path typed at VCCHK for each file fetched
+
+        This was computed inline in `_file_bats` and nowhere else, which was
+        fine while the BAT was the only thing that had an opinion about the
+        directory. The moment a second caller needed it, the choice was
+        between deriving it twice -- the shape of drift this project has been
+        bitten by more than once, with `target_host` and again with the 7.8 MB
+        figure -- and moving it here. It moved.
+
+        The default is the sibling of `dest` rather than a constant with the
+        same value, so a rig that moves its incoming directory takes its
+        outgoing one with it instead of splitting the pair silently.
+        """
+        st = self.settings or {}
+        configured = st.get("out_dir")
+        if configured:
+            return str(configured)
+        dest = self._dest()
+        parent = dest.rsplit("\\", 1)[0] if "\\" in dest.rstrip("\\") else dest
+        return parent + "\\OUT" if parent != dest else DEFAULT_OUT
+
     # The cheap probe runs on every state poll, from every open tab. Cached
     # for a few seconds for the same reason host_facts() is: a 1.5 s poll from
     # four tabs must not become four TCP connects a second at a machine whose
@@ -5473,23 +6279,27 @@ ECHO Usage: VCCHK source-path name-on-server
             time.sleep(0.5)
         return False
 
-    def _incoming_sha(self, name):
-        """sha256 of a returned file, or None if it cannot be read.
+    def _incoming_path(self, name):
+        """Where a returned file actually is, whatever case it arrived in.
 
-        Case-insensitive for the same reason _await_incoming is: the file may
-        arrive under a different case than it was asked for.
+        Case-insensitive for the same reason _await_incoming is: the far end
+        is a FAT volume and an FTP client from 1996, and case is not a
+        property either of them promises. A verification that hinges on it is
+        testing the wrong thing -- `HELLO.TXT.CHK` was asked for, `hello.txt`
+        arrived, and a completed transfer was reported as one that never
+        happened.
         """
         _stage, _p, _m, _root, incoming = self._dirs()
-        path = None
         try:
             for n in os.listdir(incoming):
                 if n.lower() == name.lower():
-                    path = os.path.join(incoming, n)
-                    break
+                    return os.path.join(incoming, n)
         except OSError:
             pass
-        if path is None:
-            return None
+        return None
+
+    def _sha_of(self, path):
+        """sha256 of a file on this host, or None if it cannot be read."""
         h = hashlib.sha256()
         try:
             with open(path, "rb") as f:
@@ -5498,6 +6308,299 @@ ECHO Usage: VCCHK source-path name-on-server
         except OSError:
             return None
         return h.hexdigest()
+
+    def _incoming_sha(self, name):
+        """sha256 of a returned file, or None if it cannot be read."""
+        path = self._incoming_path(name)
+        return None if path is None else self._sha_of(path)
+
+    def _drop_incoming(self, path):
+        """Remove a file the target sent that we are NOT keeping.
+
+        incoming/ is inside the FTP root, so anything left there is both
+        served and overwritable by the target. A copy that failed its size
+        check is exactly the kind of file that must not sit around looking
+        like a result -- and leaving it would also make the next fetch of the
+        same name race its own leftovers.
+        """
+        try:
+            if path:
+                os.remove(path)
+        except OSError:
+            pass
+
+    # -- what came back, and what the card says it has ------------------------
+    #
+    # TWO MORE DIRECTORIES, AND BOTH OUTSIDE THE FTP ROOT:
+    #
+    #   <root>-pulled/       files fetched off the target and verified
+    #   <root>-pulled-meta/  their sha and provenance, and the last listing
+    #
+    # A VERIFIED PULL IS EVIDENCE AND MUST STOP BEING REACHABLE. incoming/ is
+    # inside the root: the target can write it, the next fetch can overwrite
+    # it by name, and anything with an FTP login can read it. Promoting out of
+    # it is the same move the staging side makes in the other direction, and
+    # for the same reason -- the moment a file's bytes are what somebody will
+    # rely on, it goes somewhere nothing else writes.
+    #
+    # AND THEY ARE SIBLINGS OF THE ROOT, which is the atomicity precondition:
+    # os.replace() is atomic within one filesystem and raises EXDEV across
+    # devices. Deriving both from the configured root guarantees they share
+    # one, whatever `root_dir` is set to.
+
+    PULLED_CHUNK_MAX = 4 * 1024 * 1024
+
+    def _pulled_dirs(self):
+        """(bytes, metadata). Siblings of the FTP root, never inside it."""
+        root = self._dirs()[3]
+        return root + "-pulled", root + "-pulled-meta"
+
+    def _ensure_pulled(self):
+        dirs = self._pulled_dirs()
+        for d in dirs:
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as exc:
+                raise RuntimeError("cannot create %s: %s" % (d, exc))
+        return dirs
+
+    def _promote_pulled(self, path, name, meta):
+        """Move a verified file out of incoming/ and record what it is.
+
+        THE 8.3 CONVERSION RUNS AGAIN HERE, on a name that already passed it
+        in the listing parser. That is not belt and braces for its own sake:
+        this is the line that joins a name FROM THE TARGET onto a path on a
+        host running as root, and the rule this project keeps relearning is
+        that a containment check belongs at the join, not upstream of it.
+
+        Returns (path, replaced). An earlier copy of the same name is
+        overwritten -- it is the same file in the same directory on the same
+        card, and refusing would strand the newer bytes -- but the fact is
+        returned so the log can say so rather than letting a silent
+        replacement look like a first arrival.
+        """
+        pulled, meta_dir = self._ensure_pulled()
+        safe, _notes = dos_filename(name)
+        dest = os.path.join(pulled, safe)
+        replaced = os.path.exists(dest)
+        os.replace(path, dest)
+        try:
+            with open(os.path.join(meta_dir, safe + ".json"), "w") as f:
+                json.dump(meta, f)
+        except OSError:
+            # The bytes are the thing. Losing the sidecar costs provenance,
+            # which _pulled() then reports as unknown rather than inventing.
+            pass
+        return dest, replaced
+
+    def _pulled(self):
+        """What is in the pulled directory, READ FROM DISK.
+
+        One source of truth, the same discipline `_queued()` follows: a
+        remembered list beside a directory of files is two records of one fact
+        and they diverge on the first restart.
+        """
+        try:
+            pulled, meta_dir = self._ensure_pulled()
+        except RuntimeError:
+            return []
+        out = []
+        try:
+            names = sorted(os.listdir(pulled))
+        except OSError:
+            return out
+        for n in names:
+            path = os.path.join(pulled, n)
+            if not os.path.isfile(path):
+                continue
+            rec = {"name": n, "bytes": os.path.getsize(path), "sha256": None,
+                   "verified": None, "source": None, "pulled_at": None,
+                   "path": path}
+            try:
+                with open(os.path.join(meta_dir, n + ".json")) as f:
+                    rec.update(json.load(f))
+                    rec["path"] = path
+            except Exception:
+                # Reported as unaccounted rather than hidden or deleted, the
+                # same way an orphan in the FTP root is: it is still bytes
+                # somebody may want, and this capability cannot say where they
+                # came from.
+                rec["orphan"] = True
+            out.append(rec)
+        return out
+
+    # -- the target's own account of its outgoing directory -------------------
+
+    def _listing_file(self):
+        return os.path.join(self._pulled_dirs()[1], "listing.json")
+
+    def _listing_raw(self):
+        try:
+            with open(self._listing_file()) as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _save_listing(self, listing):
+        """Keep the last READABLE listing and the last ATTEMPT, separately.
+
+        STALE CLOSES THE QUESTION, AND SO DOES OVERWRITING. A read that came
+        back unparseable says something about that read; it does not make the
+        previous listing wrong, only older. Collapsing the two would either
+        throw away the only account of the directory anybody has, or hide the
+        fact that the newest look failed -- and each of those is a way of
+        answering a question that was not asked.
+
+        So both are stored, and `file_listing` hands back both. The consumer
+        gets to see "here is what was there at 14:02, and the 15:40 attempt
+        could not be read", which is the truth and is not expressible in one
+        record.
+        """
+        try:
+            self._ensure_pulled()
+        except RuntimeError:
+            return
+        cur = self._listing_raw() or {}
+        rec = {"listing": cur.get("listing"),
+               "attempt": {"at": listing.get("read_at") or time.time(),
+                           "ok": bool(listing.get("ok")),
+                           "why": listing.get("why"),
+                           "reason": listing.get("reason"),
+                           "raw": listing.get("raw")}}
+        if listing.get("ok"):
+            rec["listing"] = listing
+        try:
+            with open(self._listing_file(), "w") as f:
+                json.dump(rec, f)
+        except OSError:
+            pass
+
+    def _file_listing(self, req):
+        """What the target's outgoing directory held WHEN IT WAS LAST READ.
+
+        THIS TOUCHES NOTHING. Reading that directory means rebooting the
+        machine into NET, so the picker is fed from the last reading rather
+        than from a live one -- and the age is reported beside it, always, so
+        nobody reads a three-hour-old list as a current one.
+
+        NO STALENESS THRESHOLD IS INVENTED HERE. There is no number of minutes
+        after which a listing becomes wrong: it goes wrong when somebody
+        writes to that directory, which this host cannot see. So the age is a
+        fact and the judgement is the operator's, rather than a boolean with a
+        constant behind it that nothing measured.
+        """
+        rec = self._listing_raw() or {}
+        listing, attempt = rec.get("listing"), rec.get("attempt")
+        out = {"ok": True, "out_dir": self._out_dir(), "listing": listing,
+               "attempt": attempt, "age_s": None, "note": None}
+        if listing:
+            out["age_s"] = round(time.time() - (listing.get("read_at") or 0), 1)
+            out["files"] = listing.get("files") or []
+            out["count"] = len(out["files"])
+        else:
+            out["files"], out["count"] = [], 0
+            out["note"] = ("nothing has read %s yet. `vcctrl file-refresh` "
+                           "reboots the target into NET and reads it -- an "
+                           "unread directory is not an empty one"
+                           % self._out_dir())
+        if attempt and not attempt.get("ok"):
+            out["attempt_note"] = ("the most recent read failed (%s): %s"
+                                   % (attempt.get("why"),
+                                      attempt.get("reason")))
+        return out
+
+    def _file_pulled(self, req):
+        """What has been fetched off the target and is sitting on this host.
+
+            list   what is here, with how it was verified and where it came
+                   from
+            read   one chunk of one file, base64 -- so the CLI can write the
+                   bytes out on the caller's own disk, and the browser has
+                   /pulled for the same job without a round trip through JSON
+            clear  drop one or all. Refuses to remove anything it cannot
+                   account for, the same rule the staging queue follows
+
+        `read` IS CHUNKED FOR THE SAME REASON `file_stage` IS: the size policy
+        admits files far larger than one JSON message should carry, and a
+        10 MB base64 blob in a single response is a message this socket should
+        not be asked to hold.
+
+        Refusals, and the set is NOT CLOSED:
+
+            bad-name         not expressible as a DOS 8.3 filename, which is
+                             also the path guard -- see dos_filename
+            not-here         nothing of that name has been pulled. Distinct
+                             from a read that failed, which reports the OS
+                             error instead
+            offset-mismatch  a read that starts past the end of the file
+        """
+        action = (req.get("action") or "list").lower()
+        try:
+            pulled, meta_dir = self._ensure_pulled()
+        except RuntimeError as exc:
+            return {"ok": False, "error": str(exc)}
+        have = self._pulled()
+
+        if action == "list":
+            return {"ok": True, "pulled": have, "count": len(have),
+                    "dir": pulled,
+                    "bytes": sum(r["bytes"] for r in have)}
+
+        if action == "read":
+            try:
+                name, _notes = dos_filename(req.get("name"))
+            except ValueError as exc:
+                return {"ok": False, "why": "bad-name", "error": str(exc)}
+            path = os.path.join(pulled, name)
+            if not os.path.isfile(path):
+                return {"ok": False, "why": "not-here",
+                        "error": ("%s has not been pulled off the target -- "
+                                  "`vcctrl pulled list` says what has" % name)}
+            total = os.path.getsize(path)
+            try:
+                offset = int(req.get("offset") or 0)
+                length = int(req.get("length") or self.PULLED_CHUNK_MAX)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "offset and length are bytes"}
+            length = max(0, min(length, self.PULLED_CHUNK_MAX))
+            if offset < 0 or offset > total:
+                return {"ok": False, "why": "offset-mismatch",
+                        "error": "offset %d is outside %s (%d bytes)"
+                                 % (offset, name, total)}
+            try:
+                with open(path, "rb") as f:
+                    f.seek(offset)
+                    chunk = f.read(length)
+            except OSError as exc:
+                return {"ok": False, "error": "cannot read %s: %s"
+                                              % (path, exc)}
+            return {"ok": True, "name": name, "total": total,
+                    "offset": offset, "len": len(chunk),
+                    "eof": offset + len(chunk) >= total,
+                    "data": base64.b64encode(chunk).decode()}
+
+        if action != "clear":
+            return {"ok": False, "error": "unknown pulled action: %r" % action}
+
+        only = req.get("name")
+        removed, kept = [], []
+        for r in have:
+            if only and r["name"] != only:
+                continue
+            if r.get("orphan"):
+                kept.append(r["name"])
+                continue
+            for path in (os.path.join(pulled, r["name"]),
+                         os.path.join(meta_dir, r["name"] + ".json")):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            removed.append(r["name"])
+        return {"ok": True, "removed": removed, "left_alone": kept,
+                "pulled": self._pulled(),
+                "note": ("files this capability cannot account for are left in "
+                         "place and named in left_alone") if kept else None}
 
     def _file_queue(self, req):
         """List what is staged, or drop it.
@@ -5735,7 +6838,7 @@ ECHO Usage: VCCHK source-path name-on-server
         out = {"available": False, "why": None, "reason": None,
                "backend": self.backend_name,
                "server": ("%s:%d" % srv) if srv else None,
-               "dest": (self.settings or {}).get("dest", DEFAULT_DEST),
+               "dest": self._dest(), "out_dir": self._out_dir(),
                "warn_bytes": WARN_BYTES, "refuse_bytes": REFUSE_BYTES}
 
         supported, why = self.support()

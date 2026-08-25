@@ -210,29 +210,45 @@ capabilities:
       # screen you are capturing.
       target_host: 192.0.2.11     # the daemon host, on the target's subnet
       target_port: 2121
-      # Where files land on the target. Deliberately NOT the directory the
-      # program under test lives in: a staged file that collides with a name
-      # in there replaces it silently, and that directory holds the batch
-      # files every measured run calls.
-      # Where pulled files land ON THE TARGET. NOT the directory the
-      # program under test lives in: a pulled file whose name collides there
-      # silently replaces something every measured run calls.
+      # Where a file SENT to the target lands on it. Deliberately NOT the
+      # directory the program under test lives in: a file that collides with
+      # a name in there replaces it silently, and that directory holds the
+      # batch files every measured run calls.
       #
       # The words are from the TARGET's point of view and they invert across
       # the wire -- the server's stage/ feeds the target's IN, and the
       # target's OUT feeds the server's incoming/. Terse on purpose, so
       # nobody reads them as matching the server's names.
       dest: "C:\\XFER\\IN"
+      # Where the target leaves files FOR US, and the only directory
+      # `get-file` will read or fetch from.
+      #
+      # LEAVE IT UNSET UNLESS YOU MEAN IT, the same advice `dest` gets and for
+      # a stronger reason: unset, this is DERIVED as the sibling of `dest`, so
+      # a rig that moves its incoming directory takes its outgoing one with
+      # it. Setting one and not the other is how the pair silently splits --
+      # and three things read this value (the MD and the default inside
+      # VCLIST.BAT, the DIR that becomes the file picker, and the path typed
+      # at VCCHK for every fetch), so a second opinion about it is a second
+      # thing to drift.
+      #
+      # NOTHING IS EVER DELETED FROM HERE by vcctrl. It is emptied by a
+      # person.
+      # out_dir: "C:\\XFER\\OUT"
       # The FTP login's home on THIS host. It holds stage/ (the target GETs
       # from here) and incoming/ (the target PUTs its verification copy back
       # here) -- the card's batch files `cd` to both by those names.
       #
-      # Two more directories are created as SIBLINGS of this one, deliberately
-      # outside it: bytes still arriving, and per-file checksums. A partial
-      # file inside the served root is a truncated transfer waiting to happen,
-      # because the target fetches by name and a name that exists is a name it
-      # will fetch. Being siblings also keeps them on one filesystem with
-      # stage/, which is what makes the promotion an atomic rename.
+      # Four more directories are created as SIBLINGS of this one, deliberately
+      # outside it: bytes still arriving, per-file checksums, and the same
+      # pair for files fetched back off the target. A partial file inside the
+      # served root is a truncated transfer waiting to happen, because the
+      # target fetches by name and a name that exists is a name it will fetch;
+      # and a file fetched OFF the target has to leave incoming/ for the
+      # opposite reason -- incoming/ is inside the root, so anything left
+      # there is served and is overwritable by the target itself. Being
+      # siblings also keeps them on one filesystem with stage/, which is what
+      # makes both promotions an atomic rename.
       root_dir: /var/lib/vcctrl/fileserver
 
   board:

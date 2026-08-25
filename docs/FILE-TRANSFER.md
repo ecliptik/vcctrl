@@ -1,4 +1,4 @@
-# Putting a file on the card
+# Moving a file to the card, and back off it
 
 **Use `vcctrl file-stage` then `vcctrl send-file`. Do not improvise a reboot
 and a `GET.BAT` by hand.** This document exists because the improvised version
@@ -18,7 +18,83 @@ stack and packet driver are resident TSRs, and the standing rule is never load
 TSRs and measure in the same boot. A script that did not say would leave the
 rig in a state its author had not chosen.
 
-## What it does that a hand-run `GET.BAT` does not
+## Getting a file back off the card
+
+    vcctrl file-refresh --return       read C:\XFER\OUT (REBOOTS the target)
+    vcctrl file-list                   what that reading found, and its age
+    vcctrl get-file SCORES.DAT --return    fetch it (REBOOTS the target)
+    vcctrl pulled list                 what is on the daemon host now
+    vcctrl pulled save SCORES.DAT --out ./scores.dat
+
+`--all` fetches everything listed. `--paranoid` fetches each file twice and
+compares. `--return` or `--stay` is mandatory here for the same reason it is
+on the way out. In the KVM it is **File → Download from target**.
+
+**Nothing is ever deleted from the target.** `C:\XFER\OUT` is emptied by a
+person, not by this tool.
+
+### The listing is a file, not a screen
+
+The harness cannot read the target's console — it turns `13,800` into `13,808`
+and `10 file(s)` into `18 file(s)` — so a picker built on OCR would offer files
+that do not exist and hide files that do. `VCLIST.BAT` redirects a `DIR` into a
+file and sends **the file**, which arrives byte for byte and **states its own
+totals**, so it can be reconciled against itself. A listing whose sizes do not
+add up to the total `DIR` printed, or which has no `N file(s)` trailer at all,
+is refused: **a listing that arrived short reads as a directory with fewer
+files in it, and nothing about it looks wrong.**
+
+Reading that directory means rebooting the machine, so **the picker shows the
+LAST reading with its age beside it**, and refreshing is a separate, explicit
+act. An unread directory is reported as unread — never as empty.
+
+### What a pulled file is verified against, and what that is not
+
+**This direction is one step weaker than the upload, and the words are kept
+apart on purpose.** A push is proved byte for byte because the staged copy was
+sha256'd on this host before anything moved. Nothing on DOS 6.22 can hash a
+file, so a pull has no such quantity to compare against. What it has:
+
+- **`verified: size`** — the file came back the length the target's own `DIR`
+  said it was. A truncated transfer cannot match it, and truncation is the
+  failure that otherwise looks exactly like success.
+- **`verified: size+repeat`** — `--paranoid`: fetched twice, and the two
+  copies agree. **That is a claim about the path being repeatable, not about
+  either copy equalling what is on the card.**
+
+The result carries which check ran rather than letting one word cover both.
+`vcctrl pulled save` re-checks the bytes it writes against the sha the daemon
+recorded when it verified them, so a short read on the way out to your disk is
+caught too.
+
+### What is refused before anything is typed at the machine
+
+Selection happens against the target's own `DIR`, on this side. The target
+never hears a name it did not itself report:
+
+- **`not-listed`** — asked for by name and not on the card. Refused here
+  rather than spending a minute of the run on an FTP session for a file that
+  does not exist.
+- **`unsafe-name`** — the name does not survive the DOS 8.3 round trip. A name
+  with a space in it is the ordinary case: FAT permits one and
+  `VCCHK C:\XFER\OUT\MY FILE.TXT` is two arguments. Shown in the picker,
+  greyed, with the reason.
+- **`empty`** — zero bytes on the card. Arrival is proved by bytes appearing
+  and settling, so **a zero-byte file cannot be told from one that never
+  came**; there is no reading of the wait that means "it worked".
+
+### Where the bytes land, and where they do not stay
+
+They arrive in the server's `incoming/`, which is inside the FTP root and
+therefore both served and writable by the target. **A verified file is promoted
+out of it** — `<root>-pulled/`, outside the root, with its sha, its size, where
+it came from and which check passed it recorded beside it. A file that fails
+its check is removed rather than left looking like a result.
+
+`vcctrl pulled list` reads that directory from disk rather than from memory,
+the same discipline the staging queue follows.
+
+## What the upload path does that a hand-run `GET.BAT` does not
 
 **Renames before the bytes move.** The target cannot rename in transit —
 `GET.BAT` writes the name it fetched — so `my-photo-2026.jpeg` has to become
@@ -119,12 +195,67 @@ reboots and not for the bytes.
 **Writing to the CF is slower than reading from it**, consistently and by
 roughly 40%. That is a hypothesis about the mechanism, not a finding.
 
+### The download direction, 2026-08-24
+
+Everything here is from the file server's own log and the job record, not off
+the target's screen.
+
+    vcctrl get-file TCP.CFG VCGET.BAT --return     whole job  69.5 s
+
+    +26.1 s  the reset was seen
+    +53.5 s  NET confirmed by arrival
+    +58.4 s  the DIR of C:\XFER\OUT was back and reconciled   (4.9 s)
+    +63.8 s  TCP.CFG    130 B verified                        (5.4 s)
+    +69.5 s  VCGET.BAT 2434 B verified                        (5.7 s)
+
+**The reboots are the wall clock here too, and so is the FTP session.** The
+server logged `0.046 s` for the listing, `0.050` for 130 bytes and `0.052` for
+2,434 — so at this size a fetch costs about five seconds of session setup and
+a twentieth of a second of transfer. A per-file cost, not a per-byte one.
+
+**The strongest check available was not the size check.** `VCGET.BAT` was
+fetched off the card and compared against the copy `vcctrl file-bats`
+generates on this host: **byte-identical, sha256 `a94449b7…`**. That is a real
+end-to-end proof of the path — card, FTP, promotion, `pulled save` — and it is
+evidence about this run rather than a guarantee the tool can offer, which is
+why `verified` still reads `size`.
+
+**The `DIR` format is now read rather than assumed.** Two things the parser
+had to guess are settled: individual sizes DO carry thousands separators
+(`2,434`), and `N file(s)` DOES count `.` and `..` — a directory with two
+files in it reported `4 file(s)`. There is also a `Volume Serial Number` line,
+which the parser skips.
+
+### Two faults this deploy found
+
+**`COPY x C:\MTCP\` is `Invalid directory` on DOS 6.22.** The trailing
+backslash on the destination is rejected. The install instructions printed by
+`vcctrl file-bats` carried one from the day they were written; they now do
+not. `COPY x C:\MTCP` works.
+
+**The return reboot was never witnessed, in either direction.** `wait_boot()`
+waits for Scroll Lock to READ 1, and RDYPULSE had already left it at 1 — so on
+the return leg it returned on its first poll and the log said *the machine
+booted* zero seconds after the Ctrl-Alt-Del, having observed nothing. The
+outward leg has always armed Scroll Lock first so that POST clearing it is an
+EDGE; the return leg did not. **`left_in_net` was set false on the strength of
+that**, and the warning that says the target may still be in NET — the one
+state this feature is careful about — could never fire. Both legs now arm, and
+an unwitnessed return keeps `left_in_net` true rather than guessing.
+
 ## What has NOT been tested
 
 Named because a feature that works is the easiest thing to over-claim.
 
 - **Nothing between 10 MB and the 64 MB refusal.** The ceiling has only been
   met by a file well past it, never by one just over.
+- **Nothing larger than 2.4 KB has been fetched OFF the card.** The direction
+  works and is proved byte-for-byte at that size; the throughput curve above
+  was measured on the way out, not back.
+- **No fetch of more than two files in one run**, and none cancelled
+  mid-queue.
+- **`--paranoid` has not run on the hardware.** Both its outcomes are covered
+  by the fake target, and neither has met a real transfer.
 - **No transfer with a viewer attached to the KVM.** The Pi's video stream and
   the target's transfer share the wifi, and this is the one place a viewer
   measurably costs the harness something.
@@ -133,9 +264,15 @@ Named because a feature that works is the easiest thing to over-claim.
 
 ## Preconditions, and how to tell
 
-`VCGET.BAT` and `VCCHK.BAT` must be on the card. **They are generated per rig
-by `vcctrl file-bats`, not shipped**, so the address they dial cannot drift
-from the one the daemon binds and the liveness check probes.
+`VCGET.BAT`, `VCCHK.BAT` and `VCLIST.BAT` must be on the card. **They are
+generated per rig by `vcctrl file-bats`, not shipped**, so the address they
+dial cannot drift from the one the daemon binds and the liveness check probes.
+
+**`VCLIST.BAT` is only needed for the download direction**, and a card without
+it fails in exactly one way: `vcctrl file-refresh` reports `no-listing`.
+Uploads are unaffected. **Fetching needs no new batch file at all** — `VCCHK`
+already puts a named path back on this host, which is what a download is; the
+listing is the part that had no answer.
 
     vcctrl file-check     answers whether a server is really there
 

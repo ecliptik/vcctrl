@@ -7103,18 +7103,62 @@ class FakeTarget(object):
     """
 
     def __init__(self, cap, reset=True, boot=True, net=True, prompt=True,
-                 corrupt=(), screen_text=""):
+                 corrupt=(), screen_text="", card=None, listing=True,
+                 short=(), unstable=()):
         self.cap = cap
         self.reset, self.boot, self.net = reset, boot, net
         self.prompt, self.corrupt = prompt, set(corrupt)
         self.screen_text = screen_text
         self.typed, self.combos, self.slept = [], [], 0.0
+        # THE OTHER DIRECTION: what the card has in C:\XFER\OUT, and three
+        # ways for it to go wrong that a real machine can produce and a
+        # cooperative fake never would.
+        #
+        #   listing=False  VCLIST.BAT is not on the card, so nothing comes
+        #                  back -- which must not be read as an empty
+        #                  directory
+        #   short=(...)    the transfer arrives truncated. The failure that
+        #                  looks exactly like success
+        #   unstable=(...) the second fetch differs from the first, at the
+        #                  same length, so only a comparison can see it
+        self.card = dict(card or {})
+        self.listing = listing
+        self.can_arm = True
+        self.arms, self.menus = 0, 0
+        self.short, self.unstable = set(short), set(unstable)
+        self.fetched = {}
+
+    def _dir_text(self):
+        """What DOS 6.22 prints, totals and all, for self.card."""
+        rows = ["  Volume in drive C is DOSKUTSU", "  Directory of %s"
+                % self.cap._out_dir(), "",
+                ".            <DIR>        08-24-26  10:12a",
+                "..           <DIR>        08-24-26  10:12a"]
+        for name in sorted(self.card):
+            base, _, ext = name.partition(".")
+            rows.append("%-8s %-3s %12d 08-24-26  10:13a"
+                        % (base, ext, len(self.card[name])))
+        total = sum(len(v) for v in self.card.values())
+        rows.append("       %2d file(s)     %9d bytes"
+                    % (len(self.card) + 2, total))
+        rows.append("                     %9d bytes free" % 8994816)
+        return "\r\n".join(rows) + "\r\n"
 
     def combo(self, keys):
         self.combos.append(list(keys))
 
     def sleep(self, s):
         self.slept += s
+
+    def arm(self):
+        """The real driver has one, so the fake must.
+
+        Without it `hasattr(d, "arm")` was false all through the tests, and
+        the return leg's arming -- the thing that makes its reboot observable
+        at all -- was exercised by nothing.
+        """
+        self.arms += 1
+        return self.can_arm
 
     def menu_attempts(self):
         return 2
@@ -7143,13 +7187,35 @@ class FakeTarget(object):
     def type_line(self, text):
         self.typed.append(text)
         parts = text.split()
-        # VCCHK is the NET proof only. The payload's return leg rides inside
-        # VCGET.BAT, because typing it as a second command meant deciding when
-        # DOS was ready for one -- and the answer cost a command truncated to
-        # the BIOS buffer depth.
+        if "VCLIST.BAT" in text:
+            # The BAT redirects a DIR into a file and sends the FILE. A card
+            # without VCLIST.BAT prints "Bad command or file name" and sends
+            # nothing, which is `listing=False` here.
+            if self.net and self.listing:
+                self._incoming(vcctrld.PullJob.LISTING_NAME,
+                               self._dir_text().encode("ascii"))
+            return
+        # VCCHK carries the NET proof AND every fetch. The push's return leg
+        # rides inside VCGET.BAT instead, because typing it as a second
+        # command meant deciding when DOS was ready for one -- and the answer
+        # cost a command truncated to the BIOS buffer depth.
         if "VCCHK.BAT" in text and len(parts) >= 3:
-            if parts[2] == vcctrld.TransferJob.PROOF_NAME and self.net:
+            if parts[2] == vcctrld.NetJob.PROOF_NAME and self.net:
                 self._incoming(parts[2], b"packetint 0x7E\r\n")
+                return
+            base = parts[1].rsplit("\\", 1)[-1]
+            if not self.net or base not in self.card:
+                return
+            body = self.card[base]
+            n = self.fetched[base] = self.fetched.get(base, 0) + 1
+            if base in self.short:
+                body = body[:max(1, len(body) // 2)]
+            elif base in self.unstable and n > 1:
+                # SAME LENGTH, DIFFERENT BYTES. A second copy that differed in
+                # size would be caught by the size check, and the test would
+                # then pass without the comparison it exists to exercise.
+                body = body[:-1] + bytes([body[-1] ^ 0xFF])
+            self._incoming(parts[2], body)
             return
         if "VCGET.BAT" in text and len(parts) >= 2:
             base = parts[1]
@@ -7372,8 +7438,9 @@ def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
     cap._credentials = lambda: ("dosuser", "dospass")
 
     r = cap._file_bats({})
-    check("both batch files are generated", r["ok"] and
-          set(r["bats"]) == {"VCGET.BAT", "VCCHK.BAT"}, r.get("bats", {}).keys())
+    check("all three batch files are generated", r["ok"] and
+          set(r["bats"]) == {"VCGET.BAT", "VCCHK.BAT", "VCLIST.BAT"},
+          r.get("bats", {}).keys())
 
     for name, text in r["bats"].items():
         check("%s uses CRLF" % name,
@@ -7416,8 +7483,28 @@ def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
           "cd incoming" in r["bats"]["VCCHK.BAT"], r["bats"]["VCCHK.BAT"])
     check("VCGET fetches from stage/",
           "cd stage" in r["bats"]["VCGET.BAT"], r["bats"]["VCGET.BAT"])
-    check("neither is named GET.BAT or CHK.BAT",
+    check("none is named GET.BAT or CHK.BAT",
           not {"GET.BAT", "CHK.BAT"} & set(r["bats"]), set(r["bats"]))
+
+    # THE LISTING MUST NOT LAND INSIDE THE DIRECTORY IT LISTS. It would then
+    # appear in the NEXT listing as a file the operator never put there --
+    # offered in the picker, fetchable, and named after the tool that made it.
+    v = r["bats"]["VCLIST.BAT"]
+    redirects = [l for l in v.split("\r\n")
+                 if l.startswith("DIR ") and ">" in l]
+    check("VCLIST redirects its DIR into a file", len(redirects) == 1, v)
+    check("and writes it OUTSIDE the directory being listed",
+          redirects and redirects[0].endswith("C:\\XFER\\VCLIST.TXT")
+          and "C:\\XFER\\OUT\\VCLIST.TXT" not in redirects[0],
+          redirects)
+    check("VCLIST lists the OUT directory by default",
+          "SET VLD=C:\\XFER\\OUT" in v, v)
+    check("VCLIST sends the listing back into incoming/",
+          "cd incoming" in v and "put C:\\XFER\\VCLIST.TXT VCLIST.TXT" in v, v)
+    # An empty directory is an answer and a missing one is a question, so the
+    # BAT creates it rather than letting DIR say File not found.
+    check("VCLIST creates the directory before listing it",
+          "MD %VLD%" in v and v.index("MD %VLD%") < v.index("DIR %VLD%"), v)
 
     # `pasv` is not one of mTCP's commands: it negotiates passive mode itself
     # and including the word just prints "Unknown command" into the transcript.
@@ -7836,6 +7923,456 @@ def test_a_cancelled_run_is_not_reported_as_a_finished_one():
     vcctrld.FilesCapability._job = None
 
 
+# ------------------------------------------------ fetching FROM the target
+
+def _mkpull(**kw):
+    """A files capability with a stubbed rig, and a card holding some files."""
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+    return cap, FakeTarget(cap, **kw)
+
+
+def test_a_dir_listing_is_reconciled_against_its_own_totals():
+    """A SHORT LISTING IS THE DANGEROUS FAILURE, and it looks like a tidy one.
+
+    Bytes that stop arriving halfway leave text that parses perfectly and
+    describes a directory with fewer files in it. Nothing about it looks
+    wrong -- it is the same shape as the truncated transfer the staging side
+    exists to prevent, one direction over, and the picker built on it would
+    simply not offer the file somebody is looking for.
+
+    What makes it detectable is that DIR states its own totals, so a listing
+    can be checked against itself. That check is the whole reason this parser
+    returns a verdict rather than a list.
+    """
+    print("\nDIR listing")
+    f = vcctrld.dos_dir_listing
+    good = ("  Volume in drive C is DOSKUTSU\r\n"
+            "  Directory of C:\\XFER\\OUT\r\n\r\n"
+            ".            <DIR>        08-24-26  10:12a\r\n"
+            "..           <DIR>        08-24-26  10:12a\r\n"
+            "SCORES   DAT         1310 08-24-26  10:13a\r\n"
+            "README                520 08-24-26  10:14a\r\n"
+            "        4 file(s)         1830 bytes\r\n"
+            "                       8994816 bytes free\r\n")
+    r = f(good)
+    check("a whole listing reconciles", r["ok"] is True, r)
+    check("and names the directory it is of", r["dir"] == "C:\\XFER\\OUT", r)
+    check("both files are found, and the . and .. entries are not files",
+          [x["name"] for x in r["files"]] == ["README", "SCORES.DAT"]
+          or sorted(x["name"] for x in r["files"]) == ["README", "SCORES.DAT"],
+          [x["name"] for x in r["entries"]])
+    check("a name with no extension survives",
+          any(x["name"] == "README" for x in r["files"]), r["files"])
+    check("sizes are read, and they are what the fetch is checked against",
+          {x["name"]: x["bytes"] for x in r["files"]}
+          == {"SCORES.DAT": 1310, "README": 520}, r["files"])
+
+    # THE ONE THAT MATTERS. Cut the listing off before its trailer, which is
+    # exactly what a transfer that stopped early leaves behind.
+    cut = good[:good.index("        4 file(s)")]
+    check("a listing with no trailer is REFUSED, not read as a directory",
+          f(cut)["ok"] is False, f(cut))
+    check("and it is named truncated rather than empty",
+          f(cut)["why"] == "truncated", f(cut))
+
+    # A LINE LOST IN THE MIDDLE still leaves a trailer, and the arithmetic is
+    # what catches that one.
+    lost = good.replace("README                520 08-24-26  10:14a\r\n", "")
+    check("a missing line is caught by the byte total",
+          f(lost)["why"] == "unreconciled", f(lost))
+
+    # AND IT MUST NOT REFUSE A DIRECTORY THAT IS SIMPLY EMPTY. An empty one
+    # still prints its trailer, and reporting it as broken would send somebody
+    # to debug a card that is behaving perfectly.
+    empty = ("  Directory of C:\\XFER\\OUT\r\n\r\n"
+             ".            <DIR>        08-24-26  10:12a\r\n"
+             "..           <DIR>        08-24-26  10:12a\r\n"
+             "        2 file(s)            0 bytes\r\n"
+             "                       8994816 bytes free\r\n")
+    check("an empty directory is a legitimate answer", f(empty)["ok"] is True,
+          f(empty))
+    check("with no files in it", f(empty)["files"] == [], f(empty))
+
+    check("a directory that is not there is not an empty one",
+          f("  Directory of C:\\XFER\\OUT\r\n\r\nFile not found\r\n")["why"]
+          == "no-dir")
+    check("and neither is nothing at all", f("")["ok"] is False, f(""))
+
+    # NOT A SHORT LISTING -- NOT A LISTING AT ALL, and the two want different
+    # things doing about them. `DIR` failing writes its complaint into the
+    # same file the table would have gone to, so what arrives is a sentence.
+    # Reporting that as `truncated` sends somebody looking for the missing
+    # half of something that was never there.
+    for junk in ("Bad command or file name\r\n", "", "   ", "\x00\x00"):
+        check("%r is unreadable rather than truncated" % junk,
+              f(junk)["why"] == "unreadable", f(junk))
+    check("and the reason says what it looked for",
+          "no directory header" in f("junk")["reason"], f("junk")["reason"])
+
+
+def test_a_name_from_the_target_cannot_escape_or_be_typed():
+    """The listing is INPUT FROM ANOTHER MACHINE, and it crosses two boundaries.
+
+    Every name in it is about to be joined onto a path on a host running as
+    root, and typed onto a command line on the target. `dos_filename` is the
+    guard for the first -- it is the same whitelist-shaped transform the
+    upload path leans on -- and it is applied here by requiring the name to
+    come back UNCHANGED rather than by correcting it. A name we had to alter
+    is a name that would not match the file on the card anyway, so silently
+    fixing it would produce a fetch for a file that does not exist.
+
+    A space is the case that is not obviously hostile and is just as bad: FAT
+    permits one, and `VCCHK C:\\XFER\\OUT\\MY FILE.TXT` is two arguments.
+    """
+    f = vcctrld.dos_dir_listing
+    hostile = ("  Directory of C:\\XFER\\OUT\r\n\r\n"
+               "MY FILE  TXT           10 08-24-26  10:15a\r\n"
+               "GOOD     TXT           10 08-24-26  10:15a\r\n"
+               "        2 file(s)           20 bytes\r\n"
+               "                       8994816 bytes free\r\n")
+    r = f(hostile)
+    check("the listing still parses", r["ok"] is True, r)
+    by = {x["name"]: x for x in r["files"]}
+    check("a name with a space is SHOWN", "MY FILE.TXT" in by, list(by))
+    check("and refused as unfetchable, with the reason",
+          by["MY FILE.TXT"]["fetchable"] is False
+          and by["MY FILE.TXT"]["why"] == "unsafe-name", by.get("MY FILE.TXT"))
+    check("while the ordinary name beside it stays fetchable",
+          by["GOOD.TXT"]["fetchable"] is True, by["GOOD.TXT"])
+
+
+def test_a_name_the_target_did_not_list_is_never_typed_at_it():
+    """The listing is the safety, not just the convenience.
+
+    A pull is driven by names, and the tempting implementation types whatever
+    it was given. On this machine that means an FTP session for a file that
+    does not exist -- a minute of the run spent on a typo, and a `no-return`
+    at the end of it that is indistinguishable from a network fault.
+
+    So selection happens against the target's OWN DIR, on this side, before a
+    key is pressed. A name that is not there is a refusal with a reason, and
+    the machine never hears about it.
+    """
+    print("\npull: selection")
+    cap, d = _mkpull(card={"SCORES.DAT": b"x" * 40})
+    r = vcctrld.PullJob(cap, d, names=["SCORES.DAT", "NOSUCH.TXT"]).run()
+
+    got = {x["name"]: x for x in r["files"]}
+    check("the file that is there came back", got["SCORES.DAT"]["ok"] is True,
+          got.get("SCORES.DAT"))
+    check("the one that is not is refused",
+          got["NOSUCH.TXT"]["why"] == "not-listed", got.get("NOSUCH.TXT"))
+    check("and the run is not reported as ok", r["ok"] is False, r)
+    check("NOSUCH WAS NEVER TYPED AT THE MACHINE",
+          not any("NOSUCH" in t for t in d.typed), d.typed)
+    check("and the machine was still brought back",
+          r["left_in_net"] is False, r)
+
+
+def test_a_short_download_is_caught_by_the_cards_own_size():
+    """The failure that looks exactly like success, in the direction where
+    there is no sha to catch it.
+
+    A push is proved byte for byte because the staged copy was hashed here
+    before anything moved. Coming back there is no such copy -- nothing on
+    DOS 6.22 can hash a file -- so the only witness is the size the target's
+    own DIR reported, which arrived as a FILE rather than off a console that
+    reads 13,800 as 13,808.
+
+    A truncated file that got promoted anyway would be the worst outcome this
+    feature can produce: bytes on the daemon host, under the right name, with
+    a record saying they were verified.
+    """
+    print("\npull: a short file")
+    cap, d = _mkpull(card={"SCORES.DAT": b"x" * 400}, short=("SCORES.DAT",))
+    r = vcctrld.PullJob(cap, d, want_all=True).run()
+
+    bad = r["files"][0]
+    check("a short arrival is refused", bad["ok"] is False, bad)
+    check("named as a size mismatch", bad["why"] == "size-mismatch", bad)
+    check("and the reason states both numbers",
+          "200" in bad["reason"] and "400" in bad["reason"], bad["reason"])
+    check("NOTHING WAS PROMOTED", cap._pulled() == [], cap._pulled())
+    inc = cap._dirs()[4]
+    check("and the short copy is not left lying in the served directory",
+          not any(n.upper().startswith("SCORES") for n in os.listdir(inc)),
+          os.listdir(inc))
+
+
+def test_a_directory_that_could_not_be_read_is_not_an_empty_one():
+    """`COULD NOT LOOK` IS NOT A FINDING, and here it has a specific cost.
+
+    VCLIST.BAT is generated per rig and installed by hand, so the first thing
+    that happens on a card without it is that nothing comes back. A pull that
+    read that as "the directory is empty" would report a clean run with no
+    files in it -- and the operator would go looking for whatever wrote them,
+    on a machine where nothing is wrong.
+    """
+    print("\npull: no listing")
+    cap, d = _mkpull(card={"SCORES.DAT": b"x" * 40}, listing=False)
+    r = vcctrld.PullJob(cap, d, want_all=True).run()
+
+    check("the run fails", r["ok"] is False, r)
+    check("named as a listing that never came", r["why"] == "no-listing", r)
+    check("and the reason says an unknown directory is not an empty one",
+          "not the same" in r["reason"], r["reason"])
+    check("no file was fetched", not r.get("files"), r.get("files"))
+    check("and the machine was NOT left in NET",
+          any(e["phase"] == "return" for e in r["log"]), r["log"])
+
+
+def test_an_empty_file_is_refused_rather_than_reported_as_fetched():
+    """A ZERO CLOSES THE QUESTION IN THE WRONG DIRECTION.
+
+    Arrival is proved by bytes appearing and settling. A zero-byte file
+    produces no bytes to settle, so the wait cannot tell it from a transfer
+    that never happened -- there is no reading of it that means "it worked".
+    Fetching it anyway would spend a minute to arrive at a result that has to
+    be reported as a failure regardless of what actually occurred.
+    """
+    cap, d = _mkpull(card={"EMPTY.TXT": b"", "REAL.TXT": b"y" * 30})
+    r = vcctrld.PullJob(cap, d, want_all=True).run()
+    got = {x["name"]: x for x in r["files"]}
+    check("the empty one is refused", got["EMPTY.TXT"]["why"] == "empty",
+          got.get("EMPTY.TXT"))
+    check("it was never typed at the machine",
+          not any("EMPTY" in t for t in d.typed), d.typed)
+    check("and the real file beside it still came back",
+          got["REAL.TXT"]["ok"] is True, got.get("REAL.TXT"))
+
+
+def test_paranoid_compares_two_fetches_and_says_which_check_ran():
+    """Two copies that agree is a claim about the PATH, not about the card.
+
+    It proves the transfer is repeatable. It does not prove either copy equals
+    what is on the disk, because nothing here can read that disk except
+    through the same path. Borrowing the upload's "byte for byte" for it would
+    be claiming the stronger check by writing it down -- so the result carries
+    which check actually ran, and the two words are different.
+    """
+    print("\npull: repeat check")
+    cap, d = _mkpull(card={"A.DAT": b"z" * 64})
+    r = vcctrld.PullJob(cap, d, names=["A.DAT"], paranoid=True).run()
+    check("a repeatable fetch passes", r["files"][0]["ok"] is True, r["files"])
+    check("and says the repeat is what was checked",
+          r["files"][0]["verified"] == "size+repeat", r["files"][0])
+    check("it really did fetch twice", d.fetched.get("A.DAT") == 2, d.fetched)
+
+    cap2, d2 = _mkpull(card={"A.DAT": b"z" * 64}, unstable=("A.DAT",))
+    r2 = vcctrld.PullJob(cap2, d2, names=["A.DAT"], paranoid=True).run()
+    check("two copies that disagree refuse", r2["files"][0]["ok"] is False, r2)
+    check("named as unstable rather than as a size fault",
+          r2["files"][0]["why"] == "unstable", r2["files"][0])
+    check("and nothing was promoted", cap2._pulled() == [], cap2._pulled())
+
+    # WITHOUT --paranoid THE WEAKER WORD IS USED, so the strong one cannot be
+    # read off a run that never made the comparison.
+    cap3, d3 = _mkpull(card={"A.DAT": b"z" * 64})
+    r3 = vcctrld.PullJob(cap3, d3, names=["A.DAT"]).run()
+    check("the default check is named `size` and nothing more",
+          r3["files"][0]["verified"] == "size", r3["files"][0])
+    check("and it fetched once", d3.fetched.get("A.DAT") == 1, d3.fetched)
+
+
+def test_a_verified_file_leaves_the_directory_the_target_can_write():
+    """incoming/ IS INSIDE THE FTP ROOT. Anything left there is served, and is
+    overwritable by the next thing that logs in -- which is the target.
+
+    The moment a file's bytes are what somebody will rely on, they go
+    somewhere nothing else writes. That is the same move the staging side
+    makes in the other direction, and it is why a pulled file is promoted
+    rather than reported in place.
+    """
+    print("\npull: promotion")
+    cap, d = _mkpull(card={"SCORES.DAT": b"payload" * 9})
+    r = vcctrld.PullJob(cap, d, want_all=True).run()
+    check("the fetch verified", r["ok"] is True, r)
+
+    inc = cap._dirs()[4]
+    check("nothing is left in incoming/ but the NET proof",
+          [n for n in os.listdir(inc) if n.upper().startswith("SCORES")] == [],
+          os.listdir(inc))
+    pulled_dir, meta_dir = cap._pulled_dirs()
+    check("the pulled directory is NOT inside the FTP root",
+          not pulled_dir.startswith(cap._dirs()[3] + os.sep), pulled_dir)
+
+    have = cap._file_pulled({"action": "list"})
+    check("it is listed as pulled", have["count"] == 1, have)
+    rec = have["pulled"][0]
+    check("with its provenance -- where it came from on the target",
+          rec["source"] == "C:\\XFER\\OUT\\SCORES.DAT", rec)
+    check("and how it was verified, in a word that is not the upload's",
+          rec["verified"] == "size", rec)
+    check("and the size the card said it was",
+          rec["listed_bytes"] == len(b"payload" * 9), rec)
+
+    back = cap._file_pulled({"action": "read", "name": "SCORES.DAT",
+                             "offset": 0})
+    import base64 as _b64
+    check("the bytes read back are the bytes that arrived",
+          _b64.b64decode(back["data"]) == b"payload" * 9, back.get("total"))
+    check("and the read says it reached the end", back["eof"] is True, back)
+
+    # THE PATH GUARD, ON THE READ SIDE TOO. This one is reachable from a
+    # browser through /pulled.
+    evil = cap._file_pulled({"action": "read", "name": "../../etc/passwd"})
+    check("a traversal cannot be read out", evil["ok"] is False, evil)
+    check("and it is refused as a name, not as a missing file",
+          evil["why"] in ("not-here", "bad-name"), evil)
+
+    gone = cap._file_pulled({"action": "clear", "name": "SCORES.DAT"})
+    check("clear drops it", gone["removed"] == ["SCORES.DAT"], gone)
+    check("and takes its metadata with it",
+          os.listdir(meta_dir) in ([], ["listing.json"]), os.listdir(meta_dir))
+
+
+def test_the_two_directions_share_one_machine_and_one_job():
+    """Two runs interleaving their reboots would each read the other's
+    machine state, and both would be wrong about it.
+
+    One job slot makes that structural rather than remembered -- and it is
+    also what lets `file_status` and `file_cancel` work unchanged for either
+    direction, which is worth more than two tidy separate records.
+    """
+    print("\npull: one machine")
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.registry = object()
+    try:
+        vcctrld.FilesCapability._job = {"kind": "send", "running": True}
+        r = cap._file_pull({"all": True})
+        check("a pull is refused while a send is running", r["ok"] is False, r)
+        check("named busy", r["why"] == "busy", r)
+        check("and it says why they cannot overlap",
+              "one machine" in r["error"], r["error"])
+
+        vcctrld.FilesCapability._job = {"kind": "pull", "running": True}
+        r = cap._file_send({})
+        check("and a send is refused while a pull is running",
+              r["ok"] is False and r["why"] == "busy", r)
+    finally:
+        vcctrld.FilesCapability._job = None
+
+    # A REBOOT NOBODY ASKED FOR IS THE THING TO REFUSE. Fetching everything
+    # and fetching nothing are both readings of a bare call, and each costs
+    # the same two minutes of the target's environment.
+    r = cap._file_pull({})
+    check("a fetch that names nothing is refused rather than guessed at",
+          r["ok"] is False and r["why"] == "nothing-asked", r)
+
+
+def test_the_listing_store_keeps_the_good_read_and_the_failed_attempt():
+    """"Here is what was there at 14:02" and "the 15:40 read failed" are two
+    facts, and one record cannot hold both.
+
+    Overwriting the listing with the failure throws away the only account of
+    the directory anybody has. Keeping the listing and dropping the failure
+    hides that the newest look did not work. Both have the same shape as
+    every stale-reading bug in this repo: an answer that is real, and about a
+    moment other than the one being asked about.
+    """
+    print("\npull: the listing store")
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+
+    check("with nothing read yet, it says so rather than saying empty",
+          cap._file_listing({})["listing"] is None
+          and "not an empty one" in cap._file_listing({})["note"],
+          cap._file_listing({}))
+
+    cap._save_listing({"ok": True, "why": None, "reason": None,
+                       "dir": "C:\\XFER\\OUT", "read_at": time.time() - 600,
+                       "files": [{"name": "A.TXT", "bytes": 4,
+                                  "fetchable": True}], "entries": [],
+                       "bytes": 4, "reported": {"count": 3, "bytes": 4}})
+    good = cap._file_listing({})
+    check("a good read is kept", good["count"] == 1, good)
+    check("and its AGE is reported, always",
+          good["age_s"] >= 600 - 5, good["age_s"])
+
+    cap._save_listing({"ok": False, "why": "truncated",
+                       "reason": "stopped early", "read_at": time.time(),
+                       "files": [], "entries": []})
+    after = cap._file_listing({})
+    check("a failed read does NOT delete the last good listing",
+          after["count"] == 1 and after["files"][0]["name"] == "A.TXT", after)
+    check("and the failure is reported beside it rather than swallowed",
+          "truncated" in (after.get("attempt_note") or ""), after)
+    check("the age still belongs to the reading, not to the attempt",
+          after["age_s"] >= 600 - 5, after["age_s"])
+
+
+def test_a_refresh_reads_the_directory_and_fetches_nothing():
+    """A LISTING IS A RESULT. The run rebooted, learned what is on the card and
+    came back, and reporting that as an empty-handed transfer would push
+    somebody into fetching something to make it look successful.
+    """
+    print("\npull: refresh only")
+    cap, d = _mkpull(card={"SCORES.DAT": b"x" * 40, "OTHER.BIN": b"y" * 7})
+    r = vcctrld.PullJob(cap, d, refresh_only=True).run()
+    check("it succeeds", r["ok"] is True and r["complete"] is True, r)
+    check("having fetched nothing", r["files"] == [], r["files"])
+    check("no VCCHK was typed for a payload",
+          [t for t in d.typed if "VCCHK" in t and "XFER\\OUT" in t] == [],
+          d.typed)
+    seen = cap._file_listing({})
+    check("and the listing it read is what the picker now shows",
+          sorted(x["name"] for x in seen["files"])
+          == ["OTHER.BIN", "SCORES.DAT"], seen["files"])
+
+
+def test_left_in_net_is_a_reading_rather_than_the_intention():
+    """A run that ASKED to come back and got no readiness pulse has not come
+    back, and said so in its log while reporting the opposite in its result.
+
+    `left_in_net` was `not do_return` -- the operator's intention, restated.
+    The log line beside it said "NO READINESS PULSE AFTER THE RETURN REBOOT --
+    the machine may still be in NET", which is the fact. Consumers branch on
+    the field, and the KVM's warning is driven by it, so the one that was
+    wrong is the one anybody would act on.
+
+    It also has to be false on the refusals that happen BEFORE any reboot, or
+    the fix would trade a quiet failure for a noisy one.
+    """
+    print("\nleft_in_net")
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+    _send(cap, "a.txt", b"payload")
+
+    # Asked to return, and the machine never pulsed afterwards. FakeTarget's
+    # `boot` governs both the outward and the return wait, so this is the
+    # return failing on a run that got far enough to have something to return
+    # FROM: the fetch below reboots, reads, and then cannot confirm the way
+    # back.
+    cap2, d2 = _mkpull(card={"A.DAT": b"z" * 32})
+    r = vcctrld.PullJob(cap2, d2, names=["A.DAT"], do_return=True).run()
+    check("a clean return reports the machine as back",
+          r["left_in_net"] is False, r)
+
+    cap3, d3 = _mkpull(card={"A.DAT": b"z" * 32})
+    r3 = vcctrld.PullJob(cap3, d3, names=["A.DAT"], do_return=False).run()
+    check("and staying is still reported as staying",
+          r3["left_in_net"] is True, r3)
+
+    # THE REFUSALS. Before the reboot it must be false, after it, true.
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (False, "server is down")
+    early = vcctrld.TransferJob(cap, FakeTarget(cap)).run()
+    check("a refusal before the reboot does not claim the machine is in NET",
+          early["left_in_net"] is False, early)
+
+    cap._reachable = lambda timeout=None: (True, None)
+    capL, dL = _mkpull(card={"A.DAT": b"z" * 32}, listing=False)
+    late = vcctrld.PullJob(capL, dL, want_all=True, do_return=False).run()
+    check("a refusal AFTER the reboot says the machine is still in NET",
+          late["why"] == "no-listing" and late["left_in_net"] is True, late)
+
+
 def test_a_failed_tls_handshake_does_not_kill_the_accept_loop():
     """`get_request` must close the socket and leave as an OSError.
 
@@ -8070,3 +8607,246 @@ def test_the_websocket_teardown_needs_no_join():
     # Control: the loop that replaced them is actually there, and it selects.
     check("control: one pump serves both directions",
           "def _ws_pump" in web and "def _ws_handle_input" in web, "")
+
+
+def test_the_browser_download_route_serves_bytes_and_contains_a_name():
+    """The page's Save link is a real HTTP GET, so it is tested as one.
+
+    Everything else about the download path is exercised through the
+    capability, which is where the logic is -- but the browser's half is a
+    URL with a name in a query string, and a name in a query string is the
+    oldest way in there is. `../../etc/passwd` reaching the disk here would
+    be a read primitive on a daemon running as root, reachable from a tab.
+
+    What contains it is the same 8.3 conversion the upload path leans on:
+    basename() first, backslash in the illegal set, the result rebuilt from
+    surviving characters. This asserts that it is actually in the path rather
+    than merely available to it.
+
+    RE-ADDED 2026-08-24 after a peer session truncating tests/test_core.py to
+    EOF took this and the test below with it. That is the shared-tree hazard
+    the repo already knows about, arriving in the one file both sessions were
+    appending to at once.
+    """
+    print("\nthe /pulled route")
+    import tempfile
+    import urllib.error
+    import urllib.request
+    import vcweb
+
+    cap = _mkfiles(tempfile.mkdtemp())
+    pulled, _meta = cap._ensure_pulled()
+    body = b"hello card" * 3
+    with open(os.path.join(pulled, "SCORES.DAT"), "wb") as f:
+        f.write(body)
+
+    class Reg(object):
+        caps = {"files": cap}
+
+        def execute(self, req):
+            return {}
+
+    web = vcweb.WebCapability(Reg(), "127.0.0.1", 0)
+    web.start()
+    port = web.httpd.server_address[1]
+    url = "http://127.0.0.1:%d/pulled?name=%%s" % port
+    try:
+        r = urllib.request.urlopen(url % "SCORES.DAT", timeout=5)
+        check("the bytes come back", r.read() == body)
+        check("as a download rather than as something to render",
+              'attachment; filename="SCORES.DAT"'
+              == r.headers.get("Content-Disposition"),
+              r.headers.get("Content-Disposition"))
+
+        for evil in ("..%2F..%2Fetc%2Fpasswd", "%2Fetc%2Fshadow",
+                     "..%5C..%5Cboot.ini"):
+            code = 200
+            try:
+                urllib.request.urlopen(url % evil, timeout=5).read()
+            except urllib.error.HTTPError as exc:
+                code = exc.code
+            check("%s does not serve a file" % evil, code == 404, code)
+
+        # AND IT MUST STILL 404 ON A PLAIN MISS, or the check above would pass
+        # on a route that serves nothing at all.
+        code = 200
+        try:
+            urllib.request.urlopen(url % "NOPE.TXT", timeout=5)
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+        check("a name that simply is not here is a 404 too", code == 404, code)
+    finally:
+        try:
+            web.httpd.shutdown()
+        except Exception:
+            pass
+
+
+def test_saving_a_pulled_file_leaves_nothing_behind_when_it_fails():
+    """The client's half of the two-valued rule, over the host boundary.
+
+    `vcctrl pulled save X --out f` runs on the Pi and the wrapper copies the
+    result back, so a failure that leaves a half-written file behind hands the
+    caller bytes that look like the file they asked for. Same trap as --out
+    everywhere else in this tool, and the same contract.
+
+    It also checks the bytes it wrote against the sha the daemon recorded when
+    it verified them -- which is the last place a truncated read can be caught
+    before somebody starts using the file.
+    """
+    print("\npulled save")
+    import hashlib as _hl
+    import tempfile
+    cl = _client()
+    body = b"payload" * 100
+    sha = _hl.sha256(body).hexdigest()
+    out = os.path.join(tempfile.mkdtemp(), "scores.dat")
+
+    def server(chunks, digest):
+        """A daemon that hands the file back in `chunks` pieces."""
+        def call(req):
+            if req.get("action") == "list":
+                return {"ok": True, "pulled": [{"name": "SCORES.DAT",
+                                                "bytes": len(body),
+                                                "sha256": digest}]}
+            off = req.get("offset", 0)
+            n = max(1, len(body) // chunks)
+            part = body[off:off + n]
+            import base64 as _b
+            return {"ok": True, "name": "SCORES.DAT", "total": len(body),
+                    "offset": off, "len": len(part),
+                    "eof": off + len(part) >= len(body),
+                    "data": _b.b64encode(part).decode()}
+        return call
+
+    cl.call = server(4, sha)
+    rc = cl.save_pulled("scores.dat", out)
+    check("a chunked read succeeds", rc == 0, rc)
+    check("and writes the whole file", open(out, "rb").read() == body)
+
+    # THE SHA THE DAEMON RECORDED DISAGREES WITH THE BYTES THAT ARRIVED.
+    cl.call = server(4, "0" * 64)
+    rc = cl.save_pulled("scores.dat", out)
+    check("a disagreeing sha refuses", rc == 1, rc)
+    check("AND THE OLD FILE IS GONE, not left to be read as this run's",
+          not os.path.exists(out), out)
+    check("and no .part is left beside it",
+          not os.path.exists(out + ".part"), out + ".part")
+
+    # A LOWERCASE NAME MUST NOT SKIP THE CHECK. The daemon converts to 8.3, so
+    # matching the typed spelling against its list would find nothing and pass
+    # by finding no sha to compare -- a verification that vanishes when the
+    # caller uses lower case.
+    seen = {}
+
+    def watching(req):
+        seen[req.get("action")] = seen.get(req.get("action"), 0) + 1
+        return server(1, "0" * 64)(req)
+
+    cl.call = watching
+    rc = cl.save_pulled("scores.dat", out)
+    check("the lowercase spelling still reaches the comparison", rc == 1, rc)
+    check("and it really did ask what the daemon has",
+          seen.get("list") == 1, seen)
+
+    # The daemon simply not answering is a failure that says so, not a silent
+    # zero-byte file.
+    cl.call = lambda req: None
+    rc = cl.save_pulled("scores.dat", out)
+    check("a daemon that does not answer fails", rc == 1, rc)
+    check("with nothing written", not os.path.exists(out), out)
+
+
+def test_the_return_reboot_is_witnessed_by_an_edge_not_by_a_level():
+    """Found by deploying it: the return leg's witness could not fail.
+
+    From the first real fetch on the rig, 2026-08-24 -- two log lines, zero
+    seconds apart, on a machine that takes about forty seconds to come back:
+
+        +69.5 s  return   returning to the menu default
+        +69.5 s  return   the machine booted; which profile is unread
+
+    `wait_boot()` waits for Scroll Lock to READ 1. RDYPULSE had left it at 1
+    when the machine booted into NET, so on the return leg it was already 1
+    and the wait returned on its first poll -- before the reset. The line was
+    emitted having observed nothing at all.
+
+    That is the same level-versus-edge mistake `arm()` exists to prevent on
+    the outward leg, missing on the return leg, in code that has shipped. And
+    the cost is not the log line: `left_in_net` was set false on the strength
+    of it, so the one warning this feature has about the one state it is
+    careful about could never fire.
+
+    THE TEST IS THE FAILING CASE, because the passing case passed before the
+    fix too. A machine that resets on the way out and NOT on the way back has
+    to be reported as possibly still in NET.
+    """
+    print("\nthe return reboot")
+
+    class ReturnBlind(FakeTarget):
+        """Resets when told to on the way out, and not on the way back."""
+
+        def wait_menu(self):
+            self.menus += 1
+            return self.menus == 1
+
+    cap, _d = _mkpull(card={"A.DAT": b"z" * 32})
+    d = ReturnBlind(cap, card={"A.DAT": b"z" * 32})
+    r = vcctrld.PullJob(cap, d, names=["A.DAT"], do_return=True).run()
+
+    check("the fetch itself still succeeded",
+          r["files"][0]["ok"] is True, r["files"])
+    check("but a return that never reset is NOT reported as booted",
+          not any("the machine booted" in e["text"] for e in r["log"]),
+          [e["text"] for e in r["log"] if e["phase"] == "return"])
+    check("it says the machine may still be in NET",
+          any(e.get("warn") and "still be in NET" in e["text"]
+              for e in r["log"]),
+          [e["text"] for e in r["log"] if e["phase"] == "return"])
+    check("AND left_in_net STAYS TRUE, which is what anything downstream "
+          "branches on", r["left_in_net"] is True, r)
+
+    # THE ARMING IS WHAT MAKES THE EDGE VISIBLE, and it must happen on BOTH
+    # legs. Once was the bug.
+    cap2, d2 = _mkpull(card={"A.DAT": b"z" * 32})
+    r2 = vcctrld.PullJob(cap2, d2, names=["A.DAT"], do_return=True).run()
+    check("a clean run arms twice -- once per reboot", d2.arms == 2, d2.arms)
+    check("and only then reports the machine as back",
+          r2["left_in_net"] is False
+          and any("the machine booted" in e["text"] for e in r2["log"]), r2)
+
+    # AND IF IT CANNOT ARM, IT SAYS SO RATHER THAN GUESSING. "I could not
+    # look" is not a reading of "the machine came back".
+    class ArmOnce(FakeTarget):
+        """Arms for the outward reboot and cannot for the return one.
+
+        Failing to arm at ALL is refused before anything reboots -- which is
+        right, and is why this has to fail on the second call rather than the
+        first: the state being tested only exists after the machine is
+        already in NET.
+        """
+
+        def arm(self):
+            self.arms += 1
+            return self.arms == 1
+
+    cap3, _ = _mkpull(card={"A.DAT": b"z" * 32})
+    d3 = ArmOnce(cap3, card={"A.DAT": b"z" * 32})
+    r3 = vcctrld.PullJob(cap3, d3, names=["A.DAT"], do_return=True).run()
+    check("an unwitnessable return is refused as a claim",
+          r3["left_in_net"] is True, r3)
+    check("and says what it could and could not see",
+          any("nothing here can see whether the machine came back" in e["text"]
+              for e in r3["log"]), [e["text"] for e in r3["log"]])
+
+    # The SEND path gets the fix too -- it is the same method, and it is the
+    # one that has been shipping with the defect.
+    import tempfile
+    capS = _mkfiles(tempfile.mkdtemp())
+    capS.support = lambda: (True, None)
+    capS._reachable = lambda timeout=None: (True, None)
+    _send(capS, "a.txt", b"payload")
+    dS = ReturnBlind(capS)
+    rS = vcctrld.TransferJob(capS, dS, do_return=True).run()
+    check("a send whose return reboot is unseen says so too",
+          rS["left_in_net"] is True, rS)
