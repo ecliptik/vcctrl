@@ -2808,6 +2808,81 @@ def test_leds_three_states_by_board():
           (c.verified_at, c.verified_ok))
 
 
+def test_verify_input_refuses_when_unpowered():
+    """Caught live on the real rig, 2026-08-25. The g2k's plug was off
+    (`power state`: on=false), `leds` correctly reported `why: unpowered`,
+    and `_verify_input()` STILL returned `verified: true` -- `led-changes`
+    showed the exact toggle-then-restore this probe produced, recorded at
+    epoch 0, the unpowered epoch. Toggling Caps Lock moves the Pi's own
+    uinput LED node regardless of whether anything is listening on the far
+    end of the wire, and `_sample()` cannot tell that apart from a genuine
+    PS/2 reply -- the two look identical: the value moved and moved back.
+
+    snapshot() already gates on TARGET.state() for exactly this class of
+    fault (FINDINGS.md sec. 33); this probe deliberately bypasses
+    snapshot()'s `_proven_epoch` gate (it has to, or nothing could ever
+    prove a channel that gate has shut) but was, until now, bypassing the
+    power gate right along with it -- and unlike `_proven_epoch`, there is
+    no bootstrapping reason to: an unpowered target can never legitimately
+    move this node, so refusing here creates no circularity.
+
+    THE PROPERTY UNDER TEST IS THAT THE KEY IS NEVER SENT -- not merely that
+    the reply says unavailable. A Devs whose key() is instrumented is the
+    witness: if it was ever called while unpowered, the hazard this refusal
+    exists to close was not closed.
+    """
+    print("\nverify_input refuses when unpowered")
+
+    class Devs(object):
+        def __init__(self, values):
+            self.values = values
+            self.key_calls = 0
+
+        def read_leds(self):
+            return dict(self.values)
+
+        def key(self, keys):
+            self.key_calls += 1
+            # THE MEASURED HAZARD, reproduced: pressing capslock moves the
+            # LOCAL node whether or not a real target is attached.
+            self.values["capslock"] = 1 - self.values["capslock"]
+
+    d = Devs({"capslock": 0, "numlock": 0, "scrolllock": 1})
+    c = vcctrld.LedsCapability(d)
+    c.support = lambda: (True, None)
+
+    saved = vcctrld.TARGET.state()
+    try:
+        with vcctrld.TARGET.lock:
+            vcctrld.TARGET.powered = False
+        before_at, before_ok = c.verified_at, c.verified_ok
+        out = c._verify_input({})
+        check("refuses when the target has no power",
+              out.get("verified") is None and out.get("why") == "unpowered",
+              out)
+        check("and the key is NEVER SENT -- not merely reported unavailable",
+              d.key_calls == 0, d.key_calls)
+        check("verified_* is left alone, same discipline as the ADB refusal",
+              c.verified_at is before_at and c.verified_ok is before_ok,
+              (c.verified_at, c.verified_ok))
+
+        # Control: powered runs the probe for real, and the local-echo fake
+        # produces a genuine (if, per this fix, no-longer-trusted-when-
+        # unpowered) transition -- proving the refusal above is about power,
+        # not about the fake Devs being unable to move at all.
+        with vcctrld.TARGET.lock:
+            vcctrld.TARGET.powered = True
+        out2 = c._verify_input({})
+        check("control: powered DOES run the probe (key IS sent, twice -- "
+              "toggle and restore)", d.key_calls == 2, d.key_calls)
+        check("and reports a real verdict, not a refusal",
+              out2.get("why") is None and out2.get("verified") is True, out2)
+    finally:
+        with vcctrld.TARGET.lock:
+            (vcctrld.TARGET.epoch, vcctrld.TARGET.powered,
+             vcctrld.TARGET.changed_at) = saved
+
+
 def test_leds_flat_shape_survives_for_the_harness():
     """bin/vcctrl_common.leds() callers must keep working, or sweeps stall.
 
@@ -3989,6 +4064,73 @@ def test_absent_key_is_not_a_value():
         cap.vc_json = fs_returning(full)
         check("capcheck refuses rather than derive a count with %r absent"
               % missing, cap.profile(16) is None)
+
+
+def test_sweep_denied_section_is_optional():
+    """`conf["denied"]` crashed both `--list` and every real sweep run --
+    caught 2026-08-25 while wrapping this script for MCP, on the REAL
+    profile: `profiles/doskutsu.yaml` has no `denied:` key at all (there is
+    nothing to deny-list), and `preflight()` and `main(["--list"])` both
+    read it unconditionally. `python3 harness/vcctrl-sweep --list` against
+    this checkout raised `KeyError: 'denied'` before printing a single
+    sweep name it had not already printed.
+
+    THE EXISTING COVERAGE MISSED THIS FOR THE REASON `test_absent_key_is_
+    not_a_value` exists to name: `preflight()`'s own test two functions up
+    always hands it a conf dict that HAPPENS to include `"denied": {}`, so
+    the test and the fix agree with each other and neither agrees with the
+    real profile. This test uses a conf shaped like the REAL one -- no
+    `denied` key -- rather than a fixture that was never wrong to begin
+    with.
+    """
+    print("\nsweep 'denied' section is optional")
+    sweep = _load("harness/vcctrl-sweep", "vcc_sweep_t")
+
+    conf_no_denied = {"sweeps": {"PUMP": {"cells": 4, "timeout_min": 23,
+                                          "measured": "x"}},
+                      "machines": {"1": {"tag": "G", "name": "POD-83"}}}
+    check("profiles/doskutsu.yaml itself has no 'denied' key -- the real "
+          "shape this test's conf is matching, not a hypothetical",
+          "denied" not in sweep._load_profile(), sorted(sweep._load_profile()))
+
+    # preflight() must not require the key to decide nothing is denied.
+    # Stubbed past status AND ensure_powered -- the latter is imported
+    # directly from vcctrl_common and calls THAT module's own vc_json
+    # internally, so patching sweep.vc_json alone does not reach it, and an
+    # unstubbed ensure_powered would shell out to the REAL bin/vcctrl (a
+    # real ssh call) the moment this test runs, which is not what "no
+    # KeyError" needs to prove.
+    sweep.vc_json = lambda *a: {"usb4vc": {"input": True}}
+    sweep.ensure_powered = lambda *a, **kw: True
+    try:
+        sweep.preflight(conf_no_denied, "PUMP", "1")
+    except KeyError as exc:
+        check("preflight() does not require a 'denied' key", False, repr(exc))
+    except SystemExit as exc:
+        # Some OTHER guard may still legitimately refuse (e.g. power state)
+        # -- the property under test is "no KeyError", not "always proceeds".
+        check("preflight() does not require a 'denied' key -- "
+              "refused for an unrelated, named reason instead",
+              "denied" not in str(exc).lower(), str(exc)[:120])
+    else:
+        check("preflight() does not require a 'denied' key", True)
+
+    # `--list` must not require it either, and must say so plainly.
+    import contextlib
+    import io
+    real_load_conf = sweep.load_conf
+    sweep.load_conf = lambda: conf_no_denied
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = sweep.main(["--list"])
+    finally:
+        sweep.load_conf = real_load_conf
+    out = buf.getvalue()
+    check("--list exits 0 with no 'denied' key", code == 0, code)
+    check("--list says so rather than printing nothing",
+          "(none)" in out, out)
+    check("--list still prints the real sweep", "PUMP" in out, out)
 
 
 def test_relay_state_absent_is_not_off():
@@ -6928,6 +7070,126 @@ def test_power_is_gated_by_action_and_the_holder_can_still_use_it():
           == vcctrld._gated("power", {"action": "on"}))
 
 
+def test_power_refuses_on_the_wrong_board_before_touching_the_plug():
+    """docs/BOARD-IDENTITY.md sec. 5: `power cycle` used to hit ONE plug
+    regardless of which USB4VC protocol board was seated. With a Mac Plus
+    installed, that still cut the g2k's mains -- a machine nobody asked
+    about, possibly mid-run on a peer session.
+
+    THE PROPERTY UNDER TEST IS THAT THE PLUG IS NEVER TOUCHED on a mismatch
+    or an unknown board -- not merely that the reply says `ok: false`. A
+    shell backend whose on_cmd/off_cmd append to a marker file is the
+    witness: if the file gained a line, the plug moved, whatever the JSON
+    claims. `state` must keep working in every case, because diagnosing a
+    stuck run must never depend on already knowing which board is seated.
+    """
+    print("\npower board-scope")
+    import importlib.util as _u
+    import tempfile
+    m, real_installed = None, None
+    fd, marker = tempfile.mkstemp(prefix="power-marker")
+    os.close(fd)
+    p = _tmp_yaml(
+        "version: 1\ncapabilities:\n"
+        "  power:\n"
+        "    backend: shell\n"
+        "    settings:\n"
+        "      host: shell-backend\n"
+        "      state_cmd: \"echo on\"\n"
+        "      on_cmd: \"printf on- >> %s\"\n"
+        "      off_cmd: \"printf off- >> %s\"\n"
+        "      boards: [1]\n" % (marker, marker))
+    old = os.environ.get("VCCTRL_CONFIG")
+    try:
+        os.environ["VCCTRL_CONFIG"] = p
+        spec = _u.spec_from_file_location("vcctrld_powerboard", DAEMON)
+        m = _u.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        check("the built config reads the boards list",
+              m.POWER_BOARDS == (1,), m.POWER_BOARDS)
+        reg = m.Registry(make_devices())
+        cap = reg.caps.get("power")
+        check("power started", cap is not None, sorted(reg.caps))
+        if cap is None:
+            return
+
+        real_installed = m.installed_board_id
+
+        def touched():
+            try:
+                with open(marker) as f:
+                    return f.read()
+            except FileNotFoundError:
+                return ""
+
+        # 1. Installed board matches the plug's -- proceeds, plug touched.
+        m.installed_board_id = lambda: 1
+        out = cap._power({"action": "on", "as": "test"})
+        check("board 1 (the plug's own) is allowed", out.get("ok") is True, out)
+        check("and the plug was actually toggled",
+              touched() == "on-", touched())
+
+        # 2. A different, KNOWN board -- refused, plug untouched.
+        open(marker, "w").close()
+        m.installed_board_id = lambda: 3
+        out = cap._power({"action": "cycle", "as": "test"})
+        check("board 3 (a different, known board) is refused",
+              out.get("ok") is False, out)
+        check("the refusal names both boards",
+              out.get("board_id") == 3 and out.get("power_boards") == [1], out)
+        check("and NOTHING was sent to the plug -- refusal happens before "
+              "the protocol is ever touched", touched() == "", touched())
+
+        # 3. Unknown board -- refused too. Never defaults to allowing it.
+        open(marker, "w").close()
+        m.installed_board_id = lambda: None
+        out = cap._power({"action": "off", "as": "test"})
+        check("an unknown board is refused, not assumed to be the plug's",
+              out.get("ok") is False, out)
+        check("still untouched", touched() == "", touched())
+
+        # 4. `state` is unaffected by any of this -- a read, never gated --
+        # AND it carries board_match/board_reason itself, not only
+        # snapshot()/state.json. This is the surface a harness or MCP caller
+        # actually calls before attempting a gated action, so it is the one
+        # place this information is most useful to have.
+        expect_match = {1: True, 3: False, None: None}
+        for board in (1, 3, None):
+            m.installed_board_id = lambda b=board: b
+            out = cap._power({"action": "state"})
+            check("state answers regardless of board (%r)" % board,
+                  out.get("ok") is True, out)
+            check("and 'power state' itself carries board_match (%r)" % board,
+                  out.get("power", {}).get("board_match") == expect_match[board],
+                  out)
+
+        # 5. The informational fields on snapshot() -- present, not gating.
+        m.installed_board_id = lambda: 3
+        snap = cap.snapshot()
+        check("snapshot carries board_match",
+              snap.get("board_match") is False, snap)
+        check("and a reason", bool(snap.get("board_reason")), snap)
+        m.installed_board_id = lambda: 1
+        snap = cap.snapshot()
+        check("board_match is True once the board matches again",
+              snap.get("board_match") is True, snap)
+    finally:
+        if m is not None and real_installed is not None:
+            m.installed_board_id = real_installed
+        try:
+            os.remove(marker)
+        except OSError:
+            pass
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        if old is None:
+            os.environ.pop("VCCTRL_CONFIG", None)
+        else:
+            os.environ["VCCTRL_CONFIG"] = old
+
+
 def test_psm3_drops_the_count_line_and_psm6_recovers_it():
     """The screen reader silently omitted the only line its caller wanted.
 
@@ -8222,6 +8484,11 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
         "dos": "DOS sources; built elsewhere and delivered on the CF card",
         "internal": "gitignored planning work, not part of any deployment",
         "tests": "run against a checkout, never on the daemon host",
+        # agent/ USED TO be listed here ("runs on the control host, nothing
+        # about it belongs on the Pi") until the Pi-hosted MCP server
+        # (2026-08-25) made half of that false -- it now ships and installs
+        # its own systemd service there too. Removed rather than corrected
+        # in place: it is SHIPPED now, which this dict is not for.
     }
 
     present = {d for d in os.listdir(root)

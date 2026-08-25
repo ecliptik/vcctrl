@@ -2350,3 +2350,89 @@ grows, and name which band a criterion is quoting.
 benchmarking chain; the flip counts above are as reported by it. The fps
 conversions are checked here against `_flips * 500 / _reel_ticks` at
 `reel_ticks = 5140`.
+
+## 41. `verify_input` proved a link that was not there  [measured 2026-08-25]
+
+The g2k was powered off. `power state` said so (`on: false`), and `leds`
+correctly refused with `why: unpowered` — the exact guard sec. 33 put in
+place. `verify_input` did not agree with either of them:
+
+    $ vcctrl power state
+      on: false
+    $ vcctrl leds
+      {"available": false, "why": "unpowered", "reason": "the target has
+       no power, so these nodes hold what it published before the cut"}
+    $ vcctrl verify-input
+      {"verified": true, "note": "the target acknowledged a keystroke"}
+
+Three readings of the same instant, and the one built specifically to be
+trustworthy — `verify_input`'s whole reason to exist is that every other
+input status "describes the Pi's own end of the wire" — was the one that
+was wrong.
+
+### It was not a stale value. Something moved, live.
+
+Sec. 33's fault was a RETAINED reading: a value true before power-off,
+still sitting in the nodes, read again and mistaken for current. This is a
+different shape. `led-changes` right after the probe:
+
+    seq 1  epoch 0  capslock 0 -> 1   t 1787686040.490
+    seq 2  epoch 0  capslock 1 -> 0   t 1787686040.516
+
+A genuine transition, toggle then restore, 26 ms apart — exactly the pair
+`_verify_input()` produces — recorded at **epoch 0**, the epoch that means
+"before the first observed power-on" (`TargetEpoch.__init__`: `self.powered
+= None`; sec. 33's own vocabulary treats epoch 0 as belonging to no proven
+power-on). Nothing was retained here. The sysfs node moved WHILE the target
+had no mains.
+
+### The mechanism
+
+`_verify_input()` sends `KEY_CAPSLOCK` to our own uinput device and polls
+the LED sysfs node USB4VC's `change_kb_led()` writes on an inbound `0xED`
+Set-LEDs message from the real target. But that same sysfs node belongs to
+a kernel-visible input device, and the Pi's own input stack tracks lock-key
+state for any keyboard device locally, independent of whatever the external
+protocol board is doing — pressing Caps Lock on a uinput device is enough to
+move its own LED node without any reply ever crossing PS/2. `_sample()`
+cannot tell that apart from a genuine Set-LEDs echo: both are "the value
+moved and moved back" on the same node, and `_verify_input()` reads only
+that.
+
+**This means the round trip's central claim was never quite what it said.**
+"The value returns only if the target's keyboard controller received the
+key" (this method's own docstring, until now) is true for a *board with the
+lead attached and no local echo* — which is what the finding this docstring
+already cites (the vcctrl session unplugging the PS/2 lead, FINDINGS sec.
+29's family) happened to test. It is not true unconditionally, and
+"unpowered" is the one state where the gap is provable rather than merely
+suspected: an unpowered target cannot answer, so any observed transition
+during that state is, by construction, not from the target.
+
+### The fix
+
+`daemon/vcctrld.py` `LedsCapability._verify_input()` now reads
+`TARGET.state()` — the same fact `snapshot()` already gates `why: unpowered`
+on (sec. 33) — and refuses **before sending anything**, rather than sending
+the probe and letting a local artifact be misread as the target's answer.
+
+Deliberately NOT extended to `snapshot()`'s other gate, `_proven_epoch`
+("unproven"): that one exists precisely so `verify_input` has a way to prove
+a channel snapshot() itself has shut, and gating the prover on the thing it
+proves would make the channel unprovable. "Unpowered" has no such
+bootstrapping problem — an unpowered target can never legitimately produce
+this value regardless of how many times it is asked, so refusing there
+closes a real hole without reopening a needed one.
+
+`tests/test_core.py::test_verify_input_refuses_when_unpowered` reproduces
+the mechanism with an instrumented fake (`Devs.key()` flips its own LED
+value on every call, exactly like the measured local echo) and asserts the
+property that matters: the key is never sent while unpowered, not merely
+that the reply says so. A powered control case in the same test confirms
+the fake — and therefore the refusal above it — is doing real work rather
+than a probe that could never succeed anyway.
+
+Found by the vcctrl session's MCP tool layer (`agent/vcctrl_mcp.py`,
+worktree `mcp-server`) on its first supervised run against real,
+deliberately-idle hardware — the first thing to call `verify_input` against
+a target confirmed off since sec. 33 landed.

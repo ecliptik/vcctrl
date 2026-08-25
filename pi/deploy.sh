@@ -225,6 +225,33 @@ if [ "${1:-}" = "--client" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# MCP SERVER ONLY. Never touches vcctrld at all -- vcctrl-mcp.service is a
+# separate unit (pi/install.sh's install_mcp(), see its own comment for why),
+# so this needs no guard_busy check either: nothing here can interrupt a
+# running cell or sweep, the same reason --page and --client don't check.
+#
+# Ships agent/ and pi/install.sh into a throwaway /tmp layout that preserves
+# their relative positions (agent/ beside pi/), so install.sh --mcp-only's
+# own $SRC auto-detection resolves correctly and runs the SAME install_mcp()
+# a full deploy uses -- one implementation, not a second copy of it inlined
+# into an ssh command.
+if [ "${1:-}" = "--mcp" ]; then
+  bash -n "$SRC/pi/install.sh" || { echo "refusing: pi/install.sh does not parse" >&2; exit 1; }
+  [ -f "$SRC/agent/vcctrl_mcp.py" ] || { echo "no $SRC/agent/vcctrl_mcp.py" >&2; exit 1; }
+  python3 -m py_compile "$SRC/agent/vcctrl_mcp.py" || \
+    { echo "refusing: agent/vcctrl_mcp.py does not compile" >&2; exit 1; }
+  rdir="/tmp/vcctrl-mcp-deploy.$$"
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/agent $rdir/pi" || explain_hang
+  $SCP "$SRC/agent/vcctrl_mcp.py" "$SRC/agent/requirements.txt" \
+    "$HOST:$rdir/agent/" || explain_hang
+  $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
+  $SSH "$HOST" "bash $rdir/pi/install.sh --mcp-only; rc=\$?; rm -rf $rdir; exit \$rc" \
+    || explain_hang
+  echo "installed vcctrl-mcp (vcctrld untouched)"
+  exit 0
+fi
+
 if [ "${VCCTRL_FORCE:-0}" != "1" ]; then
   guard_busy || exit 1
 else
@@ -249,7 +276,10 @@ ssh "$HOST" 'rm -rf ~/vcctrl-src && mkdir -p ~/vcctrl-src'
 # library, and a deploy that omitted it would give a Pi where everything anyone
 # tests by hand works and only file transfer is dead -- reported as a broken
 # feature rather than as a missing directory.
-tar -C "$SRC" -cf - daemon bin pi tools common harness profiles vendor | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+# agent/ ships as of the Pi-hosted MCP server (2026-08-25): install.sh sets
+# up its own venv and systemd service from what lands here, separate from and
+# fault-isolated from vcctrld's own install steps -- see the comment there.
+tar -C "$SRC" -cf - daemon bin pi tools common harness profiles vendor agent | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
 if [ -f "$SRC/vcctrl.yaml" ]; then
   # Validate BEFORE shipping. An invalid file does not stop the daemon -- it
   # degrades to built-in defaults, which on this rig means no power control and

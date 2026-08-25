@@ -76,16 +76,17 @@ is why this section exists.
 
 ## The harness, and how it has been wrong
 
-**`FINDINGS.md`** — 39 sections, measured rather than reasoned. The recurring
+**`FINDINGS.md`** — 41 sections, measured rather than reasoned. The recurring
 shape is worth knowing before you read any of it:
 
 > A check that returns the reassuring answer when it is broken.
 
-Sections 31, 35, 36, 37, 38, 39 are all that family: absence read as a value; a
-check passing on an empty population; a dump bounded by the ring rather than
-the cell; Caps Lock inverting every typed character; a journal query nine hours
-in the future returning "No entries"; eight cells silently comparing a
-condition with itself.
+Sections 31, 35, 36, 37, 38, 39, 41 are all that family: absence read as a
+value; a check passing on an empty population; a dump bounded by the ring
+rather than the cell; Caps Lock inverting every typed character; a journal
+query nine hours in the future returning "No entries"; eight cells silently
+comparing a condition with itself; `verify_input` reporting a keystroke
+reached a target that had no power to receive it.
 
 - **`CLI-PARITY.md`** — the `vcctrl` verb surface and why each verb refuses.
   **Sec. 5a is the one to read if you are adding anything both sides call:**
@@ -103,6 +104,15 @@ Target-agnostic: it states requirements, and the project-specific parameters
 live in a profile rather than in the standard. Imported 2026-08-23 from the
 doskutsu campaign, where it was written; vcctrl is its reference harness
 implementation. **Read it before adding a measurement to anything here.**
+
+## Driving the rig from an agent directly
+
+**`MCP-SERVER.md`** — `agent/vcctrl_mcp.py`, 59 tools over MCP wrapping
+`bin/vcctrl` and the harness scripts, so Claude Code, Codex or any other
+MCP client can drive the rig without a person typing commands. Setup for
+both clients, the safety model (shared lock, named confirmation, board-
+scoped power), and a status table of what's been proven live versus
+unit-tested only. PC/DOS only so far, by operator direction.
 
 ## The KVM (webkvm session's component)
 

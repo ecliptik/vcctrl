@@ -1,0 +1,13 @@
+# agent/vcctrl_mcp.py -- control-host only, and deliberately its OWN file.
+#
+# The top-level requirements.txt is shared with the Pi (docs/MCP-PLAN.md sec.
+# 2: "nothing about it touches the Pi's dependency set" was the design intent,
+# and putting `mcp` there would be the one line that breaks it -- the package
+# pulls in httpx, pydantic and friends, none of which a Pi 3 running vcctrld
+# needs, and none of which should ride along on a `pip install -r
+# requirements.txt` run on the daemon host).
+#
+# mcp>=2.0 -- the reference SDK renamed FastMCP to MCPServer between 1.x and
+# 2.x (mcp.server.mcpserver.MCPServer). agent/vcctrl_mcp.py targets the 2.x
+# shape; pin below 2 only if you have a reason to run the older API.
+mcp>=2.0

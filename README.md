@@ -5,7 +5,8 @@ USB4VC's PS/2 bridge, screen over a USB VGA capture stick, files over the CF
 card and later over mTCP, power over a smart plug.
 
 **[PLAN.md](./PLAN.md)** is the design. **[docs/FINDINGS.md](./docs/FINDINGS.md)**
-is what measurement changed.
+is what measurement changed. **[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)**
+hooks an agent (Claude Code, Codex, ...) up to vcctrl directly over MCP.
 
 ## Layout
 
@@ -13,6 +14,7 @@ is what measurement changed.
 bin/vcctrl          VM-side wrapper -- ssh's to the Pi, holds no logic
 bin/vcctrl-client   the real CLI; installed on the Pi as /usr/local/bin/vcctrl
 daemon/vcctrld.py   input server; owns the uinput devices, listens on a socket
+agent/vcctrl_mcp.py MCP server -- the CLI's tools, exposed to an MCP client
 pi/install.sh       systemd unit + masks ctrl-alt-del.target
 pi/deploy.sh        push from the VM and install
 ```

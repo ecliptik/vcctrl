@@ -256,8 +256,15 @@ def load_conf():
 
 def preflight(conf, sweep, machine, allow_power_on=False):
     print("== preflight ==")
-    if sweep in conf["denied"]:
-        raise SystemExit("REFUSED: %s is deny-listed.\n  %s" % (sweep, conf["denied"][sweep]))
+    # OPTIONAL, NOT REQUIRED. `denied` is a profile section for sweeps
+    # someone has explicitly blocked; a profile with none -- like
+    # profiles/doskutsu.yaml today -- simply omits the key rather than
+    # writing an empty one out. Both call sites here used to read
+    # conf["denied"] unconditionally, which meant EVERY sweep run and
+    # `--list` crashed with KeyError on exactly this rig's profile.
+    denied = conf.get("denied") or {}
+    if sweep in denied:
+        raise SystemExit("REFUSED: %s is deny-listed.\n  %s" % (sweep, denied[sweep]))
     if sweep not in conf["sweeps"]:
         raise SystemExit("REFUSED: %s has no measured span, so no defensible timeout.\n"
                          "  A timeout guessed too tight turns a healthy sweep into a\n"
@@ -310,8 +317,10 @@ def main(argv):
             print("  %-6s %d cells  timeout %2d min   (%s)" %
                   (k, v["cells"], v["timeout_min"], v["measured"]))
         print("\ndeny-listed:")
-        for k, v in sorted(conf["denied"].items()):
+        for k, v in sorted((conf.get("denied") or {}).items()):
             print("  %-6s %s" % (k, v))
+        if not conf.get("denied"):
+            print("  (none)")
         return 0
 
     if len(argv) < 2:
