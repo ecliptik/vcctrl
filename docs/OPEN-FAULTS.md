@@ -119,6 +119,22 @@ genuine truncated frames that reached Pillow through the live system during
 actual cells. **A decoder overrunning on a malformed frame is not what aborted
 that daemon.**
 
+> **READ IN HINDSIGHT — 2026-08-24, once the SSL_free race was found.** The
+> hypothesis was not weak. It was well-formed, cheaply falsifiable, and
+> hammered harder than anything else in this file. It was aimed at the wrong
+> subsystem. **"We tested it hard and it never reproduced" reads as an
+> exoneration of the code under test, when it is equally evidence that the code
+> under test was never involved** — and those two want completely different
+> next moves. The first says look harder here; the second says look somewhere
+> else. Everyone examined the data; the fault was a close racing a read in the
+> plumbing, in a path nobody had put an arm on. **The faulting path had no test
+> arm, no counter and no stress harness; the exonerated one had all three —
+> instrumentation attracts the search to the instrumented side, so the
+> best-lit component absorbs the effort while a dark one holds the fault.**
+> Where a negative is this comprehensive, spend the next hour widening the
+> search rather than deepening it: ask which subsystems have no arm on them at
+> all. (Framing from the benchmarking session, now its harness standard 11.1.)
+
 **AND THE COMBINATION IS FINALLY TESTED** — cells-shaped input load, browser
 clients and heavy decode simultaneously, which is what was present at both
 aborts and had never been run together. **Both aborts happened at 32 and 28
@@ -290,7 +306,7 @@ clean window carried browsers' predecessors but no streamers. Do not fold
 them into this diagnosis because a nearby mechanism was found — that is the
 same move that made the malformed-frame hypothesis look strong for a week.
 
-### The rewrite: one thread owns the socket — 2026-08-24, NOT YET DEPLOYED
+### The rewrite: one thread owns the socket — 2026-08-24, DEPLOYED 19:06
 
 `serve_ws` no longer starts a reader thread. `_ws_frames` and `_ws_input` are
 merged into `_ws_pump` plus `_ws_handle_input`, and one thread owns the socket
@@ -322,10 +338,43 @@ first that the connection really carried both directions — a socket nothing
 touched trivially has one owner. Against the two-thread version it reports
 "2 threads, 13 touches" and fails.
 
-**NOT DEPLOYED.** It needs a restart, and one had just been done for the
-file-download work. Until it is deployed the Pi is running the two-thread
-version with the teardown join — the abort mechanism named above is still
-reachable on the running daemon.
+**DEPLOYED 2026-08-24 19:06:44**, committed first as `07785e9` so the Pi is
+running code that exists in a commit.
+
+**VERIFIED ON HARDWARE, and the handshake one is the fix demonstrated rather
+than argued.** Three stray plaintext probes at :8443 make `wrap_socket` raise
+inside `TLSServer.get_request` — the exact path that raised `NameError` before.
+`/state.json` returned 200 before and after all three. Under the previous code
+the FIRST probe kills the accept thread while `tls_up` goes on reporting True.
+
+    :8443 /state.json          200 before and after 3 failed handshakes
+    ws.reader_stuck            ABSENT from the payload, not zero
+    rate echo                  asked 40 -> told 30.0; asked 2 -> told 2.0
+    ping/pong                  correct payload, 0 ms (the pong changed threads)
+    pacing, idle box           asked 2.0 fps, got 2.00; 41/41 distinct
+    a keypress                 typed at the prompt, READ OFF THE SCREEN,
+                               then backspaced away
+
+**Under adversarial load it is indistinguishable from an idle box.** A
+14-file transfer job ran alongside a watched stream — 78 s of driving input
+(14 typed lines, LED polls at 2 Hz, the target running FTP.EXE) between two
+reboots. Alignment is not fitted: the job's own boundaries at +0 s and +136.4 s
+land on independently logged `frozen` transitions at monitor t=69.4 and
+t=205.8.
+
+    frames        4-6/s against an asked 5.0, never sagged
+    distinct      equal to the frame count every second
+    worst gap     0.25 s, against 0.24 s on the quiet baseline
+    ping RTT      0 ms; over 118 pings the MAXIMUM was 1 ms
+    after         ws opened 4 / closed 4, last_error null, decode_errs 0
+
+**What that is worth, stated plainly: it is one 78-second window with 14
+transitions.** It bounds the starvation question — frames stalling while input
+is driven, or input queueing behind frames — on the one shape that was run. It
+does not prove the race gone and was never going to. **The argument for the
+race is constructive: there is no second thread, so there is no read racing a
+write.** The run's real job was catching what the rewrite BROKE, and it caught
+nothing.
 
 ### Coordination hazard: a change-detector cannot tell an upgrade from a fault
 
@@ -349,18 +398,200 @@ before any planned restart, and confirm they are down first.
 
 ---
 
-## 2. `type_text` cannot produce a requested case  — OPEN
+## 2. `type_text` cannot produce a requested case  — FIXED 2026-08-24
 
 `vcctrl type` makes uppercase by holding SHIFT; **Caps Lock inverts SHIFT**;
-and `at_prompt()` toggles Caps Lock as its probe. The case of everything the
-harness types depends on a bit the prompt detector is flipping.
+and `at_prompt()` toggled Caps Lock as its probe. The case of everything the
+harness typed depended on a bit the prompt detector was flipping. It cost a
+transfer: a verification copy asked for as `HELLO.TXT.CHK` arrived as
+`hello.txt.chk`, and the wait then timed out on a transfer the server log
+showed completing.
 
-**Workaround, and it is mandatory: `FIND /I` for every DOS-side match.** A case
-mismatch returns "not found", which is indistinguishable from a real absence.
-Do not rely on the case of a `SET` *value* either.
+**THE FIX: `at_prompt()` PROBES WITH NUM LOCK.** The daemon's character map
+contains no keypad codes at all, so `type` is immune to Num Lock state, while
+Caps Lock inverts every letter. INT 09h services all three lock keys
+identically, so the probe keeps the only real signal it has — detecting a
+program that has hooked the vector. Caps Lock and Scroll Lock were both spoken
+for: `arm_leds()` arms Caps Lock HIGH so POST clearing it is the reboot edge,
+and RDYPULSE sets Scroll Lock as readiness. Num Lock was the free bit.
 
-**Proper fix, not done:** the daemon should read the LED and invert the shift
-for letters.
+**The cost, and it is the only one:** anything that SENDS a keypad key becomes
+sensitive to Num Lock where it was not before. Checked in both directions
+before landing — no path in this repo sends a `kp*` key, and the boot-menu
+digit, the one keystroke that decides which hardware profile a measurement
+runs under, resolves to `KEY_1`..`KEY_9` on the number row. Both are asserted
+by tests so a future keypad user finds out from a red suite.
+
+**`FIND /I` REMAINS MANDATORY.** The harness has stopped being *a* cause of
+case corruption; it has not become the only possible one. The operator can
+press Caps Lock at the KVM and a DOS program can set it, and a case mismatch
+still returns "not found", which is indistinguishable from a real absence. Do
+not rely on the case of a `SET` *value* either.
+
+> **THE FIX THIS FILE USED TO PRESCRIBE WOULD HAVE MADE THINGS WORSE, and
+> that is worth more to you than a corrected sentence.** It said: *"the daemon
+> should read the LED and invert the shift for letters."* **That fix was built
+> on the phantom below.** It would have inverted the case of everything typed
+> on the strength of a value that may never have been a reading of the target
+> at all — silently, confidently, on a fresh daemon, in exactly the conditions
+> where that value is least trustworthy. A prescription can be wrong in a way
+> that is invisible until you find the thing underneath it, and this one sat
+> here looking sensible for as long as the file has existed. The fix that
+> landed removes the dependency instead: nothing has to read a lock-key state
+> to know what case it typed.
+
+### The Caps Lock reading is a phantom — GATE FIXED, ACCURACY STILL OPEN
+
+**`vcctrl leds` reported `capslock: 1` while the target's Caps Lock was OFF.**
+Found by prediction rather than by noticing: before typing at the prompt the
+prediction was written down — unshifted `vcctrl6` should render `VCCTRL6` if
+caps is on — and it came back **lowercase** on the glass.
+
+The tell was in the same payload all along: **`changes: 0` and
+`changed_at: null`.** The daemon had witnessed ZERO lock-key transitions that
+lifetime. The byte only arrives on a change, so with no change ever seen that
+`1` is the Pi's virtual keyboard device default and **has never been a reading
+of the target at all.** Scroll Lock reads 1 the same way.
+
+**AND SOMETHING ACTS ON IT.** `type_line()` on the transfer path reads that LED
+and TOGGLES Caps Lock if it reads True. So a phantom 1 means every transfer
+has been sending a real Caps Lock keystroke to the target before its first
+command. Harmless in DOS and invisible on screen — but it is **an input the
+machine receives**, not a number sitting in a dict, so do not write it up as
+cosmetic. (That half is the vckvm session's finding, on its own code.)
+
+**The rule that follows, and it is broader than the case question:** the LED
+value has never been witnessed to change this daemon lifetime, so **nothing
+that reads it should be treated as reading the target until somebody proves an
+edge.** Same discipline that fixed the return reboot on the same day — arm the
+bit first, so that clearing it is an edge rather than a level that was already
+set.
+
+**IT IS NOT STALENESS, AND IT IS NOT THE PROBE MUTATING ITS CHANNEL.** Those
+are the two failures already on the books — a reading from the wrong epoch, and
+`at_prompt()` toggling the bit whose value it is reporting. This is a third and
+it is worse than either: **a value that belongs to NO epoch.** Nothing ever
+wrote it. It is the virtual keyboard's initial state, published in the same
+shape as a measurement, and no amount of re-reading it will improve it.
+(Distinction from the benchmarking session, which has since written it into
+the harness standard as 7.2.2f, `7a8037f`.)
+
+**So the requirement, for anything that maintains state by observing changes:**
+publish the transition count and the last-changed time BESIDE the value, and
+**treat zero observed transitions as UNKNOWN rather than as the initial
+value.** The daemon already does the first half, which is the only reason this
+was catchable — `changes: 0` was sitting next to the phantom the whole time.
+It is the second half that was missing, here and in every consumer.
+
+**So `FIND /I` stays mandatory, for a different reason than section 2 gives.**
+Not only because Caps Lock inverts SHIFT, but because the harness's belief
+about Caps Lock may be unrelated to the target's. **A reading nothing has ever
+witnessed still prints as a number, and gets quoted later as though somebody
+looked.** The typed character on the screen is the only direct evidence.
+
+#### The root cause: one line outside one `if`
+
+`_sample()` guarded the change RECORD with "the first sample of a daemon's
+life is not a transition" and did **not** guard the PROOF FLAG three lines
+above it:
+
+    if values != prev:
+        LedsCapability._seen_values = dict(values)
+        LedsCapability._proven_epoch = epoch     <-- set by the FIRST sample
+        if prev is not None:
+            ...the change record...              <-- correctly guarded
+
+The first sample always differs from `None`, so **every daemon proved its own
+channel by reading it once.** The field's name said proven; its value meant
+"a sample differed from the one before it". That is why `changes: 0` could sit
+beside `available: true` — two facts from the same deque, disagreeing, three
+lines apart.
+
+**IT TOOK BOTH HALVES AND EITHER ALONE WAS A NO-OP.** Measured against four
+builds, on a device whose lock LEDs never move:
+
+    neither fix          available=True   capslock=1   changes=0
+    move the line only   available=True   capslock=1   changes=0
+    fix the gate only    available=True   capslock=1   changes=0
+    both                 available=False  why=unproven values ABSENT
+
+Moving the line makes `_proven_epoch` stay `None` — and the old gate skipped
+its check entirely when it was `None`. Fixing the gate alone leaves the first
+sample setting a real epoch, which matches and passes. **A half-fix reproduces
+the phantom's exact signature**, so anyone verifying this by observing that
+the symptom is gone can be looking at an unchanged rig. Check both halves.
+
+**The invariant that now makes them unable to disagree: `available: true`
+implies `changes >= 1`.** It is asserted directly, with a positive control, so
+a gate that refused everything for ever would not score full marks either.
+
+**Two consumers were reading the phantom and acting on it**, which is what
+made it dangerous rather than merely wrong:
+
+- `type_line()` reads the LED and PRESSES Caps Lock if it reads set, so a
+  phantom sent a real keystroke to the target before every transfer's first
+  command.
+- `arm()` SKIPPED its press when a retained value said "already set", so POST
+  cleared a bit that had never been armed, no edge occurred, and the run
+  refused `no-reset` — "the machine never reset" about a machine that rebooted
+  perfectly.
+
+**And `arm_leds()` classified the honest new answer in the wrong bucket.** It
+mapped `unproven` to `False`, which its own docstring reserves for "the LED
+would not take the state" — a fault in the machine — rather than to `None`,
+"could not look". Left alone it would have reported a healthy Gateway as an
+arming failure and refused every boot-profile selection on it. **A gate made
+honest upstream will be misread downstream by whatever was written against the
+dishonest version.**
+
+**`unproven` must also be answered AFTER `unknown`.** Put first it swallowed
+it, and an unidentified board reported "nothing has been observed to move on
+this channel" — a stronger claim than the daemon can make, because it asserts
+the channel exists. `unknown` sends a reader to look at the board; `unproven`
+sends them looking for something to press.
+
+#### AND PROOF OF LIVENESS IS NOT PROOF OF ACCURACY — measured 2026-08-24
+
+**The gate above is necessary and it is NOT sufficient.** Measured on the live
+rig, with the target booted and the channel showing `changes: 8` — proven,
+available, publishing:
+
+    nodes (caps,num,scroll)   target caps, READ OFF THE SCREEN
+    1, 0, 1                   OFF    (typed `vcctrl6` -> vcctrl6)
+    1, 1, 1                   ON     (typed `vcctrl6` -> VCCTRL6)  num moved
+    0, 1, 1                   OFF    (typed `vcctrl6` -> vcctrl6)  caps moved
+
+**The target's Caps Lock followed the presses exactly: OFF, ON, OFF. The node
+NAMED `capslock` did not** — it read 1 while caps was off, stayed 1 when caps
+came on, and only moved on the second press. Which node moves was not even
+consistent between two identical keypresses.
+
+**So `changes >= 1` proves the channel carries traffic; it does not prove the
+CURRENT VALUE IS CURRENT.** A channel can be demonstrably alive and still be
+publishing a number that does not describe the target right now. That is a
+weaker guarantee than the gate's wording implies, and the gate should not be
+read as making LED values trustworthy — only as stopping the worst case, where
+nothing was ever witnessed at all.
+
+**Leading explanation, NOT established:** a PS/2 Set-LEDs command carries all
+three bits at once, so the node set is refreshed wholesale whenever the target
+sends one. Between such commands a node can hold a value that never described
+the target's current state, and the first press of a session is what corrects
+it. That fits every reading above and is not proved by them.
+
+**Num Lock behaved correctly under the same test** — two presses moved the
+`numlock` node 1 -> 0 -> 1 cleanly, with nothing else moving. That matters
+because the prompt probe now uses Num Lock; it is a reason to keep watching
+that bit, not a proof that it is immune.
+
+**THE SCREEN IS THE ONLY DIRECT WITNESS OF THE TARGET'S LOCK STATE.** Everything
+else on this rig is an inference from a node two things can write.
+
+**To open the channel: `vcctrl verify_input`.** It proves by round trip and
+reads the nodes directly, so it works while the gate is refusing — otherwise
+there would be no way out of a gate that has closed. It now records what it
+proved through `_sample()`, the one place that decides what counts as a
+change, rather than observing a transition off a raw read and telling nobody.
 
 ---
 

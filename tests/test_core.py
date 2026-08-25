@@ -2642,8 +2642,32 @@ def test_leds_three_states_by_board():
             (None, "board unknown"))
         return c
 
-    # 1. IBM PC, readable -> available, values FLAT and present
-    s = cap(1, Devs(good)).snapshot()
+    # 1. IBM PC, readable -> available, values FLAT and present.
+    #
+    # THE CHANNEL IS PROVEN FIRST, by moving a bit and letting the capability
+    # observe it. Availability now requires an OBSERVED TRANSITION: values
+    # that merely sit in the nodes are not a reading, which is the
+    # `capslock: 1` phantom of 2026-08-24 -- reported while the target's Caps
+    # Lock was off. Sampling once and expecting availability is exactly what
+    # this arm used to do, and it is what one sample no longer buys.
+    #
+    # It also gives the arm the positive control it never had: the values
+    # asserted below are ones the capability watched change.
+    L = vcctrld.LedsCapability
+    L._seen_values, L._proven_epoch = None, None
+    _t = vcctrld.TARGET.state()
+    with vcctrld.TARGET.lock:
+        vcctrld.TARGET.powered = True
+    d1 = Devs(dict(good))
+    c1 = cap(1, d1)
+    c1.snapshot()                       # a baseline to move away from
+    d1.values["capslock"] = 1           # something moves
+    c1.snapshot()                       # observed -> the channel is proven
+    d1.values["capslock"] = 0           # and back to `good`
+    s = c1.snapshot()
+    with vcctrld.TARGET.lock:
+        (vcctrld.TARGET.epoch, vcctrld.TARGET.powered,
+         vcctrld.TARGET.changed_at) = _t
     check("ibmpc reports available", s["available"] is True)
     check("ibmpc why is null", s["why"] is None)
     check("ibmpc values are flat and present",
@@ -3131,8 +3155,15 @@ def test_a_reading_must_belong_to_this_epoch():
         d = Devs(live)
         c = fresh(d)
 
-        # Powered and publishing: a normal reading.
+        # Powered and publishing: a normal reading. The channel is PROVEN
+        # first -- a bit moves and the capability sees it -- because
+        # availability now requires an observed transition rather than a
+        # single sample of whatever the nodes happen to hold.
         vcctrld.TARGET.observe(True)
+        c.snapshot()                   # a baseline to move away from
+        d.v["capslock"] = 0            # something moves
+        c.snapshot()                   # observed -> the channel is proven
+        d.v["capslock"] = 1            # and back to `live`
         s = c.snapshot()
         check("powered target reports values", s["available"] is True, s)
         check("and the values are flat", s.get("capslock") == 1, s)
@@ -9077,3 +9108,163 @@ def test_a_listing_belongs_to_the_directory_it_is_of():
     check("a store written by the single-slot version still reads",
           [f["name"] for f in migrated["files"]] == ["OLD.TXT"],
           migrated["files"])
+
+
+def test_an_led_channel_that_has_never_moved_is_not_a_reading():
+    """`available: true` must imply something was observed to move.
+
+    On 2026-08-24 `vcctrl leds` reported `capslock: 1` while the target's Caps
+    Lock was OFF -- proved by typing unshifted text at the prompt and reading
+    it off the glass, where it came back lowercase. The nodes held what they
+    held when the daemon started and nothing had ever written them.
+
+    The tell was in the same object: `changes: 0` beside `available: true`.
+    Two facts from one deque disagreeing, because `_sample()` guarded the
+    change RECORD with "the first sample of a daemon's life is not a
+    transition" and did not guard the PROOF FLAG three lines above it. The
+    first sample always differs from None, so every daemon proved its own
+    channel by reading it once.
+
+    IT TAKES BOTH HALVES AND EITHER ALONE IS A NO-OP, which is why this test
+    asserts the OUTCOME rather than the placement of a line. Measured against
+    four builds, on a device whose lock LEDs never move:
+
+        neither fix        available=True   capslock=1   changes=0
+        move the line only available=True   capslock=1   changes=0
+        fix the gate only  available=True   capslock=1   changes=0
+        both               available=False  why=unproven values absent
+
+    Moving the line makes `_proven_epoch` stay None; the old gate skipped its
+    check entirely when it was None. Fixing the gate alone leaves the first
+    sample setting a real epoch, which matches and passes. Each repair is
+    invisible without the other, and a half-fix reproduces the phantom exactly.
+    """
+    print("\nled never moved")
+    import collections as _collections
+    L = vcctrld.LedsCapability
+    saved = (L._changes, L._changes_seq, L._seen_values, L._proven_epoch)
+    t_saved = vcctrld.TARGET.state()
+    try:
+        vals = {"capslock": 1, "numlock": 0, "scrolllock": 1}
+        cap = L.__new__(L)
+        cap.devs = type("D", (), {
+            "read_leds": staticmethod(lambda: dict(vals))})()
+        cap.bus = None
+        cap.support = lambda: (True, None)   # IBM PC: LEDs are meaningful here
+        L._changes = _collections.deque(maxlen=200)
+        L._changes_seq = 0
+        L._seen_values = None
+        L._proven_epoch = None
+        vcctrld.TARGET.observe(True)         # powered, so `unpowered` is not it
+
+        cap.snapshot()                       # first look
+        s = cap.snapshot()                   # and a second changes nothing
+
+        check("a channel nothing has moved is not available",
+              s.get("available") is False, s.get("available"))
+        check("and the reason names it as unproven, not unsupported or error",
+              s.get("why") == "unproven", s.get("why"))
+        check("the VALUE KEYS ARE ABSENT, not zeroed",
+              "capslock" not in s and "scrolllock" not in s, sorted(s))
+        # The specific wrong answer this test exists to prevent.
+        check("it does NOT report the phantom capslock: 1",
+              s.get("capslock") != 1, s.get("capslock"))
+
+        # POSITIVE CONTROL, and it is what stops this passing on nothing: the
+        # same capability must publish once the bit actually moves. Without
+        # this arm a gate that refused everything for ever would score full
+        # marks.
+        vals["capslock"] = 0
+        s2 = cap.snapshot()
+        check("control: once something moves, it IS a reading",
+              s2.get("available") is True, s2.get("why"))
+        check("control: and the moved value is published",
+              s2.get("capslock") == 0, s2.get("capslock"))
+        check("control: with a change recorded beside it",
+              (s2.get("changes") or 0) >= 1, s2.get("changes"))
+
+        # THE INVARIANT, stated once rather than implied by the two arms.
+        for label, snap in (("unproven", s), ("proven", s2)):
+            if snap.get("available") is True:
+                check("%s: available implies at least one observed change"
+                      % label, (snap.get("changes") or 0) >= 1,
+                      snap.get("changes"))
+    finally:
+        (L._changes, L._changes_seq, L._seen_values, L._proven_epoch) = saved
+        with vcctrld.TARGET.lock:
+            (vcctrld.TARGET.epoch, vcctrld.TARGET.powered,
+             vcctrld.TARGET.changed_at) = t_saved
+
+
+def test_the_prompt_probe_does_not_touch_the_case_of_what_it_types_next():
+    """`at_prompt()` must not probe with a key that inverts SHIFT.
+
+    OPEN-FAULTS sec. 2 in one sentence: `type` makes uppercase by holding
+    SHIFT, Caps Lock INVERTS SHIFT, and the readiness probe toggled Caps Lock.
+    So the check that decided the machine was ready corrupted the case of the
+    command typed straight after it, silently -- DOS is case-insensitive about
+    commands and paths, so only the ARGUMENTS came out wrong. Measured: a
+    verification copy asked for as HELLO.TXT.CHK arrived as hello.txt.chk.
+
+    The probe now uses NUM LOCK, which the daemon's character map cannot be
+    affected by because it contains no keypad codes at all.
+
+    ASSERTED BY DRIVING IT, not by reading it. A source-text check for
+    "capslock" would pass the moment somebody renamed a variable, and would
+    have nothing to say about a second probe added later.
+    """
+    print("\nprompt probe key")
+    import importlib.util as _il
+    import sys as _sys
+    path = os.path.join(HERE, os.pardir, "bin", "vcctrl_common.py")
+    spec = _il.spec_from_file_location("vcc_probe", path)
+    vcc = _il.module_from_spec(spec)
+    _sys.modules["vcc_probe"] = vcc
+    spec.loader.exec_module(vcc)
+
+    sent = []
+    vcc.vc = lambda *a, **kw: sent.append(tuple(str(x) for x in a))
+    vcc.stable_led = lambda name: False          # settled, and currently off
+    vcc.wait_led = lambda name, want, t: 0.05    # every flip observed
+    vcc.leds = lambda: {"available": True, "numlock": 0, "capslock": 0,
+                        "scrolllock": 0}
+
+    r = vcc.at_prompt()
+
+    check("control: the probe ran and reached a verdict", r is True, r)
+    check("control: and it really did send keys", len(sent) >= 1, sent)
+
+    keys = [a[1] for a in sent if a and a[0] == "key"]
+    check("it presses NUM LOCK", keys and set(keys) == {"numlock"}, keys)
+    check("IT NEVER PRESSES CAPS LOCK, which would invert every letter "
+          "typed next", "capslock" not in keys, keys)
+    check("nor scroll lock, which is RDYPULSE's readiness bit",
+          "scrolllock" not in keys, keys)
+    # It must put the bit back, or a probe silently corrupts the next probe.
+    check("and it restores the level rather than leaving it flipped",
+          len(keys) == 2, keys)
+
+
+def test_the_boot_menu_digit_is_not_a_keypad_key():
+    """Num Lock must not be able to change which profile a cell boots.
+
+    Raised by the benchmarking session against the change above, and it is the
+    sharpest form of its cost: with Num Lock off a keypad `5` is an arrow, so
+    if the CONFIG.SYS menu digit were a keypad code the cell would boot a
+    different hardware profile -- silently, and into logs that look entirely
+    normal. That is the one keystroke on this rig that decides what the
+    measurement is measuring.
+
+    `spam_menu()` sends it as `vc("key", str(digit), ...)`, so the question is
+    what the daemon's NAMED_KEYS resolves a bare digit to.
+    """
+    print("\nmenu digit is top row")
+    import evdev.ecodes as _e
+    for d in "0123456789":
+        code = vcctrld.NAMED_KEYS.get(d)
+        check("the menu digit %s is a real key at all" % d,
+              code is not None, code)
+        check("digit %s is the NUMBER ROW, not the keypad" % d,
+              code == getattr(_e, "KEY_%s" % d), code)
+        check("digit %s is not KEY_KP%s" % (d, d),
+              code != getattr(_e, "KEY_KP%s" % d), code)

@@ -1202,15 +1202,38 @@ class LedsCapability(Capability):
             return None
         if not values:
             return None
+        if LedsCapability._changes is None:
+            # `start()` creates this, and `_sample()` is reachable without it
+            # -- `snapshot()` calls us, and so does `verify_input` now. The
+            # deque was only ever absent on a path that could not reach the
+            # append below, so this was a crash waiting on a call order rather
+            # than on a fault. Created here as well so the record exists
+            # wherever a transition can be observed.
+            LedsCapability._changes = collections.deque(maxlen=self.CHANGES_MAX)
         prev = LedsCapability._seen_values
         if values != prev:
             epoch, _powered, _at = TARGET.state()
             LedsCapability._seen_values = dict(values)
-            LedsCapability._proven_epoch = epoch
             if prev is not None:
                 # The first sample of a daemon's life is not a transition --
                 # there is no prior state for it to have moved from, and
                 # recording one would put a fictitious change at every start.
+                #
+                # `_proven_epoch` LIVES IN HERE FOR THE SAME REASON, and it
+                # used to live three lines up where it was set by the first
+                # sample. That is how `capslock: 1` came to sit beside
+                # `changes: 0` with `available: true`: the change record was
+                # guarded by this test and the proof field was not, so the
+                # gate compared a proof written at startup against the epoch
+                # it was written in, matched, and published nodes nothing had
+                # ever been observed to move. The field's name said proven;
+                # its value meant "a sample differed from the one before it",
+                # and the first sample always differs from None.
+                #
+                # Measured 2026-08-24: the target's Caps Lock was OFF while
+                # this channel reported 1, and unshifted text typed at the
+                # prompt came back lowercase on the glass.
+                LedsCapability._proven_epoch = epoch
                 LedsCapability._changes_seq += 1
                 LedsCapability._changes.append({
                     "seq": LedsCapability._changes_seq,
@@ -1340,6 +1363,22 @@ class LedsCapability(Capability):
         supported, reason = self.support()
         if supported is False:
             return {"available": False, "why": "unsupported", "reason": reason}
+
+        if supported is None:
+            # Readable, but we cannot say the reading MEANS anything, because
+            # we do not know which board is in. Values are withheld rather
+            # than published with a caveat -- a caveat next to a number gets
+            # dropped and the number does not.
+            #
+            # ANSWERED HERE, AHEAD OF EVERY CURRENCY QUESTION, because it used
+            # to sit below them and the never-proven branch swallowed it: an
+            # unidentified board reported `unproven`, which is a STRONGER
+            # claim than this daemon can make -- it says the channel exists
+            # and merely lacks proof. `unknown` says we cannot tell which
+            # machine this is. A consumer told `unproven` goes looking for
+            # something to press; told `unknown` it goes and looks at the
+            # board. You cannot prove a channel you cannot say exists.
+            return {"available": False, "why": "unknown", "reason": reason}
         # One sampler, shared with the 1 Hz poller, so both maintain the same
         # record and there is a single place that decides what a change is.
         values = self._sample()
@@ -1361,8 +1400,25 @@ class LedsCapability(Capability):
                                "what it published before the cut -- a real "
                                "reading, and not about now")}
 
-        if (LedsCapability._proven_epoch is not None
-                and LedsCapability._proven_epoch != epoch):
+        if LedsCapability._proven_epoch is None:
+            # NEVER PROVEN ON ANY EPOCH, which is not staleness and is the
+            # case this gate missed entirely. A stale reading was real once
+            # and belongs to an earlier epoch; this one belongs to NO epoch --
+            # nothing ever wrote it, and re-reading cannot improve it. That is
+            # the practical test for telling the two apart.
+            #
+            # `verify_input` is the way out and it reads the nodes directly
+            # rather than through this gate, so it still works while this
+            # branch is refusing. Without that there would be no way to prove
+            # a channel this branch has closed.
+            return {"available": False, "why": "unproven",
+                    "reason": ("nothing has been observed to move on this "
+                               "channel since the daemon started, so these "
+                               "nodes hold what they held at startup and have "
+                               "never been shown to be the target's state -- "
+                               "`verify_input` proves it by round trip")}
+
+        if LedsCapability._proven_epoch != epoch:
             # The sharpest case, and the one a power-off check alone misses:
             # just after power returns, the nodes still hold the PREVIOUS
             # boot's values and the machine is on. This is the moment
@@ -1377,12 +1433,6 @@ class LedsCapability(Capability):
                                                 time.localtime(changed_at))
                                   if changed_at else "an unknown time"))}
 
-        if supported is None:
-            # Readable, but we cannot say the reading MEANS anything, because
-            # we do not know which board is in. Values are withheld rather
-            # than published with a caveat -- a caveat next to a number gets
-            # dropped and the number does not.
-            return {"available": False, "why": "unknown", "reason": reason}
         out = {"available": True, "why": None, "reason": None}
         # SUMMARY of the change record, not a second source of truth -- both
         # are derived from the same deque. This is what a lamp tooltip needs
@@ -1428,14 +1478,28 @@ class LedsCapability(Capability):
                              "PS/2 link, and the LED round trip it depends "
                              "on does not exist here")}
 
-        before = self.devs.read_leds()
+        # THROUGH `_sample()`, NOT `read_leds()`, and that is the whole point
+        # of this change. This probe is the only thing that can prove a
+        # channel the gate has closed, but it used to observe the transition
+        # with a raw read and tell nobody -- it set `verified_ok` and left
+        # `_proven_epoch` alone. The 1 Hz poller is the only other writer, and
+        # a press-then-press-back inside one poll interval is invisible to it:
+        # same value either side, nothing recorded. So a successful proof
+        # could leave the gate shut forever.
+        #
+        # `_sample()` is documented as the one place that decides what counts
+        # as a change. Routing the probe through it means the proof is
+        # recorded exactly like any other transition -- `_seen_values`,
+        # `_changes` and `_proven_epoch` together -- instead of in a second
+        # place that can disagree with the first.
+        before = self._sample()
         try:
             self.devs.key(["capslock"])
         except Exception as exc:
             return {"ok": False, "error": "could not send: %s" % exc}
         changed, deadline = False, time.time() + 1.5
         while time.time() < deadline:
-            if self.devs.read_leds() != before:
+            if self._sample() != before:
                 changed = True
                 break
             time.sleep(0.02)

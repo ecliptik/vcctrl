@@ -313,10 +313,37 @@ def at_prompt():
     READ THIS BEFORE TRUSTING IT. The name is aspirational and the docstring
     used to match the name, which is how it cost a transfer on 2026-08-19.
 
-    Caps Lock is serviced by the BIOS INT 09h handler and updates the keyboard
-    controller's LED directly. **DOS is not involved.** So this flips whenever
-    the ISR is intact -- including while an ordinary program is running and not
-    reading input at all. It returns True during an FTP transfer.
+    NUM LOCK, AND IT USED TO BE CAPS LOCK. That is the whole of OPEN-FAULTS
+    sec. 2: `type` makes uppercase by holding SHIFT, Caps Lock INVERTS SHIFT,
+    and this probe toggled Caps Lock -- so the readiness check silently
+    corrupted the case of the command typed immediately after it. DOS is
+    case-insensitive about commands and paths, so the command ran and only the
+    ARGUMENTS came out wrong: a verification copy asked for as HELLO.TXT.CHK
+    arrived as hello.txt.chk, and the wait then timed out on a transfer the
+    server log showed completing.
+
+    Num Lock costs nothing here. The daemon's character map contains NO
+    keypad codes, so `type` is entirely immune to Num Lock state, while Caps
+    Lock inverts every letter it types. Checked rather than assumed, in both
+    directions: no path in this repo SENDS a `kp*` key either, and the
+    boot-menu digit -- the one keystroke that decides which hardware profile a
+    measurement runs under -- resolves to KEY_1..KEY_9 on the number row, not
+    to KEY_KP1..KEY_KP9. If anything ever does start sending keypad keys, it
+    becomes sensitive to Num Lock where it was not before, and THAT is the
+    cost of this change rather than anything about case.
+
+    Caps Lock and Scroll Lock were both spoken for and Num Lock was not:
+    `arm_leds()` arms Caps Lock HIGH so POST clearing it is the reboot edge,
+    and RDYPULSE sets Scroll Lock as the readiness signal. Probing on either
+    would fight a boot witness for one bit, which this rig has already done
+    once and does not need to do again.
+
+    Lock keys are serviced by the BIOS INT 09h handler, which updates the
+    keyboard controller's LED directly. **DOS is not involved**, and this is
+    true of all three of them identically -- so moving the probe changes the
+    key and not the signal. It flips whenever the ISR is intact, including
+    while an ordinary program is running and not reading input at all. It
+    returns True during an FTP transfer.
 
     What it genuinely detects is a program that HOOKS INT 09h, which is why it
     correctly reports the game as not-at-a-prompt: SDL3's DOS backend owns the
@@ -336,22 +363,22 @@ def at_prompt():
     the re-read; it passed, but only because the two leds() calls bracketing
     the sleep added ~3 s of their own. The sleep was never doing the work.
     """
-    before = stable_led("capslock")
+    before = stable_led("numlock")
     if before is None:
         # Refusing is right: a probe whose starting level will not settle
         # cannot answer the question, and answering anyway is how a healthy
         # machine gets reported as busy.
-        sys.stderr.write("at_prompt: caps lock level would not settle; "
+        sys.stderr.write("at_prompt: num lock level would not settle; "
                          "declining to guess\n")
         return None
-    vc("key", "capslock")
-    flipped = wait_led("capslock", not before, 8) is not None
+    vc("key", "numlock")
+    flipped = wait_led("numlock", not before, 8) is not None
     # Restore either way. On the failure path the keystroke was usually only
     # BUFFERED, not lost -- DOS processes it a moment later and the LED flips
     # after we have already given up. Leaving it unrestored means a failed
     # probe silently corrupts the state the next probe reads.
-    vc("key", "capslock")
-    wait_led("capslock", before, 8)
+    vc("key", "numlock")
+    wait_led("numlock", before, 8)
     return flipped
 
 
@@ -414,7 +441,16 @@ def arm_leds():
     ok, why, reason = leds_available()
     if not ok:
         print("  cannot arm the LEDs: %s (%s)" % (reason, why))
-        return None if why in ("unknown", "unpowered", "error") else False
+        # `unproven` IS a could-not-look, and belongs with the others rather
+        # than with False. This function's own docstring draws the line:
+        # False means "the LED would not take the state", which is a fault in
+        # the machine; None means the return channel is unreadable. A channel
+        # nothing has been observed to move is unreadable in the strongest
+        # sense -- the values were never a reading at all. Classifying it as
+        # False reports a healthy Gateway as an arming failure and refuses
+        # every boot-profile selection on it.
+        return None if why in ("unknown", "unpowered", "error",
+                               "unproven") else False
     for name, want in (("capslock", True), ("scrolllock", False)):
         cur = stable_led(name)
         if cur is None:
