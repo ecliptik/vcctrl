@@ -21,3 +21,7 @@ __pycache__/
 # reach it. The cost is the other half of that -- NO BUNDLE CONTAINS IT
 # EITHER. Anything here that matters wants a copy outside the tree.
 /internal/
+
+# Build artifacts. The SOURCE is the record; the .COM is reproducible from it
+# (`make`), and a tracked binary is a second copy that can disagree with it.
+/dos/build/
