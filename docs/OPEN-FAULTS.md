@@ -604,6 +604,40 @@ reading here and is not proved by them.
 because the prompt probe now uses Num Lock; it is a reason to keep watching
 that bit, not a proof that it is immune.
 
+#### IT IS NOT COSMETIC. IT BROKE A TRANSFER — 2026-08-24 21:37
+
+The first version of this section treated the accuracy fault as a reporting
+problem. **It is not confined to reporting, and the demonstration cost a real
+run.** `get-file --from C:\DOSKUTSU\LOGS` refused with `no-net` after 230 s —
+"nothing arrived from the target, so NET is not up" — on a machine that was in
+NET with the network working perfectly. The proof file transferred: the screen
+showed `226 Transfer complete`, and the FTP server log agreed, `130 bytes`.
+
+The chain, every link checkable:
+
+    1  Caps Lock read 1 on an AVAILABLE channel -- the value was stale
+    2  `type_line` "corrected" it by pressing Caps Lock, which turned caps
+       ON, because it was really OFF
+    3  everything typed after came out inverted; the proof landed as
+       `netproof.txt` rather than `NETPROOF.TXT`
+    4  `_find()` returned the FIRST case-insensitive match and stopped
+    5  a stale `NETPROOF.TXT` from an earlier session matched first, the
+       freshness guard correctly rejected it as too old, and the fresh
+       lowercase file two entries away was never examined
+
+**A COMPENSATION DRIVEN BY AN UNTRUSTWORTHY VALUE CREATED THE EXACT FAULT IT
+EXISTS TO PREVENT**, and the verdict blamed the target for the harness's own
+leftovers. `available: true` was not enough to make that press safe, which is
+the whole content of "proof of liveness is not proof of accuracy" and is why
+the heading above says the accuracy half is still OPEN.
+
+**Do not build a new compensation on the refresh hypothesis.** That hypothesis
+has three supporting observations and no mechanism. This file already
+prescribed one fix built on an untrusted lock-key value — "read the LED and
+invert the shift" — and that prescription would have made things worse.
+Reaching for "refresh, then press" before the instrumented sitting establishes
+how long a refresh lasts would be the same mistake with a fresher number.
+
 **THE SCREEN IS THE ONLY DIRECT WITNESS OF THE TARGET'S LOCK STATE.** Everything
 else on this rig is an inference from a node two things can write.
 
@@ -665,10 +699,20 @@ accumulating is cheaper than scheduling.**
     4  the `--from` fetch path, which has never run on hardware
 
 **ORDER MATTERS AND IT IS NOT THE OBVIOUS ONE.** Items 1-3 want the machine
-QUIET and observed; item 4 needs it POWERED and driven hard. Instrument first
-against a quiet target, then let the transfer path drive it — the other way
-round contaminates the very traffic the instrument is there to read. (Point
-from the vckvm session, whose path item 4 is.)
+QUIET and observed; item 4 needs it POWERED and driven hard. **Within the
+sitting**, instrument first against a quiet target and let the transfer path
+drive it afterwards — the other way round contaminates the very traffic the
+instrument is there to read.
+
+**THE CONSTRAINT IS CONDITIONAL ON THE INSTRUMENT BEING PRESENT, and the first
+version of this note left that out.** Read as an absolute it says the fetch leg
+must always come last, which **can never be satisfied**: the sitting wants that
+leg as LOAD, and it cannot be load until it is known to work. With no
+instrumentation running there is nothing to contaminate, so walking it
+beforehand costs the sitting nothing and turns an unknown being tested
+alongside the instrument into a known quantity being used as one. That is
+strictly better. (Constraint and its correction both from the vckvm session,
+whose path item 4 is.)
 
 **To open the channel: `vcctrl verify_input`.** It proves by round trip and
 reads the nodes directly, so it works while the gate is refusing — otherwise

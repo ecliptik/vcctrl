@@ -9669,3 +9669,131 @@ def test_a_run_does_not_leave_landmines_for_the_next_one():
           not any(n.lower() == "netproof.txt" for n in left), left)
     check("and so was the verification copy",
           not any(n.lower().endswith(".chk") for n in left), left)
+
+
+def test_arm_leds_proves_an_unproven_channel_instead_of_refusing():
+    """An honest gate upstream must not become a refusal to boot downstream.
+
+    The daemon now withholds LED values until something has been OBSERVED to
+    move. Correct -- and it made `arm_leds()` return None on a healthy
+    machine, because it called `leds_available()` and bailed BEFORE it ever
+    pressed a key. `select_boot_profile()` turns that into "cannot select a
+    boot profile", so on a freshly restarted daemon every cell would refuse
+    until something unrelated happened to press a lock key.
+
+    The daemon-side `arm()` never had this problem because it PRESSES: the
+    thing that needs the channel proves it by using it.
+
+    WHICH BIT IT PRESSES IS THE WHOLE DESIGN, and the first version got it
+    wrong. The press is BLIND -- it goes out on a channel that cannot be read
+    -- so the bit must carry no meaning to anyone:
+
+        caps lock    inverts the case of everything typed next (sec. 2), and
+                     on 2026-08-24 that broke a real transfer
+        scroll lock  IS THE BOOT WITNESS. vcctrld's poller reads its
+                     transitions as `1->0 = a reset happened` and
+                     `0->1 = a boot completed`. A blind press FORGES one.
+        num lock     no keypad codes in the character map, no transition
+                     interpreted anywhere, and its only users are the two
+                     prompt probes, which compare against their own prior
+                     reading -- so a persistent offset cannot mislead them.
+
+    Scroll lock was the first choice here, on the grounds that it changes no
+    typed character. It does not, and that was half the question. The half it
+    missed is the one that matters on this rig. Caught in review by the
+    benchmarking session asking "confirm nothing else reads it".
+    """
+    print("\narm_leds proves")
+    import importlib.util as _il
+    import sys as _sys
+    path = os.path.join(HERE, os.pardir, "bin", "vcctrl_common.py")
+
+    def fresh():
+        spec = _il.spec_from_file_location("vcc_arm", path)
+        m = _il.module_from_spec(spec)
+        _sys.modules["vcc_arm"] = m
+        spec.loader.exec_module(m)
+        return m
+
+    def rig(m, avail, sent):
+        m.vc = lambda *a, **kw: sent.append(tuple(str(x) for x in a))
+        m.leds_available = avail
+        m.stable_led = lambda name: {"capslock": True, "scrolllock": False,
+                                     "numlock": False}[name]
+        m.wait_led = lambda name, want, t: 0.1
+
+    # -- unproven; the press proves it, and it is the RIGHT bit -----------
+    m = fresh()
+    sent, state = [], {"proven": False}
+    rig(m, lambda: ((True, None, None) if state["proven"]
+                    else (False, "unproven", "nothing has moved")), sent)
+    _vc = m.vc
+    m.vc = lambda *a, **kw: (_vc(*a, **kw), state.update(proven=True))[0]
+    r = m.arm_leds()
+
+    keys = [a[1] for a in sent if a and a[0] == "key"]
+    check("it PRESSES rather than returning None straight away",
+          len(keys) >= 1, keys)
+    check("and the bit it presses blind is NUM LOCK",
+          keys and keys[0] == "numlock", keys)
+    check("NOT scroll lock, which the daemon reads as reset/boot -- a blind "
+          "press there FORGES a reboot signal",
+          "scrolllock" not in keys, keys)
+    check("NOT caps lock, which would invert the next command",
+          "capslock" not in keys, keys)
+    check("having proved the channel, it goes on to arm and succeeds",
+          r is True, r)
+
+    # -- THE WAIT MUST SPAN A POLL INTERVAL -------------------------------
+    #
+    # The daemon witnesses the edge from a 1 Hz sampler. If arm_leds pressed
+    # and re-read immediately it would still see `unproven` and return None --
+    # the original symptom surviving the fix, one call further along. So the
+    # channel here does not open until several reads after the press.
+    m2 = fresh()
+    sent2, reads = [], {"n": 0}
+
+    def slow_avail():
+        reads["n"] += 1
+        # unproven for the first few reads AFTER the press has gone out
+        if any(a and a[0] == "key" for a in sent2) and reads["n"] > 4:
+            return (True, None, None)
+        return (False, "unproven", "nothing has moved yet")
+
+    rig(m2, slow_avail, sent2)
+    r2 = m2.arm_leds()
+    keys2 = [a[1] for a in sent2 if a and a[0] == "key"]
+    check("it WAITS for the poller rather than re-reading once and giving up",
+          r2 is True, r2)
+    check("control: the channel really did stay unproven for several reads",
+          reads["n"] > 4, reads["n"])
+    check("and it did not press again while waiting",
+          keys2.count("numlock") == 1, keys2)
+
+    # -- stays unproven: honest, and EXACTLY ONE press --------------------
+    m3 = fresh()
+    sent3 = []
+    rig(m3, lambda: (False, "unproven", "nothing has moved"), sent3)
+    m3.stable_led = lambda name: None
+    m3.wait_led = lambda name, want, t: None
+    t0 = time.time()
+    r3 = m3.arm_leds()
+    el = time.time() - t0
+    keys3 = [a[1] for a in sent3 if a and a[0] == "key"]
+    check("a channel that stays unproven returns None, not False",
+          r3 is None, r3)
+    check("EXACTLY ONE press -- no retry storm at a machine that is not "
+          "answering", keys3 == ["numlock"], keys3)
+    check("and it gives up on a deadline rather than spinning",
+          el < 15.0, round(el, 1))
+
+    # -- THE CONTROLS: a press cannot fix these, so it must not press -----
+    for why in ("unpowered", "unsupported", "error", "unknown"):
+        m4 = fresh()
+        sent4 = []
+        rig(m4, lambda: (False, why, "reason"), sent4)
+        m4.stable_led = lambda name: None
+        m4.wait_led = lambda name, want, t: None
+        m4.arm_leds()
+        check("%s: no blind keystroke -- a press cannot fix it" % why,
+              not any(a and a[0] == "key" for a in sent4), sent4)

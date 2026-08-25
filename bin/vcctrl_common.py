@@ -439,6 +439,65 @@ def arm_leds():
     and the harness then waits for an event that has already happened.
     """
     ok, why, reason = leds_available()
+    if not ok and why == "unproven":
+        # PROVE IT RATHER THAN REFUSE IT, because refusing here stops a boot.
+        #
+        # The daemon now withholds LED values until something has been
+        # OBSERVED to move -- correct, and it made this function return None
+        # on a perfectly healthy machine, which `select_boot_profile()` turns
+        # into "cannot select a boot profile at all". On a freshly restarted
+        # daemon nothing has moved yet, so EVERY cell would refuse until some
+        # unrelated thing happened to press a lock key.
+        #
+        # The daemon-side `arm()` does not have this problem because it
+        # PRESSES: the thing that needs the channel proves it by using it.
+        # This one read first and bailed before it ever pressed. So: press
+        # once, blind, and let the loop below read and correct it.
+        #
+        # NUM LOCK, AND THE OTHER TWO ARE BOTH WRONG FOR DIFFERENT REASONS.
+        # This press is blind -- it goes out on a channel we cannot read -- so
+        # the bit has to be one that carries no meaning to anybody.
+        #
+        #   CAPS LOCK inverts the case of everything typed next. That is
+        #   OPEN-FAULTS sec. 2, and on 2026-08-24 a stale caps reading drove a
+        #   compensation that pressed it and broke a real transfer.
+        #
+        #   SCROLL LOCK IS THE BOOT WITNESS, and this was the first choice
+        #   here until the benchmarking session asked whether anything reads
+        #   it. It does: the daemon's LED poller interprets its transitions --
+        #   1 -> 0 as "a reset HAPPENED" (PROFILE.reset_seen) and 0 -> 1 as "a
+        #   boot COMPLETED" (PROFILE.ready_pulse). A blind press would forge
+        #   one of those, and the daemon would record a reset or a boot that
+        #   never occurred. Checking that Scroll Lock changed no typed
+        #   character covered only half the question; the half it missed is
+        #   the one that matters on this rig.
+        #
+        #   NUM LOCK carries neither. The character map contains no keypad
+        #   codes, so nothing typed changes; no path here interprets its
+        #   transitions; and its only users are the two prompt probes, which
+        #   toggle it and compare against their OWN prior reading, so a
+        #   persistent offset cannot mislead them.
+        #
+        # ONE press, not a toggle-and-restore: the daemon's poller samples at
+        # 1 Hz, so a press and its undo can both fall inside one interval and
+        # be witnessed as nothing at all. A single press leaves the bit
+        # somewhere it can be seen.
+        print("  LED channel unproven -- pressing num lock to prove it")
+        vc("key", "numlock", check=False)
+        # BOUNDED, AND LONGER THAN ONE POLL INTERVAL ON PURPOSE. The daemon
+        # witnesses the edge from a 1 Hz sampler, so an immediate re-read
+        # returns `unproven` and the original symptom survives the fix one
+        # call further along. Five seconds spans several intervals; a timeout
+        # rather than a spin so a dead channel fails instead of hanging.
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            ok, why, reason = leds_available()
+            if ok:
+                break
+            time.sleep(0.1)
+        if not ok:
+            print("  still unproven after a press -- the channel is not "
+                  "carrying, which is a different fault from an unread one")
     if not ok:
         print("  cannot arm the LEDs: %s (%s)" % (reason, why))
         # `unproven` IS a could-not-look, and belongs with the others rather
