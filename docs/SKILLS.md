@@ -91,6 +91,20 @@ server registration (`docs/MCP-SERVER.md` sec. 5). *Editing* the text of a
 skill Claude Code has already discovered is reported to reload live --
 adding a new directory is the case that needed a restart here.
 
+**The restart fix confirmed working the same day**: a fresh Claude Code
+session opened after the commit landed ran `Skill({skill:
+"vcctrl-rig-hazards"})` and got "Successfully loaded skill" with the full
+hazard list back, not "Unknown skill." Two data points now: stale session
+before the files exist -> unknown; new session after -> loads. Not yet
+tested: whether a session that was *already open* when the files landed
+picks them up on its own without a restart, or needs one regardless of
+whether it ever tried and failed to load the skill first.
+
+**Explicit invocation, if you don't want to wait for the description to
+match:** `/vcctrl-rig-hazards` (Claude Code, bare project-skill slash
+command, shows up in `/` autocomplete) or `$vcctrl-rig-hazards` (Codex).
+Same name either way -- only the sigil changes.
+
 ## 6. Removing a skill
 
 `rm -rf .agents/skills/<name>` and delete its catalog row in sec. 1. Nothing
