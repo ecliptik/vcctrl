@@ -105,6 +105,15 @@ live in a profile rather than in the standard. Imported 2026-08-23 from the
 doskutsu campaign, where it was written; vcctrl is its reference harness
 implementation. **Read it before adding a measurement to anything here.**
 
+## Driving the rig from an agent directly
+
+**`MCP-SERVER.md`** — `agent/vcctrl_mcp.py`, 59 tools over MCP wrapping
+`bin/vcctrl` and the harness scripts, so Claude Code, Codex or any other
+MCP client can drive the rig without a person typing commands. Setup for
+both clients, the safety model (shared lock, named confirmation, board-
+scoped power), and a status table of what's been proven live versus
+unit-tested only. PC/DOS only so far, by operator direction.
+
 ## The KVM (webkvm session's component)
 
 `WEBKVM.md` is the main one. `WEBKVM-DESIGN.md`, `WEBKVM-AUDIO.md`,
