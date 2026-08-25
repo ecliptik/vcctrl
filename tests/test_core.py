@@ -3025,6 +3025,32 @@ def test_coverage_is_scoped_and_absence_is_not_a_negative():
     check("and the unheld input lock is on the record",
           "NOT HELD" in conf["input_lock"], conf.get("input_lock"))
 
+    # ONE COPY OF THE ROWS, AND THIS FILE IS IT. The 91 measured rows lived
+    # in WEBKVM 5.2c for a few hours as well as here; two copies of one fact
+    # drift and then disagree, which is the argument this pair of sessions
+    # made to each other three times before making it about themselves. The
+    # doc cites this file now. This is the guard against the table growing
+    # back into the prose because somebody had it in hand.
+    doc = open(os.path.join(HERE, os.pardir, "docs", "WEBKVM.md"),
+               encoding="utf-8").read()
+    m = re.search(r"#### The 91 that arrive, as measured(.*?)^####", doc,
+                  re.S | re.M)
+    if m:
+        pairs = re.findall(r"[a-z0-9_]+\s+[0-9A-F]{2}\s+[0-9A-F]{2}", m.group(1))
+        check("the doc does not carry a second copy of the rows",
+              len(pairs) < 10, "%d row-shaped lines in the doc" % len(pairs))
+    check("the doc points at the coverage file", "keycoverage.json" in doc)
+    # AND THE FILE SAYS WHERE THE MEASUREMENT CAME FROM, not where it is
+    # described. Those pointed at each other for a while: the doc said "the
+    # rows are in the JSON" and the JSON said "source: the doc". A reader
+    # following either lands back where they started and neither names the
+    # instrument.
+    src = cov["boards"]["1"]["source"]
+    check("the file names the instrument, not the prose about it",
+          "keywit" in src.lower(), src[:60])
+    check("and says the raw artifacts do not survive a clone",
+          "GITIGNORED" in src or "gitignored" in src, src[:60])
+
     # AND THE DEPLOY MUST ACTUALLY CARRY IT. The tar ships daemon/ wholesale
     # but install.sh copies named files, so a new data file reaches the Pi's
     # source tree and never reaches /opt/vcctrl.

@@ -775,7 +775,7 @@
     }
    },
    "measured_at": "2026-08-25",
-   "source": "docs/WEBKVM.md sec. 5.2b-5.2c",
+   "source": "Measured by dos/keywit.asm (KEYWIT03 for the single-key sweep, KEYWIT04 for the modifier and chord passes) on the g2k, 2026-08-25. Raw artifacts are in internal/keysweep-2026-08-25/, which is GITIGNORED and does not survive a clone -- so these rows are the durable copy, not a cache of one. Method, conditions and interpretation: docs/WEBKVM.md sec. 5.2b-5.2c, which cites this file for the rows rather than repeating them.",
    "witness": "INT 16h AH=10h/11h for keystrokes; the PS/2 LED channel for the lock keys; the BIOS shift flags at 0040:0017/0018/0096 for the modifiers. Rows with different `how` answer different questions and are not comparable."
   }
  },
