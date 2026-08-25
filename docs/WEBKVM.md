@@ -775,6 +775,120 @@ asserts they do. Neither has been measured, and the line says so until the
 sweep replaces it.
 
 
+### 5.2b The coverage record, agreed before the sweep rather than after
+
+Design, not implementation. **Nothing below is built**, deliberately: an empty
+coverage table invites being filled with assumptions, and the greying rule it
+feeds is a UI that looks authoritative. Written now because deciding a schema
+with a powered machine waiting is how the cheaper option wins — the `vcctrl`
+session's point, and it is the right one.
+
+**One witness cannot see 129 keys, and that is the thing the sweep design
+turns on.** Sorted by what would actually witness the key at a DOS prompt:
+
+| group | ~n | witness |
+|---|---|---|
+| letters, digits, punctuation, shifted | ~90 | echoes a character. Direct. |
+| caps / num / scroll | 3 | the PS/2 LED channel — non-video, and the one round trip here that has never lied |
+| F1–F6, Ctrl-Break, Pause, Bksp, Tab, Esc, Enter | ~12 | a BEHAVIOUR, not a character. Each needs its own designed observation. |
+| arrows, nav cluster, both metas, `102nd`, `sysrq` | ~15 | **nothing at a bare prompt** |
+| the keypad | 17 | echoes, but `kp5` and row `5` echo the SAME character |
+
+Two consequences that decide the shape:
+
+- For group four, "no echo" means both *the firmware did not map it* and *it
+  arrived and did nothing here*. One value, two facts — the shape this repo
+  keeps finding, and worse than usual here because the output greys keys in a
+  UI.
+- For the keypad, echo proves **delivery** and cannot prove **identity**, and
+  identity is the entire reason the keypad matters: DOS software reads it
+  distinctly from the number row.
+
+So the sweep wants a witness that reads scancodes rather than characters —
+an INT 9 hook, the same shape as `dos/rdypulse.asm`, `nasm -f bin`, delivered
+by the CF or FTP path. With one it is a single loop over all 129 and the
+marginal cost of the boring keys is near zero. Without one, the classes "most
+likely to differ" are exactly the classes the witness cannot see, so that
+ordering produces the least trustworthy rows first — and they are the rows
+nobody can check by eye afterwards.
+
+**The witness must not paint the screen.** Scancodes are hex digits, and this
+rig has a standing finding that OCR does not read digits off this glass
+(`OPEN-FAULTS.md`: counts read by size and by eye for exactly this reason; and
+at −38% amplitude it is worse). A misread nibble is a **wrong identity rather
+than a missing one**, which fills the table instead of leaving a hole. So the
+TSR appends to a file on the card and the file is fetched over `--from` and
+compared as bytes — the leg walked 2026-08-24 against two independent
+transports three days apart, agreeing on every byte. No OCR, no glass, no
+amplitude dependence, and the run becomes unattended, re-runnable and
+diffable when firmware changes. Raised by `vcctrl`. It is the
+remove-the-dependency move rather than the tune-the-probe one, applied to an
+instrument that had not been written yet — which is the cheapest moment to
+apply it.
+
+#### The record
+
+Modelled on `LedsCapability.snapshot()`, which solved this exact problem, and
+its docstring is the design review nobody has to repeat:
+
+    "a":      {"arrives": true,  "how": "scancode", "at": 178...}
+    "kp5":    {"arrives": true,  "how": "scancode", "at": 178...}
+    "102nd":  {"arrives": false, "how": "scancode", "at": 178...}
+    "sysrq":  {"why": "no-witness", "reason": "produces nothing at a DOS prompt
+               and the scancode TSR was not loaded for this run"}
+    "pause":  {"why": "not-swept", "reason": "..."}
+
+Four properties, three of them stolen wholesale:
+
+1. **`why` names a distinct reason and is not several falsy values wearing one
+   flag.** Split `no-witness` by WHICH witness was unavailable — "the screen
+   cannot see this key" and "the TSR was not loaded" want different actions.
+2. **When there is no verdict the verdict key is ABSENT, never `false`.** A
+   consumer that forgets to check reads absent as undefined and draws a dash;
+   it reads `false` as *measured, does not work* and greys the key. Half a
+   schema is worse than none, and this is the half that gets skipped.
+3. **The set of `why` values is OPEN.** That must be said in the same breath
+   as the values, because the LED docstring said CLOSED SET while emitting
+   five for two hours and a consumer was written against three in good faith.
+   The greying rule is a consumer of exactly this kind: it must degrade on a
+   value it has never heard of, and adding one is a seam event announced to
+   consumers rather than left to be discovered by reading.
+4. **The two absence rules in this daemon are not in conflict, and a coverage
+   table needs both at once.** `PowerCapability.snapshot()` says *every key
+   always present, null where unknown*; `LedsCapability.snapshot()` says
+   *value keys absent when unavailable, never zero*. The distinction is
+   descriptive versus measured: an identity field is always present because
+   null is a real answer the consumer wants, and a measured value is absent
+   because a plausible default reads as data. So: **every key in the layout
+   has an entry** (a consumer can enumerate, and a missing entry is a bug),
+   **and an entry with no verdict carries no `arrives` field.**
+
+#### What the page does with it, and what it will not do
+
+`arrives: false` greys the key. **Nothing else greys anything** — not a
+missing entry, not any `why`, not a value the page has never heard of. Those
+draw normally and count toward the "unmeasured" sentence the panel already
+carries. Greying on absence would assert a negative from an instrument that
+could not see.
+
+#### Two hazards that are not optional
+
+**The lock keys are measured deliberately and separately, never swept
+inline.** `FINDINGS.md` sec. 3, and on this rig they are the harness's own
+signalling: Caps is the reboot detector, Scroll is `RDYPULSE`. A sweep that
+injects them in sequence fights the instrumentation while looking like a
+keyboard fault.
+
+**The instrument sits in the seam it measures.** `rdypulse.asm` says the
+mechanism out loud — a leftover `0xFA` ACK in the output buffer is taken for a
+scancode by INT 9, "which in this rig means a phantom keystroke landing in
+whatever the harness types next". A scancode TSR lives in that same seam. So a
+**control is mandatory, not advisable**: sweep a key with independent evidence
+and confirm the witness agrees before trusting it on a key without. The
+control set already exists — the three lock keys have the LED channel, and
+`TIMING-FIXES.md` bug 1 closed the loop through `key 5 enter` against
+`PKTTOOL`.
+
 ### 5.3 What the browser cannot capture, in Firefox and Safari
 
 Honest limitation, stated up front because it is the first thing the operator
