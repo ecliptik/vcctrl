@@ -828,10 +828,21 @@ PHYSICAL KEYS. Counted, not estimated:
 **And the record must be keyed by KEYCODE, not by name, or it can contradict
 itself.** A table with a row per name has 129 rows for 105 facts: `ctrl` and
 `lctrl` are one physical key, and nothing stops one row saying `arrives: true`
-and the other `arrives: false` for it. Key the record by one canonical name
-per keycode and resolve aliases into it — the page draws by name and looks the
-name up. A table with more rows than facts is a table that will eventually
-disagree with itself, and this one greys keys in a UI.
+and the other `arrives: false` for it.
+
+**The sharpest case is `printscreen` = `prtsc` = `sysrq` — one keycode, three
+names, and they do not even sit in the same row of the table above.** `sysrq`
+is in the twenty-two that produce nothing at a bare prompt; anyone sweeping by
+name would reach for `printscreen` expecting something to happen and record a
+different verdict for the same physical key. The greying rule would then grey
+one name and not the other, on one key, from one run. (`.` = `dot` = `period`
+is the only other three-name code.) Found by the `vcctrl` session checking the
+alias table rather than the example.
+
+Key the record by one canonical name per keycode and resolve aliases into it —
+the page draws by name and looks the name up. A table with more rows than
+facts is a table that will eventually disagree with itself, and this one greys
+keys in a UI.
 
 Two consequences that decide the shape:
 
