@@ -4586,6 +4586,10 @@ class RegistryDriver(object):
     def __init__(self, registry, pace=None):
         self.reg = registry
         self.pace = pace
+        # Set by type_line when the LED says Caps Lock is on. NOT acted on --
+        # carried, so the job can put it beside a result that may have been
+        # typed in the wrong case. See type_line.
+        self.caps_seen_on = False
 
     # -- typing ---------------------------------------------------------------
 
@@ -4600,7 +4604,7 @@ class RegistryDriver(object):
         return self._do("combo", keys=list(keys))
 
     def type_line(self, text):
-        """Type a line, with CAPS LOCK PROVEN OFF FIRST.
+        """Type a line, and RECORD the Caps Lock reading without acting on it.
 
         Caps Lock inverts what this harness types -- an established fact about
         this rig -- and wait_prompt() PROBES BY TOGGLING CAPS LOCK. So the
@@ -4617,23 +4621,48 @@ class RegistryDriver(object):
         Checked rather than assumed off, because the failure is invisible in
         every other respect.
 
-        BEST-EFFORT, AND SAYING SO IS THE POINT. `_led()` returns None on a
-        channel the daemon will not vouch for, and None is not True, so on an
-        unproven channel this silently does nothing and types anyway. That is
-        the right behaviour -- refusing to type because a lock key cannot be
-        read would strand the transfer over a bit that only affects the CASE
-        of an argument -- but it means this is a defence and not a guarantee.
+        IT USED TO PRESS THE KEY, AND THE PRESS BROKE A TRANSFER. 2026-08-24,
+        measured end to end: the LED read `capslock: 1` on an `available`
+        channel, the value was STALE, this "corrected" it by pressing -- which
+        turned Caps Lock ON, because it was really off -- and every command
+        typed afterwards came out inverted. The proof file landed as
+        `netproof.txt` instead of `NETPROOF.TXT`, met a stale uppercase copy
+        from an earlier session, and the run reported `no-net`: the target is
+        not on the network, about a machine whose transfer was sitting
+        completed in the server's own log. **The compensation caused the
+        fault it existed to prevent.**
 
-        It also does not own the state. Once the readiness probe stops
-        toggling Caps Lock, the harness is no longer the CAUSE of an inverted
-        case, but it is still not the only one: the operator can press Caps
-        Lock at the KVM and a DOS program can set it. So the check stays, and
-        what it promises is "if the daemon can see it and it is on, turn it
-        off", which is less than the name suggests.
+        THE PRESS IS ASYMMETRIC AND THE READ IS NOT. A wrong read reports
+        something false; a wrong press CHANGES THE TARGET, in exactly the
+        direction that breaks what follows. It helps only when the value is
+        right, harms when the value is wrongly high, and does nothing when it
+        is wrongly low -- two of three outcomes neutral or worse.
+
+        AND ITS PURPOSE SHRANK THE SAME EVENING. While `at_prompt()` probed by
+        toggling Caps Lock, the harness was itself the main reason caps was
+        ever on, and this existed largely to clean up after our own probe.
+        That probe moved to Num Lock. What is left is the operator at the KVM
+        and a DOS program, which is a far smaller population.
+
+        SO IT REPORTS AND DOES NOT ACT. The reading is recorded on the driver
+        and surfaced by the job, so a transfer that comes out case-flipped has
+        the reading sitting beside it and the diagnosis is thirty seconds
+        rather than a 230-second `no-net` hunt. What consumes the information
+        is `_await_incoming`, which is case-INSENSITIVE: the right kind of
+        insensitivity is not needing caps to be right, rather than fixing it.
+
+        DO NOT REPLACE THIS WITH "REFRESH, THEN PRESS". It is the obvious next
+        move and it is a trap. The refresh hypothesis has three observations
+        and no mechanism, and OPEN-FAULTS already prescribed one fix built on
+        an untrusted lock-key value -- read the LED and invert the shift --
+        which would have made things worse silently, in exactly the conditions
+        where the value is least trustworthy. A compensation needs a
+        precondition somebody can sign for, and no press has one today.
         """
+        # READ AND RECORD. DO NOT PRESS. See the docstring: the press is what
+        # broke a transfer tonight.
         if self._led("capslock") is True:
-            self._do("key", keys=["capslock"])
-            self._await_led("capslock", False, 5.0)
+            self.caps_seen_on = True
         r = self._do("type", text=text)
         if not r.get("ok"):
             return r
@@ -4952,6 +4981,14 @@ class NetJob(object):
         if self.cap._await_incoming(self.PROOF_NAME, before,
                                     self.d.transfer_timeout()):
             self._say("attest", "NET confirmed: the target reached this host")
+            # CONSUMED, LIKE THE LISTING. It has served its whole purpose the
+            # instant it is seen, and leaving it behind is what put a
+            # half-hour-old NETPROOF.TXT in the way of a fresh netproof.txt.
+            # The finder no longer trips over that, but a run should not be
+            # leaving landmines for the next one either -- removing the
+            # collision source and fixing the finder are different repairs and
+            # this feature needs both.
+            self.cap._drop_incoming(self.cap._incoming_path(self.PROOF_NAME))
             return True
         # The gate has failed. NOW ask the screen why -- as a diagnosis, which
         # cannot promote a failure into a pass because it runs only on this
@@ -5007,6 +5044,7 @@ class NetJob(object):
         return leaves it standing, because "I could not look" is not a reading
         of "the machine came back".
         """
+        self._note_caps()
         if not self.do_return:
             self._say("stay", "left in NET at your request -- a measured run "
                               "must not start from here")
@@ -5043,6 +5081,28 @@ class NetJob(object):
             self._say("return", "NO READINESS PULSE AFTER THE RETURN REBOOT -- "
                                 "the machine may still be in NET, which no "
                                 "measured run may start from", warn=True)
+
+    def _note_caps(self):
+        """Put the Caps Lock reading beside the result, if it was ever on.
+
+        THE OTHER HALF OF "REPORT, DO NOT ACT". type_line stopped pressing the
+        key because a stale reading made the press CAUSE an inverted case --
+        but the reading is still worth having, because a transfer that comes
+        out case-flipped is otherwise diagnosed from scratch. It cost 230
+        seconds and a screenshot to work out that a `no-net` refusal meant
+        "the file arrived under a different name"; this line would have said
+        so in the log.
+
+        Emitted once, on the way out, and only when it was seen ON. A note
+        that appears on every run is a note nobody reads.
+        """
+        if getattr(self.d, "caps_seen_on", False):
+            self._say("caps", "THE CAPS LOCK LED READ ON WHILE TYPING. Not "
+                              "acted on -- a press would change the target on "
+                              "the strength of a value that may be stale. If "
+                              "anything here came back under an unexpected "
+                              "name, this is the first thing to suspect",
+                      warn=True)
 
     def _cancelled(self):
         job = FilesCapability._job
@@ -5114,6 +5174,7 @@ class NetJob(object):
         from FilesCapability.snapshot(), which is where they are defined, and
         the listing's own words are defined on dos_dir_listing().
         """
+        self._note_caps()
         self._say("refused", reason, why=why)
         return {"ok": False, "why": why, "reason": reason, "files": [],
                 "left_in_net": self.in_net, "log": self.log}
@@ -5235,6 +5296,11 @@ class TransferJob(NetJob):
                               "copy on the target is not the file that was "
                               "staged" % name, "sha256": got}
         self._say("verify", "%s verified byte for byte" % name, name=name)
+        # Compared, therefore spent. Same reason as the proof file above: two
+        # spellings of one name in this directory is what a case-unstable far
+        # end produces across two runs, and the cheapest way not to have that
+        # problem is not to keep the first one.
+        self.cap._drop_incoming(self.cap._incoming_path(back))
         return {"name": name, "ok": True, "why": None, "sha256": got}
 
     def _finish(self, results):
@@ -6584,26 +6650,34 @@ SET VLD=
         last = None
 
         def _find():
-            """The name, whatever case it arrives in.
+            """The NEWEST file whose name matches, whatever case it arrives in.
 
             MEASURED, NOT DEFENSIVE. `HELLO.TXT.CHK` was asked for and
             `hello.txt.chk` arrived, so the wait timed out on a transfer that
             had completed -- the server log said `STOR ... completed=1
-            bytes=49` while this reported the file never came back.
+            bytes=49` while this reported the file never came back. The far
+            end is a FAT volume and an FTP client from 1996: case is not a
+            property either of them promises, and a verification that hinges
+            on it is testing the wrong thing.
 
-            The proximate cause is Caps Lock (see type_line), and it is fixed
-            there. This stays because the far end is a FAT volume and an FTP
-            client from 1996: case is not a property either of them promises,
-            and a verification that hinges on it is testing the wrong thing.
+            NEWEST, NOT FIRST, AND THAT COST A RUN. This returned the first
+            match os.listdir happened to yield and stopped there. On the rig
+            2026-08-24, `incoming/` held BOTH `NETPROOF.TXT` from a session
+            half an hour earlier and the `netproof.txt` that had just
+            arrived -- two spellings of one name, which is exactly what a
+            case-unstable far end produces over two runs. listdir handed back
+            the stale one, the `since` test below correctly refused it as too
+            old, and THE FRESH ONE TWO ENTRIES AWAY WAS NEVER LOOKED AT. The
+            job reported `no-net` -- the target is not on the network -- about
+            a machine whose transfer had completed and was sitting in the
+            server's own log.
+
+            The freshness guard was working. It was being handed the wrong
+            candidate to judge, which no amount of care in the guard can fix:
+            a filter that can only see one of two matches is not a filter, it
+            is a coin toss with a check after it.
             """
-            want = name.lower()
-            try:
-                for n in os.listdir(incoming):
-                    if n.lower() == want:
-                        return os.path.join(incoming, n)
-            except OSError:
-                pass
-            return None
+            return self._incoming_path(name)
 
         while time.time() < deadline:
             try:
@@ -6623,23 +6697,46 @@ SET VLD=
         return False
 
     def _incoming_path(self, name):
-        """Where a returned file actually is, whatever case it arrived in.
+        """The NEWEST file of that name in incoming/, whatever case it wears.
 
-        Case-insensitive for the same reason _await_incoming is: the far end
-        is a FAT volume and an FTP client from 1996, and case is not a
-        property either of them promises. A verification that hinges on it is
-        testing the wrong thing -- `HELLO.TXT.CHK` was asked for, `hello.txt`
-        arrived, and a completed transfer was reported as one that never
-        happened.
+        Case-insensitive because the far end is a FAT volume and an FTP client
+        from 1996, and case is not a property either of them promises. A
+        verification that hinges on it is testing the wrong thing --
+        `HELLO.TXT.CHK` was asked for, `hello.txt` arrived, and a completed
+        transfer was reported as one that never happened.
+
+        NEWEST RATHER THAN FIRST, AND THE SAME BUG WAS IN TWO FUNCTIONS. This
+        returned whichever match `os.listdir` yielded first. So did the finder
+        inside `_await_incoming`. On the rig 2026-08-24 incoming/ held both
+        `NETPROOF.TXT` from an earlier session and the `netproof.txt` that had
+        just landed -- two spellings of one name, which is precisely what a
+        case-unstable far end produces across two runs -- and the stale one
+        was returned. The wait then refused it as too old and never saw the
+        fresh one; the run reported `no-net` about a machine whose transfer
+        was sitting completed in the server's own log.
+
+        ONE IMPLEMENTATION NOW, and that is the actual repair. Two copies of
+        "which file does this name refer to" is how the same defect came to
+        exist twice, and fixing one of them would have left the sha
+        comparison in `_send_one` reading whichever copy turned up first.
         """
         _stage, _p, _m, _root, incoming = self._dirs()
+        best, best_t = None, None
+        want = name.lower()
         try:
             for n in os.listdir(incoming):
-                if n.lower() == name.lower():
-                    return os.path.join(incoming, n)
+                if n.lower() != want:
+                    continue
+                path = os.path.join(incoming, n)
+                try:
+                    t = os.stat(path).st_mtime
+                except OSError:
+                    continue
+                if best_t is None or t > best_t:
+                    best, best_t = path, t
         except OSError:
             pass
-        return None
+        return best
 
     def _sha_of(self, path):
         """sha256 of a file on this host, or None if it cannot be read."""

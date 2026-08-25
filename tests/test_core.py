@@ -6498,7 +6498,7 @@ def test_staging_never_exposes_a_partial_file():
                          "offset": 0, "data": __import__("base64")
                          .b64encode(payload[:100]).decode(), "final": False})
     check("a chunk is accepted", r["ok"] and r["complete"] is False, r)
-    check("and it is NOT in the served root", os.listdir(root) == [], 
+    check("and it is NOT in the served root", os.listdir(root) == [],
           os.listdir(root))
     check("it is in the partial directory instead",
           os.listdir(partial) == ["BOOT.BAT"], os.listdir(partial))
@@ -6618,7 +6618,7 @@ def test_the_queue_ceiling_counts_the_queue():
           sorted(c["removed"]) == ["A.BIN", "B.BIN"], c)
     check("and leaves alone what we did not",
           c["left_alone"] == ["HANDMADE.BAT"], c)
-    check("the orphan is still on disk", 
+    check("the orphan is still on disk",
           os.path.exists(os.path.join(root, "HANDMADE.BAT")))
     check("and the metadata went with the files we removed",
           os.listdir(meta) == [], os.listdir(meta))
@@ -7150,7 +7150,7 @@ class FakeTarget(object):
 
     def __init__(self, cap, reset=True, boot=True, net=True, prompt=True,
                  corrupt=(), screen_text="", card=None, listing=True,
-                 short=(), unstable=()):
+                 short=(), unstable=(), flip_case=False):
         self.cap = cap
         self.reset, self.boot, self.net = reset, boot, net
         self.prompt, self.corrupt = prompt, set(corrupt)
@@ -7171,6 +7171,7 @@ class FakeTarget(object):
         self.listing = listing
         self.can_arm = True
         self.arms, self.menus = 0, 0
+        self.flip_case = flip_case
         self.short, self.unstable = set(short), set(unstable)
         self.fetched = {}
 
@@ -7227,6 +7228,12 @@ class FakeTarget(object):
     def _incoming(self, name, data):
         _s, _p, _m, _r, inc = self.cap._dirs()
         os.makedirs(inc, exist_ok=True)
+        # `flip_case` models what a Caps Lock inversion actually does at the
+        # far end: the BAT is invoked with lower-cased arguments, so the file
+        # is STORED under a different spelling than the one asked for. Not a
+        # hypothetical -- it is what happened on the rig 2026-08-24.
+        if self.flip_case:
+            name = name.lower()
         with open(os.path.join(inc, name), "wb") as f:
             f.write(data)
 
@@ -7821,19 +7828,37 @@ def test_the_driver_reads_leds_from_where_the_daemon_puts_them():
           [r for r in dead.sent if r["cmd"] == "key"])
 
 
-def test_typing_proves_caps_lock_is_off_first():
-    """The readiness probe and the payload were fighting over one piece of
-    global state, and the payload lost silently.
+def test_typing_records_caps_lock_and_does_not_press_it():
+    """THE COMPENSATION CAUSED THE FAULT IT EXISTED TO PREVENT.
 
-    wait_prompt() detects a live BIOS keyboard ISR by TOGGLING CAPS LOCK. Caps
-    Lock inverts what this harness types. So the command typed immediately
-    after a readiness check came out in the wrong case -- and DOS being
-    case-insensitive about commands and paths meant it ran perfectly and only
-    the ARGUMENTS were wrong.
+    This test asserted the opposite until 2026-08-24, and the behaviour it
+    asserted broke a transfer that evening. The history is worth keeping in
+    one place, because each step was reasonable and the sum was not:
 
-    Measured on the rig: a verification copy asked for as HELLO.TXT.CHK
-    arrived as hello.txt.chk, and the wait timed out on a transfer whose
-    server log read `STOR ... completed=1 bytes=49`.
+    wait_prompt() used to detect a live BIOS keyboard ISR by TOGGLING CAPS
+    LOCK, and Caps Lock inverts what this harness types -- so a command typed
+    after a readiness check came out in the wrong case. Measured: a copy asked
+    for as HELLO.TXT.CHK arrived as hello.txt.chk, and the wait timed out on a
+    transfer whose server log read `STOR ... completed=1 bytes=49`. The
+    response was to make type_line PRESS Caps Lock off before typing.
+
+    Then the LED itself turned out to lie. On an `available` channel the value
+    can be STALE -- measured, and written up in OPEN-FAULTS. type_line read a
+    stale 1, pressed to "correct" it, and turned Caps Lock ON when it was
+    really off. Every command after that was inverted; the proof file landed
+    as `netproof.txt`, met a stale `NETPROOF.TXT` from an earlier session, and
+    the run reported `no-net` about a machine whose transfer had completed.
+
+    A WRONG READ REPORTS SOMETHING FALSE; A WRONG PRESS CHANGES THE TARGET,
+    in exactly the direction that breaks what follows. It helps only when the
+    value is right, harms when it is wrongly high, and does nothing when it is
+    wrongly low. And its purpose shrank the same evening: the readiness probe
+    moved to Num Lock, so the harness is no longer the main reason caps is
+    ever on.
+
+    So it reports and does not act, and what consumes the information is a
+    case-INSENSITIVE matcher: the right kind of insensitivity is not needing
+    caps to be right, rather than fixing it.
     """
     class Reg(object):
         def __init__(self, caps):
@@ -7850,23 +7875,43 @@ def test_typing_proves_caps_lock_is_off_first():
             return {"ok": True}
 
     r = Reg(caps=True)
-    vcctrld.RegistryDriver(r).type_line("VCCHK.BAT A B")
-    keys = [x for x in r.sent if x["cmd"] == "key"]
-    check("caps lock is cleared before typing",
-          any(k.get("keys") == ["capslock"] for k in keys), r.sent)
-    order = [i for i, x in enumerate(r.sent) if x["cmd"] == "type"]
-    caps_at = [i for i, x in enumerate(r.sent)
-               if x["cmd"] == "key" and x.get("keys") == ["capslock"]]
-    check("and it is cleared BEFORE the text, not after",
-          caps_at and order and caps_at[0] < order[0], r.sent)
-
-    # It must not toggle a lock that is already off -- that would TURN IT ON
-    # and produce the exact fault it exists to prevent.
-    r = Reg(caps=False)
-    vcctrld.RegistryDriver(r).type_line("VCCHK.BAT A B")
-    check("caps lock is left alone when already off",
+    d = vcctrld.RegistryDriver(r)
+    d.type_line("VCCHK.BAT A B")
+    check("NO CAPS LOCK KEY IS SENT, even when the LED says it is on",
           not [x for x in r.sent
                if x["cmd"] == "key" and x.get("keys") == ["capslock"]], r.sent)
+    check("the line is still typed",
+          any(x["cmd"] == "type" for x in r.sent), r.sent)
+    check("and the reading is RECORDED, so a case-flipped result has the "
+          "evidence beside it", d.caps_seen_on is True, d.caps_seen_on)
+
+    # OFF STAYS UNREMARKED. The flag is a report of a problem, so it must not
+    # be set by the ordinary case, or it says nothing.
+    r = Reg(caps=False)
+    d = vcctrld.RegistryDriver(r)
+    d.type_line("VCCHK.BAT A B")
+    check("caps lock off records nothing", d.caps_seen_on is False,
+          d.caps_seen_on)
+    check("and still presses nothing",
+          not [x for x in r.sent
+               if x["cmd"] == "key" and x.get("keys") == ["capslock"]], r.sent)
+
+    # AN UNREADABLE CHANNEL MUST NOT LOOK LIKE "OFF". None is not False: the
+    # daemon declining to vouch for the value is a third state and the flag
+    # must not quietly report the reassuring one.
+    class Unavailable(object):
+        sent = []
+
+        def execute(self, req):
+            if req["cmd"] == "leds":
+                return {"ok": True, "leds": {"available": False,
+                                             "why": "unproven"}}
+            return {"ok": True}
+
+    d = vcctrld.RegistryDriver(Unavailable())
+    d.type_line("VCCHK.BAT A B")
+    check("an unproven channel presses nothing and claims nothing",
+          d.caps_seen_on is False, d.caps_seen_on)
 
 
 def test_a_returned_file_is_matched_whatever_case_it_arrives_in():
@@ -9519,3 +9564,108 @@ def test_a_reading_is_filed_under_the_directory_that_was_ASKED_for():
           "the card actually printed",
           (asked.get("attempt") or {}).get("raw") == DIR_FAILED,
           repr(((asked.get("attempt") or {}).get("raw") or "")[:40]))
+
+
+def test_two_spellings_of_one_name_and_the_finder_took_the_stale_one():
+    """Found by walking the fetch path on hardware, 2026-08-24.
+
+    `incoming/` held `NETPROOF.TXT` from a session half an hour earlier and
+    the `netproof.txt` that had just arrived -- two spellings of one name,
+    which is exactly what a case-unstable far end produces across two runs.
+    The finder returned whichever `os.listdir` yielded first, the freshness
+    guard correctly refused the stale one as too old, AND THE FRESH ONE TWO
+    ENTRIES AWAY WAS NEVER LOOKED AT. The run reported `no-net` -- the target
+    is not on the network -- about a machine whose transfer was sitting
+    completed in the FTP server's own log.
+
+    THE GUARD WAS WORKING. It was being handed the wrong candidate to judge,
+    which no amount of care in the guard can fix.
+
+    THE TEST STARTS FROM THE BAD BASELINE, which is the habit this evening
+    taught: a directory that ALREADY contains the stale spelling. Every arm
+    that starts from a clean directory passes against the broken code.
+
+    `os.listdir` order is arbitrary, so it is pinned here rather than left to
+    the filesystem -- otherwise this test would fail only on the runs where
+    the operating system happened to reproduce the bug.
+    """
+    print("\ntwo spellings")
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+    _stage, _p, _m, _root, inc = cap._ensure_dirs()
+
+    stale = os.path.join(inc, "NETPROOF.TXT")
+    with open(stale, "wb") as f:
+        f.write(b"from an earlier session")
+    long_ago = time.time() - 3600
+    os.utime(stale, (long_ago, long_ago))
+    fresh = os.path.join(inc, "netproof.txt")
+    with open(fresh, "wb") as f:
+        f.write(b"packetint 0x7E\r\n")
+
+    real_listdir = os.listdir
+
+    def stale_first(path):
+        names = real_listdir(path)
+        return sorted(names, key=lambda n: 0 if n == "NETPROOF.TXT" else 1)
+
+    try:
+        vcctrld.os.listdir = stale_first
+        got = cap._incoming_path("NETPROOF.TXT")
+        check("the NEWEST match is returned, not the first one listed",
+              got == fresh, got)
+        check("and the wait sees it arrive",
+              cap._await_incoming("NETPROOF.TXT", time.time() - 60, 3.0) is True)
+
+        # END TO END: the same condition, through a whole job. A target that
+        # answers in the wrong case, into a directory that already holds the
+        # right case from a previous run.
+        cap2 = _mkfiles(tempfile.mkdtemp())
+        cap2.support = lambda: (True, None)
+        cap2._reachable = lambda timeout=None: (True, None)
+        _s2, _p2, _m2, _r2, inc2 = cap2._ensure_dirs()
+        old_proof = os.path.join(inc2, "NETPROOF.TXT")
+        with open(old_proof, "wb") as f:
+            f.write(b"stale")
+        os.utime(old_proof, (long_ago, long_ago))
+
+        d = FakeTarget(cap2, card={"A.DAT": b"z" * 32}, flip_case=True)
+        r = vcctrld.PullJob(cap2, d, names=["A.DAT"], do_return=True).run()
+        check("the run is NOT refused as no-net", r.get("why") != "no-net", r)
+        check("the network was proved despite the case flip",
+              any("NET confirmed" in e["text"] for e in r["log"]),
+              [e["text"] for e in r["log"]][:4])
+        check("and the file came back", r["ok"] is True, r.get("files"))
+    finally:
+        vcctrld.os.listdir = real_listdir
+
+
+def test_a_run_does_not_leave_landmines_for_the_next_one():
+    """A file from 21:09 defeated a transfer at 21:37.
+
+    The proof file and the round-trip `.CHK` copies were written into
+    `incoming/` and never removed, so every run left the next one a file to
+    trip over. That is not what broke it -- the finder was -- but it is what
+    LOADED the gun, and the two are different repairs. Fixing only the
+    cleanup would have masked the finder bug; fixing only the finder leaves a
+    directory that grows a stale twin of every name it has ever seen.
+    """
+    print("\nno leftovers")
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+    _send(cap, "a.txt", b"payload")
+
+    d = FakeTarget(cap)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("the transfer verified", r["ok"] is True, r)
+
+    _s, _p, _m, _root, inc = cap._dirs()
+    left = sorted(os.listdir(inc))
+    check("the NET proof file was consumed",
+          not any(n.lower() == "netproof.txt" for n in left), left)
+    check("and so was the verification copy",
+          not any(n.lower().endswith(".chk") for n in left), left)
