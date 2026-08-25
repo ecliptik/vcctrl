@@ -7,6 +7,8 @@ card and later over mTCP, power over a smart plug.
 **[PLAN.md](./PLAN.md)** is the design. **[docs/FINDINGS.md](./docs/FINDINGS.md)**
 is what measurement changed. **[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)**
 hooks an agent (Claude Code, Codex, ...) up to vcctrl directly over MCP.
+**[docs/SKILLS.md](./docs/SKILLS.md)** carries rig/repo domain knowledge to
+any of those same agents as portable `SKILL.md` files.
 
 ## Layout
 
