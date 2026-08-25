@@ -48,16 +48,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
-class _NullLock(object):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
-_NULLLOCK = _NullLock()
-
 # A self-contained WebSocket measurement. Opens a socket against this same
 # origin, counts binary frames for six seconds, and reports the result through
 # the daemon's own event bus using the `as` field -- which needs no new route
@@ -497,39 +487,31 @@ class TLSServer(Server):
             raise OSError("no certificate available")
         try:
             return ctx.wrap_socket(sock, server_side=True), addr
-        except Exception:
+        except Exception as exc:
             # A TLS handshake failure is one client's problem, not the
             # server's; without this the accept loop dies on the first probe.
-            # DO NOT CLOSE WHILE THE READER IS STILL INSIDE THE SOCKET.
-            #
-            # vcctrld aborted on 2026-08-24 with "free(): invalid next size",
-            # raised from SSL_free reached through a Python attribute rebind --
-            # an SSLSocket being deallocated. This is where that happened: the
-            # reader loops in ws_read() until `stop` is set, so at teardown it
-            # is typically sitting inside SSL_read on the very object about to
-            # be closed and freed. One OpenSSL SSL* used by two threads, with
-            # a close racing a read, produces exactly that.
-            #
-            # `wlock` did not cover it. It serialises WRITERS against each
-            # other, and the reader is neither a writer nor joined.
-            #
-            # So: stop, join, then close. And if the join times out, DO NOT
-            # CLOSE -- leaking a file descriptor on a rare path is enormously
-            # better than corrupting the heap of a process that is driving a
-            # measurement. The leak is recorded so it cannot be silent.
-            reader.join(timeout=2.0)
-            if reader.is_alive():
-                with self.lock:
-                    self.ws_reader_stuck += 1
-                    self.ws_last_error = (
-                        "reader thread did not exit in 2s; socket left open "
-                        "rather than freed underneath it")
-            else:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-            raise
+            # There is no reader thread here and nothing to join -- this
+            # socket has never been handed to anyone. It is closed, and the
+            # failure is re-raised for the accept loop to skip.
+            try:
+                sock.close()
+            except Exception:
+                pass
+            # AND IT MUST LEAVE AS AN OSError. socketserver's
+            # `_handle_request_noblock` wraps `get_request()` in `except
+            # OSError` and nothing wider, so anything else escapes
+            # `serve_forever` and kills the accept thread outright -- leaving
+            # `tls_up` True in /state.json with nothing listening on the port.
+            # `ssl.SSLError` is an OSError, so the ordinary handshake failure
+            # was always fine; this is about the paths that are not it. The
+            # shape is worth refusing outright rather than trusting whatever
+            # `wrap_socket` happens to raise next, because that is exactly how
+            # this went wrong once already: a misplaced hunk left a NameError
+            # on this line and one bad probe took the HTTPS listener down.
+            if isinstance(exc, OSError):
+                raise
+            raise OSError("TLS handshake failed: %s: %s"
+                          % (type(exc).__name__, exc)) from exc
 
 
 # --------------------------------------------------------------- capability
@@ -658,10 +640,6 @@ class WebCapability(object):
         self.ws_hs = None
         self.listeners = 0
         self.lock = threading.Lock()
-        # Times a websocket teardown left a socket open because its reader
-        # would not exit. Non-zero means fds are leaking and the TLS thread
-        # model needs the rewrite noted in serve_ws, not another timeout.
-        self.ws_reader_stuck = 0
 
     def start(self):
         self.httpd = Server((self.bind, self.port), Handler)
@@ -947,17 +925,29 @@ class WebCapability(object):
     # -- the stream ---------------------------------------------------------
 
     def serve_ws(self, sock, agent=None, fps=20.0):
-        # ONE writer at a time. Two threads share this socket -- the frame
-        # pump and the input reader, which answers pings with pongs -- and on
-        # the TLS port that socket is an SSLSocket. Concurrent writes to one
-        # SSL connection interleave inside the record layer and produce a
-        # corrupt record, which the peer reports as a connection error rather
-        # than as anything diagnosable.
-        #
-        # This is the only behavioural difference between the probes that
-        # stream 455 KB happily and a browser that dies after two frames: the
-        # probes never make the daemon write from both threads at once.
-        wlock = threading.Lock()
+        """One connection, ONE THREAD, and that thread owns the socket.
+
+        WHY THIS IS NOT TWO THREADS ANY MORE. It used to be a frame pump plus
+        an input reader, with a `wlock` serialising the two writers. On the TLS
+        port the socket is an SSLSocket: one OpenSSL `SSL*` shared by both.
+        `wlock` covered writer-against-writer and nothing else, so SSL_read and
+        SSL_write ran concurrently on that one `SSL*` as a matter of routine --
+        which OpenSSL does not support without the application serialising it.
+        vcctrld aborted on 2026-08-24 with "free(): invalid next size" raised
+        from SSL_free, and the teardown race that produced it was only the
+        visible half; read-against-write during normal operation was the rest,
+        and no lock in the old design touched it.
+
+        `select` gives both directions to one thread, so the question does not
+        arise. The loop waits on the socket being readable with a timeout set
+        by when the next frame is due: client input wakes it immediately, and
+        the frame cadence is a deadline rather than a sleep. Nothing else ever
+        holds this socket, so the close at the end cannot land under a reader.
+
+        WHAT THIS DELIBERATELY KEEPS: the drop-rather-than-queue rule, the
+        ten-second unwritable stall test, and the applied-rate echo. Those are
+        described where they happen in `_ws_pump`.
+        """
         with self.lock:
             self.clients += 1
             self.ws_opened += 1
@@ -968,25 +958,16 @@ class WebCapability(object):
             self.ws_last = "open"
         opened_t = time.time()
         self._log_ws("open", kind="video", agent=agent)
-        stop = threading.Event()
         held = set()
-        # A list so the input thread can retune it live: the client knows how
-        # it is doing far better than this side can infer.
+        # A list because the client retunes it live from inside the same loop:
+        # the client knows how it is doing far better than this side can infer.
         rate = [fps]
-        # KEEP THE HANDLE. See the teardown in `finally`: this thread must be
-        # joined before the socket is closed, and a fire-and-forget daemon
-        # thread cannot be.
-        reader = threading.Thread(target=self._ws_input,
-                                  args=(sock, stop, held, rate, wlock),
-                                  daemon=True)
         try:
-            reader.start()
-            self._ws_frames(sock, stop, rate, wlock)
+            self._ws_pump(sock, held, rate)
         except Exception as exc:
             with self.lock:
                 self.ws_last_error = "%s: %s" % (type(exc).__name__, exc)
         finally:
-            stop.set()
             with self.lock:
                 self.clients -= 1
                 self.ws_closed += 1
@@ -1003,6 +984,12 @@ class WebCapability(object):
                     self.call("release_all", {})
                 except Exception:
                     pass
+            # Safe unconditionally, and that is the point of the rewrite above:
+            # this thread is the only one that has ever touched this socket, so
+            # there is nobody inside it to free it underneath. The previous
+            # design had to stop a reader, join it, and skip the close if the
+            # join timed out -- leaking a descriptor rather than corrupting the
+            # heap. None of that is needed when there is no second thread.
             try:
                 sock.close()
             except Exception:
@@ -1029,33 +1016,52 @@ class WebCapability(object):
         with self.lock:
             self.ws_log.append(row)
 
-    def _ws_say(self, sock, wlock, obj):
+    def _ws_say(self, sock, obj):
         """Send one JSON text frame, or give up quietly.
 
         Used to tell a client what its request actually became. Never raises:
         a control message that cannot be delivered must not take down a
         picture that is being delivered fine.
+
+        No lock. Called only from the thread that owns the socket -- see
+        `serve_ws` for why there is only one of those now.
         """
         try:
-            with (wlock or _NULLLOCK):
-                sock.sendall(ws_frame(json.dumps(obj).encode(), opcode=0x1))
+            sock.sendall(ws_frame(json.dumps(obj).encode(), opcode=0x1))
         except Exception:
             pass
 
-    def _ws_frames(self, sock, stop, rate, wlock=None):
-        """Send frames, dropping rather than queueing when the client is slow.
+    def _ws_pump(self, sock, held, rate):
+        """Both directions, one thread, `select` deciding which runs next.
 
-        This is the backpressure rule the plan called for and the first version
-        did not implement, which is very likely why an iPhone kept dropping the
-        socket: a detailed screen is ~70 KB, so 30 fps is ~17 Mbit/s, and
-        sendall() on a client that cannot drink that fast BLOCKS -- frames pile
-        up in the kernel buffer and the stream turns into a backlog being
-        replayed. For a KVM that is strictly worse than skipping: a late frame
-        has no value, because the only frame anyone wants is the current one.
+        Returns when the connection is finished, for any reason. It never
+        closes the socket: `serve_ws`'s `finally` does that, once, and this
+        function existing on the same thread is what makes that close safe.
 
-        select() with a zero timeout asks the socket whether it can take a
-        write right now. If it cannot, the frame is dropped and the next one is
-        considered fresh. Nothing is buffered on this side either.
+        SENDING DROPS RATHER THAN QUEUES. A detailed screen is ~70 KB, so 30
+        fps is ~17 Mbit/s, and sendall() on a client that cannot drink that
+        fast BLOCKS -- frames pile up in the kernel buffer and the stream turns
+        into a backlog being replayed. For a KVM that is strictly worse than
+        skipping: a late frame has no value, because the only frame anyone
+        wants is the current one. So a zero-timeout `select` asks whether the
+        socket can take a write right now, and if it cannot the frame is
+        dropped and the next one is considered fresh. Nothing is buffered on
+        this side either.
+
+        READING IS DRAINED TO EMPTY BEFORE ANYTHING IS WRITTEN, and `pending()`
+        is checked before `select`: on a TLS socket OpenSSL may already hold a
+        decrypted record in its own buffer, in which case the fd is not
+        readable and the data is there. Getting that wrong does not hang -- it
+        stalls input until the next wake, which reads as a keyboard that
+        sometimes ignores you, and is the kind of fault nobody reports
+        precisely.
+
+        THE CADENCE IS A DEADLINE, NOT A SLEEP. The old pump slept 1/rate at
+        the bottom of its loop, which was fine when a separate thread was
+        waiting on input. With one thread a sleep would make keystrokes wait
+        for the next frame, so the wait is a `select` on the socket with the
+        time until the next frame as its timeout: input wakes it immediately,
+        and an idle client still gets frames on time.
         """
         vid = self.video()
         # A CLIENT THAT NEVER DRAINS IS GONE, AND THIS LOOP CANNOT SEE IT.
@@ -1064,7 +1070,7 @@ class WebCapability(object):
         # whose peer has vanished -- tab closed, phone asleep, network gone --
         # fills its send buffer, never becomes writable again, and is never
         # written to. No write means no error, so nothing ever raises and the
-        # loop drops a frame and sleeps, forever.
+        # loop drops a frame and waits, forever.
         #
         # Measured on the rig: two such sockets dropping 35 frames a second
         # between them, 100% of attempts, dead flat for ninety seconds, while
@@ -1079,62 +1085,145 @@ class WebCapability(object):
         STALL_S = 10.0
         stalled_since = None
         last_t, last_state = 0.0, None
+        # Zero rather than "now": the first frame goes as soon as there is one.
+        next_due = 0.0
         # THE RATE IS THIS SIDE'S NUMBER, SO THIS SIDE SAYS WHAT IT IS.
         #
         # A page reported "asking for 5 fps" beside "arriving here 9.5 fps",
-        # which cannot both be true of one socket -- the loop below sleeps
-        # 1/rate between frames, and measured from outside it honours the ask
-        # to within 2% at 5, 15 and 30. So the two numbers disagreed because
-        # one of them was a BELIEF: the page was displaying what it had asked
-        # for, and nothing ever told it what it got. Same correction as the
-        # ring length, which the page also used to remember rather than read.
-        self._ws_say(sock, wlock, {"rate": rate[0]})
-        while not stop.is_set():
-            if vid is None:
-                time.sleep(0.5)
-                continue
-            with vid.lock:
-                state = vid.state
-                item = vid.ring[-1] if vid.ring else None
-            if item is not None and item[0] > last_t:
+        # which cannot both be true of one socket -- this loop paces to the ask
+        # and measured from outside it honours it to within 2% at 5, 15 and 30.
+        # So the two numbers disagreed because one of them was a BELIEF: the
+        # page was displaying what it had asked for, and nothing ever told it
+        # what it got. Same correction as the ring length, which the page also
+        # used to remember rather than read.
+        self._ws_say(sock, {"rate": rate[0]})
+        while True:
+            # -- CLIENT -> HERE. Drain it; several messages can arrive in one
+            #    wake, and one TLS record can carry more than one ws frame.
+            while True:
                 try:
-                    writable = select.select([], [sock], [], 0)[1]
+                    if getattr(sock, "pending", lambda: 0)():
+                        ready = True
+                    else:
+                        ready = bool(select.select([sock], [], [], 0)[0])
                 except Exception:
                     return
-                if writable:
-                    stalled_since = None
-                    last_t = item[0]
+                if not ready:
+                    break
+                if not self._ws_handle_input(sock, held, rate):
+                    return
+
+            # -- HERE -> CLIENT.
+            now = time.time()
+            if vid is not None and now >= next_due:
+                next_due = now + 1.0 / max(1.0, rate[0])
+                with vid.lock:
+                    state = vid.state
+                    item = vid.ring[-1] if vid.ring else None
+                if item is not None and item[0] > last_t:
                     try:
-                        with (wlock or _NULLLOCK):
-                            sock.sendall(ws_frame(item[2], opcode=0x2))
+                        writable = bool(select.select([], [sock], [], 0)[1])
                     except Exception:
                         return
-                    with self.lock:
-                        self.ws_sent_frames += 1
-                        self.ws_sent_bytes += len(item[2])
-                elif stalled_since is None:
-                    stalled_since = time.time()
-                    with self.lock:
-                        self.ws_dropped += 1
-                elif time.time() - stalled_since > STALL_S:
-                    with self.lock:
-                        self.ws_dropped += 1
-                        self.ws_last = ("closed: unwritable for %.0fs after "
-                                        "%d frames" % (STALL_S,
-                                                       self.ws_sent_frames))
-                    return
-                else:
-                    with self.lock:
-                        self.ws_dropped += 1
-            if state != last_state:
-                last_state = state
-                try:
-                    with (wlock or _NULLLOCK):
+                    if writable:
+                        stalled_since = None
+                        last_t = item[0]
+                        try:
+                            sock.sendall(ws_frame(item[2], opcode=0x2))
+                        except Exception:
+                            return
+                        with self.lock:
+                            self.ws_sent_frames += 1
+                            self.ws_sent_bytes += len(item[2])
+                    elif stalled_since is None:
+                        stalled_since = now
+                        with self.lock:
+                            self.ws_dropped += 1
+                    elif now - stalled_since > STALL_S:
+                        with self.lock:
+                            self.ws_dropped += 1
+                            self.ws_last = ("closed: unwritable for %.0fs after "
+                                            "%d frames" % (STALL_S,
+                                                           self.ws_sent_frames))
+                        return
+                    else:
+                        with self.lock:
+                            self.ws_dropped += 1
+                if state != last_state:
+                    last_state = state
+                    try:
                         sock.sendall(ws_frame(
                             json.dumps({"state": state}).encode(), opcode=0x1))
-                except Exception:
-                    return
-            time.sleep(1.0 / max(1.0, rate[0]))
+                    except Exception:
+                        return
+
+            # -- WAIT. Wakes on client input, or when the next frame is due.
+            #    Capped so that a stalled client is still noticed promptly and
+            #    a very low rate does not park this thread for a whole second.
+            wait = 0.5 if vid is None else max(0.0, next_due - time.time())
+            try:
+                select.select([sock], [], [], min(wait, 0.5))
+            except Exception:
+                return
+
+    def _ws_handle_input(self, sock, held, rate):
+        """Read and act on ONE client message. False means stop.
+
+        Split out of the loop so the read side stays readable, not because it
+        runs anywhere else: it is called from `_ws_pump` and nowhere else, on
+        the one thread that owns this socket.
+        """
+        try:
+            got = ws_read(sock)
+        except Exception:
+            return False
+        if got is None:
+            return False
+        opcode, data = got
+        with self.lock:
+            if len(self.ws_client_ops) < 12:
+                self.ws_client_ops.append(hex(opcode))
+        if opcode == 0x8:
+            with self.lock:
+                self.ws_client_ops.append("close")
+            return False
+        if opcode == 0x9:
+            try:
+                sock.sendall(ws_frame(data, opcode=0xA))
+            except Exception:
+                return False
+            return True
+        if opcode != 0x1:
+            return True
+        try:
+            msg = json.loads(data)
+        except Exception:
+            return True
+        kind = msg.get("t")
+        try:
+            if kind == "down":
+                held.add(msg["k"])
+                self.call("keydown", {"key": msg["k"]})
+            elif kind == "up":
+                held.discard(msg["k"])
+                self.call("keyup", {"key": msg["k"]})
+            elif kind == "text":
+                self.call("type", {"text": msg["s"]})
+            elif kind == "combo":
+                self.call("combo", {"keys": msg["k"]})
+            elif kind == "rate" and rate is not None:
+                rate[0] = max(1.0, min(30.0, float(msg.get("fps", 20))))
+                # Echo the APPLIED value, not the requested one: the clamp
+                # above is exactly where a request and a reality diverge, and
+                # a client that asks for 40 should be told it is getting 30
+                # rather than left to infer it.
+                self._ws_say(sock, {"rate": rate[0]})
+            elif kind == "release":
+                held.clear()
+                self.call("release_all", {})
+        except Exception:
+            return True
+        return True
 
     def serve_ws_audio(self, sock):
         """Raw PCM out, on its own socket.
@@ -1195,79 +1284,3 @@ class WebCapability(object):
                 sock.close()
             except Exception:
                 pass
-
-    def _ws_input(self, sock, stop, held, rate=None, wlock=None):
-        """Read frames from the client until `stop`.
-
-        WAKES UP REGULARLY, which is what makes the join in serve_ws possible.
-        ws_read() blocks indefinitely, so a reader that only checks `stop` at
-        the top of the loop can sit in SSL_read forever while teardown waits --
-        and the previous code did not wait at all, which is what let the socket
-        be freed underneath it.
-
-        `select` on the fd is not sufficient on its own for a TLS socket:
-        OpenSSL may already hold a decrypted record in its own buffer, in which
-        case the fd is not readable and the data is there. `pending()` is
-        checked first for that reason. Getting this wrong does not hang -- it
-        stalls input for up to the poll interval, which reads as a keyboard
-        that sometimes ignores you, and is the kind of fault nobody reports
-        precisely.
-        """
-        import select
-        while not stop.is_set():
-            try:
-                if not getattr(sock, "pending", lambda: 0)():
-                    r, _w, _x = select.select([sock], [], [], 0.5)
-                    if not r:
-                        continue
-                got = ws_read(sock)
-            except Exception:
-                break
-            if got is None:
-                break
-            opcode, data = got
-            with self.lock:
-                if len(self.ws_client_ops) < 12:
-                    self.ws_client_ops.append(hex(opcode))
-            if opcode == 0x8:
-                with self.lock:
-                    self.ws_client_ops.append("close")
-                break
-            if opcode == 0x9:
-                try:
-                    with (wlock or _NULLLOCK):
-                        sock.sendall(ws_frame(data, opcode=0xA))
-                except Exception:
-                    break
-                continue
-            if opcode != 0x1:
-                continue
-            try:
-                msg = json.loads(data)
-            except Exception:
-                continue
-            kind = msg.get("t")
-            try:
-                if kind == "down":
-                    held.add(msg["k"])
-                    self.call("keydown", {"key": msg["k"]})
-                elif kind == "up":
-                    held.discard(msg["k"])
-                    self.call("keyup", {"key": msg["k"]})
-                elif kind == "text":
-                    self.call("type", {"text": msg["s"]})
-                elif kind == "combo":
-                    self.call("combo", {"keys": msg["k"]})
-                elif kind == "rate" and rate is not None:
-                    rate[0] = max(1.0, min(30.0, float(msg.get("fps", 20))))
-                    # Echo the APPLIED value, not the requested one: the clamp
-                    # above is exactly where a request and a reality diverge,
-                    # and a client that asks for 40 should be told it is
-                    # getting 30 rather than left to infer it.
-                    self._ws_say(sock, wlock, {"rate": rate[0]})
-                elif kind == "release":
-                    held.clear()
-                    self.call("release_all", {})
-            except Exception:
-                continue
-        stop.set()

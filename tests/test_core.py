@@ -3573,7 +3573,7 @@ def test_the_daemon_says_what_rate_it_applied():
             sent.append(b)
 
     cap = vcweb.WebCapability.__new__(vcweb.WebCapability)
-    cap._ws_say(FakeSock(), None, {"rate": 12.0})
+    cap._ws_say(FakeSock(), {"rate": 12.0})
     check("a control message is sent at all", len(sent) == 1, len(sent))
 
     # Decode it as a client would: text opcode, unmasked (server->client),
@@ -3594,7 +3594,7 @@ def test_the_daemon_says_what_rate_it_applied():
             raise OSError("peer went away")
 
     try:
-        cap._ws_say(Broken(), None, {"rate": 1.0})
+        cap._ws_say(Broken(), {"rate": 1.0})
         raised = None
     except Exception as exc:
         raised = exc
@@ -7834,3 +7834,239 @@ def test_a_cancelled_run_is_not_reported_as_a_finished_one():
           r2["complete"] is True and r2["cancelled"] is False, r2)
     check("with nothing remaining", not r2["remaining"], r2["remaining"])
     vcctrld.FilesCapability._job = None
+
+
+def test_a_failed_tls_handshake_does_not_kill_the_accept_loop():
+    """`get_request` must close the socket and leave as an OSError.
+
+    Commit a2b318a set out to join the websocket reader before the socket it
+    is sitting in gets freed. The hunk landed in the wrong function: it went
+    into `TLSServer.get_request`, which has no `reader` and no `self.lock`,
+    and it took the `sock.close()` there with it. Every failed TLS handshake
+    then raised `NameError` from the handler.
+
+    That is worse than the crash it was meant to fix. socketserver's
+    `_handle_request_noblock` wraps `get_request()` in `except OSError` and
+    nothing wider, so a NameError escapes `serve_forever` and kills the accept
+    thread -- while `tls_up` stays True in /state.json. One stray probe on the
+    TLS port and the KVM is off the air, reporting itself up.
+
+    So both arms are checked: the ordinary handshake failure, and the one that
+    is not an OSError at all. The socket is closed either way, because the
+    only reason not to close is a reader thread inside it, and here nobody has
+    ever been handed this socket.
+    """
+    print("\ntls handshake failure")
+    import inspect as _inspect
+    import socketserver as _socketserver
+    import ssl as _ssl
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    # Control, and it is the whole reason the arm below matters: if
+    # socketserver ever widens this, the OSError requirement is no longer
+    # load-bearing and this test should be revisited rather than deleted.
+    src = _inspect.getsource(_socketserver.BaseServer._handle_request_noblock)
+    check("control: socketserver catches ONLY OSError around get_request",
+          "except OSError:" in src, src.split("\n")[-6:])
+
+    for label, exc in (("a normal handshake failure", _ssl.SSLError("no")),
+                       ("one that is not an OSError", ValueError("nope"))):
+        closed = []
+
+        class FakeSock(object):
+            def close(self):
+                closed.append(True)
+
+        class FakeCtx(object):
+            def wrap_socket(self, sock, server_side=False):
+                raise exc
+
+        srv = vcweb.TLSServer.__new__(vcweb.TLSServer)
+        srv.socket = type("S", (), {
+            "accept": staticmethod(lambda: (FakeSock(), ("10.0.0.9", 44300)))})()
+        srv._context = lambda: FakeCtx()
+
+        try:
+            srv.get_request()
+            raised = None
+        except BaseException as got:      # BaseException: a NameError here is
+            raised = got                  # the regression, and it must be seen
+
+        check("%s: raises rather than returning a socket" % label,
+              raised is not None, raised)
+        check("%s: and not a NameError from a misplaced teardown" % label,
+              not isinstance(raised, NameError), repr(raised))
+        check("%s: it leaves as an OSError, so the accept loop skips it"
+              % label, isinstance(raised, OSError), repr(raised))
+        check("%s: and the socket is closed, not leaked" % label,
+              closed == [True], closed)
+
+
+def test_one_thread_owns_the_websocket_for_its_whole_life():
+    """No second thread means no concurrent SSL_read/SSL_write, and no race.
+
+    The abort of 2026-08-24 was SSL_free landing on an SSLSocket while the
+    input reader sat in SSL_read on the same OpenSSL `SSL*`. The first fix
+    joined the reader before closing, which shut the teardown race and left
+    the larger one open: read-against-write on one `SSL*` was happening as a
+    matter of routine, every connection, and `wlock` never covered it -- it
+    serialised the two WRITERS against each other and nothing else.
+
+    So the property is ownership, and ownership is what is asserted. Every
+    touch of the socket records the thread that made it; at the end there must
+    be exactly one, and it must not be the test's own thread.
+
+    A control comes first, because "one thread touched it" is trivially true
+    of a socket nothing touched: the connection has to have really carried
+    both directions -- bytes read from the client AND frames written back --
+    before the count means anything.
+    """
+    print("\nws single owner")
+    import socket as _socket
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    def client_frame(payload, opcode=0x1):
+        """Client -> server frames are MASKED. An unmasked one is a protocol
+        error, so this has to do it properly to exercise the real reader."""
+        mask = b"\x01\x02\x03\x04"
+        body = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        assert len(payload) < 126
+        return bytes([0x80 | opcode, 0x80 | len(payload)]) + mask + body
+
+    touches = []
+
+    class Sock(object):
+        """Every entry point records which thread came through it."""
+
+        def __init__(self, s):
+            self._s = s
+
+        def fileno(self):
+            touches.append((threading.get_ident(), "fileno"))
+            return self._s.fileno()
+
+        def recv(self, n):
+            touches.append((threading.get_ident(), "recv"))
+            return self._s.recv(n)
+
+        def sendall(self, b):
+            touches.append((threading.get_ident(), "sendall"))
+            return self._s.sendall(b)
+
+        def close(self):
+            touches.append((threading.get_ident(), "close"))
+            self._s.close()
+
+    class FakeVid(object):
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.state = "locked"
+            self.ring = [(time.time(), 1, b"\xff\xd8" + b"j" * 40 + b"\xff\xd9")]
+
+    cap = vcweb.WebCapability.__new__(vcweb.WebCapability)
+    cap.lock = threading.Lock()
+    cap.clients = 0
+    cap.ws_opened = cap.ws_closed = cap.ws_dropped = 0
+    cap.ws_sent_frames = cap.ws_sent_bytes = 0
+    cap.ws_client_ops = []
+    cap.ws_last_agent = None
+    cap.ws_last = None
+    cap.ws_last_error = None
+    cap.ws_log = []
+    cap.video = lambda: FakeVid()
+
+    a, b = _socket.socketpair()
+    served = Sock(a)
+    done = threading.Event()
+
+    def run():
+        try:
+            cap.serve_ws(served, agent="probe", fps=20.0)
+        finally:
+            done.set()
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+
+    # Retune the rate from the client. This is the read path: it has to be
+    # parsed, applied and echoed back, which makes the connection carry real
+    # traffic in both directions rather than just frames outward.
+    b.sendall(client_frame(b'{"t":"rate","fps":7}'))
+
+    got = b""
+    b.settimeout(0.5)
+    deadline = time.time() + 6.0
+    while time.time() < deadline and b'"rate": 7.0' not in got:
+        try:
+            chunk = b.recv(65536)
+        except Exception:
+            continue
+        if not chunk:
+            break
+        got += chunk
+
+    check("the applied rate is echoed back, so the read path really ran",
+          b'"rate": 7.0' in got, got[:120])
+    check("and a picture went the other way",
+          cap.ws_sent_frames >= 1, cap.ws_sent_frames)
+
+    # A clean client close ends the connection.
+    b.sendall(client_frame(b"", opcode=0x8))
+    done.wait(6.0)
+    t.join(timeout=3.0)
+
+    check("serve_ws returns when the client closes", not t.is_alive(),
+          "still running")
+
+    kinds = set(k for _ident, k in touches)
+    check("control: the socket was really read from", "recv" in kinds, kinds)
+    check("control: and really written to", "sendall" in kinds, kinds)
+    check("and it was closed, not leaked", "close" in kinds, kinds)
+
+    owners = set(ident for ident, _k in touches)
+    check("EXACTLY ONE thread ever touched the socket", len(owners) == 1,
+          "%d threads, %d touches" % (len(owners), len(touches)))
+    check("and it was not the caller's thread doing it from outside",
+          owners and threading.get_ident() not in owners, "")
+
+    b.close()
+
+
+def test_the_websocket_teardown_needs_no_join():
+    """The old teardown is gone, and so is the instrument that watched it.
+
+    `ws_reader_stuck` counted a teardown that left a descriptor open because
+    its reader would not exit within 2 s. With one thread there is no reader
+    and the count can never move. A counter that cannot move reads as
+    "checked, and fine", which is worse than not being there -- so it is
+    removed rather than left reporting a permanent zero.
+    """
+    print("\nno join, no counter")
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    cap = vcweb.WebCapability.__new__(vcweb.WebCapability)
+    check("the stuck-reader counter is gone from the capability",
+          not hasattr(vcweb.WebCapability, "ws_reader_stuck")
+          and "ws_reader_stuck" not in vcweb.WebCapability.__init__.__code__.co_names,
+          "")
+
+    web = open(os.path.join(HERE, os.pardir, "daemon", "vcweb.py"),
+               encoding="utf-8").read()
+    check("and it is not reported in /state.json either",
+          "reader_stuck" not in web.split("def serve_ws")[0], "")
+
+    # The reader thread and the lock that only half-covered it are both gone.
+    check("no reader thread is spawned per connection",
+          "_ws_input" not in web, "")
+    check("and the writer lock that never covered the reader is gone",
+          "_NULLLOCK" not in web and "wlock or" not in web, "")
+
+    # Control: the loop that replaced them is actually there, and it selects.
+    check("control: one pump serves both directions",
+          "def _ws_pump" in web and "def _ws_handle_input" in web, "")

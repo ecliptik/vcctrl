@@ -5,7 +5,7 @@ what is still broken, what is worked around rather than fixed, and what to
 check before trusting a result.** If you are picking this up cold, read this
 before running anything measured.
 
-Last reviewed 2026-08-21, after Round R.
+Last reviewed 2026-08-24.
 
 ---
 
@@ -239,6 +239,93 @@ question, but it is no longer "no data".
 stick emits well-formed JPEG for its no-lock constant, so there is nothing
 malformed to count and a clean counter means nothing. **Zero after a week of
 real sessions kills the hypothesis; zero on a dark rig is an artifact.**
+
+### The abort of 2026-08-24 had a mechanism, and the fix for it was inert
+
+    free(): invalid next size    09:39:57, raised from SSL_free
+
+A different signature from the two above and the first one with a **named
+mechanism**. `SSL_free` reached through a Python attribute rebind is an
+`SSLSocket` being deallocated. On the TLS port one OpenSSL `SSL*` is shared by
+two threads — the frame pump in `_ws_frames` and the input reader in
+`_ws_input` — and `serve_ws`'s `finally` closed that socket while the reader
+was sitting in `SSL_read` on it. A close racing a read frees the object out
+from under a thread that is still inside it.
+
+`wlock` never covered this. It serialises WRITERS against each other; the
+reader is neither a writer nor joined.
+
+**a2b318a wrote the right fix into the wrong function and nobody ran it.**
+The teardown — stop, join, then close — landed in `TLSServer.get_request`,
+which has no `reader` and no `self.lock`, and it removed the `sock.close()`
+that was there. So for three days:
+
+- **`serve_ws` still closed the socket under a live reader.** The double-free
+  was never actually fixed, while the commit message said it was.
+- **Every failed TLS handshake raised `NameError`.** socketserver's
+  `_handle_request_noblock` wraps `get_request()` in `except OSError` and
+  nothing wider, so that escaped `serve_forever` and killed the accept
+  thread — with `tls_up` still True in `/state.json`. **One stray probe on
+  8443 takes the KVM off the air while it reports itself up.** That is a
+  worse fault than the one being fixed, and it was introduced by the fix.
+
+The commit was never deployed (eight cells were uncollected), which is the
+only reason the listener bug was not also observed on the rig.
+
+**Both halves are now in the right place, and both are covered by tests that
+were checked against the broken code first.** `test_core.py` asserts the
+teardown ORDER against a real socketpair rather than the presence of a
+`join` — a source-text check for "join" passes against a2b318a, because the
+join was in the file the whole time.
+
+**The join closed the teardown race and left the larger one open** —
+concurrent `SSL_read` and `SSL_write` on one `SSL*`, which was happening every
+connection, all the time, and which no lock in that design touched. `wlock`
+serialised the two WRITERS against each other and nothing else. That is fixed
+now; see the rewrite below.
+
+**What this does NOT explain:** the two aborts of 2026-08-20. Those were
+`double free or corruption`, not `invalid next size`, and the 73.6-minute
+clean window carried browsers' predecessors but no streamers. Do not fold
+them into this diagnosis because a nearby mechanism was found — that is the
+same move that made the malformed-frame hypothesis look strong for a week.
+
+### The rewrite: one thread owns the socket — 2026-08-24, NOT YET DEPLOYED
+
+`serve_ws` no longer starts a reader thread. `_ws_frames` and `_ws_input` are
+merged into `_ws_pump` plus `_ws_handle_input`, and one thread owns the socket
+for the connection's whole life with `select` driving both directions. The
+wait between frames is a `select` on the socket with the time until the next
+frame as its timeout, so client input still wakes it immediately rather than
+waiting out a sleep.
+
+**This removes the hazard rather than serialising it.** There is no second
+thread, so there is no read racing a write on one `SSL*`, no teardown race,
+and no join. `wlock` and `_NULLLOCK` are gone — they only ever covered
+writer-against-writer.
+
+**`ws.reader_stuck` is gone from `/state.json`.** It counted a teardown that
+left a descriptor open because a reader would not exit in 2 s. There is no
+reader, so it could never increment again, and **a counter that cannot move
+reads as "checked, and fine"** — which is worse than not being there. If you
+have a check watching that field it will now read as ABSENT, and absent is the
+correct answer. Watch `ws.last_error` and `ws.dropped` instead.
+
+**Kept deliberately, and they are load-bearing:** the drop-rather-than-queue
+rule, the ten-second continuous-unwritability stall test that closes an
+abandoned socket, and the applied-rate echo. The client protocol did not
+change; `kvm.html` needed no edit.
+
+**The test asserts ownership, not the presence of a `select`.** Every touch of
+the socket records its thread id and there must be exactly one, with a control
+first that the connection really carried both directions — a socket nothing
+touched trivially has one owner. Against the two-thread version it reports
+"2 threads, 13 touches" and fails.
+
+**NOT DEPLOYED.** It needs a restart, and one had just been done for the
+file-download work. Until it is deployed the Pi is running the two-thread
+version with the teardown join — the abort mechanism named above is still
+reachable on the running daemon.
 
 ### Coordination hazard: a change-detector cannot tell an upgrade from a fault
 
