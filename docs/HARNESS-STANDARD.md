@@ -1360,6 +1360,42 @@ these has lost ground.
 
 ---
 
+### 11.1 A comprehensive negative points outward, not inward
+
+**"We tested it hard and it never reproduced" reads as an exoneration of
+the code under test, when it is equally evidence that the code under test
+was never involved.** Those two readings want opposite next moves: the
+first says look harder here, the second says look somewhere else.
+
+**Requirement: where a negative is unusually comprehensive, spend the next
+effort WIDENING the search rather than deepening it. Ask which subsystems
+have no arm on them at all.**
+
+A fault hypothesis in the originating project survived thousands of
+synthetic mutants and millions of real failure events without reproducing.
+It was well-formed, cheaply falsifiable, and tested harder than anything
+else in the file. **It was also aimed at the wrong subsystem, and the size
+of the negative was the signal that should have redirected the search.**
+The actual fault was a concurrency bug in a teardown path.
+
+**Note that this is not written up as an error, deliberately.** The
+hypothesis was good work; treating it as a mistake would teach the wrong
+lesson to the next reader. The failure was in what the accumulating
+negative was taken to mean.
+
+**And a harness makes this bias worse, which is why it belongs here.** The
+faulting path had no test arm, no counter and no stress harness pointed at
+it. The exonerated path had all three. **Instrumentation attracts
+attention to the instrumented side**, so the best-lit subsystem absorbs
+the search while an uninstrumented one holds the fault -- and the people
+best placed to notice that asymmetry are the ones who built the
+instruments.
+
+**The check is cheap and can be run at any point in an investigation:
+enumerate which components carry counters, tests or stress arms, and which
+carry none. A comprehensive negative in a well-lit component is a reason
+to look at a dark one.**
+
 ## 12. Profiles
 
 A **profile** records one project's adoption: its conformance level, its
