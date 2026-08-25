@@ -476,7 +476,7 @@
     }
     body #sheettitle {
       font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
-      text-transform:uppercase; color:var(--dim);
+      text-transform:uppercase; color:var(--muted);
     }
     body #body { height:auto; max-height:46vh; }
     body #body > * { display:none; }
@@ -999,7 +999,7 @@
   /* The last live picture, behind the notice. Dimmed so it cannot be mistaken
      for the current screen -- but readable, because it is often the only
      picture there is. Full brightness is one click away and is remembered. */
-  #stale { filter:grayscale(.35) brightness(.8); }
+  #stale { filter:grayscale(.25) brightness(.92) contrast(1.12); }
   #stale.full { filter:none; }
   /* Small, in the corner, out of the picture's way. It exists only while the
      notice is dismissed and the signal is still gone. */
@@ -1480,7 +1480,7 @@
   section { padding:10px 12px; border-bottom:1px solid var(--rule); }
   h2 {
     font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
-    text-transform:uppercase; color:var(--dim); margin:0 0 9px;
+    text-transform:uppercase; color:var(--muted); margin:0 0 9px;
     padding-bottom:6px; border-bottom:1px solid var(--rule);
   }
   .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
@@ -1489,6 +1489,17 @@
     font:var(--t-data)/1.9 var(--mono);
   }
   .kv span:last-child { color:var(--dim); }
+  /* The label and the value each get their own line, for a row whose label
+     no longer fits beside its value at any reasonable width. */
+  .kv.kv2 { flex-direction:column; align-items:flex-start; gap:0; line-height:1.5; }
+
+  /* The resolved config, as a tree: nesting shown by indent, not by a second
+     font size -- this is data, not a heading. */
+  .kvtree { font:var(--t-data)/1.7 var(--mono); }
+  .kvtree .kvt-sec { margin:6px 0 2px; color:var(--dim); }
+  .kvtree .kvt-row { display:flex; justify-content:space-between; gap:10px; }
+  .kvtree .kvt-row span:last-child { color:var(--muted); overflow-wrap:anywhere;
+                                      text-align:right; }
 
   #meter { display:flex; align-items:center; gap:9px; }
   #volrow { display:flex; align-items:center; gap:6px; margin-top:8px; }
@@ -1575,7 +1586,7 @@
     gap:10px; padding:10px 12px 10px 14px; border-bottom:1px solid var(--rule);
     padding-top:calc(10px + env(safe-area-inset-top,0px));
     font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
-    text-transform:uppercase; color:var(--dim);
+    text-transform:uppercase; color:var(--muted);
   }
   /* Click-off. Not a dark scrim over the picture: this page exists to show
      you the picture, and dimming it to change a theme is the wrong trade. */
@@ -1687,6 +1698,19 @@
     #zoombtn { min-width:52px; }
   }
 
+  /* THE MANUAL CHOICE, and only above the width where the toolbar already
+     narrows itself to fit -- below 1100px icon-only is a fit constraint, not
+     a preference, and stays forced regardless of this setting. Same button
+     set as the mid-band rule above: the icon+label pairs, not the snap/mute
+     split buttons (those are two independent buttons, not an icon/label pair
+     of one). */
+  @media (min-width:1100px) {
+    body.btn-icon #zoomlabel, body.btn-icon header .lbtn .bl,
+    body.btn-icon #grabbtn .bl, body.btn-icon #powerbtn .bl { display:none; }
+    body.btn-text header .lbtn .bi, body.btn-text #zoombtn .bi,
+    body.btn-text #grabbtn .bi, body.btn-text #powerbtn .bi { display:none; }
+  }
+
   /* ── desktop ─────────────────────────────────────────────────────────── */
   @media (min-width:641px) {
     body.panel-stats #stats { display:block; }
@@ -1768,8 +1792,8 @@
     <span class="lamp lockable" id="lamp-mouse"><i></i><span>MOS</span></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
     <span class="sep" aria-hidden="true">|</span>
-    <button id="lamps" aria-label="PS/2 keyboard LEDs — what they prove"
-            title="Caps, Num and Scroll read back over PS/2 — proof a keystroke landed">
+    <button id="lamps" aria-label="PS/2 keyboard LEDs"
+            title="Caps, Num and Scroll read back over PS/2">
       <!-- C N S rather than CAP NUM SCR. It breaks the three-character rule
            the rest of the row follows, deliberately: these three are the only
            group with a shared heading in their own tooltip, and 39px is the
@@ -1975,7 +1999,7 @@
            the strip it left the command line squeezed into what was left. -->
       <button id="keysbtn" aria-haspopup="true" aria-expanded="false"
               aria-controls="pop-keys"
-              title="Keys this field cannot type — Esc, F-keys, Ctrl-Alt-Del"><span
+              title="Keys this field cannot type (Esc, F-keys, Ctrl-Alt-Del)"><span
               class="gly">⌨️</span></button>
       <input id="line" placeholder="type a command"
              autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -2028,7 +2052,7 @@
               title="Sound and volume">Sound<span class="caret dn" aria-hidden="true"></span></button>
     </span>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
-            title="Mains power — on, off, cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret dn" aria-hidden="true"></span></button>
+            title="Mains power: on, off, cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret dn" aria-hidden="true"></span></button>
   </div>
 
   <!-- A POPOVER, like Sound and Power. As a row in the flow it took ~40px of
@@ -2063,7 +2087,7 @@
       <button id="kbdsend" hidden
               title="Send this chord to the target">Send</button>
       <button id="kbdclear" hidden
-              title="Let go of everything latched — sends nothing">Clear</button>
+              title="Let go of everything latched">Clear</button>
     </div>
     <!-- WHAT IS LATCHED, IN WORDS. A held chord is invisible state that fires
          on the next tap, and one of the things it can spell reboots the
@@ -2115,9 +2139,24 @@
         <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
       </div>
       <div class="hint" style="margin-left:0">Toggles Caps Lock and waits for
-        the PS/2 LED to come back — proof a keystroke reached the machine that
-        does not depend on reading the screen. Worth running when the target
-        stops responding and you need to know which half is at fault.</div>
+        the PS/2 LED to come back. Worth running when the target stops
+        responding and you need to know which half is at fault.</div>
+
+      <h2 style="margin-top:14px">Buttons</h2>
+      <div class="row" style="margin-bottom:4px">
+        <span style="flex:1 1 auto">Show</span>
+        <!-- ≥1100px only. Below that, the toolbar already forces icon-only to
+             fit -- see the 641-1099px band and the ≤640px sheet UI -- so a
+             manual choice there would just clip. Default is "both", which is
+             every existing layout unchanged until someone opens this menu. -->
+        <select id="btnstylesel" title="How toolbar buttons are labelled on a wide window">
+          <option value="both">Icon + text</option>
+          <option value="icon">Icon only</option>
+          <option value="text">Text only</option>
+        </select>
+      </div>
+      <div class="hint" style="margin-left:0">Below 1100px the toolbar already
+        switches to icons only to fit, whatever this says.</div>
 
       <h2 style="margin-top:14px">Video</h2>
       <div class="row" style="margin-bottom:4px">
@@ -2146,8 +2185,7 @@
            use, so nothing is lost by not being able to force it. -->
 
       <h2 style="margin-top:14px">Activity log</h2>
-      <div class="hint" style="margin-left:0">Filters the view only — the
-        daemon records these either way.</div>
+      <div class="hint" style="margin-left:0">Filters the view only.</div>
       <label><input type="checkbox" id="opt-probe">
         LED and probe traffic</label>
       <div class="hint">Caps Lock toggles and LED reads, which the harness
@@ -2159,6 +2197,13 @@
       <label><input type="checkbox" id="opt-mine">
         This browser&rsquo;s own commands</label>
       <div class="hint">Off by default: you know what you just did.</div>
+
+      <h2 style="margin-top:14px">System config</h2>
+      <!-- WHAT THE DAEMON RESOLVED, not the file on disk. Same source as
+           `vcctrl config show` -- fetched once, since it does not change
+           without a daemon restart. -->
+      <div class="hint" id="cfgsrc" style="margin-left:0">—</div>
+      <div id="cfgtree" class="kvtree"></div>
 
   </div>
 </aside>
@@ -2184,7 +2229,7 @@
 <div id="pop-zoom" class="pop popmenu" role="dialog" aria-label="Zoom" hidden>
   <button data-zoom="fit" title="The whole screen, as large as it fits">Fit to Screen</button>
   <button data-zoom="1" id="zoom-1"
-          title="One capture pixel per screen pixel">Original — actual resolution</button>
+          title="One capture pixel per screen pixel">Original: actual resolution</button>
   <button data-zoom="2" title="Twice the captured size">200% Original</button>
   <button data-zoom="4" title="Four times the captured size">400% Original</button>
   <hr>
@@ -2205,13 +2250,13 @@
   <label for="fileinput" id="fi-type"
          title="Typed as keystrokes, exactly as if you typed it">Copy/Paste from text file</label>
   <label for="xferinput" id="fi-xfer"
-         title="Move the bytes over the network — reboots the target">Upload file</label>
+         title="Move the bytes over the network (reboots the target)">Upload file</label>
   <!-- A BUTTON, NOT A LABEL, AND THE DIFFERENCE IS REAL. The two above open
        the browser's own file picker, which only a label can do from a click
        the page did not script. This one opens a picker of OUR files -- what
        is sitting on the target -- so there is no native control to borrow. -->
   <button id="fi-get"
-          title="Fetch files the target left in its outgoing directory — reboots it">Download from target</button>
+          title="Fetch files the target left in its outgoing directory (reboots it)">Download file</button>
   <!-- Greyed WITH THE REASON, never hidden and never left clickable to fail.
        A control that vanishes is indistinguishable from one that never
        existed, and one that fails on click teaches people the page lies. -->
@@ -2232,9 +2277,9 @@
   <hr>
   <div class="poprow">
     <button id="get-refresh"
-            title="Read the directory again — reboots the target">Refresh list — reboots</button>
+            title="Read the directory again (reboots the target)">Refresh list</button>
     <button id="get-go"
-            title="Fetch the ticked files — reboots the target">Download ticked — reboots</button>
+            title="Fetch the ticked files (reboots the target)">Download ticked</button>
   </div>
   <hr>
   <div class="hint" style="margin-left:9px">Already fetched, on the daemon host</div>
@@ -2244,7 +2289,7 @@
 <div id="pop-power" class="pop" role="dialog" aria-label="Power" hidden>
   <div class="poprow">
     <button data-power="on" title="Switch the mains plug on">On</button>
-    <button data-power="off" class="danger" title="Cut mains power — the target does not shut down first">Off</button>
+    <button data-power="off" class="danger" title="Cut mains power (the target does not shut down first)">Off</button>
     <button data-power="cycle" class="danger" title="Cut mains power, wait, and switch it back on">Power Cycle</button>
   </div>
   <!-- The standing warning is gone. All three already stop and ask, and each
@@ -2459,11 +2504,11 @@ function setXport(x) {
     // live, so it converges on whatever the link and the source allow -- 30
     // fps here. The mjpeg stream's rate is fixed in the URL at connect time
     // and cannot be changed without reconnecting.
-    x === 'ws' ? 'WebSocket — up to 30 fps, and the rate follows the link'
-    : x === 'mjpeg' ? 'mjpeg — fixed ' + MJPEG_FPS + ' fps, but it works '
+    x === 'ws' ? 'WebSocket, up to 30 fps and the rate follows the link'
+    : x === 'mjpeg' ? 'mjpeg, fixed ' + MJPEG_FPS + ' fps but it works '
                     + 'through any proxy. Click to try the websocket now'
     : x === 'connecting' ? 'Connecting…'
-    : 'Disconnected — no picture is arriving');
+    : 'Disconnected');
 }
 
 // IS THE SOURCE PRODUCING ANYTHING? A transport carrying no frames and a
@@ -2512,7 +2557,7 @@ setInterval(() => {
   const here = live
     ? 'receiving frames · last ' + Math.round(Date.now() - lastFrameAt) + ' ms ago'
     : xport === 'connecting' ? 'connecting…'
-    : 'no frames here in the last 2 s — what is on screen may be old';
+    : 'no frames here in the last 2 s, so what is on screen may be old';
   el.title = (stateWord ? stateWord + '\n' : '') + here;
 }, 700);
 
@@ -2679,7 +2724,7 @@ function noteApplied(f) {
     if (was === null || Math.abs(was - f) >= 1)
       addLine(new Date(), 'rate',
               'daemon is sending ' + f + ' fps, we asked for ' + fpsWant
-              + ' — re-asserting', 'k-warn');
+              + ', re-asserting', 'k-warn');
     if (ws && ws.readyState === 1)
       try { ws.send(JSON.stringify({t: 'rate', fps: fpsWant})); } catch (e) {}
   }
@@ -2750,7 +2795,7 @@ function useMjpeg(why) {
   if (xport === 'mjpeg') return;
   setXport('mjpeg');
   addLine(new Date(), 'transport',
-          'websocket ' + why + ' (' + lastWsURL + ') — using mjpeg', 'k-note');
+          'websocket ' + why + ' (' + lastWsURL + '), using mjpeg', 'k-note');
   // onmessage discards everything once xport is 'mjpeg', so leaving the
   // socket open buys nothing and costs a second full-rate stream through the
   // tunnel -- on a link whose capacity is the whole reason this rate control
@@ -2765,7 +2810,7 @@ function useMjpeg(why) {
   // forever. That is what a suspended iOS tab produces on return, and it is
   // indistinguishable from "the machine is off" to anyone looking at it --
   // exactly the lie this tool exists to not tell.
-  img.onerror = () => { addLine(new Date(),'transport','stream dropped — restarting','k-note'); restart(); };
+  img.onerror = () => { addLine(new Date(),'transport','stream dropped, restarting','k-note'); restart(); };
   scheduleWsRetry(why);
 }
 
@@ -2818,7 +2863,7 @@ async function checkPort() {
   }
   if (!portOK)
     addLine(new Date(), 'transport',
-            `port ${tlsPort} is not reachable from this device — `
+            `port ${tlsPort} is not reachable from this device, `
             + 'staying on the mjpeg stream', 'k-note');
   return portOK;
 }
@@ -2984,7 +3029,7 @@ setInterval(() => {
       lastFrameAt = Date.now();
       return;
     }
-    addLine(new Date(), 'transport', 'no frames for 8s — restarting', 'k-note');
+    addLine(new Date(), 'transport', 'no frames for 8s, restarting', 'k-note');
     restart();
   }
 }, 4000);
@@ -3016,7 +3061,7 @@ async function post(cmd, body) {
       // JSON.parse on that produced "SyntaxError: The string did not match the
       // expected pattern" in the log -- a message about parsing, with no hint
       // that a request had failed or which one. Say what actually happened.
-      note(`${cmd}: HTTP ${r.status} — ${text.slice(0, 60) || 'empty reply'}`);
+      note(`${cmd}: HTTP ${r.status}, ${text.slice(0, 60) || 'empty reply'}`);
       return;
     }
     if (!j.ok) {
@@ -3118,7 +3163,7 @@ const LAYOUTS = {
     arrows: true,
     chords: [
       {keys:['ctrl','c'], cap:'Ctrl-C',
-       title:'Break the running program — the one every DOS user reaches for'},
+       title:'Break the running program'},
       // ITS COMPONENT IS ONE OF ONLY TWO KEYS WITH NO VERDICT. The 2026-08-25
       // sweep voided `pause`: it halts until a keypress and swallowed the
       // sentinel that framed it. So this control is offered and says it is
@@ -3129,7 +3174,7 @@ const LAYOUTS = {
       {keys:['ctrl','pause'], cap:'Ctrl-Break',
        title:'The harder break, caught in places Ctrl-C is not'},
       {keys:['ctrl','z'], cap:'Ctrl-Z',
-       title:'^Z, end-of-file — this is what ends COPY CON'},
+       title:'^Z, end-of-file'},
       {keys:['ctrl','s'], cap:'Ctrl-S',
        title:'Pause scrolling output'},
       {keys:['ctrl','p'], cap:'Ctrl-P',
@@ -3138,7 +3183,7 @@ const LAYOUTS = {
       // command-line shortcut; it does things inside EDIT and QBasic and at
       // C:\> it is a control character. It is here because it was asked for.
       {keys:['ctrl','a'], cap:'Ctrl-A',
-       title:'^A — a control character at the DOS prompt; EDIT and QBasic '
+       title:'^A, a control character at the DOS prompt; EDIT and QBasic '
            + 'give it meanings, COMMAND.COM does not'},
       {keys:['ctrl','alt','delete'], cap:'Ctrl-Alt-Del', danger:true},
     ],
@@ -3218,30 +3263,6 @@ const LAYOUTS = {
   },
 };
 
-// EVERY KEY IS UNMEASURED UNTIL SOMEBODY MEASURES IT. The Pi hands raw evdev
-// codes to the STM32 protocol board and the Linux-to-PS/2 mapping lives in
-// that firmware, so which of these keys actually arrives at the target is not
-// derivable from anything on this side -- only measurable at the machine.
-// WEBKVM.md sec. 5.2 says so and its step 7 was never run.
-//
-// Drawing them normally asserts they work; greying them asserts they do not.
-// Both are claims and neither has been measured, so the panel says the true
-// thing once, in words, and draws every key alike. When the sweep runs, its
-// results go here and this line shrinks to the keys still unproven.
-const COVERAGE_UNMEASURED =
-  'None of these keys have been measured at the target. The Pi hands raw '
-+ 'key codes to the protocol board and the mapping lives in its firmware, so '
-+ 'which of them arrive is measurable only at the machine (WEBKVM.md 5.2).';
-
-// WHAT THE COVERAGE TABLE SAYS ABOUT THE KEYS THIS LAYOUT ACTUALLY DRAWS.
-//
-// The daemon publishes coverage for the whole key namespace it accepts; the
-// panel only ever draws a subset of it. The number worth showing is the
-// INTERSECTION -- "77 of 83" -- not the daemon's total, because a count that
-// includes keys this page cannot send overstates what the operator can act on.
-// That distinction was the operator's, found by looking at the page rather
-// than at the table.
-//
 // THREE OUTCOMES, AND ONLY ONE OF THEM GREYS A KEY:
 //   arrives === false   measured, and it does not reach the target -> grey
 //   arrives === true    measured, it does                          -> normal
@@ -3275,25 +3296,6 @@ function chordCoverage(keys) {
 function keyIsDead(key) {
   const r = coverageOf(key);
   return !!(r && r.arrives === false);
-}
-function coverageSummary(L) {
-  if (!keymap || !keymap.coverage) return null;
-  const names = new Set();
-  const walk = a => { for (const k of (a || [])) {
-    if (Array.isArray(k)) { walk(k); continue; }
-    if (k && (k.k || k.mod)) names.add(k.mod || k.k);
-  } };
-  walk(L.fkeys); walk(L.main); walk(L.bottom); walk(L.compact);
-  walk(L.nav); walk(L.locks);
-  if (L.arrows) ['up', 'down', 'left', 'right'].forEach(k => names.add(k));
-  let yes = 0, no = 0, none = 0;
-  for (const n of names) {
-    const r = coverageOf(n);
-    if (r && r.arrives === true) yes++;
-    else if (r && r.arrives === false) no++;
-    else none++;
-  }
-  return {total: names.size, yes, no, none};
 }
 
 // ── latching ──────────────────────────────────────────────────────────────
@@ -3383,8 +3385,8 @@ function rebootWarning() {
     + '\n\nThis reboots the machine. Anything unsaved is lost, and a sweep in '
     + 'progress is destroyed.'
     + '\n\nNote it is not a reliable reboot on this rig: it is swallowed while '
-    + 'the game is running. If nothing happens, the machine did not get it — '
-    + 'do not assume it rebooted.';
+    + 'the game is running. If nothing happens, the machine did not get it. '
+    + 'Do not assume it rebooted.';
 }
 
 // ONE ROUTE OUT. Every chord this panel can send -- a pre-built button, a
@@ -3398,7 +3400,7 @@ function sendChord(keys) {
   // is the one that reboots the machine is exactly the unconfirmed reboot this
   // whole path exists to prevent. Try the table again and say why.
   if (reboot === null && keys.length > 1) {
-    hint('the daemon has not sent its key table — chords are held until it does');
+    hint('the daemon has not sent its key table, chords are held until it does');
     loadKeymap();
     return false;
   }
@@ -3442,9 +3444,9 @@ function paintLatched() {
   send.classList.toggle('danger', danger);
   send.disabled = blind;
   send.title = blind
-    ? 'Waiting for the daemon\'s key table — until it arrives this page '
+    ? 'Waiting for the daemon\'s key table, until it arrives this page '
       + 'cannot tell whether a chord is the one that reboots the machine'
-    : danger ? 'This chord reboots the machine — you will be asked to confirm'
+    : danger ? 'This chord reboots the machine, and you will be asked to confirm'
     : 'Send this chord to the target';
 }
 
@@ -3512,7 +3514,7 @@ function keyButton(spec) {
   // need it.
   const label = spec.aria || spec.cap;
   b.title = spec.mod
-    ? 'Hold ' + label + ' for the next key — tap again to release'
+    ? 'Hold ' + label + ' for the next key, tap again to release'
     : 'Send ' + label + ' to the target';
   // MEASURED NOT TO ARRIVE, and only that. Disabled rather than dimmed: the
   // page has a rule against dimming text with opacity, and a key that cannot
@@ -3520,12 +3522,12 @@ function keyButton(spec) {
   const cov = coverageOf(spec.mod || spec.k);
   if (cov && cov.arrives === false) {
     b.disabled = true;
-    b.title = label + ' does not reach the target — measured '
+    b.title = label + ' does not reach the target, measured '
             + (keymap.coverage_meta && keymap.coverage_meta.measured_at
                ? 'on ' + keymap.coverage_meta.measured_at : '')
             + (cov.reason ? '. ' + cov.reason : '');
   } else if (cov && cov.arrives === true && cov.scan) {
-    b.title += ' — measured: scan ' + cov.scan + ', AL ' + cov.al;
+    b.title += ', measured: scan ' + cov.scan + ', AL ' + cov.al;
   }
   if (spec.aria || spec.cap.length > 2) b.setAttribute('aria-label', label);
   b.onclick = () => tapSpec(spec);
@@ -3604,14 +3606,14 @@ function drawKeyboard(id) {
       // is whether it gets there.
       const cc = chordCoverage(c.keys);
       const said = isReboot(c.keys)
-        ? 'Send Ctrl+Alt+Delete — reboots the target, and asks first'
+        ? 'Send Ctrl+Alt+Delete, reboots the target and asks first'
         : (c.title || 'Send ' + c.cap + ' to the target');
       b.title = said + (
         !cc ? ''
         : cc.arrives === true
           ? '\n\nMEASURED: it reaches the target'
             + (cc.scan ? ' as scan ' + cc.scan + ', AL ' + cc.al : '')
-            + (cc.how === 'in-use' ? ' — proven by use rather than swept' : '')
+            + (cc.how === 'in-use' ? ', proven by use rather than swept' : '')
             + (cc.reason ? '. ' + cc.reason : '')
         : '\n\nNO VERDICT: ' + (cc.reason || cc.why));
       // Same rule as the keys: only a measured negative disables anything.
@@ -3666,7 +3668,7 @@ function applyLayout(b) {
   // The name line says what is drawn AND on whose authority, because a layout
   // somebody picked and one the rig reported are different kinds of claim.
   $('kbdname').textContent = L
-    ? L.name + (known ? '' : ' — chosen by hand')
+    ? L.name + (known ? '' : ', chosen by hand')
     : 'No keyboard';
   $('kbdname').title = L
     ? (known
@@ -3696,32 +3698,6 @@ function applyLayout(b) {
   }
   if (L && L.unverified) bits.push([true, L.unverified]);
   if (L && L.absent) bits.push([false, L.absent]);
-  // WHAT IS ACTUALLY KNOWN, not a standing disclaimer. This line said "none
-  // of these keys have been measured" for as long as that was true, and kept
-  // saying it after the sweep ran -- which is the shape of the comment that
-  // stated a fact and went on stating it. It is derived from the table now,
-  // so it cannot outlive its own truth.
-  if (L) {
-    const c = coverageSummary(L);
-    if (!c) {
-      // THE DAEMON'S OWN WORDS FOR WHY, where it has any. "Nothing has been
-      // measured" and "this daemon was deployed without its coverage file"
-      // are different facts, and showing the first for the second reports the
-      // DEPLOY's state as the target's.
-      bits.push([!!(keymap && keymap.coverage_reason),
-                 (keymap && keymap.coverage_reason)
-                   ? 'No measured coverage: ' + keymap.coverage_reason + '.'
-                   : COVERAGE_UNMEASURED]);
-    } else {
-      const parts = [c.yes + ' of ' + c.total + ' keys on this layout have '
-                   + 'been measured at the target'];
-      if (c.no) parts.push(c.no + ' do NOT reach it and are greyed');
-      if (c.none) parts.push(c.none + ' have no verdict yet — INT 16h cannot '
-                           + 'see a modifier, so those wait on the BDA pass');
-      parts.push('WEBKVM.md 5.2c');
-      bits.push([false, parts.join('. ') + '.']);
-    }
-  }
   $('kbdnote').innerHTML = bits.map(
     ([warn, t]) => warn ? '<span class="warn">' + esc(t) + '</span>' : esc(t)
   ).join('<br>');
@@ -3821,7 +3797,7 @@ async function typeFileLines(name, lines) {
   const file = {name};
   sending = {stop: false, n: 0, of: lines.length, name: file.name};
   setFileBtn();
-  addLine(new Date(), 'file', 'typing ' + file.name + ' — ' + lines.length
+  addLine(new Date(), 'file', 'typing ' + file.name + ', ' + lines.length
           + ' lines', 'k-cmd');
   for (const line of lines) {
     if (sending.stop) break;
@@ -3892,7 +3868,7 @@ function showFiles(f) {
   if (!ok) why.textContent = filesNow.reason || 'not available';
   item.title = ok
     ? 'Send files to ' + (filesNow.dest || 'the target')
-      + ' — reboots the machine'
+      + ' (reboots the machine)'
     : (filesNow.reason || 'not available');
   // THE SAME ANSWER GOVERNS BOTH DIRECTIONS. Availability is about the
   // channel -- a packet driver, a server that answers -- and not about which
@@ -3903,7 +3879,7 @@ function showFiles(f) {
   g.disabled = !ok;
   g.title = ok
     ? 'Fetch files from ' + (filesNow.out_dir || 'the target')
-      + ' — reboots the machine'
+      + ' (reboots the machine)'
     : (filesNow.reason || 'not available');
 }
 
@@ -3959,7 +3935,7 @@ $('xferinput').onchange = async () => {
   const names = picked.map(f => f.name).join(', ');
   let msg = 'Upload ' + fmtBytes(total) + ' to '
     + (filesNow.dest || 'the target') + '?\n\n' + names + '\n\n'
-    + 'This REBOOTS the target — anything running is lost, and it comes back '
+    + 'This REBOOTS the target: anything running is lost, and it comes back '
     + 'on the default profile. About 2 minutes.';
   if (warn && total > warn) {
     msg += '\n\nOver ' + fmtBytes(warn) + ' is untested here.';
@@ -3971,8 +3947,8 @@ $('xferinput').onchange = async () => {
   // measure in the same boot -- so coming back is a correctness requirement
   // rather than politeness. A cell has already died of this.
   const stay = !confirm('Reboot back afterwards?\n\n'
-    + 'OK — come back (recommended)\n'
-    + 'Cancel — stay on the network profile\n\n'
+    + 'OK: come back (recommended)\n'
+    + 'Cancel: stay on the network profile\n\n'
     + 'No measured run may start from the network profile.');
 
   addLine(new Date(), 'file', 'staging ' + picked.length + ' file'
@@ -3980,7 +3956,7 @@ $('xferinput').onchange = async () => {
   for (const f of picked) {
     const r = await stageOne(f);
     if (!r.ok) {
-      addLine(new Date(), 'file', 'refused ' + f.name + ' — ' + r.error,
+      addLine(new Date(), 'file', 'refused ' + f.name + ': ' + r.error,
               'k-warn');
       hint('refused: ' + r.error);
       return;
@@ -3996,7 +3972,7 @@ $('xferinput').onchange = async () => {
       + ((started && started.error) || 'no answer'), 'k-warn');
     return;
   }
-  addLine(new Date(), 'file', 'transfer started — the reboots are the wait',
+  addLine(new Date(), 'file', 'transfer started, the reboots are the wait',
           'k-cmd');
   watchTransfer();
 };
@@ -4047,7 +4023,7 @@ async function paintGet() {
     where.textContent = 'the daemon did not answer';
     return;
   }
-  where.textContent = (r.out_dir || '') + ' — '
+  where.textContent = (r.out_dir || '') + ', '
     // fmtAge IS THE PAGE'S, NOT A SECOND ONE. It already renders every age on
     // this page -- the power reading, the LED change, the stale frame -- and
     // a listing that measured its age in a different vocabulary would read as
@@ -4061,7 +4037,7 @@ async function paintGet() {
   if (r.note) msgs.push(r.note);
   if (r.attempt_note) msgs.push(r.attempt_note);
   note.hidden = !msgs.length;
-  note.textContent = msgs.join(' — ');
+  note.textContent = msgs.join(' · ');
   for (const f of (r.files || [])) {
     const usable = f.fetchable && f.bytes > 0;
     const row = getRow(f.name, f.bytes > 0 ? fmtBytes(f.bytes) : 'empty',
@@ -4074,7 +4050,7 @@ async function paintGet() {
     cb.disabled = !usable;
     row.prepend(cb);
     row.title = usable
-      ? f.name + ' — ' + f.bytes + ' bytes, ' + (f.date || '') + ' '
+      ? f.name + ', ' + f.bytes + ' bytes, ' + (f.date || '') + ' '
         + (f.time || '')
       : (f.bytes > 0
          ? 'That name does not survive DOS 8.3, so it cannot be fetched'
@@ -4108,8 +4084,8 @@ async function paintGet() {
 // start from there.
 async function startPull(body, said) {
   const stay = !confirm('Reboot back afterwards?\n\n'
-    + 'OK — come back (recommended)\n'
-    + 'Cancel — stay on the network profile\n\n'
+    + 'OK: come back (recommended)\n'
+    + 'Cancel: stay on the network profile\n\n'
     + 'No measured run may start from the network profile.');
   body.return = !stay;
   const started = await post('file_pull', body);
@@ -4118,14 +4094,14 @@ async function startPull(body, said) {
       + ((started && started.error) || 'no answer'), 'k-warn');
     return;
   }
-  addLine(new Date(), 'file', said + ' — the reboots are the wait', 'k-cmd');
+  addLine(new Date(), 'file', said + ', the reboots are the wait', 'k-cmd');
   watchTransfer();
 }
 
 $('get-refresh').onclick = () => {
   closePop();
   if (!confirm('Read ' + (filesNow.out_dir || "the target's outgoing directory")
-      + '?\n\nThis REBOOTS the target — anything running is lost, and it comes '
+      + '?\n\nThis REBOOTS the target: anything running is lost, and it comes '
       + 'back on the default profile. About 2 minutes.')) return;
   startPull({refresh: true}, 'reading the directory');
 };
@@ -4145,7 +4121,7 @@ $('get-go').onclick = () => {
   closePop();
   let msg = 'Fetch ' + fmtBytes(total) + ' from '
     + (filesNow.out_dir || 'the target') + '?\n\n' + names.join(', ') + '\n\n'
-    + 'This REBOOTS the target — anything running is lost, and it comes back '
+    + 'This REBOOTS the target: anything running is lost, and it comes back '
     + 'on the default profile. About 2 minutes.\n\n'
     + 'Nothing is deleted from the target.';
   if (warn && total > warn) {
@@ -4181,14 +4157,14 @@ function watchTransfer() {
       const win = pull
         ? (j.refresh
            ? 'the directory was read'
-           : 'fetched — every file came back the size the card says it is')
-        : 'transfer complete — every file verified byte for byte';
+           : 'fetched, every file came back the size the card says it is')
+        : 'transfer complete, every file verified byte for byte';
       addLine(new Date(), 'file',
         j.ok ? win
              : (pull ? 'fetch' : 'transfer') + ' finished with '
                + (bad.length || 1) + ' problem'
                + (bad.length === 1 ? '' : 's')
-               + (j.reason ? ' — ' + j.reason : ''),
+               + (j.reason ? ': ' + j.reason : ''),
         j.ok ? 'k-vid' : 'k-warn');
       for (const f of bad) {
         addLine(new Date(), 'file', f.name + ': ' + (f.reason || f.why),
@@ -4287,7 +4263,7 @@ function setArmed(v, opts) {
   // you is the invisible-state failure this button already has history with.
   // Releasing is never refused -- letting go must always work.
   if (v && inputHeldBy) {
-    hint('input is held by "' + inputHeldBy + '" — keystrokes from here '
+    hint('input is held by "' + inputHeldBy + '", keystrokes from here '
          + 'would be refused');
     if (!armed) return;
     v = false;                    // held while armed: let go, do not re-grab
@@ -4304,7 +4280,7 @@ function setArmed(v, opts) {
   // button itself, and the one-time instruction is a toast over the picture,
   // which costs no layout at all.
   setLamp('lamp-kbd', v ? 'on' : null,
-    v ? 'Keys typed here go to the target — Ctrl + Alt + Shift releases'
+    v ? 'Keys typed here go to the target. Ctrl + Alt + Shift releases'
       : 'Keys typed here stay in the browser. Click the picture, or press '
         + 'Grab keyboard, to send them to the target.');
   // One word, and the lit state carries the rest -- the two-word label was
@@ -4318,7 +4294,7 @@ function setArmed(v, opts) {
   // release-all.
   $('grabbtn').querySelector('.bl').textContent = v ? 'Release' : 'Grab';
   $('grabbtn').classList.toggle('on', v);
-  $('grabbtn').title = v ? 'Keys are going to the target — click, or press '
+  $('grabbtn').title = v ? 'Keys are going to the target: click, or press '
                            + 'Ctrl+Alt+Shift, to stop'
                          : 'Send what you type straight to the target';
   if (v) {
@@ -4326,11 +4302,11 @@ function setArmed(v, opts) {
     // called from a timer or after an await.
     try { ghost.focus({preventScroll:true}); } catch (e) {}
     addLine(new Date(), 'ui', 'keyboard grabbed'
-            + (document.activeElement === ghost ? '' : ' — focus refused'),
+            + (document.activeElement === ghost ? '' : ', focus refused'),
             'k-note');
-    hint('keyboard grabbed — Ctrl + Alt + Shift releases');
+    hint('keyboard grabbed, Ctrl + Alt + Shift releases');
     if (!opts || !opts.quiet)
-      addLine(new Date(), 'ui', 'keyboard grabbed — Ctrl+Alt+Shift releases',
+      addLine(new Date(), 'ui', 'keyboard grabbed, Ctrl+Alt+Shift releases',
               'k-note');
   } else {
     ghost.blur();
@@ -4355,8 +4331,8 @@ $('verifybtn').onclick = async () => {
   addLine(new Date(), 'verify', 'sending a keystroke and watching for the LED…', 'k-note');
   const j = await post('verify_input', {});
   if (j) addLine(new Date(), 'verify',
-                 j.verified ? 'link proven — the target answered'
-                            : 'NO ANSWER — keystrokes are not arriving',
+                 j.verified ? 'link proven, the target answered'
+                            : 'NO ANSWER: keystrokes are not arriving',
                  j.verified ? 'k-vid' : 'k-taint');
 };
 $('grabbtn').onclick = () => setArmed(!armed);
@@ -4375,7 +4351,7 @@ function armFromStage(e) {
     // Already grabbed. Do not silently do nothing -- the previous build's
     // real bug was invisible state, so say what is true, over the picture
     // rather than by growing a row.
-    hint('already grabbed — Ctrl + Alt + Shift releases');
+    hint('already grabbed, Ctrl + Alt + Shift releases');
     return;
   }
   setArmed(true);
@@ -4827,8 +4803,45 @@ function showSettings(on) {
   $('settings').hidden = !on;
   $('setback').hidden = !on;
   $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
+  if (on) loadConfigSection();
 }
 $('gbtn').onclick = () => showSettings($('settings').hidden);
+
+// WHAT THE DAEMON RESOLVED, fetched once: it does not change without a
+// restart, so re-fetching on every open would only ask the same question.
+let cfgLoaded = false;
+function renderCfgNode(obj, indent) {
+  let html = '';
+  for (const [k, val] of Object.entries(obj || {})) {
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      html += '<div class="kvt-sec" style="padding-left:' + indent + 'px">'
+            + esc(k) + '</div>' + renderCfgNode(val, indent + 12);
+    } else {
+      const shown = val == null ? '—' : Array.isArray(val) ? val.join(', ')
+                                                             : String(val);
+      html += '<div class="kvt-row" style="padding-left:' + indent + 'px">'
+            + '<span>' + esc(k) + '</span><span>' + esc(shown)
+            + '</span></div>';
+    }
+  }
+  return html;
+}
+async function loadConfigSection() {
+  if (cfgLoaded) return;
+  cfgLoaded = true;
+  const r = await post('config', {});
+  if (!r || !r.ok) {
+    $('cfgsrc').textContent = 'Could not read the daemon\'s config.';
+    cfgLoaded = false;              // worth trying again next time it opens
+    return;
+  }
+  const c = r.config;
+  $('cfgsrc').textContent = (c.on_defaults
+    ? 'Running on built-in defaults, no config file loaded.'
+    : 'Loaded from ' + (c.source || 'unknown') + '.')
+    + (c.error ? ' Error: ' + c.error : '');
+  $('cfgtree').innerHTML = renderCfgNode(c.resolved, 0);
+}
 $('soundbtn').onclick = () => openPop('sound');
 $('powerbtn').onclick = () => openPop('power');
 $('setback').onclick = () => { closePop(); showSettings(false); };
@@ -5028,7 +5041,7 @@ function holdBuffer(on, why) {
       if (!reviewing && pinned) {
         holdBuffer(false);
         addLine(new Date(), 'capture',
-                'hold released after 45s — a held ring cannot see the picture '
+                'hold released after 45s, a held ring cannot see the picture '
                 + 'come back', 'k-note');
       }
     }, HOLD_MAX_MS);
@@ -5038,7 +5051,7 @@ function holdBuffer(on, why) {
   post('pin', {action: on ? 'on' : 'off', holder: PINME});
   if (on) renewPin(); else { clearInterval(pinRenew); pinRenew = null; }
   addLine(new Date(), 'capture',
-          on ? 'holding the capture — no signal, so nothing is evicted'
+          on ? 'holding the capture, no signal so nothing is evicted'
              : 'capture released', 'k-note');
 }
 
@@ -5295,7 +5308,7 @@ $('review').addEventListener('error', () => {
   if (!reviewing) return;
   $('scrubpos').textContent = 'frame ' + gone + ' is no longer in the capture';
   addLine(new Date(), 'capture',
-          'frame ' + gone + ' had already been evicted — rereading the '
+          'frame ' + gone + ' had already been evicted, rereading the '
           + 'capture', 'k-warn');
   refreshTimeline();
 });
@@ -5516,7 +5529,7 @@ function poll_render_veil(state, uni) {
   const live = state === 'frozen' && !uni;
   $('dimbtn').textContent = live ? 'Show live picture' : 'Show frame';
   $('dimbtn').title = live
-    ? 'Hide this notice and show the stream itself — identical frames are '
+    ? 'Hide this notice and show the stream itself: identical frames are '
       + 'what a DOS prompt looks like, and typing will prove it'
     : 'Hide this notice and show the kept frame at full brightness';
 }
@@ -5636,7 +5649,7 @@ async function saveCapture() {
     // the honest half: those frames cover time the buffer had been thinned
     // out of, and a reader who does not know that would read a stall as a
     // slow section rather than as a gap.
-    addLine(new Date(), 'saved', a.download + ' — '
+    addLine(new Date(), 'saved', a.download + ': '
             + (meta.span_s || 0).toFixed(1) + 's, ' + meta.frames + ' frames'
             + (meta.repeated ? ' (' + meta.repeated + ' repeated to cover gaps)' : '')
             + ' at ' + meta.fps + ' fps, '
@@ -5872,10 +5885,8 @@ async function pollState() {
     $('veil-sub').textContent = t ? t[1]
       : v.state === 'frozen'
         ? (uni
-           ? 'Receiving uniform ' + uni + ' at '
-             + (achievedFps() || 0).toFixed(0)
-             + ' fps — the capture is running, but the mode is outside the '
-             + 'capture device range.'
+           ? 'Capturing, but the target is powered off or the mode is '
+             + 'outside the capture range.'
            : 'Receiving identical frames, showing buffer.')
       : v.state === 'nosignal' ? 'No frames are arriving at all.' : '';
     poll_render_veil(v.state, uni);
@@ -5922,7 +5933,7 @@ async function pollState() {
         .filter(t => t && t.width && t.height && t.name)
         .map(t => `${t.width}x${t.height} on the ${t.name}`);
       btn.title = 'One capture pixel per screen pixel'
-        + (parts.length ? ' — ' + parts.join(', ') : '');
+        + (parts.length ? ': ' + parts.join(', ') : '');
     }
   }
 
@@ -5951,7 +5962,7 @@ async function pollState() {
     // "the ALSA device died" look identical otherwise.
     // What the button DOES first, then what the capture path is up to:
     // "silent" and "the ALSA device died" look identical from here otherwise.
-    $('sbtn').title = 'Turn the sound on — ' + (A.state === 'capturing'
+    $('sbtn').title = 'Turn the sound on: ' + (A.state === 'capturing'
       ? 'the capture path is alive'
       : 'audio ' + (A.state || 'unavailable'));
   }
@@ -5969,13 +5980,13 @@ function showPower(p) {
   // same word here.
   const on = powerNow.on;
   const who = powerNow.alias ? '"' + powerNow.alias + '"' : 'the plug';
-  const when = powerNow.stale ? ' — not answering'
-             : powerNow.age_s != null ? ' — read ' + fmtAge(powerNow.age_s) + ' ago'
+  const when = powerNow.stale ? ', not answering'
+             : powerNow.age_s != null ? ', read ' + fmtAge(powerNow.age_s) + ' ago'
              : '';
   setLamp('lamp-pwr', on === true ? 'on' : on === false ? 'bad' : 'stale',
     on === true ? 'Mains at ' + who + ' is ON' + when
     : on === false ? 'Mains at ' + who + ' is OFF' + when
-    : 'Cannot tell — ' + (powerNow.reason || 'the plug is not answering'));
+    : 'Cannot tell: ' + (powerNow.reason || 'the plug is not answering'));
   const bits = [];
   if (powerNow.alias) bits.push('"' + powerNow.alias + '"');
   if (powerNow.model) bits.push(powerNow.model);
@@ -6020,7 +6031,7 @@ function heat(h) {
     m & 1 && 'under-voltage', m & 2 && 'arm capped',
     m & 4 && 'throttled', m & 8 && 'soft temp limit'].filter(Boolean).join(', ');
   if (now) return {now: true, text: words(now)};
-  return {now: false, text: words(ever) + ' — earlier, not now'};
+  return {now: false, text: words(ever) + ', earlier, not now'};
 }
 
 function showHeat(j) {
@@ -6073,7 +6084,7 @@ $('bufsel').onchange = async () => {
     // Say so rather than silently reverting: the daemon may predate this
     // command, and a control that does nothing while looking as though it
     // worked is the failure this page keeps being rebuilt to avoid.
-    addLine(new Date(), 'video', 'scrub buffer unchanged — ' +
+    addLine(new Date(), 'video', 'scrub buffer unchanged: ' +
             ((r && r.error) || 'the daemon did not accept it'), 'k-warn');
     showBuffer(lastState && lastState.video);
     return;
@@ -6086,6 +6097,22 @@ $('bufsel').onchange = async () => {
     // so the "holding" figure catches up over the next span rather than now.
     showBuffer(Object.assign({}, r, {span_s: r.span_s}));
   }
+};
+
+// CLIENT-ONLY, like the theme: nothing here is a fact about the rig, so
+// there is no daemon round trip, just a class on <body> and a saved choice.
+function applyBtnStyle(v) {
+  document.body.classList.remove('btn-icon', 'btn-text', 'btn-both');
+  document.body.classList.add('btn-' + v);
+}
+const btnStyle = ['icon', 'text', 'both'].includes(localStorage.getItem('vcctrl.btnstyle'))
+  ? localStorage.getItem('vcctrl.btnstyle') : 'both';
+$('btnstylesel').value = btnStyle;
+applyBtnStyle(btnStyle);
+$('btnstylesel').onchange = () => {
+  const v = $('btnstylesel').value;
+  localStorage.setItem('vcctrl.btnstyle', v);
+  applyBtnStyle(v);
 };
 
 // WHILE SOMETHING ELSE IS DRIVING, DO NOT OFFER TO DRIVE. The daemon refuses
@@ -6116,13 +6143,13 @@ function setInputLamps(held, inputCap) {
   // the path.
   const kbd = broken ? 'Keyboard unavailable'
             : held ? 'Keyboard held by ' + held
-            : armed ? 'Keyboard reachable — and this browser is sending'
-            : 'Keyboard reachable — press Grab to send from here';
+            : armed ? 'Keyboard reachable, and this browser is sending'
+            : 'Keyboard reachable, press Grab to send from here';
   const mos = broken ? 'Mouse unavailable'
             : held ? 'Mouse held by ' + held
-            : MOUSE_PROVEN ? 'Mouse ready — cursor movement seen '
+            : MOUSE_PROVEN ? 'Mouse ready, cursor movement seen '
                              + MOUSE_PROVEN
-            : 'Mouse ready — never yet tested on a target';
+            : 'Mouse ready, never yet tested on a target';
   setLamp('lamp-kbd', broken ? 'bad' : held ? 'warn' : 'on', kbd);
   // DASHED MEANS "THIS MAY NOT DESCRIBE THE TARGET" -- what PWR, LNK and AUD
   // already use when they cannot tell, and what CAP/NUM/SCR use on an
@@ -6137,7 +6164,7 @@ function setInputHeld(owner) {
   if (owner === inputHeldBy) return;
   inputHeldBy = owner;
   const why = owner
-    ? 'The input lock is held by "' + owner + '" — keystrokes from here would '
+    ? 'The input lock is held by "' + owner + '", keystrokes from here would '
       + 'be refused until it is released.'
     : '';
   $('line').placeholder = owner ? 'input held by ' + owner : 'type a command';
@@ -6201,8 +6228,14 @@ const pct = n => Math.round(n * 100) + '%';
 function statsRows(j) {
   const out = [];
   const g = t => out.push('<div class="rgroup">' + t + '</div>');
-  const kv = (k, v, cls) => out.push(
-    '<div class="kv ' + (cls || '') + '"><span>' + k + '</span><span>'
+  const kv = (k, v, cls, title) => out.push(
+    '<div class="kv ' + (cls || '') + '"'
+    + (title ? ' title="' + esc(title) + '"' : '') + '><span>' + k
+    + '</span><span>' + esc(v == null ? '—' : String(v)) + '</span></div>');
+  // Same row, stacked: the label and the value each get their own line
+  // instead of sharing one that has to fit both.
+  const kv2 = (k, v, cls) => out.push(
+    '<div class="kv kv2 ' + (cls || '') + '"><span>' + k + '</span><span>'
     + esc(v == null ? '—' : String(v)) + '</span></div>');
   const v = j.video || {}, a = j.audio || {}, w = j.ws || {};
 
@@ -6249,7 +6282,7 @@ function statsRows(j) {
   // asking for 480 s and getting 1193 was the system working as built and
   // nothing anybody had chosen. The daemon evicts on age as well as on bytes
   // now, so the number means what the menu says.
-  kv('set to hold', v.target_span_s != null ? v.target_span_s + ' s' : '—');
+  kv('capture length', v.target_span_s != null ? v.target_span_s + ' s' : '—');
   kv('frames', v.ring_frames != null ? v.ring_frames.toLocaleString() : '—');
   kv('memory', v.ring_bytes != null
        ? (v.ring_bytes / 1048576).toFixed(1) + ' MB' : '—');
@@ -6307,9 +6340,9 @@ function statsRows(j) {
   const per = (r, tot) =>
     (r != null ? r.toFixed(1) + '/s' : '—') + '  ·  ' + tot.toLocaleString();
   if (w.sent_frames != null)
-    kv('ws sent · since a viewer joined', per(wsRate.sent, w.sent_frames));
+    kv2('ws sent · since a viewer joined', per(wsRate.sent, w.sent_frames));
   if (w.dropped)
-    kv('ws dropped · since daemon start', per(wsRate.drop, w.dropped),
+    kv2('ws dropped · since daemon start', per(wsRate.drop, w.dropped),
        wsRate.drop == null ? '' : wsRate.drop > 2 ? 'warn' : 'good');
 
   g('Devices');
@@ -6327,7 +6360,19 @@ function statsRows(j) {
   const L2 = j.leds || {};
   g('Keyboard LEDs');
   if (L2.available === false) {
-    kv('channel', L2.reason || L2.why || 'not available', 'unk');
+    // A SHORT STATUS, NOT THE DAEMON'S FULL SENTENCE. `why` is the code the
+    // daemon already gives this exact fact in (leds_available()'s doc: why in
+    // unsupported/error/unknown/unpowered/unproven); `reason` is the sentence
+    // for a log line, not a row three words wide.
+    const WHY_SHORT = {
+      unsupported: 'no LED channel on this board',
+      error: 'could not read',
+      unknown: 'not sure yet',
+      unpowered: 'target has no power',
+      unproven: 'no keystroke read back yet',
+    };
+    kv('channel', WHY_SHORT[L2.why] || L2.reason || 'not available', 'unk',
+       L2.reason || '');
   } else {
     kv('caps / num / scroll',
        [L2.capslock, L2.numlock, L2.scrolllock]
@@ -6434,13 +6479,13 @@ function showAudioDevice(a) {
       : a.device_present === true ? 'bad' : 'stale',
     a.state === 'capturing'
       ? 'Audio is being captured from ' + (a.device || 'the stick')
-        + ' — the speaker button controls whether this browser plays it'
-      : t ? t[0] + ' — ' + t[1]
+        + ', the speaker button controls whether this browser plays it'
+      : t ? t[0] + ', ' + t[1]
       : 'Audio ' + (a.state || 'unknown'));
   const line = a.state === 'capturing'
     ? (a.device || 'audio') + ' · capturing'
-    : t ? (a.device || 'audio') + ' — ' + t[1]
-    : (a.device || 'audio') + ' — ' + (a.state || 'unknown');
+    : t ? (a.device || 'audio') + ', ' + t[1]
+    : (a.device || 'audio') + ', ' + (a.state || 'unknown');
   $('audioid').textContent = line;
   // Controls that cannot do anything should not look as though they can. The
   // daemon does not yet distinguish "no audio on this board" from "the audio
@@ -6489,10 +6534,10 @@ function showTitle(b, p) {
     bits.push('profile ' + profile
               + (p.at ? ', read ' + fmtAge((Date.now() / 1000) - p.at)
                         + ' ago' : '')
-              + (p.how ? ' — ' + p.how : ''));
+              + (p.how ? ': ' + p.how : ''));
   } else {
     bits.push('boot profile not known'
-              + (p.reason ? ' — ' + p.reason : ''));
+              + (p.reason ? ': ' + p.reason : ''));
   }
   h1.title = bits.join('\n');
   // The document title too, because a phone with four tabs open shows only
@@ -6788,8 +6833,8 @@ const capSize = () => capW ? capW + '×' + capH : null;
 // Plus, Fit and Original differ by nearly two to one.
 function showCapture() {
   const b = document.querySelector('#pop-zoom [data-zoom="1"]');
-  if (b) b.textContent = capSize() ? 'Original — ' + capSize()
-                                   : 'Original — actual resolution';
+  if (b) b.textContent = capSize() ? 'Original: ' + capSize()
+                                   : 'Original: actual resolution';
   if ($('stats').clientHeight && lastState) $('stats').innerHTML = statsRows(lastState);
 }
 const ZOOMLABEL = {fit: 'Fit to Screen', '1': 'Original',
@@ -6845,7 +6890,7 @@ function setFullscreen(v) {
   } catch (e) {}
   if (v) hint(matchMedia('(pointer:coarse)').matches
     ? 'tap the top edge for the controls'
-    : 'move to the top or bottom edge for the controls — Esc leaves');
+    : 'move to the top or bottom edge for the controls, Esc leaves');
   // After the layout settles, not during: the bars are display:none by then
   // and the stage has taken the room.
   setTimeout(() => { measureBars(); applyZoom(true); }, 60);
@@ -7221,7 +7266,7 @@ function lamps(leds, videoState, verified) {
     el.classList.toggle('bad', look === 'bad');
     const NAME = {capslock: 'Caps Lock', numlock: 'Num Lock',
                   scrolllock: 'Scroll Lock'};
-    el.title = NAME[key] + ' — ' + (
+    el.title = NAME[key] + ': ' + (
       why   ? (leds.reason || 'no LED reading: ' + why)
       : blind ? 'The daemon is not reporting LED values'
       : (v === 1 ? 'lit' : 'dark')
@@ -7231,9 +7276,9 @@ function lamps(leds, videoState, verified) {
            ? ' · last changed ' + fmtAge((Date.now() / 1000) - leds.changed_at)
              + ' ago'
            : ' · unchanged since the daemon started')
-        + (unproven ? ' — the input link is unproven, so this describes the '
+        + (unproven ? ', the input link is unproven, so this describes the '
                     + 'Pi rather than the target'
-           : stale ? ' — retained, the target is not showing a picture' : ''));
+           : stale ? ', retained, the target is not showing a picture' : ''));
   }
   // AND THE KEY PANEL, which is where somebody is about to click a letter.
   // Only on a reading that is present, applicable, proven and current: every
@@ -7245,7 +7290,7 @@ function lamps(leds, videoState, verified) {
     const lit = !why && !blind && !stale && leds && leds.capslock === 1;
     capsPanel.hidden = !lit;
     capsPanel.textContent = lit
-      ? 'Caps Lock is lit at the target — the letter keys will type capitals.'
+      ? 'Caps Lock is lit at the target. The letter keys will type capitals.'
       : '';
   }
   $('lamps').title =
@@ -7259,7 +7304,7 @@ function lamps(leds, videoState, verified) {
          ? '\n\n' + (verified.reason || 'The link is not proven: ' + vWhy)
          : verified
          ? `\n\nLink last proven by round trip ${fmtAge(verified.age_s)} ago: `
-           + (verified.ok ? 'the target answered.' : 'NO ANSWER — keystrokes are not arriving.')
+           + (verified.ok ? 'the target answered.' : 'NO ANSWER: keystrokes are not arriving.')
          : '\n\nThe link has not been proven this session. Tap VERIFY to send a '
            + 'key and watch for the LED to come back.')
       + (stale
@@ -7276,11 +7321,11 @@ function lamps(leds, videoState, verified) {
 // exactly this channel and was trusted as "DOS is at a prompt". Putting it on
 // the control means nobody else has to learn it the same way.
 const LAMP_ATTESTS =
-  'PS/2 keyboard LEDs — the return channel from the target.\n\n'
+  'PS/2 keyboard LEDs: the return channel from the target.\n\n'
   + 'Lit means the keystroke reached the target\'s KEYBOARD CONTROLLER.\n'
   + 'It does NOT mean DOS read it: Caps Lock is handled by the BIOS interrupt '
   + 'handler, so these toggle during a file transfer too.\n\n'
-  + 'The level is retained — a powered-off host keeps publishing its last '
+  + 'The level is retained: a powered-off host keeps publishing its last '
   + 'value, so the lamps are dashed when the picture says nothing is running.';
 
 $('lamps').title = LAMP_ATTESTS;

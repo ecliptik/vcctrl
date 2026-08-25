@@ -660,6 +660,12 @@ class WebCapability(object):
         # reachable over the socket and from the CLI, but a browser must not
         # be able to assert what the target is running.
         "profile",
+        # READ-ONLY. What `vcctrl config show` asks the daemon for -- the
+        # resolved configuration, not the file on disk. Secrets are never
+        # literals in this format (a `*_env` key names an environment
+        # variable; `CFG.as_dict()` never reads it), so nothing here needs
+        # redacting before a browser sees it.
+        "config",
     ])
 
     def __init__(self, registry, bind, port, tls_port=0):
