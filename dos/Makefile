@@ -12,13 +12,17 @@ ASM      := nasm
 ASMFLAGS := -f bin
 OUTDIR   := ../../g2k/DRIVERS
 
-all: $(OUTDIR)/RDYPULSE.COM
+all: $(OUTDIR)/RDYPULSE.COM $(OUTDIR)/KEYWIT.COM
 
 $(OUTDIR)/RDYPULSE.COM: rdypulse.asm
 	$(ASM) $(ASMFLAGS) -o $@ $<
 	@echo "built $@ ($$(stat -c%s $@) bytes)"
 
+$(OUTDIR)/KEYWIT.COM: keywit.asm
+	$(ASM) $(ASMFLAGS) -o $@ $<
+	@echo "built $@ ($$(stat -c%s $@) bytes)"
+
 clean:
-	rm -f $(OUTDIR)/RDYPULSE.COM
+	rm -f $(OUTDIR)/RDYPULSE.COM $(OUTDIR)/KEYWIT.COM
 
 .PHONY: all clean

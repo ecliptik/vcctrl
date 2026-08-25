@@ -1209,6 +1209,125 @@ swallowed the closing sentinel. Two holes rather than two guesses. They need a
 frame that does not use a following keystroke — which is a design problem, not
 a measurement, and it is not solved here.
 
+#### Where the rows live, and why not here
+
+**The 91 single-key rows are in `daemon/keycoverage.json`, not in this file.**
+That table was written here first and it should not have been: the JSON is
+machine-readable, tracked, durable, and the thing the daemon actually serves.
+Two copies of one fact drift and then disagree — the argument this repo has
+made about alias tables, board mappings and duplicated documentation, applied
+to itself. **This section carries the interpretation and the conditions; the
+file carries the rows.**
+
+The raw artifacts are in `internal/keysweep-2026-08-25/`, which is gitignored:
+one disk, no history, no bundle. Neither the artifacts nor this section is the
+machine-readable record.
+
+#### The modifier pass — all six resolve, and all three flag bytes were needed
+
+A modifier generates no keystroke, so INT 16h cannot see one. The witness is
+the BDA flags carried on a record produced by a sentinel pressed **underneath**
+the held key: `keydown lshift ; key a ; keyup lshift`.
+
+    baseline (plain a)     LL=30  MM=00  NN=10
+    lshift  LL 30->32   bit1 of 0017    rshift  LL 30->31   bit0 of 0017
+    lctrl   LL 34 MM 01 bit0 of 0018    rctrl   LL 34 NN 14 bit2 of 0096
+    lalt    LL 38 MM 02 bit1 of 0018    ralt    LL 38 NN 18 bit3 of 0096
+
+**All six arrive and all six are distinguishable.**
+
+**ALL THREE BYTES WERE NECESSARY, NOT THOROUGH, and the next person will want
+to trim it.** `0017` merges ctrl and alt — bit 2 says *a* ctrl is down, not
+which. `0018` carries only the LEFT pair; `0096` only the RIGHT. Either alone
+leaves half the modifiers at class level. They were all recorded because
+DOSBox-X cannot hold a modifier, so the question could not be settled before
+the run and **guessing an address is how you produce a column of zeroes that
+reads as a measurement.**
+
+#### The chords — five arrive, and Ctrl-Break is structurally invisible
+
+7 sentinels expected, 7 recorded, run valid.
+
+    ctrl+z   2C 1A      ctrl+s   1F 13   no XOFF hang
+    ctrl+a   1E 01      ctrl+p   19 10   no printer hang
+    ctrl+c   2E 03      arrives, AND DID NOT TERMINATE THE WITNESS
+    ctrl+pause          empty slot -- no INT 16h event
+
+**`ctrl+c` survived for two reasons and both were needed.** DOS acts on `03`
+when it READS the character, and KEYWIT is the only reader and consumes it
+first — so DOS never sees it. And KEYWIT installs a bare `IRET` as INT 23h
+before anything else runs, covering the path where DOS fires the handler at its
+next INT 21h call anyway. The same consume-first argument covers `ctrl+s`
+(`13`, acted on at WRITE) and `ctrl+p` (`10h`, acted on at READ).
+
+**`ctrl+pause` is `no-witness`, not `arrives: false`, and structurally so.**
+The BIOS raises INT 1Bh from inside the INT 9 handler; nothing is ever
+enqueued, so INT 16h cannot see it however well it polls. **And note what it
+did NOT do: it did not swallow the sentinel.** Plain `pause` does, which is
+what voided that run — Pause enters a wait-for-key loop, Ctrl-Break takes the
+INT 1Bh path instead. Two mechanisms indistinguishable from outside, separated
+by the data. A real verdict needs the break flag at `0040:0071` bit 7; nothing
+reads it today.
+
+`ctrl+alt+delete` is **measured by use** and deliberately not swept: the
+harness reboots with it constantly and `is_reboot_combo` exists to match it
+across spellings. Sweeping it would end the run and tell us less than daily use
+already does.
+
+Every chord record carries `LL=34 MM=01` — **`combo` sends LEFT ctrl.**
+
+#### CONFIDENCE — these are not all the same grade of evidence
+
+**The 100-key sweep is protected. The modifier and chord passes are not.**
+
+    100 keys   TWO independent runs, 100/100 agreement. A dropped injection
+               produces a well-formed empty slot in a run that passes every
+               internal check, so agreement between runs is the ONLY
+               discriminator, and it held.
+    modifiers  ONE run.  chords  ONE run.  Clean-looking rather than
+               defended: no interference signature was found, which is
+               weaker than "was protected from interference".
+
+**AND THE INPUT LOCK WAS NOT HELD** for the 100-key sweep, its controls, or
+either pass. `vcctrl-cell` and `vcctrl-sweep` take it; this workflow was
+written fresh and did not inherit that. The guard was correct, centrally
+enforced and covered every verb used — and was never invoked, because a new
+driver is a new entrance. **The operator caught it from the KVM by noticing an
+absence: the hold he sees during cells was not there.** A stray keystroke would
+have landed as a spurious record inside a sentinel slot and read as *that
+slot's key arrived with this scan code* — a wrong identity rather than a
+missing one, self-consistent, passing every check in the file.
+
+Taken as `vcctrl-keysweep` once flagged, and it then refused `power off`
+because that command did not pass `--as`. **A gate that only ever refuses other
+people is not a gate.**
+
+#### The reconciliation, and what is still open
+
+Counted by enumerating the `LAYOUTS` object rather than searching the file:
+
+    page renders (pc-at-101)    83 keycodes, no aliasing
+    daemon accepts             105 keycodes
+
+**All 83 the page can send now have a verdict, and so does every chord it
+ships.** The panel says so. Still open, none of it needing the rig:
+
+- **`leftmeta` / `rightmeta`** stay no-witness. The layout does not draw them
+  and the pass covered the six it does — the right scope, said out loud so
+  they do not look forgotten.
+- **`prtsc` and `break` remain void** at the daemon level, where a CLI caller
+  can send them. Sentinel shortfall: `break` is Pause and ate the closing
+  sentinel. They block nothing in the UI because the page draws neither.
+- **`ctrl+pause` wants the `0040:0071` break flag** for a real verdict.
+
+#### A fact about the tool, worth knowing before planning around it
+
+**DOSBox-X validated every single key and can express nothing that remains.**
+AUTOTYPE takes space-separated single buttons: no chord syntax, no hold syntax.
+So the emulator carried the entire 105-key design — format, arithmetic, the
+negative control, the keypad premise — and stops exactly at the boundary of
+held and combined keys. Everything after that had to be measured on the rig.
+
 ### 5.3 What the browser cannot capture, in Firefox and Safari
 
 Honest limitation, stated up front because it is the first thing the operator
