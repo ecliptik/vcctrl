@@ -4008,6 +4008,73 @@ def test_absent_key_is_not_a_value():
               % missing, cap.profile(16) is None)
 
 
+def test_sweep_denied_section_is_optional():
+    """`conf["denied"]` crashed both `--list` and every real sweep run --
+    caught 2026-08-25 while wrapping this script for MCP, on the REAL
+    profile: `profiles/doskutsu.yaml` has no `denied:` key at all (there is
+    nothing to deny-list), and `preflight()` and `main(["--list"])` both
+    read it unconditionally. `python3 harness/vcctrl-sweep --list` against
+    this checkout raised `KeyError: 'denied'` before printing a single
+    sweep name it had not already printed.
+
+    THE EXISTING COVERAGE MISSED THIS FOR THE REASON `test_absent_key_is_
+    not_a_value` exists to name: `preflight()`'s own test two functions up
+    always hands it a conf dict that HAPPENS to include `"denied": {}`, so
+    the test and the fix agree with each other and neither agrees with the
+    real profile. This test uses a conf shaped like the REAL one -- no
+    `denied` key -- rather than a fixture that was never wrong to begin
+    with.
+    """
+    print("\nsweep 'denied' section is optional")
+    sweep = _load("harness/vcctrl-sweep", "vcc_sweep_t")
+
+    conf_no_denied = {"sweeps": {"PUMP": {"cells": 4, "timeout_min": 23,
+                                          "measured": "x"}},
+                      "machines": {"1": {"tag": "G", "name": "POD-83"}}}
+    check("profiles/doskutsu.yaml itself has no 'denied' key -- the real "
+          "shape this test's conf is matching, not a hypothetical",
+          "denied" not in sweep._load_profile(), sorted(sweep._load_profile()))
+
+    # preflight() must not require the key to decide nothing is denied.
+    # Stubbed past status AND ensure_powered -- the latter is imported
+    # directly from vcctrl_common and calls THAT module's own vc_json
+    # internally, so patching sweep.vc_json alone does not reach it, and an
+    # unstubbed ensure_powered would shell out to the REAL bin/vcctrl (a
+    # real ssh call) the moment this test runs, which is not what "no
+    # KeyError" needs to prove.
+    sweep.vc_json = lambda *a: {"usb4vc": {"input": True}}
+    sweep.ensure_powered = lambda *a, **kw: True
+    try:
+        sweep.preflight(conf_no_denied, "PUMP", "1")
+    except KeyError as exc:
+        check("preflight() does not require a 'denied' key", False, repr(exc))
+    except SystemExit as exc:
+        # Some OTHER guard may still legitimately refuse (e.g. power state)
+        # -- the property under test is "no KeyError", not "always proceeds".
+        check("preflight() does not require a 'denied' key -- "
+              "refused for an unrelated, named reason instead",
+              "denied" not in str(exc).lower(), str(exc)[:120])
+    else:
+        check("preflight() does not require a 'denied' key", True)
+
+    # `--list` must not require it either, and must say so plainly.
+    import contextlib
+    import io
+    real_load_conf = sweep.load_conf
+    sweep.load_conf = lambda: conf_no_denied
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = sweep.main(["--list"])
+    finally:
+        sweep.load_conf = real_load_conf
+    out = buf.getvalue()
+    check("--list exits 0 with no 'denied' key", code == 0, code)
+    check("--list says so rather than printing nothing",
+          "(none)" in out, out)
+    check("--list still prints the real sweep", "PUMP" in out, out)
+
+
 def test_relay_state_absent_is_not_off():
     """A plug that answers without saying is not a plug that said off.
 
