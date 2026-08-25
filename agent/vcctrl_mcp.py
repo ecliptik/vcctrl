@@ -1114,6 +1114,15 @@ if ROLE == "control":
             argv += ["--shot-at", str(shot_at)]
         if hw is not None:
             argv += ["--hw", hw]
+        # vcctrl-cell takes the input lock ITSELF, under its own identity
+        # (vcctrl-cell-<tag>), not this process's OWNER -- if this session's
+        # own gated calls (e.g. a prior vcctrl_preflight) are still holding
+        # the MCP lock, vcctrl-cell's own acquire is refused and it presses
+        # on anyway (only warning), then hard-crashes on its first `vcctrl
+        # key` call. Release proactively rather than relying on the 300s
+        # idle timeout, which would otherwise silently break every run_cell
+        # called soon after another gated tool. Harmless if nothing was held.
+        LOCK.release()
         job_id = JOBS.launch(argv, cwd=REPO_ROOT)
         return {"ok": True, "job_id": job_id, "argv": argv}
 
@@ -1146,6 +1155,7 @@ if ROLE == "control":
             argv.append("--collect")
         if power_on:
             argv.append("--power-on")
+        LOCK.release()   # see vcctrl_run_cell's comment on the same call
         job_id = JOBS.launch(argv, cwd=REPO_ROOT)
         return {"ok": True, "job_id": job_id, "argv": argv}
 
@@ -1188,6 +1198,7 @@ if ROLE == "control":
             argv.append("--stay-net")
         if incoming is not None:
             argv += ["--incoming", incoming]
+        LOCK.release()   # see vcctrl_run_cell's comment on the same call
         job_id = JOBS.launch(argv, cwd=REPO_ROOT)
         return {"ok": True, "job_id": job_id, "argv": argv}
 
