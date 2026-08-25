@@ -277,6 +277,50 @@ had to guess are settled: individual sizes DO carry thousands separators
 files in it reported `4 file(s)`. There is also a `Volume Serial Number` line,
 which the parser skips.
 
+### The fetch path, walked 2026-08-24
+
+Every leg is proved by BYTE COMPARISON rather than by the size check the tool
+itself applies — each fetched file was compared against a copy of the same file
+collected that morning over the old `PUT.BAT` path. **Two independent
+transports, three days of code apart, agreeing on every byte.**
+
+    get-file --from C:\DOSKUTSU\LOGS ACC1SDL.LOG      43,462 B   identical
+    vcctrl-collect --tags CLN1   (the harness default)  702 + 4,282 B
+    vcctrl-collect --tags ACC1                      122,811 + 43,462 B identical
+
+166 KB is 68× the largest previously proven fetch, and the cost stayed
+per-file rather than per-byte: the whole two-file ACC1 job, **including the
+return reboot**, was 62 seconds. `--already-net` ran three jobs in one NET
+session with no reboot between them, each proving the network by arrival.
+
+**The collector earned its keep on its first real run.** CLN1's files arrived
+intact and `inspect_logs` failed the cell anyway, on
+`[critical] ack, sdl_init failed: No BLASTER environment variable`. Arrival is
+not health, and a complete envelope around a dead cell is exactly what that
+function exists to catch.
+
+### What the walk cost, and what it found
+
+**The first attempt refused with `no-net` on a machine whose transfer was
+sitting completed in the FTP server's own log.** Five links, and only the last
+was the defect: a stale Caps Lock reading → `type_line` pressed to "correct"
+it and turned caps ON → every typed command inverted → the proof file landed
+as `netproof.txt` → it met a stale `NETPROOF.TXT` from an earlier session →
+the finder returned the FIRST case-insensitive match, the freshness guard
+correctly refused it as too old, and the fresh one two entries away was never
+looked at.
+
+Fixed in `452de9b`: the finder takes the **newest** match and there is one
+implementation of it (`_incoming_path` had the same bug, and it is what the
+sha comparison reads); the proof file and the `.CHK` copies are consumed
+rather than left; and **`type_line` no longer presses Caps Lock** — it reads,
+records, and the job reports it. A wrong read reports something false; a wrong
+press changes the target in the direction that breaks what follows.
+
+**A run that leaves artifacts leaves landmines for the next run, and the
+failure surfaces as a wrong verdict about the machine.** A file from 21:09
+defeated a transfer at 21:37.
+
 ### Two faults this deploy found
 
 **`COPY x C:\MTCP\` is `Invalid directory` on DOS 6.22.** The trailing
@@ -316,17 +360,8 @@ Named because a feature that works is the easiest thing to over-claim.
   was measured on the way out, not back.
 - **No fetch of more than two files in one run**, and none cancelled
   mid-queue.
-- **`--paranoid` has not run on the hardware.** Both its outcomes are covered
-  by the fake target, and neither has met a real transfer.
-- **NOTHING IN THE `--from` PATH HAS RUN ON THE HARDWARE**, and that includes
-  the whole of `vcctrl-collect`'s new default. The rig was powered down before
-  it was written. What has run is the suite, and the card is still carrying
-  the older `VCLIST.BAT`. **The first real use should be a `file-list --from
-  C:\DOSKUTSU\LOGS`, which reads and fetches nothing**, before anything is
-  asked to collect a sweep.
-- **`--already-net` has not run on the hardware either.** Its refusal path is
-  covered — a caller wrong about the profile gets `no-net` — but no real
-  session has skipped a reboot yet.
+- **`--paranoid` still has not run on the hardware**, and it is now the only
+  part of the fetch path that has not.
 - **No transfer with a viewer attached to the KVM.** The Pi's video stream and
   the target's transfer share the wifi, and this is the one place a viewer
   measurably costs the harness something.
