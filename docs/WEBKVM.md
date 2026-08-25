@@ -854,20 +854,75 @@ Two consequences that decide the shape:
   identity is the entire reason the keypad matters: DOS software reads it
   distinctly from the number row.
 
-So the sweep wants a witness that reads scancodes rather than characters —
-an INT 9 hook, the same shape as `dos/rdypulse.asm`, `nasm -f bin`, delivered
-by the CF or FTP path. With one it is a single loop over all 105 and the
-marginal cost of the boring keys is near zero. Without one, the classes "most
-likely to differ" are exactly the classes the witness cannot see, so that
-ordering produces the least trustworthy rows first — and they are the rows
-nobody can check by eye afterwards.
+So the sweep wants a witness that reads SCAN CODES rather than characters.
+With one it is a single loop over most of the 105 and the marginal cost of the
+boring keys is near zero. Without one, the classes "most likely to differ" are
+exactly the classes the witness cannot see, so that ordering produces the least
+trustworthy rows first — and they are the rows nobody can check by eye
+afterwards.
+
+**The instrument is `INT 16h AH=11h`/`AH=10h`, NOT an INT 9 hook**, and the
+change is the `vcctrl` session's. The extended keyboard read returns AH = BIOS
+scan code, AL = ASCII, from ordinary foreground code. What that buys:
+
+- **It takes the instrument out of the seam.** No hook means no second reader
+  of port 0x60, and none of the `0xFA`-phantom mechanism `rdypulse.asm`
+  documents — on a path whose 8042 is an STM32 emulation, which is the very
+  thing under test. The argument against the hook was the strongest argument
+  for it: the note warning about leftover ACKs was warning about the
+  instrument I had proposed.
+- **No DOS reentrancy problem.** DOS is not reentrant, so an ISR cannot write
+  a file; a hook needs a RAM buffer plus a foreground flush — more moving
+  parts inside the one component the whole table's correctness rests on.
+- **It settles the keypad**, which was the sharpest case here: row `5` and
+  `kp5` carry different scan codes even though they produce the same ASCII, so
+  identity comes free. *(The two codes differing is itself something this
+  sweep measures. If they come back identical, the instrument cannot separate
+  them and the 16 keypad rows are `no-witness`, not `arrives`.)*
+- **It collapses most of group five.** The 10 nav and arrow keys return
+  distinct extended scan codes, so they stop being "nothing at a bare prompt"
+  and join the directly-witnessed set.
+
+**The trade, stated rather than buried.** `INT 16h` reports what the BIOS
+PRODUCED, not what the protocol board put on the wire — so a silent key still
+conflates *the board sent nothing* with *the board sent something the BIOS
+discarded*. A hook would separate those. It is not worth the seam risk here,
+because the question this table exists to answer is "does pressing this on the
+page reach DOS as this key", and `INT 16h` is measured at exactly that end.
+**The hook is the follow-up diagnostic for keys that come back silent**, run
+against those specific keys to learn whether it was the board or the BIOS —
+not the primary instrument for all 105.
+
+**So `arrives` is not one claim, and the record must say which claim it is.**
+Three witnesses answer three different questions: `INT 16h` says the BIOS
+produced this key for DOS; the LED channel says the keyboard controller
+received it; BDA shift flags say the BIOS believes a modifier is held. A
+consumer must never compare two rows with different `how` values as though
+they measured the same thing, which is why `how` is mandatory and not
+decorative — the same discipline as `why` in `LedsCapability`.
+
+The residue still needs a witness each, named rather than hidden under one
+instrument: the **8 modifiers** by BDA shift flags at `0040:0017`/`0018` (and
+`0040:0496` for the left/right ctrl+alt distinction), held with `keydown`,
+sampled, released; the **3 lock keys** by the LED channel, separately, as
+above; and `sysrq`, `pause`, `menu`, `102nd` genuinely awkward and likely
+`no-witness`, honestly labelled — which is what the schema is built to say.
+`102nd` in particular wants `unsupported` rather than `arrives: false`: a key
+a US layout does not have is a fact about the keyboard, not a measurement of
+the wire.
+
+**The negative control needs `AH=11h`, not `AH=10h`.** A blocking read cannot
+report "nothing happened"; it waits. So the no-key-pressed control polls with
+the non-blocking check for a bounded interval and asserts zero events — and it
+runs FIRST, before any positive control, so the witness has to report nothing
+before it is allowed to report something.
 
 **The witness must not paint the screen.** Scancodes are hex digits, and this
 rig has a standing finding that OCR does not read digits off this glass
 (`OPEN-FAULTS.md`: counts read by size and by eye for exactly this reason; and
 at −38% amplitude it is worse). A misread nibble is a **wrong identity rather
 than a missing one**, which fills the table instead of leaving a hole. So the
-TSR appends to a file on the card and the file is fetched over `--from` and
+probe appends to a file on the card and the file is fetched over `--from` and
 compared as bytes — the leg walked 2026-08-24 against two independent
 transports three days apart, agreeing on every byte. No OCR, no glass, no
 amplitude dependence, and the run becomes unattended, re-runnable and
@@ -884,15 +939,15 @@ its docstring is the design review nobody has to repeat:
     "a":      {"arrives": true,  "how": "scancode", "at": 178...}
     "kp5":    {"arrives": true,  "how": "scancode", "at": 178...}
     "102nd":  {"arrives": false, "how": "scancode", "at": 178...}
-    "sysrq":  {"why": "no-witness", "reason": "produces nothing at a DOS prompt
-               and the scancode TSR was not loaded for this run"}
+    "sysrq":  {"why": "no-witness", "reason": "no INT 16h event, and no
+               witness was run that could see it"}
     "pause":  {"why": "not-swept", "reason": "..."}
 
 Four properties, three of them stolen wholesale:
 
 1. **`why` names a distinct reason and is not several falsy values wearing one
    flag.** Split `no-witness` by WHICH witness was unavailable — "the screen
-   cannot see this key" and "the TSR was not loaded" want different actions.
+   cannot see this key" and "that witness was not run" want different actions.
 2. **When there is no verdict the verdict key is ABSENT, never `false`.** A
    consumer that forgets to check reads absent as undefined and draws a dash;
    it reads `false` as *measured, does not work* and greys the key. Half a
@@ -949,7 +1004,9 @@ keyboard fault.
 **The instrument sits in the seam it measures.** `rdypulse.asm` says the
 mechanism out loud — a leftover `0xFA` ACK in the output buffer is taken for a
 scancode by INT 9, "which in this rig means a phantom keystroke landing in
-whatever the harness types next". A scancode TSR lives in that same seam. So a
+whatever the harness types next". That mechanism is why the witness is INT 16h
+rather than an INT 9 hook -- but the follow-up hook, if it is ever run against
+keys that came back silent, lives in exactly that seam. So a
 **control is mandatory, not advisable**: sweep a key with independent evidence
 and confirm the witness agrees before trusting it on a key without. The
 control set already exists — the three lock keys have the LED channel, and
