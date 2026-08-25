@@ -4124,6 +4124,35 @@ def dos_dir_listing(text):
         out["reason"] = ("DIR said File not found: %s does not exist on the "
                          "target" % (where or "the directory"))
         return out
+    if where is not None and not entries and reported["count"] is None:
+        # A HEADER AND NOTHING ELSE, WHICH IS WHAT A FAILED DIR LEAVES BEHIND.
+        # Measured on the rig 2026-08-24: `DIR C:\NOSUCH > file` where NOSUCH
+        # does not exist wrote exactly this and no more --
+        #
+        #     Volume in drive C is DOS
+        #     Volume Serial Number is 0000-0000
+        #     Directory of C:\
+        #
+        # DOS 6.22 HAS NO STDERR REDIRECTION, so `File not found` goes to the
+        # console and never reaches the file. The absence of the error message
+        # IS the error message. Note also that DOS re-read the argument as a
+        # FILENAME PATTERN in the root and reported the directory as `C:\` --
+        # which is why the caller's own path, not the text's claim, is what
+        # this reading gets filed under.
+        #
+        # NAMED AS THE LIKELY CAUSE WITHOUT CLAIMING TO KNOW IT. A transfer
+        # truncated at exactly the header boundary would look identical from
+        # here, and nothing in the bytes can separate them -- so the reason
+        # says both and the advice covers both.
+        out["why"] = "no-dir"
+        out["reason"] = ("the listing holds a header and no entries at all, "
+                         "which is what DIR leaves when it fails: its error "
+                         "goes to the console and DOS 6.22 cannot redirect "
+                         "that into the file. So the directory very likely "
+                         "does not exist -- check the path. A transfer cut "
+                         "off at the header would look the same, so if the "
+                         "path is right, try again")
+        return out
     if reported["count"] is None:
         # NOT "an empty directory". An empty one still prints its trailer --
         # `2 file(s) 0 bytes` for the . and .. entries -- so a listing with no
@@ -5279,7 +5308,16 @@ class PullJob(NetJob):
         # listing (it is older, not wrong), and it must not be hidden either
         # -- "could not look" is a fact about this attempt and belongs beside
         # the answer it failed to refresh.
-        self.cap._save_listing(listing)
+        #
+        # FILED UNDER THE DIRECTORY WE ASKED FOR, NEVER THE ONE THE TEXT
+        # CLAIMS. That distinction looked pedantic until the hardware made it:
+        # `DIR C:\NOSUCH` on a path that does not exist is re-read by DOS as a
+        # filename pattern, and it printed `Directory of C:\`. The failure was
+        # therefore filed under `C:\` -- a directory nobody asked about -- and
+        # `file-list --from C:\NOSUCH` could not find the record of its own
+        # failure. A reading belongs to the thing it is a reading OF, and on
+        # the failure path the text is the least reliable witness to that.
+        self.cap._save_listing(listing, where=self.out_dir)
         if not listing["ok"]:
             self._leave_net()
             return self._fail(listing["why"], listing["reason"])

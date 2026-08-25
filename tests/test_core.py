@@ -9360,3 +9360,114 @@ def test_verify_input_reports_the_settled_state_not_one_in_flight():
         with vcctrld.TARGET.lock:
             (vcctrld.TARGET.epoch, vcctrld.TARGET.powered,
              vcctrld.TARGET.changed_at) = t_saved
+
+
+# The real thing, off the card 2026-08-24: `DIR C:\NOSUCH > file` where NOSUCH
+# does not exist. Kept verbatim, like PKTTOOL_FOUND, so a future change to the
+# parser is checked against what the hardware actually wrote rather than
+# against somebody's model of DOS.
+DIR_FAILED = ("\r\n Volume in drive C is DOS        \r\n"
+              " Volume Serial Number is 0000-0000\r\n"
+              " Directory of C:\\\r\n\r\n")
+
+
+def test_a_failed_dir_is_a_missing_directory_not_a_short_listing():
+    """DOS 6.22 CANNOT REDIRECT STDERR, so a failed DIR writes a header and
+    nothing else and its complaint never reaches the file.
+
+    Measured, not modelled. The parser was written expecting `File not found`
+    to appear in the text -- it does not, it goes to the console -- so a
+    missing directory came back as `truncated`: "it stopped early rather than
+    being empty". Safe, in that it refused rather than reporting an empty
+    directory, and pointed at the wrong cause: somebody would have gone
+    looking for a broken transfer with the path in front of them misspelled.
+
+    THE ABSENCE OF THE ERROR MESSAGE IS THE ERROR MESSAGE, which is only
+    obvious once you have seen the file.
+    """
+    print("\na failed DIR")
+    r = vcctrld.dos_dir_listing(DIR_FAILED)
+    check("a header with no entries and no trailer is a missing directory",
+          r["why"] == "no-dir", r["why"])
+    check("and it is not reported as ok", r["ok"] is False, r)
+    check("the reason tells the operator to check the path",
+          "check the path" in r["reason"], r["reason"])
+    check("and it does NOT claim to know, because a transfer cut off at the "
+          "header looks identical",
+          "would look the same" in r["reason"], r["reason"])
+
+    # AND IT MUST NOT SWALLOW THE CASE IT WAS WRITTEN FOR. A listing cut off
+    # mid-table still has entries, so it is a truncation and must stay one.
+    cut = ("  Directory of C:\\XFER\\OUT\r\n\r\n"
+           ".            <DIR>        08-24-26  10:12a\r\n"
+           "SCORES   DAT         1310 08-24-26  10:13a\r\n")
+    check("a listing cut off mid-table is still `truncated`",
+          vcctrld.dos_dir_listing(cut)["why"] == "truncated",
+          vcctrld.dos_dir_listing(cut)["why"])
+    # And an empty directory -- which prints . .. and a trailer -- stays OK.
+    empty = ("  Directory of C:\\XFER\\OUT\r\n\r\n"
+             ".            <DIR>        08-24-26  10:12a\r\n"
+             "..           <DIR>        08-24-26  10:12a\r\n"
+             "        2 file(s)            0 bytes\r\n")
+    check("an empty directory is still a legitimate empty answer",
+          vcctrld.dos_dir_listing(empty)["ok"] is True,
+          vcctrld.dos_dir_listing(empty))
+
+
+def test_a_reading_is_filed_under_the_directory_that_was_ASKED_for():
+    """DOS re-read a missing path as a filename pattern and said `C:\\`.
+
+    `DIR C:\\NOSUCH` where NOSUCH does not exist does not report on NOSUCH --
+    it treats it as a pattern in the root and prints `Directory of C:\\`. The
+    store keyed the attempt by what the TEXT claimed, so:
+
+      - the failure was filed under `C:\\`, a directory nobody asked about
+      - `file-list --from C:\\NOSUCH` could not find the record of its own
+        failure and reported the directory as never read
+
+    Both halves are wrong in the same direction: the evidence went where
+    nobody would look for it. A reading belongs to the thing it is a reading
+    OF, and on the failure path the text is the least reliable witness to
+    which thing that was -- so the caller's own path decides.
+    """
+    print("\nfiled under what was asked for")
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    class FailingDir(FakeTarget):
+        """A card that answers VCLIST with what a failed DIR really writes."""
+
+        def type_line(self, text):
+            self.typed.append(text)
+            if "VCLIST.BAT" in text:
+                self._incoming(vcctrld.PullJob.LISTING_NAME,
+                               DIR_FAILED.encode("ascii"))
+                return
+            parts = text.split()
+            if "VCCHK.BAT" in text and len(parts) >= 3 \
+                    and parts[2] == vcctrld.NetJob.PROOF_NAME:
+                self._incoming(parts[2], b"packetint 0x7E\r\n")
+
+    d = FailingDir(cap)
+    r = vcctrld.PullJob(cap, d, want_all=True,
+                        out_dir="C:\\NOSUCH", do_return=True).run()
+    check("the run is refused", r["ok"] is False, r)
+    check("as a missing directory rather than a short listing",
+          r["why"] == "no-dir", r["why"])
+
+    asked = cap._file_listing({"dir": "C:\\NOSUCH"})
+    check("the failure is filed under the directory that was ASKED for",
+          (asked.get("attempt") or {}).get("ok") is False, asked.get("attempt"))
+    check("and `file-list --from` on it finds the record of its own failure",
+          "no-dir" in (asked.get("attempt_note") or ""),
+          asked.get("attempt_note"))
+
+    store = cap._listing_store()
+    check("NOTHING was filed under the directory the text claimed",
+          "C:\\" not in store["attempts"], sorted(store["attempts"]))
+    check("and the raw text is kept, since it is the only evidence of what "
+          "the card actually printed",
+          (asked.get("attempt") or {}).get("raw") == DIR_FAILED,
+          repr(((asked.get("attempt") or {}).get("raw") or "")[:40]))
