@@ -696,6 +696,55 @@ letters, digits, F-keys, arrows and modifiers; punctuation exists only inside
 Pause. A KVM needs every physical key addressable by name for down/up. Extend
 the table to the full US PS/2 set.
 
+### 5.1a Where the on-screen keyboard stands, 2026-08-25
+
+The panel is a **whole keyboard** now — F-row, the alphanumeric block in
+QWERTY with real key-unit widths, Space, the Ins/Home/PgUp · Del/End/PgDn
+cluster, the arrows, the locks, and a row of DOS chords — and it is **drawn
+from a layout table rather than typed into the markup**, because the rig has
+two protocol boards and an IBM PC board and a Lisa/Mac/ADB board are not the
+same keyboard with a few keys missing.
+
+- The layout descriptors live in `LAYOUTS` in `kvm.html`. A layout is a fact
+  about a class of machine, so it is data in the page.
+- **The key tables are the daemon's**, fetched once from `/keymap.json`: the
+  alias map, the modifier order, the reboot chord, and every name the daemon
+  accepts. `vcctrl keymap` prints the same object from the same command. The
+  page carries no transcription of any of it, and **fails closed** — with no
+  table it cannot tell a reboot from a chord, so chords are held rather than
+  sent unwarned.
+- **Chords are ordered in the daemon**, not the browser. See
+  `docs/CLI-PARITY.md` sec. 5a: the page used to sort modifiers to the front
+  and the CLI did not, so `vcctrl combo delete ctrl alt` was quietly a
+  different command from the same chord built in the page.
+- **Which layout is the daemon's answer**, published as `board.keyboard` in
+  `/state.json` and bound by a `keyboard:` word in `targets:`. See
+  `docs/BOARD-IDENTITY.md` sec. 4.1. The page maps no board id to anything.
+- `null` draws **no keyboard** and says which of the three absences it is: no
+  board identified, no layout configured for this board, or a layout id this
+  page does not have. It never falls back to the PC.
+- The phone keeps a compact rail; the alphanumeric block is rendered and
+  hidden there. Tapping the picture already raises the system keyboard through
+  `#ghost`, and a 24px QWERTY would be the third way to type the same letter.
+
+**Two live defects were found writing it, and both are fixed.** They are
+recorded because each is a shape that recurs here:
+
+1. The sticky-modifier code added a class called `sticky` and no stylesheet
+   selected it. A latched Ctrl looked exactly like an unlatched one — the one
+   piece of invisible state in the panel, invisible. The class the page styles
+   is `on`.
+2. **`lctrl,lalt,delete` was not recognised as Ctrl-Alt-Del.** The page keyed
+   its confirmation on the literal string `'ctrl,alt,delete'`, and `_combo` in
+   the daemon tested `{"ctrl","alt"} <= keys` — while the panel's modifier
+   buttons send `lctrl` and `lalt`. So a Ctrl-Alt-Del assembled from those
+   buttons would have rebooted the machine with no dialog **and** left
+   `PROFILE` holding a reading from the boot before it. It was unreachable
+   only because the panel had no Delete key to finish the chord with. It has
+   one now. Both sides match on the canonical key SET (`is_reboot_combo` /
+   `isReboot`), a superset test, and every route to the chord — a button, a
+   sticky Send, a latched modifier plus a tap — goes through one function.
+
 ### 5.2 The unknown that has to be measured
 
 The Pi does **not** translate keycodes. It hands raw evdev codes to the STM32
@@ -710,6 +759,21 @@ inject each key at a DOS prompt, capture, read back what echoed. A keyboard
 sweep that would have cost 100 x 40 s of captures costs about a minute once
 frames are free. **Do this early -- it is a good first real use of the
 streamer, and it produces a coverage table the UI can grey out keys from.**
+
+**5.2 IS STILL OWED, AND STEP 8 SHIPPED WITHOUT IT.** The pacing table below
+gates step 8 on step 7, and that is not what happened: the browser keyboard
+went in first and the sweep was never run. The rail got away with it because
+ten F-keys, four arrows and Esc are keys anybody would notice failing within a
+day. Seventy is a different bet — `pause`, `sysrq`, `102nd` and the right-hand
+modifiers are the ones most likely to be missing from a firmware map and the
+ones nobody presses often enough to notice.
+
+So the panel **carries the unknown rather than settling it**: every key is
+drawn alike, none is greyed, and one line above them says none of them have
+been measured. Greying would assert they do not work; drawing them silently
+asserts they do. Neither has been measured, and the line says so until the
+sweep replaces it.
+
 
 ### 5.3 What the browser cannot capture, in Firefox and Safari
 
@@ -982,8 +1046,8 @@ built at all until someone has seen a cursor move.
 | 4 | HTTP capability + `tailscale serve` HTTPS + `/shot.jpg` + the event bus | 2 |
 | 5 | **WS video to the browser.** A page that shows the g2k live. First real milestone | 4 |
 | 6 | Input capability: `keydown`/`keyup`, full key table, the input lock | 1 |
-| 7 | Keyboard coverage sweep -- measure what the STM32 actually delivers (5.2) | 5, 6 |
-| 8 | **Keyboard in the browser**, macro bar, sticky modifiers, release-all-on-disconnect | 7 |
+| 7 | Keyboard coverage sweep -- measure what the STM32 actually delivers (5.2). **STILL OWED** -- step 8 shipped without it; see 5.2 | 5, 6 |
+| 8 | **Keyboard in the browser**, macro bar, sticky modifiers, release-all-on-disconnect. **Done** (5.1a), out of order | 7 |
 | 9 | Power panel + live LEDs + **activity log and current-operation age** (sec. 2), **in v1** | 4, 6 |
 | 10 | **v1 done.** Measure real glass-to-glass latency and write it down | 5, 8, 9 |
 | 11 | Mouse capability: hardware test, then Pointer Lock | 10 + a cursor that moved |

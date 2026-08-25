@@ -236,6 +236,124 @@ MOUSE_BUTTONS = {
     "left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE,
 }
 
+# THE ALIASES ARE THE POINT. NAMED_KEYS gives the same physical key several
+# names -- `ctrl`, `lctrl` and `rctrl` are three names for two keys that both
+# mean Ctrl to a chord -- so a check written against one spelling is a check
+# that a different spelling walks straight past.
+#
+# That was live: the reboot detector below tested `{"ctrl", "alt"} <= keys`,
+# and the web KVM's modifier buttons send `lctrl` and `lalt`. A Ctrl-Alt-Del
+# assembled from those buttons rebooted the machine and left PROFILE holding a
+# reading from the boot before it -- a real value, about a machine that is no
+# longer running, which is the failure PROFILE.invalidate() exists to prevent.
+# It was unreachable only because the page had no Delete key to finish the
+# chord with. It has one now.
+_CHORD_ALIASES = {
+    "lctrl": "ctrl", "rctrl": "ctrl",
+    "lalt": "alt", "ralt": "alt",
+    "lshift": "shift", "rshift": "shift",
+    "leftmeta": "meta", "rightmeta": "meta",
+    "del": "delete", "escape": "esc", "return": "enter", "bs": "backspace",
+    "caps": "capslock", "period": "dot", "break": "pause",
+    "printscreen": "sysrq", "prtsc": "sysrq", "compose": "menu",
+}
+
+
+def chord_set(keys):
+    """A combo's keys as a set of canonical names, aliases collapsed.
+
+    For asking questions ABOUT a chord -- is this the reboot? -- never for
+    sending one. Sending goes through NAMED_KEYS unchanged: `lctrl` and
+    `rctrl` are genuinely different keycodes on the wire and collapsing them
+    there would send the wrong one.
+    """
+    out = set()
+    for k in (keys or []):
+        n = str(k).lower()
+        out.add(_CHORD_ALIASES.get(n, n))
+    return out
+
+
+REBOOT_CHORD = ("ctrl", "alt", "delete")
+
+
+def is_reboot_combo(keys):
+    """Does this combo warm-boot a PC?
+
+    A SUPERSET test, not equality: Ctrl-Alt-Shift-Del is still Ctrl-Alt-Del
+    with a spare finger on it, and the BIOS does not care about the extra.
+
+    NOTE this is a fact about the IBM PC boards. A Macintosh reboots by a
+    route that does not exist on this keyboard at all, so a false here means
+    "not the PC reboot chord", not "harmless".
+    """
+    return set(REBOOT_CHORD) <= chord_set(keys)
+
+
+# The order a chord's keys must be PRESSED in. Anything not a modifier keeps
+# its position after these, in the order the caller gave.
+MOD_ORDER = ("ctrl", "alt", "shift", "meta")
+
+
+def order_chord(keys):
+    """A combo's keys, modifiers first, ready to press.
+
+    THIS IS PROTOCOL, NOT TIDINESS. Devices.combo() presses in the order it is
+    given and releases in reverse, so `combo delete ctrl alt` presses Delete
+    BEFORE either modifier arrives -- the target sees a keystroke, and then two
+    modifiers going down after it. The chord silently becomes something else,
+    and at a DOS prompt the something else is a character in the buffer.
+
+    It lives here rather than in the caller because there are two callers --
+    the CLI over the unix socket and the web KVM over /cmd -- and the browser
+    having a guarantee the command line does not is exactly the asymmetry that
+    makes one of them wrong. Every caller of the `combo` COMMAND gets it.
+
+    Deliberately NOT in Devices.combo(). That is the primitive: it presses what
+    it is handed, in the order it is handed, and something that genuinely wants
+    a raw press sequence must still be able to say so. The reordering belongs
+    to the meaning of "chord", which is what the command means and the
+    primitive does not.
+
+    Stable: keys that rank equal keep the caller's order, so a chord with two
+    non-modifiers in it still types them the way it was written.
+    """
+    ranked = []
+    for i, k in enumerate(keys or []):
+        c = _CHORD_ALIASES.get(str(k).lower(), str(k).lower())
+        r = MOD_ORDER.index(c) if c in MOD_ORDER else len(MOD_ORDER)
+        ranked.append((r, i, k))
+    return [k for _, _, k in sorted(ranked, key=lambda t: (t[0], t[1]))]
+
+
+def keymap():
+    """The key tables a client needs to reason about chords, as data.
+
+    THE POINT IS THAT THERE IS ONE COPY. The web KVM has to decide whether a
+    chord is the reboot BEFORE it sends it -- that is what the confirmation is
+    -- so it needs the alias table and the reboot definition. It used to carry
+    its own transcription of both, kept honest by a test that read the two
+    files and compared them. A test that two tables agree is a good answer to
+    a question that should not have been asked.
+
+    So the daemon publishes and the page consumes: `/keymap.json` over HTTP,
+    `vcctrl keymap` on the command line, one `keymap` command underneath both.
+
+    `keys` is every name `key`, `combo`, `keydown` and `keyup` will accept.
+    Note what it does NOT say: whether the protocol board turns any of them
+    into a scancode the target sees. That is not knowable from this side --
+    the Pi forwards raw evdev codes and the mapping lives in the STM32's
+    firmware -- and a list published by the daemon must not be mistaken for a
+    coverage table. See docs/WEBKVM.md sec. 5.2.
+    """
+    return {
+        "aliases": dict(_CHORD_ALIASES),
+        "mod_order": list(MOD_ORDER),
+        "reboot": list(REBOOT_CHORD),
+        "keys": sorted(NAMED_KEYS),
+        "measured": False,
+    }
+
 
 # ---------------------------------------------------------------- power
 
@@ -938,6 +1056,10 @@ class InputCapability(Capability):
             "combo": self._combo, "keydown": self._keydown,
             "keyup": self._keyup, "release_all": self._release_all,
             "mouse_move": self._mouse_move, "mouse_click": self._mouse_click,
+            # Read-only, and deliberately a COMMAND rather than a field on
+            # /state.json: it is a constant, and every open tab polls state
+            # every 1.5 s. Same argument as /wslog.json.
+            "keymap": self._keymap,
         }
 
     def _key(self, req):
@@ -956,11 +1078,20 @@ class InputCapability(Capability):
         # Ctrl-Alt-Del is a reboot, and after it the profile reading describes
         # a boot that is no longer running. Matched on the SET of keys, not
         # their order, because the caller may send them in any.
-        keys = {str(k).lower() for k in (req.get("keys") or [])}
-        if {"ctrl", "alt"} <= keys and keys & {"delete", "del"}:
+        if is_reboot_combo(req.get("keys")):
             PROFILE.invalidate("ctrl-alt-del")
-        self.devs.combo(req["keys"], _pace(req))
-        return {"ok": True}
+        # MODIFIERS FIRST, for every caller. See order_chord(): the primitive
+        # presses in the order it is handed, so an unordered chord arrives at
+        # the target as a keystroke followed by its modifiers. The browser used
+        # to sort before posting and the CLI did not, which meant `vcctrl combo
+        # delete ctrl alt` was quietly a different command from the same chord
+        # built in the page. Sorting here is what makes them one command.
+        keys = order_chord(req["keys"])
+        self.devs.combo(keys, _pace(req))
+        return {"ok": True, "keys": keys}
+
+    def _keymap(self, req):
+        return {"ok": True, "keymap": keymap()}
 
     def _keydown(self, req):
         self.devs.keydown(req["key"])
@@ -1062,6 +1193,34 @@ def _configured_targets():
     for row in t:
         try:
             out[int(row["board_id"])] = row.get("name")
+        except (TypeError, ValueError, KeyError):
+            continue
+    return out
+
+
+def _configured_keyboards():
+    """`targets:` as {board_id: keyboard layout id}, or None if absent.
+
+    A SEPARATE function rather than widening _configured_targets(), which
+    flattens to {id: name} and has another caller. Two small readers over the
+    same list is the shape _configured_led_boards() already set, and it keeps
+    each one's "absent" answer its own.
+
+    The value is a LAYOUT ID -- an opaque string the page resolves against its
+    own table of drawn keyboards -- not a machine name and not a boolean. A
+    row with no `keyboard:` maps to None, which is a real answer: this board
+    is known and no keyboard layout has been declared for it. The page must
+    not fall back to the PC layout on it, because a Macintosh drawn as a PC is
+    a picture of a keyboard that is not in the building.
+    """
+    t = CFG.optional("targets")
+    if t is vcconfig.ABSENT or t is vcconfig.NONE:
+        return None
+    out = {}
+    for row in t:
+        try:
+            kb = row.get("keyboard")
+            out[int(row["board_id"])] = str(kb) if kb else None
         except (TypeError, ValueError, KeyError):
             continue
     return out
@@ -3556,6 +3715,20 @@ class BoardCapability(Capability):
     # installed, and both are different from "we could not look".
     TARGETS = {1: "Gateway 2000", 2: None, 3: "Macintosh Plus"}
 
+    # Which KEYBOARD each board implies, by the same rule and for the same
+    # reason: one table, here, so the page is fed rather than carrying a
+    # second copy to drift against this one.
+    #
+    # The values are layout ids the page resolves; the daemon never draws a
+    # key and deliberately knows nothing about what is on one. That split is
+    # what lets a page older than its config say "board 3 asks for a layout I
+    # do not have" instead of quietly showing the wrong keyboard.
+    #
+    # 2 maps to None for the same reason it does above -- a board that exists
+    # and implies no known keyboard is a different answer from a board that is
+    # not installed, and both differ from "we could not look".
+    KEYBOARDS = {1: "pc-at-101", 2: None, 3: "mac-plus"}
+
     def __init__(self, *a, **kw):
         super(BoardCapability, self).__init__(*a, **kw)
         self._last_id = _UNSET
@@ -3629,6 +3802,24 @@ class BoardCapability(Capability):
                 continue
         return out
 
+    def _keyboards(self):
+        """board id -> keyboard layout id, from config where configured.
+
+        REPLACES the built-in table rather than merging, exactly as _targets()
+        does and for the identical reason: a rig that configures board 1 must
+        not silently inherit this rig's board 3 and offer a Macintosh keyboard
+        for a machine that is not in the building.
+
+        No legacy JSON override here -- `board_targets` predates this field
+        and never carried one, so there is nothing to be backward-compatible
+        with. An empty branch kept "for symmetry" would be a code path that
+        cannot run, which is worse than an asymmetry that is explained.
+        """
+        cfgd = _configured_keyboards()
+        if cfgd is not None:
+            return dict(cfgd)
+        return dict(self.KEYBOARDS)
+
     def _from_file(self):
         """The primary source: written by our local patch to rpi_app.
 
@@ -3684,12 +3875,14 @@ class BoardCapability(Capability):
             bid = (self.settings or {}).get("board_id")
             if bid is None:
                 out = {"id": None, "name": None, "target": None,
+                       "keyboard": None,
                        "source": "configured", "stale": None,
                        "reason": "backend is `static` but no board_id is set"}
             else:
                 bid = int(bid)
                 out = {"id": bid, "name": (self.settings or {}).get("name"),
                        "target": self._targets().get(bid),
+                       "keyboard": self._keyboards().get(bid),
                        "source": "configured", "stale": None,
                        "reason": "asserted by configuration, not detected -- "
                                  "it cannot notice a board swap"}
@@ -3705,8 +3898,8 @@ class BoardCapability(Capability):
             except Exception as exc:
                 reason = errstr(exc)
         if not rec:
-            out = {"id": None, "name": None, "target": None, "source": None,
-                   "stale": None,
+            out = {"id": None, "name": None, "target": None, "keyboard": None,
+                   "source": None, "stale": None,
                    "reason": ("usb4vc has not reported a board (%s)"
                               % reason)[:ERR_MAX]}
         else:
@@ -3716,6 +3909,7 @@ class BoardCapability(Capability):
             out = {"id": bid,
                    "name": rec.get("name"),
                    "target": self._targets().get(bid),
+                   "keyboard": self._keyboards().get(bid),
                    "source": src_name,
                    # The journal path cannot prove the frame belongs to the
                    # currently running rpi_app -- only to this boot -- so it is

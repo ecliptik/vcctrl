@@ -32,6 +32,7 @@ onto the Pi later changes nothing but which wrapper gets called.
     vcctrl key enter
     vcctrl hold left 800             # press, dwell 800 ms, release
     vcctrl combo ctrl alt delete     # warm-boots the DOS box
+    vcctrl keymap                    # key names, aliases, chord order
     vcctrl mouse move 40 -12
     vcctrl mouse click left
     vcctrl leds                      # PS/2 LED return channel
@@ -42,6 +43,7 @@ onto the Pi later changes nothing but which wrapper gets called.
 | capability | state |
 |---|---|
 | Keyboard + mouse over PS/2 | **working** -- typed at the g2k, drove the game |
+| On-screen keyboard in the KVM | **working** -- full QWERTY, per-board layout; *no key measured at the target* (WEBKVM 5.2) |
 | PS/2 LED return channel | **working** -- non-video proof a keystroke landed |
 | VGA capture | **working** -- locks on mode 12h *and* the game's 320x240 |
 | Audio capture | **working** -- -30.8 dB vs -65.6 dB silence floor |

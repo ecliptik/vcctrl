@@ -221,6 +221,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, base64.b64decode(r["jpeg"]), "image/jpeg",
                                   {"X-Frame-Age": str(r.get("age_s")),
                                    "X-Frame-Mean": str(r.get("mean"))})
+            if path == "/keymap.json":
+                # ONE COPY OF THE KEY TABLES, and this is where the page gets
+                # them. It has to decide whether a chord is the reboot BEFORE
+                # it sends it -- that is what the confirmation is -- and it
+                # used to do that from its own transcription of the daemon's
+                # alias table, kept honest by a test comparing the two files.
+                #
+                # Its own endpoint rather than a field on /state.json for the
+                # same reason /wslog.json is: this is a CONSTANT, and every
+                # open tab polls state every 1.5 s.
+                return self._json(self.cap.call("keymap", {}))
             if path == "/wslog.json":
                 # Its own endpoint rather than a field on /state.json: every
                 # open tab polls state every 1.5 s and none of them wants 200

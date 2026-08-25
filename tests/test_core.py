@@ -1242,21 +1242,41 @@ HARNESS = r"""
   // Ctrl+Alt+Delete must ASK. It sits in a rail of harmless keys, at thumb
   // distance from Esc, and it is the only one whose mis-tap costs the
   // machine's state.
+  //
+  // The keys are drawn from a layout now rather than typed into the markup,
+  // so the panel has to be given one before there is anything to click --
+  // and there are no data-key/data-combo attributes to find them by. Every
+  // ROUTE to this chord, including the ones assembled key by key, is covered
+  // in test_keyboard_chords_in_a_browser; this stays as the check that the
+  // page still asks at all.
   {
     const realConfirm = window.confirm, realPost = window.post;
     let asked = null, sent = 0;
     window.confirm = m => { asked = m; return false; };
     window.post = async () => { sent++; return {ok: true}; };
-    const cad = document.querySelector('[data-combo="ctrl,alt,delete"]');
-    cad.onclick();
+    // The page asks the DAEMON which chord is the reboot, and under file://
+    // that fetch has genuinely failed -- so without this the panel correctly
+    // refuses to send any chord and this block would measure the refusal
+    // rather than the confirmation. The fixture is json.dumps(vcctrld.keymap())
+    // substituted by the test: the daemon's own table, not a copy.
+    const KM = KEYMAPJSON;
+    const realFetch = window.fetch;
+    window.fetch = async () => ({json: async () => ({ok:true, keymap:KM})});
+    await loadKeymap();
+    window.fetch = realFetch;
+    applyLayout({id:1, keyboard:'pc-at-101'});
+    const byText = (sel, t) => [...document.querySelectorAll(sel)]
+                                 .find(b => b.textContent === t);
+    const cad = byText('#kbdbody .kchordrow button', 'Ctrl-Alt-Del');
+    cad.click();
     const blocked = sent === 0 && asked && /reboots/i.test(asked);
     window.confirm = () => true;
-    cad.onclick();
+    cad.click();
     const wentThrough = sent === 1;
     // A plain key must NOT ask -- a rail that confirms everything is a rail
     // nobody reads the confirmations in.
     asked = null;
-    document.querySelector('[data-key="esc"]').onclick();
+    byText('#kbdbody .key', 'Esc').click();
     const quiet = asked === null;
     window.confirm = realConfirm; window.post = realPost;
     emit(`cad ${blocked && wentThrough ? 1 : 0} ${quiet ? 1 : 0}`);
@@ -1492,9 +1512,16 @@ HARNESS = r"""
   // when the menu was a wrapping bag of buttons, and every one of them would
   // silently come back if the row containers were ever dropped.
   document.getElementById('keysbtn').click();
+  // RE-ASSERTED BEFORE MEASURING, the same way the canvas is above. The keys
+  // are drawn from whatever board /state.json reports, the page polls that
+  // every 1.5 s, and under a virtual-time budget those polls all fire -- each
+  // one failing to reach a daemon and correctly redrawing the panel as "no
+  // board identified, no keyboard". Measuring without re-applying counted
+  // zero function keys and reported it as a layout fault.
+  applyLayout({id:1, keyboard:'pc-at-101'});
   const q = sel => document.querySelector('#pop-keys ' + sel);
-  const fk = Array.from(document.querySelectorAll('#pop-keys [data-key]'))
-                  .filter(b => /^f\d+$/.test(b.dataset.key));
+  const fk = Array.from(document.querySelectorAll('#pop-keys [data-latch]'))
+                  .filter(b => /^f\d+$/.test(b.dataset.latch));
   const rows = new Set(fk.map(b => Math.round(b.getBoundingClientRect().top)));
   emit(`fkeyrow ${fk.length} ${rows.size}`);
   const up = q('[data-key="up"]').getBoundingClientRect();
@@ -1506,11 +1533,11 @@ HARNESS = r"""
            && Math.abs(lf.top - dn.top) < 2 && Math.abs(rt.top - dn.top) < 2
            && lf.right <= dn.left + 1 && rt.left >= dn.right - 1;
   emit(`arrowtee ${tee ? 1 : 0} `
-     + `${mid(dn) > mid(q('[data-key="scrolllock"]').getBoundingClientRect()) ? 1 : 0}`);
+     + `${mid(dn) > mid(q('[data-latch="scrolllock"]').getBoundingClientRect()) ? 1 : 0}`);
   // Red while it sits there. Compared against a plain key rather than to a
   // literal colour, because the value is a theme token and changes 22 ways.
-  emit(`cadcolour ${getComputedStyle(q('[data-combo]')).color
-                    !== getComputedStyle(q('[data-key="esc"]')).color ? 1 : 0} `
+  emit(`cadcolour ${getComputedStyle(q('.kchordrow button.danger')).color
+                    !== getComputedStyle(q('[data-latch="esc"]')).color ? 1 : 0} `
      + `${document.getElementById('refresh').closest('#pop-zoom') ? 1 : 0}`);
   // The buffer control is in the strip where it can be found, and it carries
   // the same caret rule as the menus beside it -- up when closed, because it
@@ -1689,7 +1716,13 @@ HARNESS = r"""
   zoomMode = 'fit'; applyZoom(true);
   emit('end 1 1');
  } catch (e) {
-  document.getElementById('harness-out').textContent = 'THREW ' + e.message;
+  // KEEP WHAT IT GOT TO. Replacing the whole element threw away every
+  // measurement taken before the throw, so the report was one sentence with
+  // no stack and no hint of WHICH step died -- and the emit-as-it-goes design
+  // above exists precisely so a run that stops two thirds of the way through
+  // says where. The last emitted value is the step before the one that broke.
+  const pre = document.getElementById('harness-out');
+  pre.textContent = 'THREW ' + e.message + '\nafter: ' + pre.textContent;
  }
 })();
 </script>
@@ -1737,7 +1770,9 @@ def test_zoom_layout_in_a_browser():
         cap = "data:image/jpeg;base64," + base64.b64encode(
             buf.getvalue()).decode()
         with open(os.path.join(d, "page.html"), "w", encoding="utf-8") as f:
-            f.write(page + HARNESS.replace("CAPSRC", cap))
+            import json as _json
+            f.write(page + HARNESS.replace("CAPSRC", cap)
+                    .replace("KEYMAPJSON", _json.dumps(vcctrld.keymap())))
 
         r = subprocess.run(
             [chrome, "--headless", "--disable-gpu", "--no-sandbox",
@@ -2012,8 +2047,12 @@ def test_zoom_layout_in_a_browser():
           got["caretopen"][0] == 0.0, got["caretopen"])
     check("opening the header menu flips its caret up",
           got["caretzoom"][0] == 1.0, got["caretzoom"])
-    check("control: all ten function keys are present",
-          got["fkeyrow"][0] == 10.0, got["fkeyrow"])
+    # Twelve, not ten: F11 and F12 came with the whole-keyboard layout, which
+    # is where the F-row moved to. They still have to share one row -- that is
+    # the property, and it was wrong for months when this panel was a
+    # wrapping bag of buttons rather than a geometry.
+    check("control: all twelve function keys are present",
+          got["fkeyrow"][0] == 12.0, got["fkeyrow"])
     check("and they share one row", got["fkeyrow"][1] == 1.0, got["fkeyrow"])
     check("the arrows form an inverted T",
           got["arrowtee"][0] == 1.0, got["arrowtee"])
@@ -2779,6 +2818,678 @@ def test_installed_board_id_never_guesses():
         check("reads the IBM PC id", vcctrld.installed_board_id() == 1)
     finally:
         vcctrld.BoardCapability.FILE = orig
+
+
+def test_reboot_is_recognised_by_any_spelling():
+    """`lctrl,lalt,delete` is Ctrl-Alt-Del, and the daemon used to disagree.
+
+    NAMED_KEYS gives one physical key several names on purpose -- `ctrl`,
+    `lctrl` and `rctrl` all reach a Ctrl -- so a check written against one
+    spelling is a check a different spelling walks straight past.
+
+    That was live. `_combo` tested `{"ctrl","alt"} <= keys` and the web KVM's
+    modifier buttons send `lctrl` and `lalt`, so a Ctrl-Alt-Del built from
+    those buttons rebooted the machine and left PROFILE holding a reading from
+    the boot BEFORE it -- a real value, about a machine no longer running,
+    which is the exact failure PROFILE.invalidate() exists to prevent. It was
+    unreachable only because the page had no Delete key to finish the chord
+    with, and it has one now.
+
+    The superset arm matters as much: Ctrl-Alt-Shift-Del is a reboot with a
+    spare finger on it, and the BIOS does not care about the extra key.
+    """
+    print("\nreboot chord recognition")
+    R = vcctrld.is_reboot_combo
+    for keys in (["ctrl", "alt", "delete"],
+                 ["lctrl", "lalt", "delete"],
+                 ["rctrl", "ralt", "del"],
+                 ["del", "alt", "ctrl"],                 # any order
+                 ["lctrl", "lalt", "lshift", "delete"],  # spare modifier
+                 ["CTRL", "Alt", "Delete"]):             # case
+        check("reboot: %s" % " ".join(keys), R(keys) is True)
+    for keys in (["ctrl", "alt"], ["ctrl", "c"], ["alt", "delete"],
+                 ["ctrl", "delete"], ["ctrl", "alt", "d"], [], None):
+        check("not a reboot: %s" % (" ".join(keys) if keys else repr(keys)),
+              R(keys) is False)
+
+    # chord_set is for ASKING ABOUT a chord and must never be used to send
+    # one: lctrl and rctrl are different keycodes and collapsing them on the
+    # way out would press the wrong key.
+    check("aliases collapse for the question",
+          vcctrld.chord_set(["lctrl", "rctrl"]) == {"ctrl"})
+    check("and the two are still different keys on the wire",
+          vcctrld.NAMED_KEYS["lctrl"] != vcctrld.NAMED_KEYS["rctrl"])
+
+    # THE PAGE ASKS THE SAME QUESTION ON THE OTHER SIDE OF THE SOCKET, and it
+    # asks it from THIS table. There was briefly a second copy in kvm.html and
+    # a check here that the two agreed -- which is a good answer to a question
+    # that should not have been asked. The page reads /keymap.json now, so the
+    # property to hold is that it carries no transcription of its own.
+    page = os.path.join(HERE, os.pardir, "daemon", "kvm.html")
+    with open(page, encoding="utf-8") as f:
+        h = f.read()
+    check("the page does not carry its own alias table",
+          "const CHORD_ALIAS" not in h)
+    check("and it does not carry its own modifier order",
+          "const MOD_ORDER" not in h)
+    check("it reads them from the daemon instead", "/keymap.json" in h)
+
+    km = vcctrld.keymap()
+    check("keymap publishes the aliases", km["aliases"] == vcctrld._CHORD_ALIASES)
+    check("keymap publishes the modifier order",
+          km["mod_order"] == list(vcctrld.MOD_ORDER))
+    check("keymap publishes the reboot chord",
+          km["reboot"] == list(vcctrld.REBOOT_CHORD))
+    check("keymap publishes every key name the daemon accepts",
+          set(km["keys"]) == set(vcctrld.NAMED_KEYS))
+    # A LIST OF NAMES IS NOT A COVERAGE TABLE. The daemon can say what it will
+    # accept; it cannot say what the STM32 turns into a scancode, and a
+    # consumer must not read the first as the second.
+    check("and says outright that none of it is measured",
+          km["measured"] is False)
+
+
+def test_a_chord_is_ordered_for_every_caller():
+    """Modifiers first, in the daemon, so the CLI and the browser agree.
+
+    Devices.combo() presses in the order it is handed and releases in reverse.
+    So `vcctrl combo delete ctrl alt` pressed Delete BEFORE either modifier
+    arrived -- the target sees a keystroke, then two modifiers going down after
+    it, and at a DOS prompt the keystroke is a character in the buffer.
+
+    The web KVM sorted before posting. The CLI did not. One caller holding a
+    guarantee the other lacks is the asymmetry that makes one of them wrong,
+    and it was the browser that had it -- the surface with a confirmation
+    dialog, not the one that is scripted into sweeps.
+
+    The sort is in `_combo`, the command both callers reach, and NOT in
+    Devices.combo(): the primitive presses what it is handed, because
+    something that genuinely wants a raw press sequence must still be able to
+    say so. The reordering is part of what the word "chord" means.
+    """
+    print("\nchord ordering")
+    O = vcctrld.order_chord
+    check("already ordered is left alone",
+          O(["ctrl", "alt", "delete"]) == ["ctrl", "alt", "delete"])
+    check("the key moves behind its modifiers",
+          O(["delete", "ctrl", "alt"]) == ["ctrl", "alt", "delete"])
+    check("aliases rank as the key they are",
+          O(["del", "lctrl", "lalt"]) == ["lctrl", "lalt", "del"])
+    check("ctrl before alt before shift before meta",
+          O(["leftmeta", "lshift", "lalt", "lctrl"])
+          == ["lctrl", "lalt", "lshift", "leftmeta"])
+    # STABLE. Two non-modifiers rank equal, and a chord with both must still
+    # type them the way it was written -- reordering those would be the same
+    # defect this fixes, pointing the other way.
+    check("equal ranks keep the caller's order",
+          O(["b", "a", "ctrl"]) == ["ctrl", "b", "a"])
+    check("a lone key is untouched", O(["a"]) == ["a"])
+    check("empty is empty", O([]) == [] and O(None) == [])
+
+    # A CHORD WITH NO MODIFIER IN IT IS NOT REORDERED AT ALL, and this arm is
+    # here because the evidence for "the sort is harmless" was gathered from
+    # the callers that existed, while the same change adds one that can emit
+    # arbitrary chords: the KVM's sticky mode, where the keys go in the order
+    # a person tapped them. Raised by the vcctrl session before deploy.
+    #
+    # Sorting keys that carry no chord semantics would be a reorder with
+    # nothing to justify it -- so: every non-modifier ranks equal, the sort is
+    # stable, and equal ranks keep their positions. Nothing moves.
+    for seq in (["b", "a"], ["a", "b", "c"], ["c", "b", "a"],
+                ["1", "2", "3"], ["z", "enter", "x"]):
+        check("no modifiers -> untouched: %s" % " ".join(seq),
+              O(list(seq)) == list(seq), O(list(seq)))
+    # And the ordered-sequence capability is not lost by this: `key` is the
+    # command that taps in sequence, and it does not go near order_chord().
+    check("`key` is still the ordered-sequence verb, unsorted",
+          "order_chord" not in
+          re.search(r"def _key\(self.*?\n\n", open(
+              os.path.join(HERE, os.pardir, "daemon", "vcctrld.py"),
+              encoding="utf-8").read(), re.S).group(0))
+    # The keys that go out are the SENDABLE spellings, never the canonical
+    # ones: lctrl and rctrl are different keycodes and sending "ctrl" for
+    # "rctrl" would press the wrong key.
+    check("it reorders without rewriting the names",
+          O(["del", "rctrl"]) == ["rctrl", "del"])
+
+    # The command sorts; the primitive does not.
+    class FakeDevs(object):
+        def __init__(self):
+            self.got = None
+
+        def combo(self, names, pace=None):
+            self.got = list(names)
+
+    devs = FakeDevs()
+    cap = vcctrld.InputCapability(devs)
+    r = cap.commands()["combo"]({"cmd": "combo",
+                                 "keys": ["delete", "lctrl", "lalt"]})
+    check("the combo COMMAND orders what it sends",
+          devs.got == ["lctrl", "lalt", "delete"], devs.got)
+    # Echoed back, so a caller can see what actually went rather than assuming
+    # its own argv order was what happened.
+    check("and the reply says what order it used",
+          r.get("keys") == ["lctrl", "lalt", "delete"], r)
+
+    # And the page no longer does it, or there would be two implementations
+    # again -- agreeing today, by luck.
+    page = os.path.join(HERE, os.pardir, "daemon", "kvm.html")
+    with open(page, encoding="utf-8") as f:
+        h = f.read()
+    check("the page does not sort chords any more",
+          "NO SORT HERE" in h and ".sort((a, b) => rank(" not in h)
+
+
+def test_layout_keys_are_all_real_keys():
+    """Every key name in every layout must exist in NAMED_KEYS.
+
+    The on-screen keyboard is a table of ~90 keycaps typed by hand, and a
+    typo in one of them is a button that looks exactly like its neighbours and
+    returns `unknown key: semicolonn` at press time -- during a sweep, on the
+    one control surface whose whole job is to be trustworthy.
+
+    Nothing else catches it: the page parses, the button renders, the layout
+    lays out. It is only wrong on the wire.
+
+    Read out of kvm.html by pattern rather than by running the page, so it
+    holds with no browser on the host. That couples this test to how the
+    layout table is WRITTEN -- k:'x' and mod:'x' and keys:[...] in single
+    quotes -- which is a real coupling and is stated rather than hidden. The
+    count check below is what notices if the coupling silently stops matching
+    anything: a regex that finds nothing would otherwise pass.
+    """
+    print("\nlayout key names")
+    page = os.path.join(HERE, os.pardir, "daemon", "kvm.html")
+    with open(page, encoding="utf-8") as f:
+        h = f.read()
+
+    m = re.search(r"^const LAYOUTS = \{$(.*?)^\};$", h, re.S | re.M)
+    check("the LAYOUTS table is where this test expects it", bool(m))
+    if not m:
+        return
+    block = m.group(1)
+
+    def unq(s):
+        return s.replace("\\\\", "\\").replace("\\'", "'")
+
+    names = set()
+    for pat in (r"\bk:\s*'((?:[^'\\]|\\.)*)'", r"\bmod:\s*'((?:[^'\\]|\\.)*)'"):
+        names.update(unq(v) for v in re.findall(pat, block))
+    # Chords carry their keys as a list; take the whole list and split it.
+    for lst in re.findall(r"\bkeys:\s*\[([^\]]*)\]", block):
+        names.update(unq(v) for v in
+                     re.findall(r"'((?:[^'\\]|\\.)*)'", lst))
+    # The arrow cluster is built by drawKeyboard() from a fixed set rather
+    # than sitting in the table, so it is named here too or it goes unchecked.
+    names.update(("up", "down", "left", "right"))
+
+    # A REGEX THAT MATCHES NOTHING PASSES EVERY ASSERTION AFTER IT. This suite
+    # has been bitten by a check that examined an empty set and printed a
+    # pass, so the size is asserted before the contents.
+    check("the scan found a whole keyboard, not a handful",
+          len(names) > 70, len(names))
+    for want in ("a", "z", "0", "9", "space", "home", "insert", "end",
+                 "pgup", "pgdn", "f12", "leftmeta", "pause"):
+        check("the scan reached %r" % want, want in names)
+
+    missing = sorted(n for n in names if n not in vcctrld.NAMED_KEYS)
+    check("every layout key is in NAMED_KEYS", not missing, missing)
+
+
+def test_keyboard_layout_is_resolved_never_guessed():
+    """`board.keyboard` is always present, and absent never means "the PC".
+
+    The web KVM draws a whole keyboard now, and it draws it from this field.
+    The failure to prevent is the one BOARD-IDENTITY sec. 2 already records in
+    another costume: a plausible value returned with total confidence about
+    the wrong machine. Here that would be a Macintosh Plus rendered with a
+    function row, a numeric block and Ctrl-Alt-Del -- a picture of a keyboard
+    that is not in the building, on the one surface the operator uses to
+    decide what to press.
+
+    Four properties, and the third is the one worth the test:
+
+      1. the key is present on EVERY path, null where unknown -- the same
+         contract the rest of the object keeps, because a page that has to
+         branch on which keys exist re-encodes the daemon's internal states;
+      2. a configured `targets:` list REPLACES the built-in table rather than
+         merging, so a rig that configures only its own board does not inherit
+         this rig's Macintosh;
+      3. a configured row with NO `keyboard:` yields None -- "this board is
+         known and no layout is declared for it" -- and NOT the built-in
+         layout for that id. Merging here would be indistinguishable from
+         working, on this rig, forever: board 1 would keep resolving to
+         pc-at-101 whether the config said so or not;
+      4. an unknown board yields None and never an id.
+    """
+    print("\nkeyboard layout resolution")
+    import json as _json
+    import tempfile
+
+    cap = vcctrld.BoardCapability(None)
+
+    # 1. Built-in table, no `targets:` configured (the suite's test-config has
+    #    none, so this is the real code path rather than a stubbed one).
+    check("no targets: -> built-in table", vcctrld._configured_keyboards() is None)
+    kb = cap._keyboards()
+    check("built-in board 1 -> pc-at-101", kb.get(1) == "pc-at-101", kb)
+    check("built-in board 3 -> mac-plus", kb.get(3) == "mac-plus", kb)
+    # A board that exists and implies no known keyboard is not a board that is
+    # missing, and neither is a default.
+    check("built-in board 2 -> None, present as a key",
+          2 in kb and kb[2] is None, kb)
+
+    # 2 and 3. A configured list replaces wholesale, and a row without the
+    #    word resolves to None rather than to the built-in for that id.
+    real = vcctrld._configured_keyboards
+    try:
+        vcctrld._configured_keyboards = lambda: {1: None, 7: "some-layout"}
+        kb = cap._keyboards()
+        check("configured row without `keyboard:` -> None, NOT pc-at-101",
+              kb.get(1) is None, kb)
+        check("configured row with a layout is carried through",
+              kb.get(7) == "some-layout", kb)
+        check("the built-in Macintosh is NOT merged in",
+              3 not in kb, kb)
+    finally:
+        vcctrld._configured_keyboards = real
+
+    # 4. Every snapshot path carries the key. Driven through the real
+    #    snapshot() rather than asserted about the dicts, because the bug this
+    #    guards against is one branch of four forgetting the field.
+    d = tempfile.mkdtemp(prefix="boardkb")
+    orig_file, orig_backend, orig_settings = (
+        vcctrld.BoardCapability.FILE, cap.backend_name, cap.settings)
+    try:
+        # detected, board known
+        p = os.path.join(d, "board.json")
+        with open(p, "w") as f:
+            _json.dump({"id": 1, "name": "IBM PC", "t": time.time()}, f)
+        vcctrld.BoardCapability.FILE = p
+        cap._last_id = vcctrld._UNSET
+        s = cap.snapshot()
+        check("detected board 1 publishes its layout",
+              s.get("keyboard") == "pc-at-101", s)
+
+        # detected, board known, no layout for it
+        with open(p, "w") as f:
+            _json.dump({"id": 2, "name": "ADB", "t": time.time()}, f)
+        cap._last_id = vcctrld._UNSET
+        s = cap.snapshot()
+        check("board 2: key PRESENT and null, not absent",
+              "keyboard" in s and s["keyboard"] is None, s)
+
+        # detected, board id nothing knows
+        with open(p, "w") as f:
+            _json.dump({"id": 99, "t": time.time()}, f)
+        cap._last_id = vcctrld._UNSET
+        s = cap.snapshot()
+        check("unknown board id -> null layout, not pc-at-101",
+              "keyboard" in s and s["keyboard"] is None, s)
+
+        # no board reported at all. The journal fallback runs here and will
+        # fail on a machine with no usb4vc unit, which is the path under test.
+        vcctrld.BoardCapability.FILE = os.path.join(d, "absent.json")
+        cap._last_id = vcctrld._UNSET
+        s = cap.snapshot()
+        check("no board reported -> key present and null",
+              "keyboard" in s and s["keyboard"] is None, s)
+
+        # static backend, asserted by config, with and without a board_id
+        cap.backend_name = "static"
+        cap.settings = {}
+        cap._last_id = vcctrld._UNSET
+        s = cap.snapshot()
+        check("static with no board_id -> key present and null",
+              "keyboard" in s and s["keyboard"] is None, s)
+
+        cap.settings = {"board_id": 3, "name": "asserted"}
+        cap._last_id = vcctrld._UNSET
+        s = cap.snapshot()
+        check("static with board_id 3 -> mac-plus",
+              s.get("keyboard") == "mac-plus", s)
+    finally:
+        vcctrld.BoardCapability.FILE = orig_file
+        cap.backend_name, cap.settings = orig_backend, orig_settings
+
+
+KBD_HARNESS = r"""
+<pre id="harness-out"></pre>
+<script>
+// Drive the key panel in a real engine and report what WOULD go on the wire.
+// A ported model of this would agree with itself: the thing under test is the
+// interaction between four click handlers, a sort, and a confirm() -- and the
+// bug it exists to catch was a chord assembled a different way reaching the
+// wire by a route that skipped the check.
+(async () => {
+ try {
+  const out = [], pre = document.getElementById('harness-out');
+  const emit = v => { out.push(v); pre.textContent = out.join('\n'); };
+  const sent = [];
+  window.post = async (cmd, body) => { sent.push(cmd + ' ' + (body.keys||[]).join('+')); return {ok:true}; };
+  let confirms = 0;
+  window.confirm = () => { confirms++; return true; };
+
+  applyLayout({id:1, target:'Gateway 2000', keyboard:'pc-at-101'});
+  const popEarly = document.getElementById('pop-keys');
+  popEarly.hidden = false; popEarly.style.position = 'static';
+
+  // ── BEFORE THE KEY TABLE ARRIVES ──────────────────────────────────────
+  // The page cannot tell a reboot from a chord without the daemon's tables,
+  // and a page that quietly stops warning is the failure that hides itself.
+  // Under file:// the fetch has genuinely failed, so this is the real state.
+  {
+    const k = c => [...document.querySelectorAll('#kbdbody .key')]
+                     .find(b => b.textContent === c);
+    sent.length = 0;
+    emit('nokeymap-null ' + (keymap === null));
+    k('A').click();                       // a lone key can never be the reboot
+    emit('nokeymap-lone ' + sent.join(';'));
+    sent.length = 0;
+    k('Ctrl').click(); k('C').click();    // a chord must be refused
+    emit('nokeymap-chord sent=' + sent.length);
+    const cad = [...document.querySelectorAll('#kbdbody .kchordrow button')]
+                  .find(b => b.textContent === 'Ctrl-Alt-Del');
+    sent.length = 0; confirms = 0;
+    cad.click();
+    emit('nokeymap-reboot sent=' + sent.length + ' confirms=' + confirms);
+    clearLatched();
+  }
+
+  // Now serve it, from the daemon's OWN tables -- this fixture is
+  // json.dumps(vcctrld.keymap()) substituted by the test, so nothing here is
+  // a transcription that could drift.
+  const KM = KEYMAPJSON;
+  window.fetch = async (u) => ({json: async () => ({ok:true, keymap:KM})});
+  await loadKeymap();
+  emit('keymap-loaded ' + (keymap !== null)
+       + ' aliases=' + Object.keys(keymap.aliases).length);
+
+  applyLayout({id:1, target:'Gateway 2000', keyboard:'pc-at-101'});
+  const pop = document.getElementById('pop-keys');
+  pop.hidden = false; pop.style.position = 'static';
+  const key = c => [...document.querySelectorAll('#kbdbody .key')]
+                     .find(b => b.textContent === c);
+  const chord = c => [...document.querySelectorAll('#kbdbody .kchordrow button')]
+                     .find(b => b.textContent === c);
+  const sticky = on => { const e = document.getElementById('kbdsticky');
+                         e.checked = on; e.dispatchEvent(new Event('change')); };
+
+  emit('keys ' + document.querySelectorAll('#kbdbody [data-latch]').length);
+  // Rows of the block must all be the same width or the columns do not line
+  // up, which is the one thing that stops it being a keyboard.
+  const w = e => e.getBoundingClientRect().width.toFixed(1);
+  emit('rowwidths ' + [...document.querySelectorAll('#kbdbody .kmain .kbrow')]
+        .map(w).concat([w(document.querySelector('#kbdbody .kbottom .kbrow')),
+                        w(document.querySelector('#kbdbody .kfrow .kbrow'))])
+        .join(' '));
+
+  sent.length = 0; confirms = 0;
+  key('A').click();
+  emit('lone ' + sent.join(';') + ' confirms=' + confirms);
+
+  // Sticky OFF: a modifier latches and the next key discharges it.
+  sent.length = 0;
+  key('Ctrl').click();
+  emit('latched ' + (key('Ctrl').classList.contains('on') ? 'lit' : 'DARK'));
+  key('C').click();
+  emit('modtap ' + sent.join(';'));
+
+  // ORDER IS THE DAEMON'S JOB NOW, so what this asserts is that the page
+  // sends what was LATCHED and adds no sort of its own. The guarantee that a
+  // letter-first chord still reaches the target modifier-first is asserted
+  // against order_chord() in test_a_chord_is_ordered_for_every_caller, where
+  // the CLI gets it too.
+  sticky(true);
+  sent.length = 0;
+  key('A').click(); key('Ctrl').click();
+  document.getElementById('kbdsend').click();
+  emit('order ' + sent.join(';'));
+
+  // WHAT STICKY CAN EMIT WITH NO MODIFIER IN IT. Sticky is the caller that
+  // can produce arbitrary chords in whatever order a thumb tapped them, and
+  // the daemon reorders every chord it is given -- so the question is whether
+  // this UI can express a sequence whose ORDER was the intent. Latch two
+  // ordinary letters and see what leaves.
+  sent.length = 0;
+  key('B').click(); key('A').click();
+  document.getElementById('kbdsend').click();
+  emit('twoletters ' + sent.join(';'));
+
+  // THE REBOOT, assembled by hand, out of order, with a spare modifier on it.
+  sent.length = 0; confirms = 0;
+  key('Del').click(); key('Shift').click(); key('Alt').click(); key('Ctrl').click();
+  emit('assembled-danger ' + document.getElementById('kbdsend').classList.contains('danger'));
+  document.getElementById('kbdsend').click();
+  emit('assembled ' + sent.join(';') + ' confirms=' + confirms);
+
+  // The pre-built button, and a harmless one for contrast.
+  sticky(false);
+  sent.length = 0; confirms = 0;
+  chord('Ctrl-Alt-Del').click();
+  emit('button ' + sent.join(';') + ' confirms=' + confirms);
+  sent.length = 0; confirms = 0;
+  chord('Ctrl-C').click();
+  emit('harmless ' + sent.join(';') + ' confirms=' + confirms);
+
+  // Declining must send nothing at all.
+  window.confirm = () => false;
+  sent.length = 0;
+  chord('Ctrl-Alt-Del').click();
+  emit('declined sent=' + sent.length);
+  window.confirm = () => { confirms++; return true; };
+
+  // The three absences, and none of them may draw a keyboard.
+  applyLayout({id:null, keyboard:null, reason:'usb4vc has not reported a board'});
+  emit('unknown keys=' + document.querySelectorAll('#kbdbody [data-latch]').length
+       + ' pick=' + !document.getElementById('kbdpick').hidden);
+  applyLayout({id:2, keyboard:null});
+  emit('nolayout keys=' + document.querySelectorAll('#kbdbody [data-latch]').length);
+  applyLayout({id:1, target:'Gateway 2000', keyboard:'pc-at-999'});
+  emit('unknownid keys=' + document.querySelectorAll('#kbdbody [data-latch]').length);
+
+  // A different machine is a different keyboard, not a subset of this one.
+  applyLayout({id:3, target:'Macintosh Plus', keyboard:'mac-plus'});
+  emit('mac fkeys=' + document.querySelectorAll('#kbdbody .kfrow').length
+       + ' arrows=' + document.querySelectorAll('#kbdbody .karrows').length
+       + ' nav=' + document.querySelectorAll('#kbdbody .kcluster').length);
+  sent.length = 0;
+  [...document.querySelectorAll('#kbdbody .key')]
+     .find(b => b.textContent.indexOf('Command') >= 0).click();
+  key('Q').click();
+  emit('maccmd ' + sent.join(';'));
+
+  // WHAT THE LETTER KEYS WILL ACTUALLY TYPE. With Caps Lock lit at the target
+  // `key a` produces A, and the keycaps print A either way -- so the panel
+  // says so, but ONLY from a reading that is present, applicable, proven and
+  // current. Each arm below is a different reason the value does not describe
+  // the target now, and a confident sentence built on any of them is the
+  // retained-reading failure (FINDINGS sec. 33) in a new place.
+  {
+    const good = {available:true, capslock:1, numlock:0, scrolllock:0,
+                  changed_at: Date.now()/1000};
+    const ver = {available:true, ok:true, age_s:10};
+    const say = () => document.getElementById('kbdcaps').hidden ? 0 : 1;
+    const arms = [];
+    lamps(good, 'live', ver);                                arms.push(say());
+    lamps({...good, capslock:0}, 'live', ver);               arms.push(say());
+    lamps(good, 'nosignal', ver);                            arms.push(say());
+    lamps(good, 'live', {available:true, ok:false, age_s:10}); arms.push(say());
+    lamps(good, 'live', {available:true, ok:true, age_s:5000}); arms.push(say());
+    lamps({available:false, why:'unsupported'}, 'live', ver); arms.push(say());
+    lamps(null, 'live', ver);                                arms.push(say());
+    emit('caps ' + arms.join(''));
+  }
+ } catch (e) {
+  document.getElementById('harness-out').textContent = 'THREW ' + e + '\n' + e.stack;
+ }
+})();
+</script>
+"""
+
+
+def test_keyboard_chords_in_a_browser():
+    """Every route to Ctrl-Alt-Del asks first, and every chord goes in order.
+
+    TWO DEFECTS, one of which was live and unreachable and is now reachable.
+
+    1. The confirmation was keyed on the literal string 'ctrl,alt,delete'.
+       The daemon got the same question right ten lines of Python away -- it
+       matches on the SET, "because the caller may send them in any order".
+       The gap survived because exactly one button produced exactly that
+       string and the panel had no Delete key to build the chord any other
+       way. It has one now, and a sticky mode that assembles chords key by
+       key, so `del,alt,ctrl` is three taps away from rebooting the machine
+       with no dialog.
+
+    2. combo() presses in the order given and releases in reverse. A chord
+       latched as [a, ctrl] is sent as press-a, press-ctrl: the target sees
+       the letter typed BEFORE the modifier arrives and the chord quietly
+       becomes a keystroke with a modifier press after it.
+
+    Measured in an engine rather than modelled, because the property is the
+    interaction of four click handlers, a sort and a confirm() -- and a port
+    of that logic would assert the same premise and agree with itself.
+    """
+    print("\nkeyboard chords (measured in chromium)")
+    import shutil
+    import subprocess
+    import tempfile
+
+    chrome = (shutil.which("chromium") or shutil.which("chromium-browser")
+              or shutil.which("google-chrome"))
+    if not chrome:
+        print("  SKIP  no chromium on this host")
+        return
+
+    src = os.path.join(HERE, os.pardir, "daemon")
+    d = tempfile.mkdtemp(prefix="kvmkbd")
+    try:
+        with open(os.path.join(src, "kvm.html"), encoding="utf-8") as f:
+            page = f.read().replace('href="/themes.css"', 'href="themes.css"')
+        shutil.copy(os.path.join(src, "themes.css"),
+                    os.path.join(d, "themes.css"))
+        # THE FIXTURE IS THE DAEMON'S OWN TABLE, serialised here rather than
+        # written out in the harness. A hand-copied keymap in the test would
+        # reintroduce, in the test, exactly the second copy this change took
+        # out of the page.
+        import json as _json
+        with open(os.path.join(d, "page.html"), "w", encoding="utf-8") as f:
+            f.write(page + KBD_HARNESS.replace(
+                "KEYMAPJSON", _json.dumps(vcctrld.keymap())))
+        r = subprocess.run(
+            [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+             "--hide-scrollbars", "--window-size=1580,900",
+             "--virtual-time-budget=30000", "--dump-dom",
+             "file://" + os.path.join(d, "page.html")],
+            capture_output=True, text=True, timeout=90)
+        m = re.search(r'<pre id="harness-out">(.*?)</pre>', r.stdout, re.S)
+        if not m or not m.group(1).strip():
+            check("the harness reported a measurement", False,
+                  "rc=%d, %s, stderr: %s"
+                  % (r.returncode,
+                     "pre present but empty" if "harness-out" in r.stdout
+                     else "pre MISSING from dom",
+                     r.stderr.strip()[-200:] or "(silent)"))
+            return
+        import html as _html
+        text = _html.unescape(m.group(1))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    if text.startswith("THREW"):
+        check("the harness ran without throwing", False, text[:300])
+        return
+    got = {}
+    for line in text.strip().splitlines():
+        k, _, v = line.partition(" ")
+        got[k] = v.strip()
+    for line in text.strip().splitlines():
+        print("   ", line)
+
+    # WITHOUT THE DAEMON'S TABLES THE PANEL REFUSES CHORDS. It cannot tell a
+    # reboot from a harmless chord, and answering "harmless" would be a page
+    # that silently stopped warning.
+    check("with no key table the page knows it has none",
+          got.get("nokeymap-null") == "true", got.get("nokeymap-null"))
+    check("a lone key still goes -- it cannot spell the reboot",
+          got.get("nokeymap-lone") == "key a", got.get("nokeymap-lone"))
+    check("but a chord is held back", got.get("nokeymap-chord") == "sent=0",
+          got.get("nokeymap-chord"))
+    check("and the reboot button sends nothing and asks nothing",
+          got.get("nokeymap-reboot") == "sent=0 confirms=0",
+          got.get("nokeymap-reboot"))
+    check("the tables load from the daemon, not from the page",
+          got.get("keymap-loaded", "").startswith("true aliases="),
+          got.get("keymap-loaded"))
+
+    # The panel drew a whole keyboard, so everything below is about a real one.
+    check("a full keyboard was drawn", int(got.get("keys", 0)) > 85,
+          got.get("keys"))
+    widths = set(got.get("rowwidths", "").split())
+    check("every row of the block is the same width", len(widths) == 1, widths)
+
+    # A lone key is `key`, not `combo`, and asks nothing.
+    check("a lone key sends `key`", got.get("lone") == "key a confirms=0",
+          got.get("lone"))
+    # The latch is VISIBLE. The old code added a class no stylesheet selected,
+    # so a latched modifier looked exactly like an unlatched one.
+    check("a latched modifier is lit", got.get("latched") == "lit",
+          got.get("latched"))
+    check("modifier then key sends one ordered combo",
+          got.get("modtap") == "combo lctrl+c", got.get("modtap"))
+
+    # STICKY CANNOT EXPRESS AN ORDERED SEQUENCE, so the daemon's reorder has
+    # nothing of the user's intent to destroy. Two latched letters go out in
+    # tap order, and order_chord() leaves a modifier-free chord alone -- both
+    # halves measured rather than argued. Raised by the vcctrl session as the
+    # gap in "every existing caller writes ctrl alt delete": this deploy adds
+    # the caller that does not.
+    check("two latched letters go in the order they were tapped",
+          got.get("twoletters") == "combo b+a", got.get("twoletters"))
+
+    # DEFECT 2, now fixed one layer down. The page posts the latch order and
+    # the daemon reorders, so BOTH callers get the guarantee -- see
+    # test_a_chord_is_ordered_for_every_caller. What matters here is that the
+    # page adds no second sort: two implementations agreeing today is how they
+    # come to disagree later.
+    check("the page posts the chord as latched, unsorted",
+          got.get("order") == "combo a+lctrl", got.get("order"))
+
+    # DEFECT 1. The reboot assembled out of order, with a spare Shift on it.
+    check("an assembled reboot warns before it goes",
+          got.get("assembled", "").endswith("confirms=1"), got.get("assembled"))
+    check("an assembled reboot is posted as latched",
+          got.get("assembled", "").startswith("combo delete+lshift+lalt+lctrl"),
+          got.get("assembled"))
+    check("Send says it is dangerous before the dialog does",
+          got.get("assembled-danger") == "true", got.get("assembled-danger"))
+    check("the pre-built reboot button warns too",
+          got.get("button") == "combo ctrl+alt+delete confirms=1",
+          got.get("button"))
+    check("a harmless chord does NOT ask",
+          got.get("harmless") == "combo ctrl+c confirms=0", got.get("harmless"))
+    check("declining the warning sends nothing",
+          got.get("declined") == "sent=0", got.get("declined"))
+
+    # Unknown must not draw a keyboard, and must never draw the PC's.
+    check("an unidentified board draws no keys and offers the picker",
+          got.get("unknown") == "keys=0 pick=true", got.get("unknown"))
+    check("a board with no configured layout draws no keys",
+          got.get("nolayout") == "keys=0", got.get("nolayout"))
+    check("a layout id this page does not have draws no keys",
+          got.get("unknownid") == "keys=0", got.get("unknownid"))
+
+    # A second machine is the whole point of the layout table.
+    check("the Macintosh has no F-row, arrows or nav cluster",
+          got.get("mac") == "fkeys=0 arrows=0 nav=0", got.get("mac"))
+    check("its Command key goes on the wire as leftmeta",
+          got.get("maccmd") == "combo leftmeta+q", got.get("maccmd"))
+
+    # Lit-and-trustworthy is the ONLY arm that may speak. The other six are
+    # each a reason the reading is not about the target now.
+    check("the Caps Lock warning appears only on a proven current reading",
+          got.get("caps") == "1000000", got.get("caps"))
 
 
 def test_wrapper_out_is_the_callers_disk():

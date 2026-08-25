@@ -289,6 +289,19 @@ targets:
     # client; the capability still refuses if no file server is answering,
     # which is a different fact and reported under a different word.
     transfer: supported
+    # Which KEYBOARD the web KVM draws for this machine -- a layout id the
+    # page resolves against its own table, not a machine name and not a
+    # boolean. The daemon never draws a key and deliberately knows nothing
+    # about what is on one; it only publishes which layout this board asks
+    # for. That split is what lets a page older than its config say "board 1
+    # asks for a layout I do not have" instead of showing the wrong keyboard.
+    #
+    # Omitting it is NOT "use the default". A configured targets: list
+    # replaces the built-in table wholesale, so a row with no `keyboard:`
+    # means this board has no declared layout and the page draws none. That
+    # is deliberate: a Macintosh drawn as a PC is a picture of a keyboard
+    # that is not in the building.
+    keyboard: pc-at-101
 
   - board_id: 3
     name: Example Macintosh
@@ -301,6 +314,10 @@ targets:
     # `capabilities.files` implementing its own answer to "how do you know it
     # arrived". The plumbing is shared; that proof is not.
     transfer: unsupported
+    # A different keyboard, not a subset of the PC's: no function row, no
+    # arrows, no Home/End/PgUp/PgDn, and Command and Option where a PC has
+    # Alt and Ctrl.
+    keyboard: mac-plus
 
 # ---------------------------------------------------------------------------
 # Harness. See docs/HARNESS-STANDARD.md; project-specific parameters belong in

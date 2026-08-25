@@ -258,6 +258,49 @@
     body #pop-keys button:active { background:var(--rule); }
     body #pop-keys button.on { color:var(--green); background:transparent; }
     body #pop-keys button.danger { color:var(--red); }
+    /* ── NO QWERTY HERE, AND THAT IS THE DECISION ─────────────────────────
+       Not an omission and not "it did not fit". On a phone the operator
+       already has a keyboard: tapping the picture focuses #ghost, the
+       transparent full-bleed input above, and iOS raises the system keyboard
+       -- that is the whole reason #ghost exists. Fifteen columns at 390px is
+       a 24px key, below any usable touch target, and it would be the THIRD
+       way to type the same letter on the same screen.
+       So the block is rendered and hidden rather than not rendered: one DOM,
+       one code path, and dragging a desktop window down to phone width needs
+       no re-render. The compact row below carries what the block was
+       carrying that the phone actually needs -- Tab, Enter, Backspace,
+       Space, Caps and the modifiers. */
+    body #pop-keys .kmain, body #pop-keys .kbottom { display:none; }
+    body #pop-keys .kcompact { display:flex; }
+    /* EVERY ROW WRAPS HERE. On a desktop a row is a GEOMETRY -- fixed key
+       units, columns that line up -- and wrapping would destroy it. On a
+       phone the two rows that survive are bags of named keys at thumb size,
+       and thirteen F-keys at 46px is 600px of row in a 374px panel. The old
+       rail wrapped; not carrying that over put the F-keys off the right-hand
+       edge, which is a control you cannot reach. */
+    body #pop-keys .kbrow { flex-wrap:wrap; }
+    /* 46px of HEIGHT is not negotiable -- it is the touch target, and every
+       key on this panel is one. The width is: 13px of side padding put the
+       F-row on three lines and the whole panel at 639px of an 844px phone,
+       measured, which is a control surface that has eaten the picture it is
+       controlling. 9px brings it back without taking a pixel off the target
+       a thumb actually has to hit. */
+    body #pop-keys .kbrow .key { width:auto; height:auto;
+                                 min-height:46px; padding:0 9px;
+                                 font:500 15px/1 var(--sans); }
+    body #pop-keys .kcluster .key, body #pop-keys .karrows .key {
+      min-width:52px; padding:0;
+    }
+    /* CLAMPED, NOT CUT. The coverage sentence is four lines here and it cost
+       88px of an already tall panel, measured -- and it is a thing read once,
+       sitting above the keys it is about. Two lines and a tap: the full text
+       goes into the log, which is the same gesture the LED lamps already use
+       for the one other explanation on this page that is easy to get wrong.
+       Tooltips do not exist on a touch screen, so the tap has to be the way. */
+    body #kbdnote {
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+      overflow:hidden;
+    }
     #zoom { max-width:66px; font-size:10px; padding:0 3px; }
     /* Room for a thumb: a 34px swatch is a comfortable target with a mouse
        and a miss on a phone. */
@@ -1171,6 +1214,63 @@
     display:flex; flex-direction:column; gap:5px; padding:8px;
     width:max-content; max-width:calc(100vw - 16px);
   }
+  /* KEY UNITS, because a keyboard is not a row of equal buttons. Every width
+     on a real board is a multiple of one alphanumeric key -- Backspace is 2u,
+     the left Shift 2.25u, the space bar 9u -- and that is what puts Q above
+     the gap between A and S. Getting it wrong does not read as "slightly off
+     widths", it reads as not being a keyboard.
+     The arithmetic below is why the widths cannot just be flex-grow: a 2u key
+     must span two 1u keys AND THE GAP BETWEEN THEM, or every row drifts left
+     by a gap per wide key and the columns stop lining up. */
+  #pop-keys { --ku:32px; --kgap:4px; --kh:32px; }
+  #pop-keys .kbrow { display:flex; gap:var(--kgap); align-items:center; }
+  #pop-keys .kbrow > * { flex:none; }
+  #pop-keys .kbrow .key {
+    width:calc(var(--ku) * var(--w, 1) + var(--kgap) * (var(--w, 1) - 1));
+    min-width:0; height:var(--kh); min-height:var(--kh);
+    padding:0; font:500 12px/1 var(--sans);
+    display:flex; flex-direction:column; gap:1px;
+    align-items:center; justify-content:center;
+  }
+  /* WIDTH FROM THE WORD, for keys that are not part of a geometry. The lock
+     keys sit outside the block -- they belong to a numeric keypad this layout
+     does not draw -- so a key unit means nothing to them, and "Num Lock" in a
+     32px box wraps to two lines and reads as neither. Full names are
+     deliberate here ("Scroll" alone is not a key anybody recognises), so the
+     box follows the name rather than the name being cut to fit the box. */
+  #pop-keys .kbrow .key.kauto { width:auto; padding:0 8px; white-space:nowrap; }
+  /* Dead space in a row -- the gap between Esc and F1, and between the F-key
+     groups. A spacer rather than a margin so it is one more entry in the same
+     list and a layout can put one anywhere. */
+  #pop-keys .kbrow .kgap {
+    width:calc(var(--ku) * var(--w, 1) + var(--kgap) * (var(--w, 1) - 1));
+    height:1px;
+  }
+  /* The shifted legend, small and ABOVE -- where it is printed on the key
+     itself. `1` and `!` are one key and the panel should say so, or the only
+     way to find `!` is to know it is Shift-1 already.
+     Above rather than beside: side by side, "!1" reads as a key that types
+     two characters.
+     A COLOUR, NOT AN ALPHA. `opacity:.55` on 8px text is a legend nobody can
+     read, and no contrast floor can see it -- the token stays green while the
+     glyph renders at 2:1. --muted is fitted for exactly this. */
+  #pop-keys .key .sub { font-size:8px; line-height:1; color:var(--muted); }
+  #pop-keys .kmain, #pop-keys .kfrow, #pop-keys .kbottom,
+  #pop-keys .kcompact, #pop-keys .kchords {
+    display:flex; flex-direction:column; gap:var(--kgap);
+  }
+  /* The phone's stand-in for the block, hidden at every other width. Its
+     counterpart lives in the max-width:640px block below, where the reasoning
+     for the split is written down. */
+  #pop-keys .kcompact { display:none; }
+  /* THE NAV CLUSTER, in hardware order: Ins/Home/PgUp over Del/End/PgDn.
+     Named areas rather than nth-child so the DOM stays in reading order for
+     anyone arriving by keyboard or screen reader, which is the same argument
+     the arrow cluster below already makes. */
+  #pop-keys .kcluster {
+    display:grid; gap:var(--kgap);
+    grid-template-columns:repeat(3, auto);
+  }
   #pop-keys .krow { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
   /* The locks and the arrow cluster share a row, and the cluster is two rows
      tall, so the locks centre against it rather than sitting on its top edge. */
@@ -1196,10 +1296,64 @@
      again at id strength or the menu is permanently open. */
   #pop-keys[hidden] { display:none; }
   #pop-keys button { flex:none; }
-  /* .pop[hidden] is (0,2,0) and loses to the id above, so it has to be said
-     again at id strength or the menu is permanently open. */
-  #pop-keys[hidden] { display:none; }
-  #pop-keys button { flex:none; }
+
+  /* ── the panel header ──────────────────────────────────────────────────
+     The layout's name, the sticky switch, and the two buttons that only
+     exist while something is latched. */
+  #kbdhdr { display:flex; align-items:center; gap:8px; }
+  #kbdname { font:600 var(--t-data) var(--sans); color:var(--muted);
+             margin-right:auto; }
+  #kbdstickywrap { display:flex; align-items:center; gap:5px; cursor:pointer;
+                   font:500 var(--t-data) var(--sans); color:var(--text);
+                   user-select:none; }
+  #kbdstickywrap input { margin:0; }
+  #kbdsend, #kbdclear { min-height:26px; padding:0 9px;
+                        font:600 var(--t-data) var(--sans); }
+  #kbdsend { color:var(--green); border-color:var(--green); }
+  #kbdsend[hidden], #kbdclear[hidden], #kbdheld[hidden], #kbdnote[hidden],
+  #kbdcaps[hidden], #kbdpick[hidden] { display:none; }
+  #kbdcaps { font:600 var(--t-data) var(--sans); color:var(--yellow);
+             line-height:1.35; max-width:40em; }
+  /* WARNS BY LOOKING LIKE THE THING IT SENDS. When what is latched spells the
+     reboot, Send stops being the green "go" button -- it is about to restart
+     the machine, and it says so before the dialog does. */
+  #kbdsend.danger { color:var(--red); border-color:var(--red); }
+  #kbdheld {
+    font:600 var(--t-data) var(--sans); color:var(--green);
+    padding:4px 7px; border:1px solid var(--green); border-radius:5px;
+    background:transparent;
+  }
+  #kbdheld.danger { color:var(--red); border-color:var(--red); }
+  #kbdnote { font:500 var(--t-data) var(--sans); color:var(--muted);
+             line-height:1.35; max-width:40em; cursor:pointer; }
+  #kbdnote .warn { color:var(--yellow); }
+  #kbdpick { display:flex; align-items:center; gap:7px;
+             font:500 var(--t-data) var(--sans); color:var(--muted); }
+  #kbdpicksel { min-height:28px; }
+  #kbdbody { display:flex; flex-direction:column; gap:var(--kgap); }
+  #kbdbody:empty { display:none; }
+
+  /* LATCHED IS A COLOUR THAT EXISTS. The old code added a `sticky` class and
+     nothing in any stylesheet selected it, so tapping Ctrl latched it and the
+     button looked exactly as it had a moment before -- the one piece of
+     invisible state in this panel, invisible. `on` is the class the rest of
+     the page already styles for exactly this. */
+  #pop-keys button.on {
+    border-color:var(--green); color:var(--green);
+    background:color-mix(in srgb, var(--green) 12%, transparent);
+  }
+  #pop-keys button.danger { color:var(--red); border-color:var(--red); }
+  #pop-keys button.on.danger {
+    border-color:var(--red); color:var(--red);
+    background:color-mix(in srgb, var(--red) 14%, transparent);
+  }
+  /* NO "unavailable key" STYLE HERE, deliberately. A key the target does not
+     have is simply absent from that target's layout -- the ADB entry has no
+     function row at all rather than a greyed one -- and a key that is merely
+     UNMEASURED must not be greyed, because greying it asserts it does not
+     work and nobody has looked. If a layout ever does need to draw a key as
+     unavailable, `disabled` is the mechanism: it already has a treatment on
+     this page, and it is not an opacity over text. */
 
   button, select {
     font:500 var(--t-read)/1 var(--sans); color:var(--text);
@@ -1887,47 +2041,53 @@
        F-keys split across two lines and the arrows landed next to Scroll.
        Function row, editing row, locks with the arrow cluster beside them --
        the shape a hand already knows. -->
+  <!-- DRAWN FROM A LAYOUT, not typed out here. The rows below used to be
+       hand-written markup for one keyboard, which is fine right up until a
+       second protocol board is fitted: an IBM PC board and a Lisa/Mac/ADB
+       board are not the same keyboard with a few keys missing. One of them
+       has no function row, no arrows and no Home/End/PgUp/PgDn at all.
+       So the keys are DATA (see LAYOUTS in the script) and the daemon says
+       which layout this board asks for -- this page names no machine and
+       maps no board id, for the same reason the rig table does not. Everything
+       under #kbdbody is built by drawKeyboard(); the containers here are the
+       only fixed part. -->
   <div id="pop-keys" class="pop" role="dialog" aria-label="Keys" hidden>
-    <div class="krow">
-      <button data-key="f1">F1</button><button data-key="f2">F2</button>
-      <button data-key="f3">F3</button><button data-key="f4">F4</button>
-      <button data-key="f5">F5</button><button data-key="f6">F6</button>
-      <button data-key="f7">F7</button><button data-key="f8">F8</button>
-      <button data-key="f9">F9</button><button data-key="f10">F10</button>
+    <div id="kbdhdr">
+      <span id="kbdname">—</span>
+      <!-- ONE CHECKBOX FOR THE WHOLE PANEL. Modifiers have always latched on
+           tap; this generalises it to every key, which is the only way to
+           build a chord out of keys a browser will not let through and the
+           only way to build one at all with a thumb. Off is the behaviour
+           this panel has always had. -->
+      <label id="kbdstickywrap"><input type="checkbox" id="kbdsticky">Sticky</label>
+      <button id="kbdsend" hidden
+              title="Send this chord to the target">Send</button>
+      <button id="kbdclear" hidden
+              title="Let go of everything latched — sends nothing">Clear</button>
     </div>
-    <div class="krow">
-      <button data-key="esc">Esc</button>
-      <button data-mod="lctrl">Ctrl</button>
-      <button data-mod="lalt">Alt</button>
-      <button data-mod="lshift">Shift</button>
-      <button data-key="tab">Tab</button>
-      <button data-key="backspace">Backspace</button>
-      <button data-key="enter">Enter</button>
-    </div>
-    <!-- Sendable because a modern keyboard may not have them at all. Caps
-         Lock is the one that matters: it is the LED round trip this rig uses
-         to prove a keystroke reached the machine, and until now the only way
-         to toggle it was to own a keyboard with the key on it. Full names
-         because there is room: "Scroll" alone is not a key anybody recognises.
-         The arrows are an inverted T, which is the only arrangement of four
-         arrow keys anyone can use without reading them. -->
-    <div class="krow klocks">
-      <button data-key="capslock">Caps Lock</button>
-      <button data-key="numlock">Num Lock</button>
-      <button data-key="scrolllock">Scroll Lock</button>
-      <div class="karrows">
-        <button data-key="up" aria-label="up">↑</button>
-        <button data-key="left" aria-label="left">←</button>
-        <button data-key="down" aria-label="down">↓</button>
-        <button data-key="right" aria-label="right">→</button>
-      </div>
-    </div>
-    <!-- The rule is the same object as the | between the menu buttons: it
-         separates the keys that type from the key that reboots. -->
-    <hr>
-    <div class="krow">
-      <button data-combo="ctrl,alt,delete" class="danger"
-              title="Send Ctrl+Alt+Delete — reboots the target">Ctrl-Alt-Del</button>
+    <!-- WHAT IS LATCHED, IN WORDS. A held chord is invisible state that fires
+         on the next tap, and one of the things it can spell reboots the
+         machine. The input lock's owner gets a readout for the same reason. -->
+    <div id="kbdheld" hidden aria-live="polite"></div>
+    <div id="kbdnote" hidden></div>
+    <!-- WHAT THESE KEYS WILL ACTUALLY TYPE. With Caps Lock lit at the target,
+         `key a` produces A -- the keycaps print A either way and the panel
+         cannot tell you from a keycap which one you are about to get. The
+         lamp in the header has said so all along, but the person clicking
+         keys is looking here.
+         Drawn ONLY from a reading that is current and proven: the same
+         staleness judgement lamps() already makes, reused rather than a
+         second copy of it, because a retained value from before the machine
+         was switched off would be a confident sentence about nothing. -->
+    <div id="kbdcaps" hidden></div>
+    <div id="kbdbody"></div>
+    <!-- ONLY WHEN THE BOARD CANNOT ANSWER. Choosing a layout by hand is a
+         DECLARED fact in the harness-standard sense -- a person said so,
+         nothing observed it -- so the panel goes on saying that for as long
+         as it is true, and a board.changed event drops the override. -->
+    <div id="kbdpick" hidden>
+      <label for="kbdpicksel">Draw the keyboard for</label>
+      <select id="kbdpicksel"></select>
     </div>
   </div>
 
@@ -2871,43 +3031,606 @@ async function post(cmd, body) {
   } catch (e) { note(`${cmd}: ${e}`); }
 }
 
-// Sticky modifiers. Tap Ctrl, then a key: the pair goes as one chord. This is
-// how a touch screen sends a chord at all, and on desktop it covers the chords
-// Firefox and Safari reserve for themselves -- Keyboard Lock is Chromium-only,
-// so those keys never reach the page however it is written.
-const mods = new Set();
-function tapKey(k) {
-  if (mods.size) {
-    post('combo', {keys:[...mods, k]});
-    mods.clear();
-    document.querySelectorAll('[data-mod]').forEach(b => b.classList.remove('sticky'));
-  } else {
-    post('key', {keys:[k]});
-  }
+// ══════════════════════════════════════════════════ the on-screen keyboard
+//
+// WHY THIS IS DATA. The rig drives a Gateway 2000 over the USB4VC IBM PC
+// board and a Macintosh Plus over the Lisa/Mac/ADB board, swapped by hand.
+// Those are not one keyboard with a few keys missing: the Mac Plus has no
+// function row, no arrow keys, no Home/End/PgUp/PgDn, and Command and Option
+// where a PC has Alt and Ctrl. Hand-written markup for one of them is a page
+// that lies about the other.
+//
+// So a layout is an entry in this table, and the DAEMON says which entry this
+// board asks for (`board.keyboard` in /state.json). Nothing here maps a board
+// id to anything -- that table lives in the daemon, once, exactly as it does
+// for `target`, `leds` and `transfer`.
+//
+// A key spec:
+//     {k:'a', cap:'A'}                 sends `key a`
+//     {k:'1', cap:'1', sub:'!'}        keycap with its shifted legend
+//     {mod:'lctrl', cap:'Ctrl'}        a modifier: latches rather than firing
+//     {w:1.5}                          dead space, for the stagger
+//     ... plus w: on any of them, in key units
+// `cap` is what is printed and `k` is what goes on the wire; they are allowed
+// to differ, and on a Macintosh they must -- the keycap says ⌘ and the wire
+// wants `leftmeta`.
+const LAYOUTS = {
+  'pc-at-101': {
+    name: 'PC/AT 101-key',
+    fkeys: [
+      {k:'esc', cap:'Esc'}, {w:1},
+      {k:'f1',cap:'F1'},{k:'f2',cap:'F2'},{k:'f3',cap:'F3'},{k:'f4',cap:'F4'},
+      {w:0.5},
+      {k:'f5',cap:'F5'},{k:'f6',cap:'F6'},{k:'f7',cap:'F7'},{k:'f8',cap:'F8'},
+      {w:0.5},
+      {k:'f9',cap:'F9'},{k:'f10',cap:'F10'},{k:'f11',cap:'F11'},
+      {k:'f12',cap:'F12'},
+    ],
+    // Four rows of 15u each. The widths are a real 101-key board's, which is
+    // what puts Q above the gap between A and S.
+    main: [
+      [{k:'`',cap:'`',sub:'~'},{k:'1',cap:'1',sub:'!'},{k:'2',cap:'2',sub:'@'},
+       {k:'3',cap:'3',sub:'#'},{k:'4',cap:'4',sub:'$'},{k:'5',cap:'5',sub:'%'},
+       {k:'6',cap:'6',sub:'^'},{k:'7',cap:'7',sub:'&'},{k:'8',cap:'8',sub:'*'},
+       {k:'9',cap:'9',sub:'('},{k:'0',cap:'0',sub:')'},{k:'-',cap:'-',sub:'_'},
+       {k:'=',cap:'=',sub:'+'},{k:'backspace',cap:'Backspace',w:2}],
+      [{k:'tab',cap:'Tab',w:1.5},{k:'q',cap:'Q'},{k:'w',cap:'W'},
+       {k:'e',cap:'E'},{k:'r',cap:'R'},{k:'t',cap:'T'},{k:'y',cap:'Y'},
+       {k:'u',cap:'U'},{k:'i',cap:'I'},{k:'o',cap:'O'},{k:'p',cap:'P'},
+       {k:'[',cap:'[',sub:'{'},{k:']',cap:']',sub:'}'},
+       {k:'\\',cap:'\\',sub:'|',w:1.5}],
+      [{k:'capslock',cap:'Caps',w:1.75},{k:'a',cap:'A'},{k:'s',cap:'S'},
+       {k:'d',cap:'D'},{k:'f',cap:'F'},{k:'g',cap:'G'},{k:'h',cap:'H'},
+       {k:'j',cap:'J'},{k:'k',cap:'K'},{k:'l',cap:'L'},
+       {k:';',cap:';',sub:':'},{k:'\'',cap:'\'',sub:'"'},
+       {k:'enter',cap:'Enter',w:2.25}],
+      [{mod:'lshift',cap:'Shift',w:2.25},{k:'z',cap:'Z'},{k:'x',cap:'X'},
+       {k:'c',cap:'C'},{k:'v',cap:'V'},{k:'b',cap:'B'},{k:'n',cap:'N'},
+       {k:'m',cap:'M'},{k:',',cap:',',sub:'<'},{k:'.',cap:'.',sub:'>'},
+       {k:'/',cap:'/',sub:'?'},{mod:'rshift',cap:'Shift',w:2.75}],
+    ],
+    bottom: [
+      {mod:'lctrl',cap:'Ctrl',w:1.5},{mod:'lalt',cap:'Alt',w:1.5},
+      {k:'space',cap:'Space',w:9},
+      {mod:'ralt',cap:'Alt',w:1.5},{mod:'rctrl',cap:'Ctrl',w:1.5},
+    ],
+    // The phone's stand-in for the block above: what the block was carrying
+    // that a thumb still needs. Esc is not here because the F-row shows on a
+    // phone too and already has it.
+    compact: [
+      {k:'tab',cap:'Tab',auto:true},{k:'backspace',cap:'Backspace',auto:true},
+      {k:'enter',cap:'Enter',auto:true},{k:'space',cap:'Space',auto:true},
+      {k:'capslock',cap:'Caps Lock',auto:true},
+      {mod:'lshift',cap:'Shift',auto:true},{mod:'lctrl',cap:'Ctrl',auto:true},
+      {mod:'lalt',cap:'Alt',auto:true},
+    ],
+    nav: [{k:'insert',cap:'Ins',auto:true},{k:'home',cap:'Home',auto:true},
+          {k:'pgup',cap:'PgUp',auto:true},{k:'delete',cap:'Del',auto:true},
+          {k:'end',cap:'End',auto:true},{k:'pgdn',cap:'PgDn',auto:true}],
+    // Caps Lock is NOT here -- it is in the block, where a keyboard puts it,
+    // and in `compact` for the phone. Num and Scroll stay separate: they are
+    // the PS/2 return channel this rig proves keystrokes with, they belong to
+    // a numeric keypad this layout does not draw, and FINDINGS sec. 3 says
+    // never to send a lock key mid-sweep. Full names because there is room --
+    // "Scroll" alone is not a key anybody recognises.
+    locks: [{k:'numlock',cap:'Num Lock',auto:true},
+            {k:'scrolllock',cap:'Scroll Lock',auto:true}],
+    arrows: true,
+    chords: [
+      {keys:['ctrl','c'], cap:'Ctrl-C',
+       title:'Break the running program — the one every DOS user reaches for'},
+      {keys:['ctrl','pause'], cap:'Ctrl-Break',
+       title:'The harder break, caught in places Ctrl-C is not'},
+      {keys:['ctrl','z'], cap:'Ctrl-Z',
+       title:'^Z, end-of-file — this is what ends COPY CON'},
+      {keys:['ctrl','s'], cap:'Ctrl-S',
+       title:'Pause scrolling output'},
+      {keys:['ctrl','p'], cap:'Ctrl-P',
+       title:'Toggle echoing output to the printer'},
+      // SAYS WHAT IT IS RATHER THAN IMPLYING A FUNCTION. Ctrl-A is not a DOS
+      // command-line shortcut; it does things inside EDIT and QBasic and at
+      // C:\> it is a control character. It is here because it was asked for.
+      {keys:['ctrl','a'], cap:'Ctrl-A',
+       title:'^A — a control character at the DOS prompt; EDIT and QBasic '
+           + 'give it meanings, COMMAND.COM does not'},
+      {keys:['ctrl','alt','delete'], cap:'Ctrl-Alt-Del', danger:true},
+    ],
+  },
+
+  // NOT VERIFIED AGAINST THE HARDWARE, and the panel says so where the
+  // operator will read it. This is drawn only when board 3 is fitted, so it
+  // costs the Gateway nothing -- but a keyboard drawn from memory is exactly
+  // the sort of plausible-looking wrong answer this rig keeps being bitten
+  // by, and it must not read as measured. The M0110's bottom row in
+  // particular is written from recollection.
+  'mac-plus': {
+    // THE KEYBOARD'S NAME, NOT THE MACHINE'S. Which computer this board
+    // implies is the daemon's answer and appears in the tooltip beside it;
+    // a second copy here is the hardcoded table phase 5 took out of the rig
+    // panel, growing back in a different room.
+    name: 'Apple M0110',
+    unverified: 'This layout has not been checked against the machine. The '
+              + 'key positions — the bottom row especially — are from '
+              + 'recollection, not from the hardware. The KEYS are right; '
+              + 'treat the arrangement as a sketch.',
+    absent: 'No function row, no arrow keys and no Home/End/PgUp/PgDn: this '
+          + 'keyboard has none of them. Restart is Command-Control-Power, and '
+          + 'there is no Power key here for vcctrl to send.',
+    main: [
+      [{k:'`',cap:'`',sub:'~'},{k:'1',cap:'1',sub:'!'},{k:'2',cap:'2',sub:'@'},
+       {k:'3',cap:'3',sub:'#'},{k:'4',cap:'4',sub:'$'},{k:'5',cap:'5',sub:'%'},
+       {k:'6',cap:'6',sub:'^'},{k:'7',cap:'7',sub:'&'},{k:'8',cap:'8',sub:'*'},
+       {k:'9',cap:'9',sub:'('},{k:'0',cap:'0',sub:')'},{k:'-',cap:'-',sub:'_'},
+       {k:'=',cap:'=',sub:'+'},{k:'backspace',cap:'Backspace',w:2}],
+      [{k:'tab',cap:'Tab',w:1.5},{k:'q',cap:'Q'},{k:'w',cap:'W'},
+       {k:'e',cap:'E'},{k:'r',cap:'R'},{k:'t',cap:'T'},{k:'y',cap:'Y'},
+       {k:'u',cap:'U'},{k:'i',cap:'I'},{k:'o',cap:'O'},{k:'p',cap:'P'},
+       {k:'[',cap:'[',sub:'{'},{k:']',cap:']',sub:'}'},{w:1.5}],
+      [{k:'capslock',cap:'Caps',w:1.75},{k:'a',cap:'A'},{k:'s',cap:'S'},
+       {k:'d',cap:'D'},{k:'f',cap:'F'},{k:'g',cap:'G'},{k:'h',cap:'H'},
+       {k:'j',cap:'J'},{k:'k',cap:'K'},{k:'l',cap:'L'},
+       {k:';',cap:';',sub:':'},{k:'\'',cap:'\'',sub:'"'},
+       {k:'enter',cap:'Return',w:2.25}],
+      [{mod:'lshift',cap:'Shift',w:2.25},{k:'z',cap:'Z'},{k:'x',cap:'X'},
+       {k:'c',cap:'C'},{k:'v',cap:'V'},{k:'b',cap:'B'},{k:'n',cap:'N'},
+       {k:'m',cap:'M'},{k:',',cap:',',sub:'<'},{k:'.',cap:'.',sub:'>'},
+       {k:'/',cap:'/',sub:'?'},{mod:'rshift',cap:'Shift',w:2.75}],
+    ],
+    // ⌘ is `leftmeta` and ⌥ is `lalt`: the keycap and the wire name are
+    // genuinely different things here, which is why `cap` exists.
+    bottom: [
+      {mod:'lalt',cap:'⌥',aria:'Option',w:1.75},
+      {mod:'leftmeta',cap:'⌘',aria:'Command',w:1.5},
+      {k:'space',cap:'Space',w:8.5},
+      {mod:'rightmeta',cap:'⌘',aria:'Command',w:1.5},
+      {mod:'ralt',cap:'⌥',aria:'Option',w:1.75},
+    ],
+    compact: [
+      {k:'tab',cap:'Tab',auto:true},{k:'backspace',cap:'Backspace',auto:true},
+      {k:'enter',cap:'Return',auto:true},{k:'space',cap:'Space',auto:true},
+      {k:'capslock',cap:'Caps Lock',auto:true},{mod:'lshift',cap:'Shift',auto:true},
+      {mod:'leftmeta',cap:'⌘ Command',auto:true},
+      {mod:'lalt',cap:'⌥ Option',auto:true},
+    ],
+    nav: [],
+    // Num Lock and Scroll Lock are UNSUPPORTED here, not unmeasured: ADB has
+    // no message in which a Macintosh reports lock-key state back, which is
+    // the same fact `leds: unsupported` already records for board 3.
+    locks: [],
+    arrows: false,
+    chords: [
+      {keys:['leftmeta','.'], cap:'⌘ .', title:'Cancel the current operation'},
+      {keys:['leftmeta','q'], cap:'⌘ Q', title:'Quit the front application'},
+      {keys:['leftmeta','lshift','3'], cap:'⌘ ⇧ 3',
+       title:'Write a screen snapshot to the disk'},
+      // Deliberately no restart button. Command-Control-Power needs a Power
+      // key this keyboard does not have; a danger-coloured button that does
+      // nothing is worse than no button, because it teaches the operator to
+      // distrust the panel rather than the control.
+    ],
+  },
+};
+
+// EVERY KEY IS UNMEASURED UNTIL SOMEBODY MEASURES IT. The Pi hands raw evdev
+// codes to the STM32 protocol board and the Linux-to-PS/2 mapping lives in
+// that firmware, so which of these keys actually arrives at the target is not
+// derivable from anything on this side -- only measurable at the machine.
+// WEBKVM.md sec. 5.2 says so and its step 7 was never run.
+//
+// Drawing them normally asserts they work; greying them asserts they do not.
+// Both are claims and neither has been measured, so the panel says the true
+// thing once, in words, and draws every key alike. When the sweep runs, its
+// results go here and this line shrinks to the keys still unproven.
+const COVERAGE_NOTE =
+  'None of these keys have been measured at the target. The Pi hands raw '
++ 'key codes to the protocol board and the mapping lives in its firmware, so '
++ 'which of them arrive is measurable only at the machine (WEBKVM.md 5.2).';
+
+// ── latching ──────────────────────────────────────────────────────────────
+// `latched` is an ORDERED list, because combo() presses in the order it is
+// given -- see sendChord() for why that order then gets rewritten.
+//
+// Sticky OFF is exactly the behaviour this panel has always had: modifiers
+// latch on tap, the next real key fires the chord and clears. Sticky ON
+// extends the same latch to every key, which is the only way to build a chord
+// with a thumb and the only way at all to send the chords Firefox and Safari
+// reserve for themselves -- Keyboard Lock is Chromium-only, so those keys
+// never reach the page however it is written.
+let sticky = false;
+let latched = [];                        // [{key, cap, isMod}]
+
+// ── THE KEY TABLES COME FROM THE DAEMON ───────────────────────────────────
+//
+// This page used to carry its own transcription of the alias table and its
+// own idea of which chord is the reboot, kept honest by a test that read both
+// files and compared them. A test that two tables agree is a good answer to a
+// question that should not have been asked: there is one daemon, it owns
+// NAMED_KEYS, and it can say what it knows.
+//
+// So `/keymap.json` publishes the aliases, the modifier order and the reboot
+// chord, and `vcctrl keymap` prints the same object from the same command.
+// Nothing below transcribes any of it.
+//
+// The ORDERING is not here at all any more -- the daemon sorts every chord it
+// is given, so the CLI gets the same guarantee this panel does. What is still
+// here is the QUESTION "is this the reboot", because the answer has to be
+// known BEFORE sending in order to ask; the daemon asks it again on arrival
+// for its own reasons, from the same table.
+let keymap = null;
+
+async function loadKeymap() {
+  if (keymap) return true;
+  try {
+    const r = await fetch('/keymap.json');
+    const j = await r.json();
+    if (!j || !j.ok || !j.keymap) return false;
+    keymap = j.keymap;
+    // Anything drawn before it arrived was drawn without it, and the chord
+    // tooltips are decided at draw time -- so redraw once on the transition
+    // rather than leaving a Ctrl-Alt-Del button whose tooltip does not know
+    // what it is. This runs once, within a moment of load.
+    if (layoutNow) drawKeyboard(layoutNow);
+    paintLatched();
+    return true;
+  } catch (e) { return false; }
 }
-document.querySelectorAll('[data-mod]').forEach(b => b.onclick = () => {
-  const m = b.dataset.mod;
-  if (mods.has(m)) { mods.delete(m); b.classList.remove('sticky'); }
-  else { mods.add(m); b.classList.add('sticky'); }
-});
-document.querySelectorAll('[data-key]').forEach(b => b.onclick = () => tapKey(b.dataset.key));
-document.querySelectorAll('[data-combo]').forEach(b => b.onclick = () => {
-  const keys = b.dataset.combo.split(',');
-  // CONFIRM THE ONES THAT REBOOT. Ctrl+Alt+Delete sits in a rail of keys that
-  // are all harmless, at thumb distance from Esc and the arrows, and it is
-  // the only one whose mis-tap costs the machine's state. Everything else on
-  // this page that destroys something asks first; this was the gap.
+
+const canon = k => {
+  const n = String(k).toLowerCase();
+  return (keymap && keymap.aliases && keymap.aliases[n]) || n;
+};
+
+// IS THIS THE REBOOT? A SUPERSET TEST ON THE SET, not a string match.
+//
+// This used to be a table keyed on the literal string 'ctrl,alt,delete', and
+// the daemon got it right ten lines of Python away: it matches on the set,
+// "because the caller may send them in any order". The gap was unreachable
+// only because one button produced that one string. Sticky makes it reachable
+// the obvious way -- latch Ctrl, latch Alt, latch Del, press Send -- and there
+// was no Delete key on this panel to finish the chord with until now.
+//
+// Superset, not equality: Ctrl-Alt-Shift-Del is still a reboot with a spare
+// finger on it. And it runs on the canonical names, because the modifier
+// buttons send `lctrl` and `lalt`, which is what walked past the daemon's
+// version of this check too.
+//
+// RETURNS null WHEN IT CANNOT TELL, and that is a third answer rather than a
+// polite "no". Without the daemon's table this function has no basis for an
+// opinion, and answering `false` would be a page that quietly stopped warning
+// -- the failure that hides itself. Callers must treat null as "refuse".
+function isReboot(keys) {
+  if (!keymap) return null;
+  const s = new Set(keys.map(canon));
+  return keymap.reboot.every(k => s.has(k));
+}
+
+// The wording is fixed and the confirmation is UNCONDITIONAL: every route to
+// this chord passes through here, so there is no way to assemble a reboot
+// that skips it.
+function rebootWarning() {
+  return 'Send Ctrl + Alt + Delete'
+    + (boardNow.target ? ' to the ' + boardNow.target : '') + '?'
+    + '\n\nThis reboots the machine. Anything unsaved is lost, and a sweep in '
+    + 'progress is destroyed.'
+    + '\n\nNote it is not a reliable reboot on this rig: it is swallowed while '
+    + 'the game is running. If nothing happens, the machine did not get it — '
+    + 'do not assume it rebooted.';
+}
+
+// ONE ROUTE OUT. Every chord this panel can send -- a pre-built button, a
+// sticky Send, a latched modifier plus a tapped key -- goes through this
+// function, which is what makes the reboot confirmation impossible to route
+// around by assembling the same keys a different way.
+function sendChord(keys) {
+  const reboot = isReboot(keys);
+  // CANNOT TELL MEANS DO NOT SEND. A single key can never spell the reboot, so
+  // it goes regardless -- but for a chord, sending without knowing whether it
+  // is the one that reboots the machine is exactly the unconfirmed reboot this
+  // whole path exists to prevent. Try the table again and say why.
+  if (reboot === null && keys.length > 1) {
+    hint('the daemon has not sent its key table — chords are held until it does');
+    loadKeymap();
+    return false;
+  }
+  if (reboot && !confirm(rebootWarning())) return false;
+  // NO SORT HERE. The daemon orders every chord it is given -- modifiers
+  // first, stable -- so the CLI has the same guarantee this panel does and
+  // there is one implementation of what "chord" means. See order_chord() in
+  // vcctrld.py; it used to be here, and a browser holding a guarantee the
+  // command line did not is how the two drift apart.
   //
-  // Named per key rather than by a "danger" class, because the class is a
-  // style and the list of things worth stopping for is a decision.
-  const REBOOTS = {'ctrl,alt,delete':
-    'Send Ctrl + Alt + Delete' + (boardNow.target ? ' to the ' + boardNow.target : '')
-    + '?\n\nThis reboots it immediately. Anything unsaved is lost, and a sweep '
-    + 'in progress is destroyed.'};
-  const warn = REBOOTS[b.dataset.combo];
-  if (warn && !confirm(warn)) return;
-  post('combo', {keys});
-});
+  // ONE KEY IS STILL `key`. combo() with a single key does the same thing on
+  // the wire, but the command name is what the activity log, the CLI and the
+  // daemon's own audit call it -- routing every tap through `combo` would
+  // rename a thing that has not changed, in three places at once, for the
+  // convenience of having one code path here.
+  post(keys.length > 1 ? 'combo' : 'key', {keys});
+  return true;
+}
+
+function clearLatched() { latched = []; paintLatched(); }
+
+function paintLatched() {
+  const keys = latched.map(l => l.key);
+  const reboot = latched.length ? isReboot(keys) : false;
+  // Three states, not two: true, false, and "the key table has not arrived so
+  // there is no basis for an opinion". The third disables Send rather than
+  // colouring it safe -- a green button on an unexamined chord is the page
+  // saying something it does not know.
+  const danger = reboot === true;
+  const blind = reboot === null && keys.length > 1;
+  for (const b of document.querySelectorAll('#pop-keys [data-latch]'))
+    b.classList.toggle('on', latched.some(l => l.key === b.dataset.latch));
+  const held = $('kbdheld'), send = $('kbdsend'), clear = $('kbdclear');
+  held.hidden = !latched.length;
+  held.textContent = latched.map(l => l.cap).join(' + ');
+  held.classList.toggle('danger', danger);
+  // Send and Clear belong to sticky. With sticky off a latched modifier is
+  // discharged by the next key, which is the gesture that has always worked
+  // and needs no button.
+  send.hidden = clear.hidden = !(sticky && latched.length);
+  send.classList.toggle('danger', danger);
+  send.disabled = blind;
+  send.title = blind
+    ? 'Waiting for the daemon\'s key table — until it arrives this page '
+      + 'cannot tell whether a chord is the one that reboots the machine'
+    : danger ? 'This chord reboots the machine — you will be asked to confirm'
+    : 'Send this chord to the target';
+}
+
+// A tap on any key. The two paths differ only in whether a non-modifier
+// latches or fires.
+function tapSpec(spec) {
+  const key = spec.mod || spec.k;
+  const isMod = !!spec.mod;
+  const at = latched.findIndex(l => l.key === key);
+  if (at >= 0) { latched.splice(at, 1); paintLatched(); return; }
+  if (isMod || sticky) {
+    // The NAME, not the printed glyph: "Option + Q" is a chord and "⌥ + Q" is
+    // a puzzle. Same reason the tooltip takes `aria` where there is one.
+    latched.push({key, cap: spec.aria || spec.cap, isMod});
+    paintLatched();
+    return;
+  }
+  if (latched.length) {
+    if (sendChord([...latched.map(l => l.key), key])) clearLatched();
+    return;
+  }
+  // A LONE KEY STILL GOES THROUGH THE CHECK. `key` cannot spell the reboot on
+  // its own, but routing it past sendChord() would leave a second way to
+  // reach the wire, and a second way is how the first one gets forgotten.
+  sendChord([key]);
+}
+
+$('kbdsticky').onchange = e => {
+  sticky = e.target.checked;
+  // Unticking discharges nothing. A latch that survives into a mode where it
+  // fires on the next tap is a chord you did not know you were holding.
+  clearLatched();
+};
+$('kbdclear').onclick = () => clearLatched();
+$('kbdsend').onclick = () => {
+  if (!latched.length) return;
+  if (sendChord(latched.map(l => l.key))) clearLatched();
+};
+
+// ── drawing one ───────────────────────────────────────────────────────────
+function keyButton(spec) {
+  if (!spec.k && !spec.mod) {                     // dead space
+    const s = document.createElement('span');
+    s.className = 'kgap';
+    s.style.setProperty('--w', spec.w || 1);
+    return s;
+  }
+  const b = document.createElement('button');
+  // `auto` means "this key is not part of a geometry" -- the locks and the
+  // compact row, where the name decides the width rather than a key unit.
+  b.className = 'key' + (spec.auto ? ' kauto' : '');
+  b.style.setProperty('--w', spec.w || 1);
+  b.dataset.latch = spec.mod || spec.k;
+  if (spec.sub) {
+    const s = document.createElement('span');
+    s.className = 'sub';
+    s.textContent = spec.sub;
+    b.appendChild(s);
+  }
+  b.appendChild(document.createTextNode(spec.cap));
+  // THE PRINTED CAP IS NOT ALWAYS THE NAME. A Command key is printed ⌘ and
+  // nothing else -- that is what is on the keycap -- so the tooltip and the
+  // screen reader take `aria` where there is one, or a tooltip reads "Hold ⌘
+  // for the next key" and the only people it helps are the ones who did not
+  // need it.
+  const label = spec.aria || spec.cap;
+  b.title = spec.mod
+    ? 'Hold ' + label + ' for the next key — tap again to release'
+    : 'Send ' + label + ' to the target';
+  if (spec.aria || spec.cap.length > 2) b.setAttribute('aria-label', label);
+  b.onclick = () => tapSpec(spec);
+  return b;
+}
+
+function keyRow(specs, cls) {
+  const r = document.createElement('div');
+  r.className = 'kbrow' + (cls ? ' ' + cls : '');
+  for (const s of specs) r.appendChild(keyButton(s));
+  return r;
+}
+
+function keyGroup(cls, rows) {
+  const g = document.createElement('div');
+  g.className = cls;
+  for (const r of rows) g.appendChild(r);
+  return g;
+}
+
+function drawKeyboard(id) {
+  const body = $('kbdbody');
+  body.textContent = '';
+  const L = LAYOUTS[id];
+  if (!L) return;
+  if (L.fkeys && L.fkeys.length)
+    body.appendChild(keyGroup('kfrow', [keyRow(L.fkeys)]));
+  if (L.main && L.main.length)
+    body.appendChild(keyGroup('kmain', L.main.map(r => keyRow(r))));
+  if (L.bottom && L.bottom.length)
+    body.appendChild(keyGroup('kbottom', [keyRow(L.bottom)]));
+  if (L.compact && L.compact.length)
+    body.appendChild(keyGroup('kcompact', [keyRow(L.compact)]));
+
+  // Locks, the nav cluster and the arrows share one row, and the row exists
+  // only if something is in it -- a Macintosh has none of the three.
+  const nav = document.createElement('div');
+  nav.className = 'kbrow knav';
+  for (const s of (L.locks || [])) nav.appendChild(keyButton(s));
+  if (L.nav && L.nav.length) {
+    const c = document.createElement('div');
+    c.className = 'kcluster';
+    c.style.marginLeft = 'auto';
+    for (const s of L.nav) c.appendChild(keyButton(s));
+    nav.appendChild(c);
+  }
+  if (L.arrows) {
+    const a = document.createElement('div');
+    a.className = 'karrows';
+    if (!(L.nav && L.nav.length)) a.style.marginLeft = 'auto';
+    for (const s of [{k:'up',cap:'↑',aria:'up'}, {k:'left',cap:'←',aria:'left'},
+                     {k:'down',cap:'↓',aria:'down'},
+                     {k:'right',cap:'→',aria:'right'}]) {
+      const b = keyButton(s);
+      b.dataset.key = s.k;              // the grid places by this
+      a.appendChild(b);
+    }
+    nav.appendChild(a);
+  }
+  if (nav.children.length) body.appendChild(nav);
+
+  if (L.chords && L.chords.length) {
+    // The rule is the same object as the | between the menu buttons: it
+    // separates the keys that type from the keys that do something.
+    body.appendChild(document.createElement('hr'));
+    const row = document.createElement('div');
+    row.className = 'kbrow kchordrow';
+    for (const c of L.chords) {
+      const b = document.createElement('button');
+      b.textContent = c.cap;
+      if (c.danger) b.classList.add('danger');
+      // The reboot's tooltip is not written per layout: it comes from the
+      // same place as its confirmation, so the two cannot drift apart.
+      b.title = isReboot(c.keys)
+        ? 'Send Ctrl+Alt+Delete — reboots the target, and asks first'
+        : (c.title || 'Send ' + c.cap + ' to the target');
+      b.onclick = () => {
+        // Straight to sendChord: a pre-built chord is not a latch, and a
+        // pending latch must not silently ride along with it.
+        if (latched.length) clearLatched();
+        sendChord(c.keys.slice());
+      };
+      row.appendChild(b);
+    }
+    body.appendChild(keyGroup('kchords', [row]));
+  }
+  clearLatched();
+}
+
+// ── which keyboard, and on whose word ─────────────────────────────────────
+//
+// THREE ABSENCES, AND THEY ARE NOT THE SAME ABSENCE. The daemon publishes
+// `board.keyboard`; null can mean the board is not identified, or that it is
+// identified and no layout has been declared for it. A third case is an id
+// this page has never heard of -- a page older than its config -- and that
+// one has to be said out loud rather than swallowed, because the alternative
+// is drawing the wrong machine's keyboard with total confidence.
+//
+// Nothing here falls back to pc-at-101. A Macintosh drawn as a PC is a
+// picture of a keyboard that is not in the building.
+let layoutNow = null;        // the id being drawn
+let layoutPicked = null;     // an id the operator chose by hand, or null
+let layoutBoardId = undefined;
+
+function layoutChoices() {
+  return Object.keys(LAYOUTS);
+}
+
+function applyLayout(b) {
+  b = b || {};
+  // A board swap drops a hand-picked layout: it was chosen because nothing
+  // could answer, and now something has.
+  if (b.id !== layoutBoardId) {
+    if (layoutBoardId !== undefined && b.keyboard) layoutPicked = null;
+    layoutBoardId = b.id;
+  }
+  const asked = b.keyboard || null;
+  const known = asked && LAYOUTS[asked];
+  const id = known ? asked : layoutPicked;
+  const L = id ? LAYOUTS[id] : null;
+
+  if (id !== layoutNow) { layoutNow = id; drawKeyboard(id); }
+
+  // The name line says what is drawn AND on whose authority, because a layout
+  // somebody picked and one the rig reported are different kinds of claim.
+  $('kbdname').textContent = L
+    ? L.name + (known ? '' : ' — chosen by hand')
+    : 'No keyboard';
+  $('kbdname').title = L
+    ? (known
+       ? 'The daemon reports this board asks for "' + asked + '".'
+         + (b.target ? '\nBoard fitted: ' + b.target + '.' : '')
+       : 'You chose this layout. Nothing has confirmed which machine is on '
+         + 'the other end of the wire.')
+    : '';
+
+  // The picker appears exactly when the rig cannot answer for itself.
+  $('kbdpick').hidden = !!known;
+
+  // Kept as PLAIN TEXT with a separate warn flag, and escaped only where it
+  // is put into the DOM. Building the markup first and stripping tags back
+  // off it for the log leaves the entities behind -- the log would carry
+  // "Gateway &amp; co" -- and it makes the escaping a thing that has to be
+  // undone correctly rather than a thing done once at the edge.
+  const bits = [];
+  if (!known) {
+    if (asked) bits.push([true, 'The daemon reports this board asks for a '
+      + 'layout this page does not have: ' + asked + '.']);
+    else if (b.id != null) bits.push([true, 'Board ' + b.id
+      + (b.target ? ' (' + b.target + ')' : '')
+      + ' has no keyboard layout configured.']);
+    else bits.push([true,
+      b.reason || 'The protocol board is not identified.']);
+  }
+  if (L && L.unverified) bits.push([true, L.unverified]);
+  if (L && L.absent) bits.push([false, L.absent]);
+  if (L) bits.push([false, COVERAGE_NOTE]);
+  $('kbdnote').innerHTML = bits.map(
+    ([warn, t]) => warn ? '<span class="warn">' + esc(t) + '</span>' : esc(t)
+  ).join('<br>');
+  $('kbdnote').hidden = !bits.length;
+  // On a phone the note is clamped to two lines, so the rest of it has to be
+  // reachable by a gesture rather than by a tooltip that does not exist
+  // there. Same treatment the LED lamps already have, and the log is where
+  // the page puts things it wants to survive the panel closing.
+  $('kbdnote').title = 'Tap to put this in the log';
+  $('kbdnote').onclick = () => {
+    for (const [, t] of bits) addLine(new Date(), 'keys', t, 'k-note');
+  };
+}
+
+(function buildPicker() {
+  const sel = $('kbdpicksel');
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '— nothing —';
+  sel.appendChild(none);
+  for (const id of layoutChoices()) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = LAYOUTS[id].name;
+    sel.appendChild(o);
+  }
+  sel.onchange = () => {
+    layoutPicked = sel.value || null;
+    applyLayout(boardNow);
+  };
+})();
 document.querySelectorAll('[data-power]').forEach(b => b.onclick = () => {
   const a = b.dataset.power;
   // ON confirms too, which is not the obvious choice -- switching a machine on
@@ -4979,6 +5702,11 @@ async function pollState() {
   // Gateway's Pi moved off 2.4 GHz wifi.
   const dt = performance.now() - t0;
   pollMs = pollMs ? pollMs * 0.7 + dt * 0.3 : dt;
+  // The daemon just answered, so if the key tables are still missing this is
+  // the moment to ask again -- a restart between page load and that first
+  // fetch is the whole window in which they can be absent. No-ops once they
+  // are in hand.
+  if (!keymap) loadKeymap();
   const v = j.video || {};
   if (v.state === 'locked') {
     pill('p-video','on','video locked');
@@ -5304,6 +6032,22 @@ function setInputHeld(owner) {
     if (owner) el.title = why;
   }
   for (const b of document.querySelectorAll('#pop-keys button')) b.disabled = !!owner;
+  // The sticky switch and the picker are controls in this panel too, and a
+  // checkbox that still ticks while every key under it is dead is a control
+  // that does nothing but look alive.
+  $('kbdsticky').disabled = !!owner;
+  $('kbdpicksel').disabled = !!owner;
+  // AND DISCHARGE WHAT IS HELD. A latch left lit behind a disabled panel is a
+  // chord waiting to fire on whatever gets tapped after the lock is released
+  // -- minutes later, by someone who has forgotten they were holding it.
+  if (owner && latched.length) clearLatched();
+  // THE BLANKET RE-ENABLE ABOVE UNDOES A DELIBERATE DISABLE. When the lock is
+  // released, `b.disabled = false` runs over every button in the panel --
+  // including Send, which paintLatched() may have disabled because the key
+  // table has not arrived and it cannot tell a reboot from a chord. Repainting
+  // puts that back. Two owners for one boolean, which is the shape that needs
+  // a re-assertion rather than a second flag.
+  else paintLatched();
   if (owner && armed) setArmed(false);
   if (!owner) {
     $('sendline').title = 'Type this line at the target and press Enter';
@@ -5641,7 +6385,21 @@ function showBoard(b) {
   // answer is in Settings -> Rig, in that confirmation, and in the log when
   // it changes -- none of which is a place you have to hunt.
   boardNow = b || {};
+  // And the key panel, which draws a whole keyboard now and needs to know
+  // WHICH one. Called on every poll rather than only on a change: applyLayout
+  // redraws only when the resolved id actually moves, and routing it through
+  // the transition detector would mean a board that never changes never gets
+  // a keyboard.
+  applyLayout(boardNow);
 }
+// Before the first poll answers. Without this the panel opens empty with
+// nothing saying why -- which is the "could not look reported as a fact about
+// the target" failure in miniature, on a panel rather than a lamp.
+applyLayout({});
+// The key tables, once. No timer of its own: a daemon that was restarting when
+// the page loaded will answer on one of the state polls instead, and
+// loadKeymap() returns immediately once it has them.
+loadKeymap();
 applyVolume();
 setInterval(pollState, 1500);
 setInterval(pollEvents, 1500);
@@ -5937,20 +6695,10 @@ addEventListener('resize', () => applyZoom());
 // tells us -- a display change fires no resize event.
 // The side panel, on desktop. Same shape as the key rail: hiding it changes
 // the stage size and no resize event says so.
-// Tooltips for the key rail. Written here rather than typed twenty times into
-// the markup: they are all the same sentence with one word changed, and a
-// hand-copied set is a set with one wrong one in it.
-(function keytips() {
-  const NAME = {esc:'Esc', tab:'Tab', enter:'Enter', backspace:'Backspace',
-                up:'Up', down:'Down', left:'Left', right:'Right'};
-  for (const b of document.querySelectorAll('#pop-keys button')) {
-    if (b.title) continue;                       // Ctrl-Alt-Del says more
-    const k = b.dataset.key, m = b.dataset.mod;
-    if (k) b.title = 'Send ' + (NAME[k] || k.toUpperCase()) + ' to the target';
-    else if (m) b.title = 'Hold ' + b.textContent
-      + ' for the next key — tap again to release';
-  }
-})();
+// Tooltips for the key rail used to be written here, once, over markup that
+// was typed out by hand. The keys are drawn from a layout now, so keyButton()
+// gives each one its title as it makes it -- still one sentence in one place,
+// and no pass over the DOM that a key added later could be missed by.
 
 // ── FULL SCREEN ─────────────────────────────────────────────────────────
 // The Fullscreen API where it exists, and the CSS half everywhere: an iPhone
@@ -6364,6 +7112,19 @@ function lamps(leds, videoState, verified) {
         + (unproven ? ' — the input link is unproven, so this describes the '
                     + 'Pi rather than the target'
            : stale ? ' — retained, the target is not showing a picture' : ''));
+  }
+  // AND THE KEY PANEL, which is where somebody is about to click a letter.
+  // Only on a reading that is present, applicable, proven and current: every
+  // one of `why`, `blind` and `stale` is a reason this value does not describe
+  // the target now, and a confident sentence built on any of them would be
+  // the retained-reading failure again, in a new place.
+  const capsPanel = $('kbdcaps');
+  if (capsPanel) {
+    const lit = !why && !blind && !stale && leds && leds.capslock === 1;
+    capsPanel.hidden = !lit;
+    capsPanel.textContent = lit
+      ? 'Caps Lock is lit at the target — the letter keys will type capitals.'
+      : '';
   }
   $('lamps').title =
     why ? 'Caps / Num / Scroll are a PS/2 return channel.\n\n'

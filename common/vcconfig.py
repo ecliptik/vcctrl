@@ -226,6 +226,21 @@ SCHEMA = {
         # transfer reboots the target and writes to its disk, which is the
         # wrong thing to do to a machine nobody has identified.
         "transfer": str,             # supported | unsupported | unknown
+        # NOT in ENUMS, and that is the decision rather than an oversight.
+        # `leds` and `transfer` are three fixed words the daemon branches on,
+        # so a typo there has to fail here or it silently picks a branch.
+        # `keyboard` is a LAYOUT ID resolved by the web KVM against its own
+        # table of keyboards it can draw, and that table grows every time
+        # somebody adds a machine. Listing the ids here would put a second
+        # copy in the config schema to drift against the page's -- the exact
+        # duplication BoardCapability.KEYBOARDS exists to avoid.
+        #
+        # A typo is not swallowed. An id the page does not have is a real
+        # answer and is reported verbatim -- "board 1 asks for a layout this
+        # page does not have: pc-at-1O1" -- by the only component that can
+        # tell. Absent is a different answer again: no layout is declared for
+        # this board and none is drawn.
+        "keyboard": str,             # a layout id, e.g. pc-at-101, mac-plus
     }),
 
     "harness": {
@@ -715,9 +730,15 @@ def main(argv):
               "to a machine name")
     else:
         for t in targets:
-            print("  board %-3s %-20s leds=%s"
+            # `keyboard` is printed as `none` when absent rather than left
+            # off the line. Omitting it would read as "not relevant here",
+            # and it is the opposite: a configured targets: list REPLACES the
+            # daemon's built-in table, so a row with no keyboard is a board
+            # the KVM will draw no keyboard for. That is the one thing about
+            # this field somebody checking a config needs to see.
+            print("  board %-3s %-20s leds=%-12s keyboard=%s"
                   % (t.get("board_id", "?"), t.get("name", "(unnamed)"),
-                     t.get("leds", "unknown")))
+                     t.get("leds", "unknown"), t.get("keyboard") or "none"))
     return 0
 
 

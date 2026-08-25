@@ -88,6 +88,10 @@ in the future returning "No entries"; eight cells silently comparing a
 condition with itself.
 
 - **`CLI-PARITY.md`** — the `vcctrl` verb surface and why each verb refuses.
+  **Sec. 5a is the one to read if you are adding anything both sides call:**
+  parity is not "the CLI can reach it", it is "both sides get the same thing
+  when they do". A chord ordered in the browser and not in the CLI was two
+  different commands with one name, and the verb count could not see it.
 - **`MOUSE.md`**, **`TIMING-FIXES.md`** — input path and settling races.
 - **`PI5-MIGRATION.md`** — the Pi 3 → Pi 5 move, closed.
 
@@ -104,6 +108,12 @@ implementation. **Read it before adding a measurement to anything here.**
 
 `WEBKVM.md` is the main one. `WEBKVM-DESIGN.md`, `WEBKVM-AUDIO.md`,
 `WEBKVM-BOARDS.md` and `WEBKVM-SCRUB.md` are its subsystems.
+
+**Sec. 5.1a — the on-screen keyboard — carries a live warning.** It is a whole
+keyboard now, drawn from a layout the daemon names per protocol board, and
+**not one of its keys has been measured at the target.** Sec. 5.2's coverage
+sweep gates step 8 in the pacing table and step 8 shipped without it. The panel
+says so itself rather than the fact living only here.
 
 ## Hardware facts
 

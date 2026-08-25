@@ -115,6 +115,41 @@ acts differently on each. See FINDINGS sec. 24.
 `caps` and `/state.json` gain a `board` object as above. `vcctrl board` prints
 it. The web KVM reads it from `/state.json`, which it already polls.
 
+### 4.1 `keyboard` — which keyboard the KVM draws
+
+Added 2026-08-25 with the KVM's full on-screen keyboard. One more
+always-present key in the same object:
+
+    {"id": 1, "name": "IBM PC", "target": "Gateway 2000",
+     "keyboard": "pc-at-101", "source": "status-file", ...}
+
+The value is an opaque **layout id**. The daemon never draws a key and
+deliberately knows nothing about what is on one — it publishes only which
+layout this board asks for, and the page resolves that against its own table
+of keyboards it can draw. That split is what lets a page older than its config
+say *"board 1 asks for a layout I do not have"* rather than quietly showing
+the wrong keyboard.
+
+Source, in the same order as `target`: a `keyboard:` word on the matching row
+of `targets:` in `vcctrl.yaml`, else the built-in `BoardCapability.KEYBOARDS`.
+A configured `targets:` list **replaces** the built-in table wholesale, so a
+row with no `keyboard:` yields `null` — which means *this board is known and
+no layout has been declared for it*, not *use the default*. That is deliberate
+and it is the same rule `target` already follows: merging would let a rig that
+configures only board 1 inherit this rig's board 3.
+
+`null` is a first-class answer and the page draws no keyboard on it. It must
+not fall back to `pc-at-101`, because a Macintosh drawn as a PC is a picture
+of a keyboard that is not in the building — the same failure as reporting a
+Macintosh Plus that is not in the building, one layer up.
+
+**What this field does not say.** It names the keyboard the machine HAS. It
+asserts nothing about which of those keys survive the trip: the Pi hands raw
+evdev codes to the STM32 and the Linux→PS/2 mapping lives in that firmware, so
+coverage is measurable only at the target and has not been measured. See
+`docs/WEBKVM.md` sec. 5.2; the page carries that unknown itself rather than
+implying this field settles it.
+
 ## 5. Per-board capability semantics — and one real hazard
 
 This is the part that matters more than the identity itself.

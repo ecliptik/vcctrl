@@ -25,6 +25,16 @@ USAGE = """usage: vcctrl <command> [args]
   keyup <key>               release a key held by keydown
   release-all               release every key held by keydown
   combo <key>...            chord                     (combo ctrl alt delete)
+                            Keys are pressed MODIFIERS FIRST whatever order
+                            they are given in, and released in reverse. Order
+                            is protocol: a chord whose modifier arrives after
+                            its key is a keystroke with a modifier press after
+                            it. The reply echoes the order actually sent.
+  keymap                    the key names this daemon accepts, the modifier
+                            order chords are sent in, and the alias table --
+                            what the web KVM reads so there is one copy. It
+                            does NOT say which keys reach the target; only a
+                            sweep at the machine can (docs/WEBKVM.md 5.2).
   mouse move <dx> <dy>
   mouse click [left|right|middle]
   leds                      read PS/2 LED return channel
@@ -1112,6 +1122,8 @@ def main(argv):
         req = {"cmd": "release_all"}
     elif cmd == "caps":
         req = {"cmd": "caps"}
+    elif cmd == "keymap":
+        req = {"cmd": "keymap"}
     elif cmd == "config":
         # `config show` asks the RUNNING DAEMON what it resolved. `config
         # check` parses the file on disk, which is a different question --
