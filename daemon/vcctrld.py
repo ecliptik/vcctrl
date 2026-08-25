@@ -1507,12 +1507,32 @@ class LedsCapability(Capability):
             self.devs.key(["capslock"])          # put it back
         except Exception:
             pass
+        # WAIT FOR THE RESTORE, DO NOT SNAPSHOT THROUGH IT. `after` used to be
+        # a bare read taken immediately after sending the restore keystroke,
+        # with nothing between the two. The VERDICT was never at risk --
+        # `changed` comes from the polled loop above and its 1.5 s deadline --
+        # but `after` is the field a reader quotes as "what the LEDs were left
+        # at", and on a target slower than tonight's it would capture the
+        # state before the restore landed and report the TOGGLED value as the
+        # resting one.
+        #
+        # Same shape as the fault this whole function exists to expose: the
+        # verdict waits for evidence and the number printed beside it does
+        # not. Polled back to `before` with a deadline, and whatever the last
+        # sample says is reported either way -- a restore that genuinely did
+        # not land must show as not landed, not be waited into looking fine.
+        settled = self._sample() or {}
+        deadline = time.time() + 1.5
+        while settled != before and time.time() < deadline:
+            time.sleep(0.02)
+            settled = self._sample() or settled
         LedsCapability.verified_at = time.time()
         LedsCapability.verified_ok = changed
         if self.bus:
             self.bus.publish("input.verify", ok=changed)
         return {"ok": True, "verified": changed, "before": before,
-                "after": self.devs.read_leds(),
+                "after": settled,
+                "restored": settled == before,
                 "note": ("the target acknowledged a keystroke"
                          if changed else
                          "no LED change -- the PS/2 link is not carrying "

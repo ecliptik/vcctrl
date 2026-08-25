@@ -9268,3 +9268,95 @@ def test_the_boot_menu_digit_is_not_a_keypad_key():
               code == getattr(_e, "KEY_%s" % d), code)
         check("digit %s is not KEY_KP%s" % (d, d),
               code != getattr(_e, "KEY_KP%s" % d), code)
+
+
+def test_verify_input_reports_the_settled_state_not_one_in_flight():
+    """`after` must be what the LEDs were LEFT at, not a snapshot through the
+    restore.
+
+    `verify_input` presses a lock key, polls until the word moves, then presses
+    it back. The VERDICT was never at risk -- `changed` comes from the polled
+    loop and its deadline. But `after` was a bare read taken immediately after
+    sending the restore keystroke, with nothing between the two, and `after` is
+    the field a reader quotes as "what the LEDs were left at". On a target
+    slower than the one this was written against it captures the state BEFORE
+    the restore lands and reports the toggled value as the resting one.
+
+    Same shape as the fault this function exists to expose: the verdict waits
+    for evidence and the number printed beside it does not. Found by the vckvm
+    session reading the sequence rather than the output.
+
+    The negative control is the half that matters most: a restore that
+    genuinely does NOT land must still be reported as not landed. Polling must
+    not turn "the key never took" into "fine, eventually".
+    """
+    print("\nverify_input settles")
+    import collections as _collections
+    L = vcctrld.LedsCapability
+    saved = (L._changes, L._changes_seq, L._seen_values, L._proven_epoch)
+    t_saved = vcctrld.TARGET.state()
+
+    class Devs(object):
+        """A target whose restore keystroke lands `lag` reads late."""
+
+        def __init__(self, lag):
+            self.word = {"capslock": 0, "numlock": 0, "scrolllock": 0}
+            self.presses, self.lag = 0, lag
+            self.pending, self.countdown = None, 0
+
+        def key(self, names, pace=None):
+            self.presses += 1
+            if self.presses == 1:                    # the probe toggles it
+                self.word = dict(self.word, capslock=1)
+            else:                                    # ...and puts it back,
+                self.pending = dict(self.word, capslock=0)   # eventually
+                self.countdown = self.lag
+
+        def read_leds(self):
+            if self.pending is not None:
+                if self.countdown <= 0:
+                    self.word, self.pending = self.pending, None
+                else:
+                    self.countdown -= 1
+            return dict(self.word)
+
+    def run(lag):
+        L._changes = _collections.deque(maxlen=200)
+        L._changes_seq, L._seen_values, L._proven_epoch = 0, None, None
+        cap = L.__new__(L)
+        cap.devs = Devs(lag)
+        cap.bus = None
+        cap.support = lambda: (True, None)
+        with vcctrld.TARGET.lock:
+            vcctrld.TARGET.powered = True
+        t0 = time.time()
+        return cap._verify_input({}), time.time() - t0
+
+    try:
+        # A restore that lands a few reads late -- the realistic case.
+        r, _el = run(5)
+        check("control: the round trip is still verified", r["verified"] is True,
+              r.get("note"))
+        check("`after` is the SETTLED word, not the toggled one",
+              r["after"].get("capslock") == 0, r["after"])
+        check("and it equals `before`, which is what restore means",
+              r["after"] == r["before"], (r["before"], r["after"]))
+        check("`restored` says so positively", r.get("restored") is True,
+              r.get("restored"))
+
+        # THE NEGATIVE CONTROL. A restore that never lands must be REPORTED,
+        # not waited into looking fine.
+        r2, el2 = run(10 ** 6)
+        check("a restore that never lands is still verified as a round trip",
+              r2["verified"] is True, r2.get("note"))
+        check("`after` shows the key STILL TOGGLED, honestly",
+              r2["after"].get("capslock") == 1, r2["after"])
+        check("and `restored` is False rather than absent or true",
+              r2.get("restored") is False, r2.get("restored"))
+        check("and it gives up on a deadline rather than hanging",
+              el2 < 5.0, round(el2, 2))
+    finally:
+        (L._changes, L._changes_seq, L._seen_values, L._proven_epoch) = saved
+        with vcctrld.TARGET.lock:
+            (vcctrld.TARGET.epoch, vcctrld.TARGET.powered,
+             vcctrld.TARGET.changed_at) = t_saved

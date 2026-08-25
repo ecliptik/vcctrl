@@ -562,22 +562,42 @@ available, publishing:
     0, 1, 1                   OFF    (typed `vcctrl6` -> vcctrl6)  caps moved
 
 **The target's Caps Lock followed the presses exactly: OFF, ON, OFF. The node
-NAMED `capslock` did not** — it read 1 while caps was off, stayed 1 when caps
-came on, and only moved on the second press. Which node moves was not even
-consistent between two identical keypresses.
+named `capslock` did not** — it read 1 while caps was off, and only moved on
+the second press.
+
+**READ THE WORD, NOT THE BITS, AND IT IS NOT ERRATIC — IT IS STALE.** The first
+write-up of this said "which node moves was not consistent between two
+identical keypresses", which invites the alarming conclusion that a keystroke
+has side effects on unrelated bits. **It does not, and the data never said so.**
+Decompose the same readings against a true word of `{caps 0, num 1, scroll 1}`:
+
+    nodes {1,0,1}   caps OFF     caps and num are STALE; scroll is right
+    press caps ->   caps ON      true word caps=1; node already 1, so no
+    nodes {1,1,1}                change there — and num 0->1 is the stale
+                                 bit catching up, not a side effect
+    press caps ->   caps OFF     true word caps=0; node 1->0; num already
+    nodes {0,1,1}                right; scroll never moved
+
+Every reading is explained, deterministically, by: **the node word was stale,
+and each Set-LEDs wrote the truth.** What varied between the two presses was
+which bits were already correct — which is not the same thing as inconsistency.
+The distinction matters because the two readings have very different
+consequences: *a press moves unrelated bits* means the keystroke path is unsafe
+and everything is in question; *a stale word is refreshed by a round trip*
+means only reads taken BEFORE the first round trip are untrusted. **It is the
+second.** (Decomposition from the vckvm session, correcting this file's first
+account.)
 
 **So `changes >= 1` proves the channel carries traffic; it does not prove the
 CURRENT VALUE IS CURRENT.** A channel can be demonstrably alive and still be
-publishing a number that does not describe the target right now. That is a
-weaker guarantee than the gate's wording implies, and the gate should not be
-read as making LED values trustworthy — only as stopping the worst case, where
-nothing was ever witnessed at all.
+publishing a word from before the last thing that changed it. That is weaker
+than the gate's wording implies: the gate stops the worst case, where nothing
+was ever witnessed at all. It does not make the values fresh.
 
-**Leading explanation, NOT established:** a PS/2 Set-LEDs command carries all
-three bits at once, so the node set is refreshed wholesale whenever the target
-sends one. Between such commands a node can hold a value that never described
-the target's current state, and the first press of a session is what corrects
-it. That fits every reading above and is not proved by them.
+**Mechanism, still a hypothesis:** a PS/2 Set-LEDs command carries all three
+bits at once, so the node set is refreshed wholesale whenever the target sends
+one, and the first press of a session is what corrects it. It fits every
+reading here and is not proved by them.
 
 **Num Lock behaved correctly under the same test** — two presses moved the
 `numlock` node 1 -> 0 -> 1 cleanly, with nothing else moving. That matters
@@ -586,6 +606,42 @@ that bit, not a proof that it is immune.
 
 **THE SCREEN IS THE ONLY DIRECT WITNESS OF THE TARGET'S LOCK STATE.** Everything
 else on this rig is an inference from a node two things can write.
+
+**AND A ROUND TRIP APPEARS TO REFRESH THE VALUES, NOT ONLY PROVE THEM.**
+Independently reproduced after the 20:48 deploy. `verify_input` reported
+
+    before {caps 1, num 0, scroll 1}  ->  after {caps 0, num 1, scroll 1}
+
+from a press and its restore — **net zero at the target, and the word still
+moved, because the word was WRONG BEFORE IT.** Identical start word and
+identical correction to the 19:5x readings. The values then AGREED with the
+screen: the channel said `capslock: 0` and unshifted text came back lowercase,
+where the identical prediction had failed an hour earlier on a channel that was
+equally "proven".
+
+So the practical rule, offered as the hypothesis it is: **`verify_input` is
+worth running not only to open the gate but because the values are least stale
+immediately after it.** One agreement does not establish that, and it does not
+tell you how long the refresh lasts — which is the question the instrumented
+session should answer.
+
+#### The sitting that would settle this has four tenants, and an order
+
+Four separate questions now wait on the same thing — the PS/2 traffic
+instrumented between the board and the target. **Four is past the point where
+accumulating is cheaper than scheduling.**
+
+    1  the accuracy fault above: what writes those nodes, and when
+    2  how long a refresh holds after a round trip
+    3  `wait_prompt`'s exposure -- a single toggle-and-look, the one consumer
+       that cannot arm an edge, so it is exposed to exactly (1)
+    4  the `--from` fetch path, which has never run on hardware
+
+**ORDER MATTERS AND IT IS NOT THE OBVIOUS ONE.** Items 1-3 want the machine
+QUIET and observed; item 4 needs it POWERED and driven hard. Instrument first
+against a quiet target, then let the transfer path drive it — the other way
+round contaminates the very traffic the instrument is there to read. (Point
+from the vckvm session, whose path item 4 is.)
 
 **To open the channel: `vcctrl verify_input`.** It proves by round trip and
 reads the nodes directly, so it works while the gate is refusing — otherwise
