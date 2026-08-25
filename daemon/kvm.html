@@ -2577,7 +2577,22 @@ function gotFrame() {
   // only ever grows, so an hour of good connection followed by one blip would
   // wait five minutes to try again.
   if (xport === 'ws') wsRetryDelay = 60000;
-  if (!frames) setTimeout(() => applyZoom(true), 60);  // sizes known now
+  // FIRST FRAME, OR A GENUINE RESOLUTION CHANGE -- both need an immediate
+  // refit, not the periodic letterbox check. That check is deliberately
+  // slow now (three agreeing samples, 10-15s -- see the crop interval
+  // below) because it cannot tell a real letterbox from a dark scene held
+  // still. This is a different question: the CAPTURE DEVICE itself
+  // reporting a different frame size -- a DOS mode switch, a target that
+  // changed video mode entirely -- is not a heuristic, it is the mode
+  // actually changing, and any crop measured against the old frame means
+  // nothing against the new one, so it is dropped rather than carried over
+  // and applied to content it was never measured on.
+  const el = mediaEl();
+  const nw = el.naturalWidth || el.width, nh = el.naturalHeight || el.height;
+  if (!frames || (nw > 1 && nh > 1 && (nw !== capW || nh !== capH))) {
+    crop = null; cropCand = null; cropStreak = 0;
+    setTimeout(() => applyZoom(true), 60);  // sizes known now
+  }
   frames++;
   const now = performance.now();
   lastFrameAt = Date.now();

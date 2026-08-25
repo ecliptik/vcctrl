@@ -6479,6 +6479,121 @@ console.log(JSON.stringify([
         check(name, got == want, (got, want))
 
 
+def test_a_resolution_change_refits_immediately():
+    """Reported: DOS was fit properly, then doskutsu switched video mode and
+    the picture showed at its raw pixel size -- smaller than the window --
+    for a while before "Fit to Screen" caught up.
+
+    The periodic letterbox check (see the crop test above) is deliberately
+    slow now: three agreeing samples, 10-15s, because it is a HEURISTIC that
+    cannot tell a real letterbox from a dark scene held still. A mode switch
+    is not that question. The capture device reporting a different frame
+    size -- cv.width/cv.height actually changing between frames -- is not a
+    guess, it is the authoritative fact that something changed, and waiting
+    on the same slow, cautious check that exists to NOT be fooled by content
+    was applying the wrong tool to a question that already has a certain
+    answer. Worse, it also meant a crop measured against the OLD resolution
+    kept being applied to the new one until the slow check got around to
+    reconsidering it.
+
+    gotFrame() now compares the media element's own naturalWidth/Height
+    against the last-seen capture size on every frame, refits immediately
+    (the same path the very first frame already used) when they differ, and
+    drops any adopted crop rather than carry it into a frame it was never
+    measured against.
+    """
+    print("\nresolution change refits immediately")
+    import shutil
+    import subprocess
+    import tempfile
+
+    chrome = (shutil.which("chromium") or shutil.which("chromium-browser")
+              or shutil.which("google-chrome"))
+    if not chrome:
+        print("  SKIP  no chromium on this host")
+        return
+
+    src = os.path.join(HERE, os.pardir, "daemon")
+    d = tempfile.mkdtemp(prefix="kvmres")
+    try:
+        with open(os.path.join(src, "kvm.html"), encoding="utf-8") as f:
+            page = f.read().replace('href="/themes.css"', 'href="themes.css"')
+        shutil.copy(os.path.join(src, "themes.css"), os.path.join(d, "themes.css"))
+        script = """
+<script>
+window.addEventListener('load', () => { (async () => {
+  try {
+    const cv = document.getElementById('screen');
+    document.getElementById('mjpeg').style.display = 'none';
+    // A settled 640x480 session, fit mode -- the state before doskutsu.
+    cv.width = 640; cv.height = 480;
+    zoomMode = 'fit';
+    gotFrame();
+    await new Promise(r => setTimeout(r, 150));
+    const before = cv.getBoundingClientRect();
+    const capBefore = capW + 'x' + capH;
+
+    // The mode switch: the capture device reports a genuinely different
+    // frame size on the next frame, the way a real resolution change would.
+    cv.width = 320; cv.height = 200;
+    gotFrame();
+    const immediate = cv.getBoundingClientRect();
+    await new Promise(r => setTimeout(r, 150));
+    const after = cv.getBoundingClientRect();
+
+    document.title = 'RES|' + before.width.toFixed(1) + 'x' + before.height.toFixed(1)
+      + '|' + capBefore
+      + '|' + immediate.width.toFixed(1) + 'x' + immediate.height.toFixed(1)
+      + '|' + after.width.toFixed(1) + 'x' + after.height.toFixed(1)
+      + '|' + (capW + 'x' + capH)
+      + '|' + (crop === null ? 'nocrop' : 'crop');
+  } catch (e) { document.title = 'THREW ' + e + ' ' + e.stack; }
+})(); });
+</script>
+"""
+        with open(os.path.join(d, "page.html"), "w", encoding="utf-8") as f:
+            f.write(page + script)
+
+        r = subprocess.run(
+            [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+             "--hide-scrollbars", "--window-size=1400,900",
+             "--virtual-time-budget=3000", "--dump-dom",
+             "file://" + os.path.join(d, "page.html")],
+            capture_output=True, text=True, timeout=90)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    m = re.search(r"<title>([^<]*)</title>", r.stdout)
+    if not m:
+        check("the page produced a title", False,
+              "rc=%d, stderr: %s" % (r.returncode, r.stderr.strip()[-200:]))
+        return
+    title = m.group(1)
+    if title.startswith("THREW"):
+        check("the harness ran without throwing", False, title)
+        return
+    check("control: the title reports a measurement", title.startswith("RES|"),
+          title)
+    if not title.startswith("RES|"):
+        return
+    before, cap_before, immediate, after, cap_after, crop_state = \
+        title[len("RES|"):].split("|")
+
+    check("control: the first frame was recognised as 640x480",
+          cap_before == "640x480", cap_before)
+    check("control: fit filled more than the raw capture size",
+          before != "640.0x480.0", before)
+    check("nothing has changed the instant the new frame arrives -- the "
+          "refit is scheduled, not synchronous",
+          immediate == before, (immediate, before))
+    check("the capture size is updated to the new mode",
+          cap_after == "320x200", cap_after)
+    check("and the picture is refit to it, not left at the old size",
+          after != before, (after, before))
+    check("a crop measured against the old resolution is not carried over",
+          crop_state == "nocrop", crop_state)
+
+
 def test_no_status_indicator_fades_below_its_fitted_contrast():
     """The blind spot this file has now hit three times.
 
