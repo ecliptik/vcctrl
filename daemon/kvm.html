@@ -6701,9 +6701,11 @@ let zoomMode = localStorage.getItem('vcctrl.zoom2') || 'fit';
 // still applying the vanished factor.
 if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
 let crop = null, lastHinted = null, hintTimer = null;
-// The last MEASUREMENT, which is not the same thing as the adopted crop. See
-// cropsAgree() and the re-measure interval for why one sample is not enough.
-let cropCand = null, cropCandT = 0;
+// The last MEASUREMENT, which is not the same thing as the adopted crop, and
+// how many times in a row it has repeated. See cropsAgree() and the
+// re-measure interval for why one sample is not enough -- and why two was
+// not always enough either.
+let cropCand = null, cropStreak = 0;
 
 // Do two crop measurements describe the same letterbox?
 //
@@ -7005,8 +7007,8 @@ setBufOpen(false);
 // Re-measure periodically: a mode change moves the letterbox, and the whole
 // point is that it follows the target rather than needing to be told.
 //
-// A CROP IS ADOPTED ONLY WHEN TWO MEASUREMENTS AGREE. One is not enough, and
-// the comment on measureCrop used to say why it thought it was: "the
+// TWO AGREEING MEASUREMENTS WAS THE FIRST FIX, AND IT WAS STILL NOT ENOUGH.
+// The comment this replaced said why it thought one sample was enough: "the
 // letterbox only changes when the target changes video mode, which is rare
 // and visible". THAT PREMISE IS FALSE WHILE A GAME IS RUNNING. measureCrop
 // finds the bounding box of non-black pixels, and in Cave Story that box is
@@ -7014,26 +7016,37 @@ setBufOpen(false);
 // symmetry guard meant to reject text screens, and gets treated as a
 // letterbox. Fit then fits the "drawn region", overflows the real frame on
 // purpose, and the picture jumps in, off-centre, with scrollbars -- then
-// changes again five seconds later, or when the player walks into a
+// changes again five or ten seconds later, or when the player walks into a
 // differently-lit cave. Reported from the rig, in Firefox, playing Cave
-// Story, and every symptom in that report is this.
+// Story -- and reported AGAIN after the two-sample fix shipped, because a
+// title card, a loading screen or a player standing still is a dark
+// symmetric scene held steady for exactly the 5-10s two agreeing samples
+// need. Two consecutive samples 5s apart is not a rare coincidence for a
+// game; it is most menus.
 //
-// A real letterbox is the same in every frame. Live content is not. So the
-// discriminator is time, not any property of a single sample: measure, keep
-// it as a candidate, and adopt only when the NEXT measurement agrees. A
-// moving picture never produces two agreeing samples and therefore never gets
-// cropped, which is the behaviour that was wanted all along.
+// So ADOPTING now needs THREE, spanning 10-15s -- a bar real letterboxing
+// clears easily, since it is the same in every frame forever, and a bar that
+// a static game scene usually does not clear, since something on screen
+// moves within 15s far more reliably than within 5. DROPPING stays at two,
+// on purpose and asymmetrically -- showing the full frame is never wrong, so
+// recovering from a bad crop should not be held to the same bar as adopting
+// one.
 //
-// Dropping is symmetric: an adopted crop is abandoned only when two
-// measurements agree that it is gone, so one bright frame in a letterboxed
-// mode does not throw the crop away either.
+// PURE, so a sequence of samples can be replayed in a test rather than
+// asserted about by reading the source -- the same reason cropsAgree is its
+// own function instead of being inlined here.
+function cropStep(m, cand, streak, adopted) {
+  const newStreak = cropsAgree(m, cand) ? streak + 1 : 1;
+  const changed = !cropsAgree(m, adopted) && newStreak >= (m ? 3 : 2);
+  return {streak: newStreak, changed};
+}
 setInterval(() => {
   if (document.hidden) return;   // a readback nobody can see is just battery
   const m = measureCrop();
-  const confirmed = cropsAgree(m, cropCand);
+  const step = cropStep(m, cropCand, cropStreak, crop);
+  cropStreak = step.streak;
   cropCand = m;
-  if (!confirmed) return;        // the picture is moving: trust neither sample
-  if (cropsAgree(m, crop)) return;
+  if (!step.changed) return;
   crop = m;
   applyZoom(true);               // a real change, so re-centre on it
 }, 5000);

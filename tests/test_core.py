@@ -6317,7 +6317,7 @@ def test_lamp_states_are_tellable_apart():
                     page) is not None)
 
 
-def test_a_crop_needs_two_agreeing_samples():
+def test_a_crop_needs_three_agreeing_samples_to_adopt():
     """Reported from the rig: in Firefox, with Cave Story running, "Fit to
     Screen" would zoom in, sit off-centre and grow scrollbars -- then change
     again when the player walked into another cave, sometimes resetting and
@@ -6336,6 +6336,16 @@ def test_a_crop_needs_two_agreeing_samples():
     discriminator is TIME, not any property of a single sample -- the same
     shape as a poll that caught a file mid-write and reported a real number
     about the wrong moment.
+
+    TWO agreeing samples was the first fix, and the report came back: a title
+    card or a player standing still is a static, symmetric, dark scene held
+    for exactly the 5-10s two samples 5s apart need, so two was not a rare
+    coincidence for a game, it was most menus. Adopting now needs THREE,
+    spanning 10-15s -- real letterboxing is trivially the same in every frame
+    forever, and something on screen moves within 15s far more reliably than
+    within 5. Dropping stays at two, asymmetrically: showing the full frame
+    is never wrong, so recovering from a bad crop is not held to the bar
+    adopting one is.
     """
     print("\nletterbox needs confirming")
     import shutil
@@ -6355,21 +6365,24 @@ def test_a_crop_needs_two_agreeing_samples():
     check("control: the removed line is still QUOTED in a comment, so the "
           "search above is not passing because the text vanished",
           "if (!crop) crop = measureCrop()" in page)
-    check("adoption happens where two samples can be compared",
-          "cropsAgree(m, cropCand)" in page)
+    check("the interval drives its decision through cropStep, not inline",
+          "cropStep(m, cropCand, cropStreak, crop)" in page)
     check("and setZoom no longer throws the crop away, which re-opened it",
           re.search(r"crop = null;\s+// re-measure on the next frame", page)
           is None)
 
-    m = re.search(r"^function cropsAgree\(a, b\) \{.*?^\}", page, re.S | re.M)
-    check("cropsAgree is extractable for testing", m is not None)
-    if not m:
+    ma = re.search(r"^function cropsAgree\(a, b\) \{.*?^\}", page, re.S | re.M)
+    ms = re.search(r"^function cropStep\(m, cand, streak, adopted\) \{.*?^\}",
+                    page, re.S | re.M)
+    check("cropsAgree is extractable for testing", ma is not None)
+    check("cropStep is extractable for testing", ms is not None)
+    if not ma or not ms:
         return
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         print("  SKIP  no node available")
         return
-    js = m.group(0) + """
+    js = ma.group(0) + "\n" + ms.group(0) + """
 const L  = {x0:80,  y0:60, bw:480, bh:360};
 const L2 = {x0:82,  y0:62, bw:478, bh:358};
 const S1 = {x0:100, y0:40, bw:200, bh:300};
@@ -6385,15 +6398,52 @@ console.log(JSON.stringify([
   ['a scene does not agree with nothing', cropsAgree(S1, null), false],
   ['nothing does not agree with a scene', cropsAgree(null, S1), false],
 ]));
+
+// REPLAY A SEQUENCE, the way the 5s interval would drive it -- this is the
+// only way to test "three, not two" as BEHAVIOUR rather than as a number
+// sitting in the source that nothing runs.
+function simulate(samples) {
+  let cand = null, streak = 0, crop = null;
+  const seen = [];
+  for (const m of samples) {
+    const step = cropStep(m, cand, streak, crop);
+    streak = step.streak;
+    cand = m;
+    if (step.changed) crop = m;
+    seen.push(crop);
+  }
+  return seen;
+}
+const real = simulate([L, L, L, L]);
+// A static scene held for exactly two ticks -- Cave Story's dark cave, a
+// title card -- then the player moves and the next sample is nothing like
+// it: this must never be adopted, at any point in the sequence.
+const X = {x0:400, y0:10, bw:50, bh:60};
+const twoThenGone = simulate([S1, S1, X, null]);
+const dropSeq = simulate([L, L, L, null, null, null]);
+console.log(JSON.stringify([
+  ['a real letterbox is not adopted after two agreeing samples',
+   real[1] === null, true],
+  ['but is adopted on the third', real[2] !== null, true],
+  ['a scene held for only two samples is never adopted',
+   twoThenGone.every(c => c === null), true],
+  ['an adopted crop survives a single differing sample',
+   dropSeq[3] !== null, true],
+  ['and drops on the second agreeing one', dropSeq[4] === null, true],
+]));
 """
     r = subprocess.run([node, "-e", js], capture_output=True, text=True)
     check("node ran the comparator", r.returncode == 0, r.stderr[:200])
     if r.returncode != 0:
         return
     import json as _json
-    rows = _json.loads(r.stdout)
-    check("control: the comparator returned every case", len(rows) == 6,
-          len(rows))
+    out = r.stdout.strip().split("\n")
+    check("control: the script printed both result sets", len(out) == 2,
+          len(out))
+    if len(out) != 2:
+        return
+    rows = _json.loads(out[0]) + _json.loads(out[1])
+    check("control: every case reported", len(rows) == 11, len(rows))
     for name, got, want in rows:
         check(name, got == want, (got, want))
 
