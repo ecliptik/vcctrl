@@ -11,6 +11,12 @@ sudo install -m 0755 "$SRC/daemon/vcctrld.py"    "$PREFIX/vcctrld.py"
 sudo install -m 0644 "$SRC/daemon/vcweb.py"      "$PREFIX/vcweb.py"
 sudo install -m 0644 "$SRC/daemon/kvm.html"      "$PREFIX/kvm.html"
 sudo install -m 0644 "$SRC/daemon/themes.css"    "$PREFIX/themes.css"
+# THE MEASURED KEY COVERAGE. Named explicitly like everything else here, and
+# forgetting it does not fail loudly: the daemon reports `coverage: null`,
+# which is exactly what a board with no measurements looks like. A deploy gap
+# and a genuine absence of data are different facts and this file made them
+# the same JSON for one deploy on 2026-08-25. vcctrld now says which.
+sudo install -m 0644 "$SRC/daemon/keycoverage.json" "$PREFIX/keycoverage.json"
 sudo install -m 0755 "$SRC/bin/vcctrl-client"    /usr/local/bin/vcctrl
 
 sudo tee /etc/systemd/system/vcctrld.service >/dev/null <<'UNIT'

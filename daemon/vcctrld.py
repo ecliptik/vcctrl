@@ -375,18 +375,35 @@ def key_coverage(board_id):
     machine's BIOS, not about the daemon. The IBM PC board's table says
     nothing whatever about what an ADB board delivers.
 
+    Returns (row, reason). `reason` is None when a row was found, and
+    otherwise says WHY -- because "not deployed with the file" and "this board
+    has never been swept" are different facts and the caller acts differently
+    on each.
+
     Rows are keyed by ONE CANONICAL NAME PER KEYCODE and aliases resolve into
     them -- `ctrl` and `lctrl` are one physical key, and a row per name would
     be 129 rows for 105 facts, free to disagree with itself.
     """
     if board_id is None:
-        return None
+        return None, "the protocol board is not identified"
     try:
         with open(COVERAGE_FILE) as f:
             doc = json.load(f)
-    except Exception:
-        return None
-    return (doc.get("boards") or {}).get(str(board_id))
+    except FileNotFoundError:
+        # A DEPLOY FAULT, NOT A MEASUREMENT FACT, and they looked identical
+        # for one deploy. install.sh names each daemon/ file explicitly, this
+        # one was added and the install line was not, and the daemon answered
+        # `coverage: null` -- which is precisely what a board nobody has swept
+        # looks like. Two different facts sharing one value, in the object
+        # built to stop exactly that.
+        return None, ("no coverage file on this host (%s) -- the daemon was "
+                      "deployed without it" % COVERAGE_FILE)
+    except Exception as exc:
+        return None, "coverage file unreadable: %s" % errstr(exc)
+    row = (doc.get("boards") or {}).get(str(board_id))
+    if row is None:
+        return None, "no keys have been measured for board %s" % board_id
+    return row, None
 
 
 def keymap():
@@ -410,7 +427,7 @@ def keymap():
     coverage table. See docs/WEBKVM.md sec. 5.2.
     """
     bid = installed_board_id()
-    cov = key_coverage(bid)
+    cov, cov_why = key_coverage(bid)
     return {
         "aliases": dict(_CHORD_ALIASES),
         "mod_order": list(MOD_ORDER),
@@ -430,6 +447,10 @@ def keymap():
         "coverage": (cov or {}).get("keys") or None,
         "coverage_meta": {k: v for k, v in (cov or {}).items() if k != "keys"}
                          or None,
+        # WHY there is no coverage, in the daemon's own words. Null when there
+        # is some. A consumer showing "nothing measured" for a missing file
+        # would be reporting the deploy's state as the target's.
+        "coverage_reason": cov_why,
         # `measured` was False and unconditional while nothing had been swept.
         # It is now a fact about THIS BOARD: true when a table exists for it,
         # false when none does. It never meant "every key works" and still

@@ -2965,6 +2965,35 @@ def test_coverage_is_scoped_and_absence_is_not_a_negative():
     finally:
         vcctrld.BoardCapability.FILE = orig
 
+    # A MISSING FILE IS NOT AN ABSENCE OF MEASUREMENTS. install.sh names each
+    # daemon/ file explicitly; keycoverage.json was added and the install line
+    # was not, and the deployed daemon answered `coverage: null` -- exactly
+    # what a board nobody has swept looks like. Caught by curl'ing the rig,
+    # not by any test, which is why there is one now.
+    orig_cov = vcctrld.COVERAGE_FILE
+    try:
+        vcctrld.COVERAGE_FILE = os.path.join(d, "not-deployed.json")
+        row, why = vcctrld.key_coverage(1)
+        check("a missing coverage file says it is missing",
+              row is None and "deployed without it" in (why or ""), why)
+        vcctrld.COVERAGE_FILE = orig_cov
+        row, why = vcctrld.key_coverage(3)
+        check("a board with no rows says THAT instead",
+              row is None and "never" not in (why or "")
+              and "measured for board 3" in (why or ""), why)
+        row, why = vcctrld.key_coverage(1)
+        check("and a board with rows gives no reason at all",
+              row is not None and why is None, why)
+    finally:
+        vcctrld.COVERAGE_FILE = orig_cov
+
+    # AND THE DEPLOY MUST ACTUALLY CARRY IT. The tar ships daemon/ wholesale
+    # but install.sh copies named files, so a new data file reaches the Pi's
+    # source tree and never reaches /opt/vcctrl.
+    inst = open(os.path.join(HERE, os.pardir, "pi", "install.sh")).read()
+    check("install.sh installs the coverage file",
+          "keycoverage.json" in inst)
+
     # THE PAGE MUST GREY ON `arrives === false` AND NOTHING ELSE. A rule that
     # greyed on an unrecognised `why` would turn every future vocabulary
     # addition into a key that silently stops working.

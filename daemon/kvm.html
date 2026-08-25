@@ -3682,7 +3682,14 @@ function applyLayout(b) {
   if (L) {
     const c = coverageSummary(L);
     if (!c) {
-      bits.push([false, COVERAGE_UNMEASURED]);
+      // THE DAEMON'S OWN WORDS FOR WHY, where it has any. "Nothing has been
+      // measured" and "this daemon was deployed without its coverage file"
+      // are different facts, and showing the first for the second reports the
+      // DEPLOY's state as the target's.
+      bits.push([!!(keymap && keymap.coverage_reason),
+                 (keymap && keymap.coverage_reason)
+                   ? 'No measured coverage: ' + keymap.coverage_reason + '.'
+                   : COVERAGE_UNMEASURED]);
     } else {
       const parts = [c.yes + ' of ' + c.total + ' keys on this layout have '
                    + 'been measured at the target'];
