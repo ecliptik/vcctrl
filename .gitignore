@@ -25,3 +25,20 @@ __pycache__/
 # Build artifacts. The SOURCE is the record; the .COM is reproducible from it
 # (`make`), and a tracked binary is a second copy that can disagree with it.
 /dos/build/
+
+# Claude Code's isolated worktrees. `.claude/worktrees/<name>/` is a full
+# registered checkout of this repo -- 3.2 MB of it on 2026-08-25, on its own
+# branch, locked, and belonging to whichever session created it.
+#
+# NOT `/.claude/` wholesale: project-level Claude config that somebody
+# deliberately tracks would belong in the repo, and a blanket ignore would
+# hide it silently. Only the tooling's scratch checkouts are ignored.
+#
+# It has shown as `?? .claude/` all day and nothing had swept it, for two
+# reasons that are both accidents rather than defences: a registered worktree
+# carries a `.git` file, so `add` will not recurse into it -- and the nested
+# copy of THIS file is what was ignoring its `internal/`, since `/internal/`
+# is root-anchored and does not match a nested one. Neither fact is something
+# to rely on. An untracked directory in this tree is a thing waiting to be
+# added by somebody who did not look.
+/.claude/worktrees/
