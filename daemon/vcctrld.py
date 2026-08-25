@@ -1497,10 +1497,14 @@ class LedsCapability(Capability):
             self.devs.key(["capslock"])
         except Exception as exc:
             return {"ok": False, "error": "could not send: %s" % exc}
-        changed, deadline = False, time.time() + 1.5
+        changed, toggled, deadline = False, None, time.time() + 1.5
         while time.time() < deadline:
-            if self._sample() != before:
-                changed = True
+            cur = self._sample()
+            if cur != before:
+                # KEEP THE TOGGLED WORD. It is the first reading of this
+                # sequence that is known to post-date a Set-LEDs, so it is the
+                # only one we can compare against without trusting `before`.
+                changed, toggled = True, cur
                 break
             time.sleep(0.02)
         try:
@@ -1521,18 +1525,40 @@ class LedsCapability(Capability):
         # not. Polled back to `before` with a deadline, and whatever the last
         # sample says is reported either way -- a restore that genuinely did
         # not land must show as not landed, not be waited into looking fine.
+        # AND `restored` COMPARES AGAINST THE TOGGLED READING, NOT `before`.
+        #
+        # The first version of this waited for the word to come back to
+        # `before`, which is wrong for the exact reason the fault above
+        # documents: `before` may be STALE. Measured on hardware 2026-08-24,
+        # first run of this code on the rig -- before {1,0,1}, after {0,1,1},
+        # `restored: false` on a probe whose keystroke had been restored
+        # perfectly. The round trip REFRESHED a stale word, so the settled
+        # word could never equal `before` and the poll burned its whole
+        # deadline to report a false alarm.
+        #
+        # `toggled` is a reading taken after the target answered, so it is not
+        # stale. The caps bit moving AWAY from its value there is what "the
+        # key went back" means, and it is checkable without trusting anything
+        # read before the target spoke.
+        #
+        # `None` when nothing was ever seen to move: we cannot say a key came
+        # back if we never saw it leave, and False would claim we could.
         settled = self._sample() or {}
-        deadline = time.time() + 1.5
-        while settled != before and time.time() < deadline:
-            time.sleep(0.02)
-            settled = self._sample() or settled
+        restored = None
+        if toggled is not None:
+            was = toggled.get("capslock")
+            deadline = time.time() + 1.5
+            while settled.get("capslock") == was and time.time() < deadline:
+                time.sleep(0.02)
+                settled = self._sample() or settled
+            restored = settled.get("capslock") != was
         LedsCapability.verified_at = time.time()
         LedsCapability.verified_ok = changed
         if self.bus:
             self.bus.publish("input.verify", ok=changed)
         return {"ok": True, "verified": changed, "before": before,
                 "after": settled,
-                "restored": settled == before,
+                "restored": restored,
                 "note": ("the target acknowledged a keystroke"
                          if changed else
                          "no LED change -- the PS/2 link is not carrying "

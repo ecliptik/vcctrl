@@ -9355,6 +9355,54 @@ def test_verify_input_reports_the_settled_state_not_one_in_flight():
               r2.get("restored") is False, r2.get("restored"))
         check("and it gives up on a deadline rather than hanging",
               el2 < 5.0, round(el2, 2))
+
+        # THE ARM THIS TEST WAS MISSING, AND ITS ABSENCE IS WHY THE FIRST
+        # VERSION SHIPPED WRONG. Both arms above start from a `before` that is
+        # ACCURATE, so neither could exercise the one condition this whole
+        # section of OPEN-FAULTS is about: a STALE `before`. The first
+        # implementation waited for the word to return to `before` and called
+        # that restored -- which can never happen when the round trip has
+        # refreshed a stale word. Measured on the rig at 21:23, first run of
+        # that code on hardware: before {1,0,1}, after {0,1,1},
+        # `restored: false` on a keystroke that had been restored perfectly.
+        #
+        # The test agreed with the implementation's assumption because it was
+        # built on the same one.
+        class StaleDevs(object):
+            """Nodes start stale; each press refreshes them to the true word."""
+
+            def __init__(self):
+                self.word = {"capslock": 1, "numlock": 0, "scrolllock": 0}
+                self.presses = 0                 # true state: caps 0, num 1
+
+            def key(self, names, pace=None):
+                self.presses += 1
+                self.word = {"capslock": self.presses % 2,
+                             "numlock": 1, "scrolllock": 0}
+
+            def read_leds(self):
+                return dict(self.word)
+
+        L._changes = _collections.deque(maxlen=200)
+        L._changes_seq, L._seen_values, L._proven_epoch = 0, None, None
+        cap = L.__new__(L)
+        cap.devs = StaleDevs()
+        cap.bus = None
+        cap.support = lambda: (True, None)
+        with vcctrld.TARGET.lock:
+            vcctrld.TARGET.powered = True
+        r3 = cap._verify_input({})
+
+        check("control: a stale `before` still verifies the round trip",
+              r3["verified"] is True, r3.get("note"))
+        check("control: and `after` differs from `before`, because `before` "
+              "was never true", r3["after"] != r3["before"],
+              (r3["before"], r3["after"]))
+        check("A RESTORED KEY ON A STALE `before` IS NOT CALLED UNRESTORED",
+              r3.get("restored") is True, r3.get("restored"))
+        check("and `after` is the refreshed word, not the stale one",
+              r3["after"] == {"capslock": 0, "numlock": 1, "scrolllock": 0},
+              r3["after"])
     finally:
         (L._changes, L._changes_seq, L._seen_values, L._proven_epoch) = saved
         with vcctrld.TARGET.lock:

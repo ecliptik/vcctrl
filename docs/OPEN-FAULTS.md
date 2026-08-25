@@ -625,6 +625,33 @@ immediately after it.** One agreement does not establish that, and it does not
 tell you how long the refresh lasts — which is the question the instrumented
 session should answer.
 
+#### THE RULE THAT GENERALISES ALL OF IT: a value read before the target spoke is not a baseline
+
+Every fault in this section, and two outside it, is a version of trusting one.
+Three instances in one evening, in three different files, on three different
+bits:
+
+    arm()       do not trust the level read BEFORE the press. Press, then
+                look. A retained "already set" made it skip the press, POST
+                cleared a bit that was never armed, and the run refused
+                `no-reset` about a machine that had rebooted perfectly.
+    the listing do not trust the TEXT about which directory it describes. On
+    store       the failure path DOS re-read a missing path as a filename
+                pattern and printed `Directory of C:\`, so the record of the
+                failure was filed where nobody would look for it. Key it by
+                the path that was ASKED for.
+    `restored`  do not compare against a word read before the round trip.
+                `before` may be stale; the first sample that post-dates the
+                target answering is the only usable baseline.
+
+**The generalisation is not "LED values are unreliable".** It is that a
+reading taken before the target has said anything is a reading of the
+INSTRUMENT, not of the target — true about itself, and worth nothing as a
+comparison. Anything that needs a baseline must take it from the first
+observation the target actually produced, or arm the bit itself and watch for
+the edge. (Formulated by the vckvm session after the third instance; none of us
+had it in the morning, and it would have caught all three.)
+
 #### The sitting that would settle this has four tenants, and an order
 
 Four separate questions now wait on the same thing — the PS/2 traffic
