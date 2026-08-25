@@ -873,6 +873,18 @@ transitions as UNKNOWN rather than as its initial value.** This is 7.2.2f
 in its strongest form -- not a reading from the wrong epoch, but one that
 belongs to no epoch.
 
+**And such a value is not inert.** In the case above the input path READ
+that same field and pressed the physical key whenever it read SET -- so a
+phantom that had never been written sent a real keystroke to the target
+before every transfer's first command. **A never-written state field can
+be an actuator input**, which closes the loop with the mutation hazard at
+the top of this section: the probe writes the bit, nothing ever reads a
+transition, and a third component acts on the default.
+
+**The practical distinction, and it is why this is worth separating from
+staleness: re-reading fixes a stale value and cannot fix this one.** Look
+again and the same initial value returns with the same confidence.
+
 **The general form: a probe that writes is part of the system under test.**
 Look for this wherever readiness is established by doing something rather
 than by reading something.
