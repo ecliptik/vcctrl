@@ -1037,6 +1037,28 @@ HARNESS = r"""
     emit(`view-${m} ${sc.clientWidth} ${sc.clientHeight}`);
     say(m, `${sc.scrollWidth > sc.clientWidth + 1 ? 1 : 0}${sc.scrollHeight > sc.clientHeight + 1 ? 1 : 0}`);
   }
+  // RECENTRING ON A WIDTH CHANGE, not just resizing. showPanel() used to call
+  // applyZoom() with no recentre argument, so opening or closing the side
+  // column resized the picture into the new width and left scrollLeft at
+  // whatever it had been for the OLD width -- correct for the column that
+  // just closed, not for the one now on screen. Reported as "closing
+  // Activity doesn't bring the picture back to centre".
+  {
+    const stage = document.getElementById('stage');
+    const offCentre = () => {
+      const s = stage.getBoundingClientRect(), c = cv.getBoundingClientRect();
+      return Math.abs((c.left + c.right) / 2 - (s.left + s.right) / 2);
+    };
+    arm();
+    zoomMode = '4'; crop = null;                 // guaranteed to overflow
+    showPanel('stats', false); applyZoom(true);  // open, settle centred
+    const openOff = offCentre();
+    showPanel('', false);                        // close: the width jumps back up
+    const closedOff = offCentre();
+    emit(`recentre ${openOff.toFixed(1)} ${closedOff.toFixed(1)}`);
+    showPanel('', false);
+    zoomMode = 'fit'; crop = null; applyZoom(true);
+  }
   // The picker builds itself from the stylesheet. When that read fails it
   // fails SILENTLY -- an empty grid and a raw theme id where the name goes --
   // which is exactly what a cross-origin cssRules read did on the first
@@ -1855,6 +1877,15 @@ def test_zoom_layout_in_a_browser():
         check("%sx spills, so it must offer scrollbars" % m,
               not spills or bars.get(m, "00") != "00",
               (got[m], (W, H), bars.get(m)))
+
+    # Reported: closing the Activity/Status column left the (zoomed,
+    # overflowing) picture at the scroll offset the OPEN, narrower column
+    # needed -- correct for a width that no longer applies.
+    open_off, closed_off = got["recentre"]
+    check("control: the picture is centred while the column is open",
+          open_off < 2.0, got["recentre"])
+    check("closing the column recentres the picture, not just resizes it",
+          closed_off < 2.0, got["recentre"])
 
     # The picker: one swatch per identity, each wearing a real palette.
     import importlib.util

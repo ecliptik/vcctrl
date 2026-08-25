@@ -6976,7 +6976,15 @@ function showPanel(which, remember) {
   // fresh load, is the failure this page keeps having to design against.
   if (which === 'stats' && lastState) $('stats').innerHTML = statsRows(lastState);
   if (remember !== false) localStorage.setItem('vcctrl.panel', which);
-  applyZoom();
+  // RECENTRED, not just resized. setTab() and setFullscreen() both pass
+  // true here for the same reason: the column opening or closing changes
+  // how much width the picture has, and at any zoom past plain Fit that
+  // changes the scroll position needed to keep it centred. Without it the
+  // picture kept the OLD offset in the NEW width -- correct for the column
+  // that just closed, not for the one now on screen. Reported as "closing
+  // Activity doesn't bring the picture back to centre", and it didn't:
+  // scrollLeft simply never moved.
+  applyZoom(true);
 }
 (function sidepanel() {
   // 'hidden' and 'shown' are what the old collapse toggle wrote. Migrate
