@@ -600,7 +600,15 @@ one, and the first press of a session is what corrects it. It fits every
 reading here and is not proved by them.
 
 **Num Lock behaved correctly under the same test** — two presses moved the
-`numlock` node 1 -> 0 -> 1 cleanly, with nothing else moving. That matters
+`numlock` node 1 -> 0 -> 1 cleanly, with nothing else moving.
+
+**THIRD INSTANCE, AND THE CLEANEST, 22:26:** a NUM LOCK press moved the CAPS
+bit. `{1,0,1} -> {0,0,1}` on a press that should have touched neither of those
+— the stale word correcting itself on the first Set-LEDs. The two presses after
+it, on a now-fresh word, moved `numlock` cleanly and reversibly. Pressing one
+bit and watching a different one move is the reading that cannot be explained
+any other way. Three instances, three code paths, one mechanism — and still no
+measurement of how long the freshness holds. That matters
 because the prompt probe now uses Num Lock; it is a reason to keep watching
 that bit, not a proof that it is immune.
 
@@ -713,6 +721,36 @@ beforehand costs the sitting nothing and turns an unknown being tested
 alongside the instrument into a known quantity being used as one. That is
 strictly better. (Constraint and its correction both from the vckvm session,
 whose path item 4 is.)
+
+#### The unproven window arrives on its own — recognise it, do not engineer it
+
+**`arm_leds()` presses to prove an unproven channel rather than refusing.**
+That path has NOT been exercised on hardware, and the reason is worth knowing
+because it tells you when to look.
+
+Measured 2026-08-24: powering the target up produces `available: true,
+changes: 2` **before anything else runs**. POST clearing the LEDs and RDYPULSE
+setting Scroll Lock are real transitions, and the poller witnesses both. So a
+cold boot PROVES the channel as a side effect, every time.
+
+    daemon restarts while the target is UP     -> unproven window EXISTS
+    target boots under a running daemon        -> boot proves it, no window
+
+So the window is a deploy-while-powered, or a daemon crash with the machine
+left running. That is not rare — it is most deploys that are not late at
+night. **Nobody should schedule one for this.** At 21:23 the target was up and
+the window existed; at 22:23 it was dark and it did not.
+
+**WHOEVER NEXT DEPLOYS WHILE THE RIG IS POWERED:** take `vcctrl leds`
+immediately afterwards, before anything presses a key, then select a boot
+profile. That is the whole reading, it costs a minute, and the window closes
+the moment any lock key moves. (Suggested by the vckvm session, whose point
+was that recognising the moment is cheaper than manufacturing it.)
+
+What IS confirmed on hardware is the mechanism the blind press depends on:
+three single Num Lock presses, each producing a transition the poller
+witnessed, `changes` 2 -> 3 -> 4 -> 5. That is not the path, and the fix stays
+labelled confirmed-in-code only.
 
 **To open the channel: `vcctrl verify_input`.** It proves by round trip and
 reads the nodes directly, so it works while the gate is refusing — otherwise
