@@ -7090,18 +7090,29 @@ function unionStep(m, union) {
 // slice happened to be lit on one frame -- and asked as a RATIO, not a fixed
 // pixel tolerance, because a union built from a partly-explored room is
 // close to centred without ever being exact the way one still, fully-lit
-// frame can be. Measured live, in Cave Story: a union built from the first
-// twenty seconds of a starting room came out margins 172px/253px and
-// 132px/189px -- 0.68 and 0.70 by this ratio, nowhere near the ~6px a single
-// frame gets, but not remotely what an off-centre screen looks like either.
-// The case this guards against is still caught: "551 of 640 columns, all the
-// slack on one side" -- the DOS-prompt example the original check was
-// written for -- is 0px against 89px, a ratio of 0 whatever the threshold.
+// frame can be. The case this guards against is still caught: "551 of 640
+// columns, all the slack on one side" -- the DOS-prompt example the original
+// check was written for -- is 0px against 89px, a ratio of 0 at any
+// threshold.
 function isSymmetric(b) {
   const lm = b.x0, rm = b.w - b.x0 - b.bw, tm = b.y0, bm = b.h - b.y0 - b.bh;
   const hRatio = Math.min(lm, rm) / Math.max(lm, rm, 1);
   const vRatio = Math.min(tm, bm) / Math.max(tm, bm, 1);
   return hRatio >= 0.5 && vRatio >= 0.5;
+}
+// SYMMETRIC IS NOT THE SAME QUESTION AS BIG ENOUGH, and adopting on symmetry
+// alone shipped a real regression: a small starting room, roughly centred by
+// ordinary level design rather than by being the true video mode boundary,
+// passed isSymmetric() on its own union and got cropped to -- room-sized,
+// not mode-sized, reported directly as "too zoomed in" against the live rig
+// minutes after the union fix above went out. A room is level design and can
+// be any size; the true letterbox is a hardware fact and is not usually a
+// sliver. A floor here is a coarse, deliberately generous filter -- not a
+// claim about what the real boundary is, only that something covering under
+// 40% of an axis is far more likely to be an unexplored corner of a bigger
+// mode than the mode itself.
+function isPlausibleSize(b) {
+  return b.bw >= b.w * 0.4 && b.bh >= b.h * 0.4;
 }
 const CROP_STABLE_TICKS = 3;   // ticks (5s each) the union must hold still
 setInterval(() => {
@@ -7120,7 +7131,8 @@ setInterval(() => {
     if (crop === null) return;
     crop = null;
   } else {
-    if (cropStableTicks < CROP_STABLE_TICKS || !isSymmetric(cropUnion)) return;
+    if (cropStableTicks < CROP_STABLE_TICKS || !isSymmetric(cropUnion)
+        || !isPlausibleSize(cropUnion)) return;
     if (cropsAgree(cropUnion, crop)) return;
     crop = cropUnion;
   }

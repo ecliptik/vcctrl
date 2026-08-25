@@ -6546,6 +6546,17 @@ def test_a_letterbox_is_a_union_that_stops_growing():
     exact the way one fully-lit frame is; the DOS-prompt case the original
     check existed for ("551 of 640 columns, all the slack on one side") is
     0px against 89px, a ratio of 0 at any threshold, still caught.
+
+    And symmetric is not the same question as big enough, which was found the
+    same way: watched live, minutes after the union fix above shipped. The
+    STARTING room, only partly explored, unioned to 211x159 of a 640x480
+    frame -- roughly centred by ordinary level design, not because it was the
+    true video mode -- passed isSymmetric on its own and got adopted anyway,
+    reported directly as "too zoomed in" against the live rig. isSymmetric
+    asks about SHAPE and cannot tell a small, coincidentally-centred room
+    from the true boundary; isPlausibleSize is the coarse floor that a real
+    letterbox is a hardware fact and not usually a sliver, added once that
+    gap was seen rather than guessed at.
     """
     print("\nletterbox is a union that stops growing")
     import shutil
@@ -6562,21 +6573,24 @@ def test_a_letterbox_is_a_union_that_stops_growing():
           "if (!crop) crop = measureCrop()" in page)
     check("measureCrop no longer rejects an asymmetric single sample",
           "if (Math.abs(lm - rm) > w * 0.06" not in live)
-    check("the interval drives its decision through unionStep and "
-          "isSymmetric, not a short streak of raw samples",
-          "unionStep(m, cropUnion)" in page and "isSymmetric(cropUnion)" in page)
+    check("the interval drives its decision through unionStep, isSymmetric "
+          "and isPlausibleSize, not a short streak of raw samples",
+          "unionStep(m, cropUnion)" in page and "isSymmetric(cropUnion)" in page
+          and "isPlausibleSize(cropUnion)" in page)
 
     ms = re.search(r"^function unionStep\(m, union\) \{.*?^\}", page, re.S | re.M)
     isym = re.search(r"^function isSymmetric\(b\) \{.*?^\}", page, re.S | re.M)
+    ipl = re.search(r"^function isPlausibleSize\(b\) \{.*?^\}", page, re.S | re.M)
     check("unionStep is extractable for testing", ms is not None)
     check("isSymmetric is extractable for testing", isym is not None)
-    if not ms or not isym:
+    check("isPlausibleSize is extractable for testing", ipl is not None)
+    if not ms or not isym or not ipl:
         return
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
         print("  SKIP  no node available")
         return
-    js = ms.group(0) + "\n" + isym.group(0) + """
+    js = ms.group(0) + "\n" + isym.group(0) + "\n" + ipl.group(0) + """
 // A REAL LETTERBOX: identical every sample, so the union never grows past
 // the first one, and it is well-centred.
 const L  = {x0:80, y0:60, bw:480, bh:360, w:640, h:480};
@@ -6602,16 +6616,29 @@ function unionOf(samples) {
 const letterboxUnion = unionOf([L, L, L]);
 const roomUnion = unionOf([room1, room2, room3]);
 const promptUnion = unionOf([prompt1, prompt2, prompt1, prompt2]);
+// THE SECOND BUG, caught live minutes after the first fix shipped: the
+// STARTING cell, before the player has gone anywhere -- room1 and room2
+// only, never reaching room3's fuller extent. 211-215px of 640 is ~33%,
+// under the 40% floor, even though it is just as symmetric as the fully
+// explored union above.
+const cellUnion = unionOf([room1, room2]);
 
 console.log(JSON.stringify([
   ['a union of one sample is that sample', JSON.stringify(unionStep(L, null)) === JSON.stringify(L), true],
   ['a union only ever grows, matching the widest sample seen',
    roomUnion.bw >= room3.bw && roomUnion.bh >= room3.bh, true],
   ['a stable, identical letterbox is symmetric', isSymmetric(letterboxUnion), true],
+  ['and a plausible size', isPlausibleSize(letterboxUnion), true],
   ['a partly-explored room, close but not exact, still reads as symmetric',
    isSymmetric(roomUnion), true],
+  ['and by then is a plausible size too', isPlausibleSize(roomUnion), true],
   ['a lopsided DOS prompt is never symmetric, however long it is watched',
    isSymmetric(promptUnion), false],
+  ['the STARTING CELL is symmetric on its own -- ordinary level design, '
+   + 'not evidence of the true mode',
+   isSymmetric(cellUnion), true],
+  ['but it is not yet a plausible size, so it is not adopted either',
+   isPlausibleSize(cellUnion), false],
 ]));
 """
     r = subprocess.run([node, "-e", js], capture_output=True, text=True)
@@ -6620,7 +6647,7 @@ console.log(JSON.stringify([
         return
     import json as _json
     rows = _json.loads(r.stdout)
-    check("control: every case reported", len(rows) == 5, len(rows))
+    check("control: every case reported", len(rows) == 9, len(rows))
     for name, got, want in rows:
         check(name, got == want, (got, want))
 
