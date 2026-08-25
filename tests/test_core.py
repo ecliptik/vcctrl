@@ -7739,6 +7739,56 @@ def test_the_driver_reads_leds_from_where_the_daemon_puts_them():
     check("and it presses nothing", not [r for r in reg.sent
                                          if r["cmd"] == "key"], reg.sent)
 
+    # A PRESS THAT MOVES THE BIT THE WRONG WAY MUST BE CORRECTED, NOT
+    # REPORTED AS A FAILURE. The read that says "not set" can be wrong about
+    # the target -- the daemon serves retained sysfs values as available on a
+    # channel it has never seen move -- so one press can CLEAR a bit that was
+    # already set. The old shape then waited for it to become set, timed out,
+    # and refused the run `no-witness` on a healthy machine.
+    class Toggling(object):
+        """A target whose LED really does follow the key it is sent."""
+
+        def __init__(self, start):
+            self.value, self.presses = start, 0
+
+        def execute(self, req):
+            if req["cmd"] == "leds":
+                return {"ok": True, "leds": {"available": True,
+                                             "scrolllock": self.value}}
+            if req["cmd"] == "key":
+                self.value = 0 if self.value else 1
+                self.presses += 1
+            return {"ok": True}
+
+    # The reading is wrong in the dangerous direction: it says 0 once, so the
+    # first press clears a bit that was really set.
+    class Lying(Toggling):
+        def __init__(self):
+            Toggling.__init__(self, 1)
+            self.lied = False
+
+        def execute(self, req):
+            if req["cmd"] == "leds" and not self.lied:
+                self.lied = True
+                return {"ok": True, "leds": {"available": True,
+                                             "scrolllock": 0}}
+            return Toggling.execute(self, req)
+
+    liar = Lying()
+    check("arm() recovers from a press that went the wrong way",
+          vcctrld.RegistryDriver(liar).arm() is True, liar.value)
+    check("and it took two presses to get there, not one", liar.presses == 2,
+          liar.presses)
+
+    # AND IT MUST STILL FAIL WHEN THE CHANNEL IS GENUINELY DEAD, or the retry
+    # has turned a fail-closed guard into a loop that eventually says yes.
+    dead = FakeReg({"ok": True, "leds": {"available": False}})
+    check("an unreadable channel still refuses",
+          vcctrld.RegistryDriver(dead).arm() is False)
+    check("and it does not press forever",
+          len([r for r in dead.sent if r["cmd"] == "key"]) == 2,
+          [r for r in dead.sent if r["cmd"] == "key"])
+
 
 def test_typing_proves_caps_lock_is_off_first():
     """The readiness probe and the payload were fighting over one piece of

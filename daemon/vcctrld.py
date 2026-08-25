@@ -4477,6 +4477,20 @@ class RegistryDriver(object):
 
         Checked rather than assumed off, because the failure is invisible in
         every other respect.
+
+        BEST-EFFORT, AND SAYING SO IS THE POINT. `_led()` returns None on a
+        channel the daemon will not vouch for, and None is not True, so on an
+        unproven channel this silently does nothing and types anyway. That is
+        the right behaviour -- refusing to type because a lock key cannot be
+        read would strand the transfer over a bit that only affects the CASE
+        of an argument -- but it means this is a defence and not a guarantee.
+
+        It also does not own the state. Once the readiness probe stops
+        toggling Caps Lock, the harness is no longer the CAUSE of an inverted
+        case, but it is still not the only one: the operator can press Caps
+        Lock at the KVM and a DOS program can set it. So the check stays, and
+        what it promises is "if the daemon can see it and it is on, turn it
+        off", which is less than the name suggests.
         """
         if self._led("capslock") is True:
             self._do("key", keys=["capslock"])
@@ -4545,8 +4559,36 @@ class RegistryDriver(object):
         clearing it changes nothing and the wait for 1 -> 0 times out on a
         machine that rebooted perfectly. Same reason arm_leds() exists for
         Caps Lock -- a level cannot show a transition.
+
+        IT VERIFIES ITS OWN PRESS NOW, RATHER THAN ASSUMING IT LANDED, and
+        that is a fix for a real failure of this feature rather than tidiness.
+        The old shape read once, pressed if the read was not True, and
+        returned whatever the next read said. Both of those reads can be wrong
+        about the target:
+
+        THE VALUE MAY NEVER HAVE BEEN A READING. The daemon publishes the
+        lock LEDs as `available` on a channel it has never seen move -- the
+        first sample of its life is recorded as proof, so retained sysfs
+        values are served as current. If that phantom says Scroll Lock is
+        already set, this SKIPS THE PRESS, POST clears a bit that was never
+        set, no edge occurs, and the run refuses `no-reset`: "the machine
+        never reset" about a machine that rebooted perfectly. That is the
+        second time this exact sentence has been produced by an instrument
+        fault rather than a target fault -- see the note above about reading
+        the values from the wrong level.
+
+        AND A PRESS CAN MOVE THE BIT THE WRONG WAY. If the read said not-set
+        and the truth was set, one press clears it, and waiting for it to
+        become set then times out on a machine that is fine.
+
+        So: read, and press only if the reading disagrees -- then LOOK AGAIN.
+        Two attempts, because the second one corrects a first press that went
+        the wrong way, and stopping there bounds the stray keystrokes sent to
+        a target we may not be able to observe at all.
         """
-        if self._led("scrolllock") is not True:
+        for _ in range(2):
+            if self._led("scrolllock") is True:
+                return True
             self._do("key", keys=["scrolllock"])
             self._await_led("scrolllock", True, 5.0)
         return self._led("scrolllock") is True
@@ -4562,7 +4604,7 @@ class RegistryDriver(object):
     def wait_prompt(self):
         """Is the BIOS keyboard ISR alive? NOT "is DOS at a prompt".
 
-        Caps Lock is serviced by INT 09h and DOS is not involved, so this is
+        A lock key is serviced by INT 09h and DOS is not involved, so this is
         True during an FTP transfer as well as at a prompt. It is a NECESSARY
         condition and never a sufficient one: what it genuinely detects is a
         program that HOOKS the vector, which is why it correctly reports the
@@ -4570,22 +4612,54 @@ class RegistryDriver(object):
 
         The transfer does not lean on it the way its name invites -- the thing
         that actually proves a transfer finished is the file arriving here.
+
+        IT PROBES NUM LOCK, AND IT USED TO PROBE CAPS LOCK. Two reasons, and
+        the first one already cost this project a transfer:
+
+        THE PROBE CORRUPTED WHAT WAS TYPED NEXT. Caps Lock inverts the case of
+        every letter this harness sends, so a readiness check run before a
+        command silently changed that command's ARGUMENTS -- `HELLO.TXT.CHK`
+        was asked for and `hello.txt.chk` arrived, and the wait timed out on a
+        transfer the server log showed completing. type_line() defends against
+        that by proving Caps Lock off first, which is a compensation for a
+        hazard this probe created. Probing a bit that changes nothing removes
+        the dependency instead. Num Lock is safe here because the char map
+        contains no keypad codes at all, so nothing typed by `type` is
+        sensitive to it -- and the boot-menu digit is a number-row key.
+        (`kp*` keys ARE reachable by name. Anything that sends one becomes
+        sensitive to Num Lock where it was not before; nothing on this path
+        does.)
+
+        THE CAPS LOCK NODE IS THE ONE MEASURED TO MISBEHAVE. On the rig,
+        2026-08-24: the node named `capslock` read 1 while the target's Caps
+        Lock was OFF, stayed 1 when it came ON, and moved only on a second
+        press -- on a channel that was PROVEN, so this is not the phantom.
+        Which node moved was not consistent between two identical presses. The
+        num lock node moved cleanly under the same test. A probe that reads a
+        bit to decide whether the machine is responsive should not be reading
+        the one bit known to lie about itself.
+
+        WHAT THAT MEANS HERE, STATED BECAUSE IT IS NOT FIXED: this probe is a
+        tiebreaker after something has already gone wrong, and a false
+        negative turns a per-file `no-return` into `no-prompt`, which stops
+        the rest of the run. On the old bit that was a live risk. On this one
+        it is smaller and it is not zero.
         """
-        before = self._led("capslock")
+        before = self._led("numlock")
         if before is None:
             return False
         end = time.time() + self.PROMPT_TIMEOUT_S
         while time.time() < end:
-            self._do("key", keys=["capslock"])
-            if self._await_led("capslock", not before, 8.0):
+            self._do("key", keys=["numlock"])
+            if self._await_led("numlock", not before, 8.0):
                 # Restore, ALWAYS. On the failure path the keystroke was
                 # usually only buffered, so leaving it unrestored means a
                 # failed probe corrupts the state the next probe reads.
-                self._do("key", keys=["capslock"])
-                self._await_led("capslock", before, 8.0)
+                self._do("key", keys=["numlock"])
+                self._await_led("numlock", before, 8.0)
                 return True
             time.sleep(1.0)
-        self._do("key", keys=["capslock"])
+        self._do("key", keys=["numlock"])
         return False
 
     def screen(self):
