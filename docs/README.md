@@ -76,16 +76,17 @@ is why this section exists.
 
 ## The harness, and how it has been wrong
 
-**`FINDINGS.md`** — 39 sections, measured rather than reasoned. The recurring
+**`FINDINGS.md`** — 41 sections, measured rather than reasoned. The recurring
 shape is worth knowing before you read any of it:
 
 > A check that returns the reassuring answer when it is broken.
 
-Sections 31, 35, 36, 37, 38, 39 are all that family: absence read as a value; a
-check passing on an empty population; a dump bounded by the ring rather than
-the cell; Caps Lock inverting every typed character; a journal query nine hours
-in the future returning "No entries"; eight cells silently comparing a
-condition with itself.
+Sections 31, 35, 36, 37, 38, 39, 41 are all that family: absence read as a
+value; a check passing on an empty population; a dump bounded by the ring
+rather than the cell; Caps Lock inverting every typed character; a journal
+query nine hours in the future returning "No entries"; eight cells silently
+comparing a condition with itself; `verify_input` reporting a keystroke
+reached a target that had no power to receive it.
 
 - **`CLI-PARITY.md`** — the `vcctrl` verb surface and why each verb refuses.
   **Sec. 5a is the one to read if you are adding anything both sides call:**

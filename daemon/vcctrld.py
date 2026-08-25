@@ -1411,6 +1411,47 @@ if LED_BOARDS is None:
     LED_BOARDS = (1,)
 
 
+def _configured_power_boards():
+    """Board ids the configured power plug actually controls, or None.
+
+    NOT part of `targets:` -- that list describes facts about a MACHINE
+    (does it have LEDs, can it receive files); this describes a fact about
+    the CONFIGURED PLUG, which board's mains it is wired to. Lives beside the
+    plug's own settings for that reason: `capabilities.power.settings.boards`,
+    read the same defensive way as `_configured_led_boards()` -- anything
+    that is not a clean list of ints is treated as "not configured" rather
+    than trusted partially, so a typo here fails toward refusing power
+    actions rather than toward silently accepting an unmapped board.
+    """
+    boards = CFG.optional("capabilities.power.settings.boards")
+    if boards is vcconfig.ABSENT or boards is vcconfig.NONE:
+        return None
+    out = []
+    for b in boards:
+        try:
+            out.append(int(b))
+        except (TypeError, ValueError):
+            continue
+    return tuple(out)
+
+
+# Which board(s) the configured plug is wired to. docs/BOARD-IDENTITY.md
+# sec. 5: `power cycle` drives ONE plug regardless of which USB4VC protocol
+# board is seated, so with a Mac Plus installed it cut the Gateway's mains --
+# a machine nobody asked about and possibly mid-run on a peer session. This is
+# the fix: a gated power action refuses on a board this plug is not declared
+# to control, rather than running unconditionally (see PowerCapability.support
+# and _power below).
+#
+# The built-in default is the reference rig's single plug, wired to the g2k
+# (board 1) -- same shape as LED_BOARDS. A rig with more than one powered
+# machine MUST configure `capabilities.power.settings.boards` explicitly; an
+# unmapped board is refused, never assumed to be this one.
+POWER_BOARDS = _configured_power_boards()
+if POWER_BOARDS is None:
+    POWER_BOARDS = (1,)
+
+
 def installed_board_id():
     """The installed board's id from the primary source, or None.
 
@@ -1799,6 +1840,47 @@ class LedsCapability(Capability):
                              "PS/2 link, and the LED round trip it depends "
                              "on does not exist here")}
 
+        # REFUSE ON UNPOWERED TOO -- MEASURED, not hypothetical. snapshot()
+        # already gates on this (the "unpowered" branch below), but this
+        # probe did not, and toggling Caps Lock with the target's mains cut
+        # is not a no-op: it MOVES OUR OWN sysfs LED node regardless, because
+        # that node belongs to the Pi's uinput device and something in the
+        # Pi's own input stack echoes a keyboard's lock-key LED locally,
+        # independent of whatever the external protocol board is doing.
+        # `_sample()` cannot tell that local echo apart from a genuine
+        # Set-LEDs reply carried back over PS/2 -- both are "the value moved
+        # and moved back" on the same node.
+        #
+        # Caught live, 2026-08-25: the g2k's plug was off (`power state`:
+        # on=false), `leds` correctly reported `why: unpowered`, and this
+        # probe still returned `verified: true` -- `led-changes` showed the
+        # exact toggle-then-restore it produced, recorded at epoch 0, the
+        # unpowered epoch. The round trip this docstring promises -- "the
+        # value returns only if the target's keyboard controller received
+        # the key" -- was false for that reading, which is precisely the
+        # class of bug this command exists to catch everywhere else.
+        #
+        # Same TARGET.state() snapshot.py already reads; not the _proven_epoch
+        # gate just below in snapshot() (deliberately bypassed, per that
+        # gate's own comment -- this probe is what proves a channel that gate
+        # would otherwise never let out of "unproven"). Power is different:
+        # an unpowered target can never legitimately move this node, so there
+        # is no bootstrapping problem in refusing here the way there would be
+        # for "unproven".
+        _epoch, powered, _changed_at = TARGET.state()
+        if powered is False:
+            return {"ok": True, "verified": None,
+                    "available": False,
+                    "why": "unpowered",
+                    "reason": ("the target has no power, so a round trip "
+                               "cannot prove anything reached it -- see this "
+                               "method's docstring for the measured false "
+                               "positive this refusal closes"),
+                    "note": ("not attempted -- toggling the key regardless "
+                             "would still move our own uinput device's LED "
+                             "node locally and could be misread as the "
+                             "target's answer")}
+
         # THROUGH `_sample()`, NOT `read_leds()`, and that is the whole point
         # of this change. This probe is the only thing that can prove a
         # channel the gate has closed, but it used to observe the transition
@@ -1923,6 +2005,18 @@ class PowerCapability(Capability):
     this same class, and `self.backend_name` selects which protocol object it
     builds. That is the honest factoring: switching from a Kasa plug to a shell
     command changes how a relay is toggled, not what mains control means.
+
+    BOARD-SCOPED, as of the fix docs/BOARD-IDENTITY.md sec. 5 named and left
+    open: the configured plug is wired to ONE machine, and with a different
+    USB4VC protocol board seated, `power cycle` used to cut that machine's
+    mains regardless -- a Mac Plus installed on the rig still cycled the
+    g2k's plug, a machine nobody asked about and possibly mid-run on a peer
+    session. `support()` and the check at the top of `_power()` close this:
+    a gated action (`on`/`off`/`cycle`) refuses unless the installed board is
+    one `POWER_BOARDS` names, and an unknown board refuses too rather than
+    assuming. `state` is unaffected -- it is never gated (see `_gated()`),
+    and diagnosing a stuck run must never require knowing which board is
+    seated.
     """
 
     name = "power"
@@ -2003,6 +2097,34 @@ class PowerCapability(Capability):
         # told from readings taken after one. See TargetEpoch.
         TARGET.observe(st.get("on"))
 
+    def support(self):
+        """Is the configured plug wired to the INSTALLED board?
+
+        Tri-state, same shape as LedsCapability.support() and for the same
+        reason: `False` (known board, not this plug's) and `None` (board
+        unknown) are different facts that need different responses, and
+        collapsing them would mean an unknown board either blocks every
+        power action forever or -- far worse -- defaults to allowing one.
+
+        Read-only, and called from `_power()` only for the GATED actions.
+        `power state` must keep working with no board known at all, because
+        diagnosing a stuck run must never depend on already knowing which
+        board is seated.
+        """
+        bid = installed_board_id()
+        if bid is None:
+            return None, ("board unknown, so it cannot be confirmed that "
+                           "the configured power plug controls it -- "
+                           "refusing rather than guessing which machine "
+                           "this would power-cycle")
+        if bid in POWER_BOARDS:
+            return True, None
+        return False, ("the configured power plug controls board(s) %s, "
+                        "not the installed board %d -- refusing rather "
+                        "than cycling the wrong machine's mains (see "
+                        "docs/BOARD-IDENTITY.md sec. 5)"
+                        % (list(POWER_BOARDS), bid))
+
     def snapshot(self):
         """Plug identity and last known relay state, for /state.json.
 
@@ -2020,11 +2142,17 @@ class PowerCapability(Capability):
             cfg_host = kasa_host()
         except Exception:
             pass
+        # Informational, never gating: `board_match` tells a caller (a
+        # preflight, a human reading /state.json) whether a WRITE to this
+        # plug would be honoured right now, without making the READ above
+        # depend on the board being known. See support().
+        board_match, board_reason = self.support()
         st, t = self._seen, self._seen_t
         if not st:
             return {"host": cfg_host, "alias": None, "model": None,
                     "on": None, "age_s": None, "stale": None,
-                    "reason": "the plug has not answered since the daemon started"}
+                    "reason": "the plug has not answered since the daemon started",
+                    "board_match": board_match, "board_reason": board_reason}
         age = round(time.time() - t, 1)
         # `on` is TRI-STATE. If the last refresh failed we no longer know the
         # relay state, and reporting the last-known value as though it were
@@ -2037,7 +2165,8 @@ class PowerCapability(Capability):
                 "on": None if unreachable else st.get("on"),
                 "age_s": age,
                 "stale": unreachable or age > self.STALE_S,
-                "reason": self._fail}
+                "reason": self._fail,
+                "board_match": board_match, "board_reason": board_reason}
 
     def commands(self):
         return {"power": self._power, "powerlog": self._powerlog}
@@ -2070,6 +2199,21 @@ class PowerCapability(Capability):
         return {"ok": True, "entries": lines[-n:], "total": len(lines)}
 
     def _power(self, req):
+        action = req.get("action", "state")
+        if action in GATED_POWER_ACTIONS:
+            # BOARD-SCOPED, CHECKED FIRST -- before the host is resolved,
+            # before PROFILE is invalidated, before the plug is touched.
+            # docs/BOARD-IDENTITY.md sec. 5: this plug is wired to one
+            # machine, and cycling it while a different board is installed
+            # is a power cycle of a machine nobody asked about, possibly
+            # mid-run on a peer session. See PowerCapability's docstring and
+            # support() for the two refusal reasons this can return.
+            supported, why = self.support()
+            if supported is not True:
+                self._audit(action, req.get("as"), "REFUSED (board scope): %s" % why)
+                return {"ok": False, "error": why,
+                        "board_id": installed_board_id(),
+                        "power_boards": list(POWER_BOARDS)}
         # ANY power action may have rebooted the target, so the profile
         # reading stops being about the machine that is running. Done here
         # rather than in a listener because the invalidation must not be able
@@ -2081,10 +2225,19 @@ class PowerCapability(Capability):
                     "no power host configured -- set "
                     "capabilities.power.settings.host in %s"
                     % (CFG.source or "vcctrl.yaml (see vcctrl.example.yaml)")}
-        action = req.get("action", "state")
         if action == "state":
-            st = self._protocol().state()
+            st = dict(self._protocol().state())
             self._remember(host, st)
+            # SAME TWO FIELDS snapshot() carries, on the SAME call a caller
+            # would make right before attempting `on`/`off`/`cycle` -- not
+            # only on /state.json's poll. Without this, `vcctrl power state`
+            # (what a harness or MCP caller actually calls) answered a
+            # different, thinner question than the web UI did, and the one
+            # place this information is most useful -- deciding whether a
+            # gated action is even worth attempting -- was the one place it
+            # was missing.
+            board_match, board_reason = self.support()
+            st["board_match"], st["board_reason"] = board_match, board_reason
             return {"ok": True, "power": st}
         # Reads are not audited -- they happen on a timer from every open
         # browser tab and would bury the two lines that matter.

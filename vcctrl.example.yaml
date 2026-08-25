@@ -127,6 +127,21 @@ capabilities:
       alias: example-plug
       # How long mains stays off during a power cycle.
       cycle_off_s: 15.0
+      # WHICH BOARD(S) THIS PLUG IS WIRED TO. Not a preference -- a safety
+      # fact. `on`/`off`/`cycle` refuse when the INSTALLED board is not in
+      # this list, rather than running unconditionally. Required because a
+      # rig can carry more than one USB4VC protocol board over its life
+      # without carrying more than one smart plug: this example's plug is
+      # the PC's, and if a Macintosh board were seated on the same rig,
+      # `power cycle` would otherwise still cut the PC's mains -- a machine
+      # nobody asked about and possibly mid-run on a peer session. See
+      # docs/BOARD-IDENTITY.md sec. 5.
+      #
+      # An unmapped or unknown board is refused, never assumed to be this
+      # one -- same discipline as `leds.settings.boards_with_channel` below.
+      # `power state` is unaffected: it is a read, never gated, and must
+      # keep answering even when the installed board is unknown.
+      boards: [1]
     #
     # The `shell` backend runs your own commands instead, for any plug this
     # project will never support -- a Zigbee bridge, a relay board, a PDU with
