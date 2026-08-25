@@ -3119,8 +3119,15 @@ const LAYOUTS = {
     chords: [
       {keys:['ctrl','c'], cap:'Ctrl-C',
        title:'Break the running program — the one every DOS user reaches for'},
+      // ITS COMPONENT IS ONE OF ONLY TWO KEYS WITH NO VERDICT. The 2026-08-25
+      // sweep voided `pause`: it halts until a keypress and swallowed the
+      // sentinel that framed it. So this control is offered and says it is
+      // unproven, rather than being removed or being presented as working.
       {keys:['ctrl','pause'], cap:'Ctrl-Break',
-       title:'The harder break, caught in places Ctrl-C is not'},
+       title:'The harder break, caught in places Ctrl-C is not. UNMEASURED: '
+           + 'its Pause component is one of only two keys the sweep could '
+           + 'not give a verdict for, so if nothing happens the target may '
+           + 'simply not have received it.'},
       {keys:['ctrl','z'], cap:'Ctrl-Z',
        title:'^Z, end-of-file — this is what ends COPY CON'},
       {keys:['ctrl','s'], cap:'Ctrl-S',
@@ -3221,10 +3228,65 @@ const LAYOUTS = {
 // Both are claims and neither has been measured, so the panel says the true
 // thing once, in words, and draws every key alike. When the sweep runs, its
 // results go here and this line shrinks to the keys still unproven.
-const COVERAGE_NOTE =
+const COVERAGE_UNMEASURED =
   'None of these keys have been measured at the target. The Pi hands raw '
 + 'key codes to the protocol board and the mapping lives in its firmware, so '
 + 'which of them arrive is measurable only at the machine (WEBKVM.md 5.2).';
+
+// WHAT THE COVERAGE TABLE SAYS ABOUT THE KEYS THIS LAYOUT ACTUALLY DRAWS.
+//
+// The daemon publishes coverage for the whole key namespace it accepts; the
+// panel only ever draws a subset of it. The number worth showing is the
+// INTERSECTION -- "77 of 83" -- not the daemon's total, because a count that
+// includes keys this page cannot send overstates what the operator can act on.
+// That distinction was the operator's, found by looking at the page rather
+// than at the table.
+//
+// THREE OUTCOMES, AND ONLY ONE OF THEM GREYS A KEY:
+//   arrives === false   measured, and it does not reach the target -> grey
+//   arrives === true    measured, it does                          -> normal
+//   anything else       no verdict: no row, an unknown `why`, or a
+//                       `why` this page has never heard of          -> normal
+//
+// The last case is deliberately wide. `why` is an OPEN set -- the daemon's
+// own LedsCapability docstring records what it cost to treat one as closed --
+// so a rule that greyed on anything it did not recognise would turn every
+// future `why` value into a key that silently stops working, three files away
+// from whoever added it.
+function coverageOf(key) {
+  if (!keymap || !keymap.coverage) return null;
+  // THE DAEMON OWNS THE NAME RESOLUTION. The layout draws printed keycaps --
+  // `-`, `[`, `.` -- and the coverage table is keyed one-name-per-keycode.
+  // Guessing at the correspondence here would be a second mapping to drift
+  // against the daemon's, and it fails QUIETLY: a missed lookup reads as "no
+  // verdict", which understates what is known and so looks like nothing is
+  // wrong. `canon()` is the CHORD alias table and is a different question.
+  const n = (keymap.canonical && keymap.canonical[key]) || key;
+  return keymap.coverage[n] || null;
+}
+function keyIsDead(key) {
+  const r = coverageOf(key);
+  return !!(r && r.arrives === false);
+}
+function coverageSummary(L) {
+  if (!keymap || !keymap.coverage) return null;
+  const names = new Set();
+  const walk = a => { for (const k of (a || [])) {
+    if (Array.isArray(k)) { walk(k); continue; }
+    if (k && (k.k || k.mod)) names.add(k.mod || k.k);
+  } };
+  walk(L.fkeys); walk(L.main); walk(L.bottom); walk(L.compact);
+  walk(L.nav); walk(L.locks);
+  if (L.arrows) ['up', 'down', 'left', 'right'].forEach(k => names.add(k));
+  let yes = 0, no = 0, none = 0;
+  for (const n of names) {
+    const r = coverageOf(n);
+    if (r && r.arrives === true) yes++;
+    else if (r && r.arrives === false) no++;
+    else none++;
+  }
+  return {total: names.size, yes, no, none};
+}
 
 // ── latching ──────────────────────────────────────────────────────────────
 // `latched` is an ORDERED list, because combo() presses in the order it is
@@ -3444,6 +3506,19 @@ function keyButton(spec) {
   b.title = spec.mod
     ? 'Hold ' + label + ' for the next key — tap again to release'
     : 'Send ' + label + ' to the target';
+  // MEASURED NOT TO ARRIVE, and only that. Disabled rather than dimmed: the
+  // page has a rule against dimming text with opacity, and a key that cannot
+  // reach the target should not be pressable rather than merely look sad.
+  const cov = coverageOf(spec.mod || spec.k);
+  if (cov && cov.arrives === false) {
+    b.disabled = true;
+    b.title = label + ' does not reach the target — measured '
+            + (keymap.coverage_meta && keymap.coverage_meta.measured_at
+               ? 'on ' + keymap.coverage_meta.measured_at : '')
+            + (cov.reason ? '. ' + cov.reason : '');
+  } else if (cov && cov.arrives === true && cov.scan) {
+    b.title += ' — measured: scan ' + cov.scan + ', AL ' + cov.al;
+  }
   if (spec.aria || spec.cap.length > 2) b.setAttribute('aria-label', label);
   b.onclick = () => tapSpec(spec);
   return b;
@@ -3599,7 +3674,25 @@ function applyLayout(b) {
   }
   if (L && L.unverified) bits.push([true, L.unverified]);
   if (L && L.absent) bits.push([false, L.absent]);
-  if (L) bits.push([false, COVERAGE_NOTE]);
+  // WHAT IS ACTUALLY KNOWN, not a standing disclaimer. This line said "none
+  // of these keys have been measured" for as long as that was true, and kept
+  // saying it after the sweep ran -- which is the shape of the comment that
+  // stated a fact and went on stating it. It is derived from the table now,
+  // so it cannot outlive its own truth.
+  if (L) {
+    const c = coverageSummary(L);
+    if (!c) {
+      bits.push([false, COVERAGE_UNMEASURED]);
+    } else {
+      const parts = [c.yes + ' of ' + c.total + ' keys on this layout have '
+                   + 'been measured at the target'];
+      if (c.no) parts.push(c.no + ' do NOT reach it and are greyed');
+      if (c.none) parts.push(c.none + ' have no verdict yet — INT 16h cannot '
+                           + 'see a modifier, so those wait on the BDA pass');
+      parts.push('WEBKVM.md 5.2c');
+      bits.push([false, parts.join('. ') + '.']);
+    }
+  }
   $('kbdnote').innerHTML = bits.map(
     ([warn, t]) => warn ? '<span class="warn">' + esc(t) + '</span>' : esc(t)
   ).join('<br>');

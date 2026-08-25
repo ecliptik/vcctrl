@@ -1,0 +1,720 @@
+{
+ "boards": {
+  "1": {
+   "keys": {
+    "0": {
+     "al": "30",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "0B"
+    },
+    "1": {
+     "al": "31",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "02"
+    },
+    "102nd": {
+     "al": "5C",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "56"
+    },
+    "2": {
+     "al": "32",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "03"
+    },
+    "3": {
+     "al": "33",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "04"
+    },
+    "4": {
+     "al": "34",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "05"
+    },
+    "5": {
+     "al": "35",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "06"
+    },
+    "6": {
+     "al": "36",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "07"
+    },
+    "7": {
+     "al": "37",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "08"
+    },
+    "8": {
+     "al": "38",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "09"
+    },
+    "9": {
+     "al": "39",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "0A"
+    },
+    "a": {
+     "al": "61",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "1E"
+    },
+    "apostrophe": {
+     "al": "27",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "28"
+    },
+    "b": {
+     "al": "62",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "30"
+    },
+    "backslash": {
+     "al": "5C",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "2B"
+    },
+    "backspace": {
+     "al": "08",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "0E"
+    },
+    "break": {
+     "how": "int16",
+     "reason": "sentinel shortfall: Pause halts until a keypress and swallowed the closing sentinel, so neither key in that slot pair has a verdict",
+     "why": "void"
+    },
+    "c": {
+     "al": "63",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "2E"
+    },
+    "capslock": {
+     "arrives": true,
+     "how": "leds",
+     "reason": "no keystroke to see; the PS/2 LED channel witnessed a transition 14->15"
+    },
+    "comma": {
+     "al": "2C",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "33"
+    },
+    "compose": {
+     "arrives": false,
+     "how": "int16",
+     "reason": "this 1993 BIOS does not translate it"
+    },
+    "d": {
+     "al": "64",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "20"
+    },
+    "delete": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "53"
+    },
+    "down": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "50"
+    },
+    "e": {
+     "al": "65",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "12"
+    },
+    "end": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4F"
+    },
+    "equal": {
+     "al": "3D",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "0D"
+    },
+    "escape": {
+     "al": "1B",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "01"
+    },
+    "f": {
+     "al": "66",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "21"
+    },
+    "f1": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "3B"
+    },
+    "f10": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "44"
+    },
+    "f11": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "85"
+    },
+    "f12": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "86"
+    },
+    "f2": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "3C"
+    },
+    "f3": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "3D"
+    },
+    "f4": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "3E"
+    },
+    "f5": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "3F"
+    },
+    "f6": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "40"
+    },
+    "f7": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "41"
+    },
+    "f8": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "42"
+    },
+    "f9": {
+     "al": "00",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "43"
+    },
+    "g": {
+     "al": "67",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "22"
+    },
+    "grave": {
+     "al": "60",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "29"
+    },
+    "h": {
+     "al": "68",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "23"
+    },
+    "home": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "47"
+    },
+    "i": {
+     "al": "69",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "17"
+    },
+    "insert": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "52"
+    },
+    "j": {
+     "al": "6A",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "24"
+    },
+    "k": {
+     "al": "6B",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "25"
+    },
+    "kp0": {
+     "al": "30",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "52"
+    },
+    "kp1": {
+     "al": "31",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4F"
+    },
+    "kp2": {
+     "al": "32",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "50"
+    },
+    "kp3": {
+     "al": "33",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "51"
+    },
+    "kp4": {
+     "al": "34",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4B"
+    },
+    "kp5": {
+     "al": "35",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4C"
+    },
+    "kp6": {
+     "al": "36",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4D"
+    },
+    "kp7": {
+     "al": "37",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "47"
+    },
+    "kp8": {
+     "al": "38",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "48"
+    },
+    "kp9": {
+     "al": "39",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "49"
+    },
+    "kpasterisk": {
+     "al": "2A",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "37"
+    },
+    "kpdot": {
+     "al": "2E",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "53"
+    },
+    "kpenter": {
+     "al": "0D",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "E0"
+    },
+    "kpminus": {
+     "al": "2D",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4A"
+    },
+    "kpplus": {
+     "al": "2B",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4E"
+    },
+    "kpslash": {
+     "al": "2F",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "E0"
+    },
+    "l": {
+     "al": "6C",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "26"
+    },
+    "lalt": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "lctrl": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "left": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4B"
+    },
+    "leftbrace": {
+     "al": "5B",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "1A"
+    },
+    "leftmeta": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "lshift": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "m": {
+     "al": "6D",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "32"
+    },
+    "minus": {
+     "al": "2D",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "0C"
+    },
+    "n": {
+     "al": "6E",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "31"
+    },
+    "numlock": {
+     "arrives": true,
+     "how": "leds",
+     "reason": "no keystroke to see; the PS/2 LED channel witnessed a transition 16->17"
+    },
+    "o": {
+     "al": "6F",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "18"
+    },
+    "p": {
+     "al": "70",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "19"
+    },
+    "period": {
+     "al": "2E",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "34"
+    },
+    "pgdn": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "51"
+    },
+    "pgup": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "49"
+    },
+    "printscreen": {
+     "how": "int16",
+     "reason": "sentinel shortfall: Pause halts until a keypress and swallowed the closing sentinel, so neither key in that slot pair has a verdict",
+     "why": "void"
+    },
+    "q": {
+     "al": "71",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "10"
+    },
+    "r": {
+     "al": "72",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "13"
+    },
+    "ralt": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "rctrl": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "return": {
+     "al": "0D",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "1C"
+    },
+    "right": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "4D"
+    },
+    "rightbrace": {
+     "al": "5D",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "1B"
+    },
+    "rightmeta": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "rshift": {
+     "how": "int16",
+     "reason": "a modifier generates no keystroke, so INT 16h cannot see it; awaiting the BDA shift-flag pass",
+     "why": "no-witness"
+    },
+    "s": {
+     "al": "73",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "1F"
+    },
+    "scrolllock": {
+     "arrives": true,
+     "how": "leds",
+     "reason": "no keystroke to see; the PS/2 LED channel witnessed a transition 18->19"
+    },
+    "semicolon": {
+     "al": "3B",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "27"
+    },
+    "slash": {
+     "al": "2F",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "35"
+    },
+    "space": {
+     "al": "20",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "39"
+    },
+    "t": {
+     "al": "74",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "14"
+    },
+    "tab": {
+     "al": "09",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "0F"
+    },
+    "u": {
+     "al": "75",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "16"
+    },
+    "up": {
+     "al": "E0",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "48"
+    },
+    "v": {
+     "al": "76",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "2F"
+    },
+    "w": {
+     "al": "77",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "11"
+    },
+    "x": {
+     "al": "78",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "2D"
+    },
+    "y": {
+     "al": "79",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "15"
+    },
+    "z": {
+     "al": "7A",
+     "arrives": true,
+     "how": "int16",
+     "ll": "30",
+     "scan": "2C"
+    }
+   },
+   "measured_at": "2026-08-25",
+   "source": "docs/WEBKVM.md sec. 5.2b-5.2c",
+   "witness": "INT 16h AH=10h/11h, plus the PS/2 LED channel for the lock keys"
+  }
+ },
+ "note": "Measured coverage per protocol board. Keyed by CANONICAL key name, one per keycode -- aliases resolve to these. `how` names the witness and rows with different `how` are not comparable. A row with no `arrives` has no verdict; absent is never false.",
+ "version": 1
+}

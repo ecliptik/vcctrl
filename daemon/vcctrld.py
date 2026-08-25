@@ -326,6 +326,69 @@ def order_chord(keys):
     return [k for _, _, k in sorted(ranked, key=lambda t: (t[0], t[1]))]
 
 
+def canonical_key_names():
+    """{every accepted name: the one canonical name for its keycode}.
+
+    NAMED_KEYS gives 129 names to 105 keycodes, so any table keyed by name has
+    more rows than facts and is free to disagree with itself -- `printscreen`
+    and `sysrq` are ONE key and could carry opposite verdicts. Coverage is
+    therefore keyed by ONE name per keycode, and this is how a caller resolves
+    whatever spelling it happens to hold into that name.
+
+    Published rather than reimplemented, for the reason the alias table is:
+    the web KVM draws keys by the names in its layout -- printed keycaps like
+    `-` and `[` -- and the coverage table is keyed by evdev-ish ones like
+    `minus` and `leftbrace`. Two independent guesses at "the same key" is how
+    a lookup silently misses and a measured key reads as unmeasured.
+
+    The pick is deterministic and boring: the longest name made only of
+    letters, ties broken alphabetically; and if a keycode has no such name --
+    the punctuation whose only spelling IS the keycap -- the keycap itself.
+    Which name wins does not matter. That both sides agree does.
+    """
+    by_code = {}
+    for name, code in NAMED_KEYS.items():
+        by_code.setdefault(code, []).append(name)
+    out = {}
+    for code, names in by_code.items():
+        wordy = [n for n in names if n.isalnum()]
+        pick = (max(sorted(wordy), key=len) if wordy
+                else max(sorted(names), key=len))
+        for n in names:
+            out[n] = pick
+    return out
+
+
+COVERAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "keycoverage.json")
+
+
+def key_coverage(board_id):
+    """Measured coverage for one protocol board, or None if there is none.
+
+    None means "nothing has been measured for this board", which is a real
+    answer and NOT the same as "measured, and nothing works". A board with no
+    entry gets no coverage published and the page greys nothing -- greying on
+    absence would assert a negative from a measurement that was never taken.
+
+    KEYED BY BOARD because coverage is a fact about a board's firmware and a
+    machine's BIOS, not about the daemon. The IBM PC board's table says
+    nothing whatever about what an ADB board delivers.
+
+    Rows are keyed by ONE CANONICAL NAME PER KEYCODE and aliases resolve into
+    them -- `ctrl` and `lctrl` are one physical key, and a row per name would
+    be 129 rows for 105 facts, free to disagree with itself.
+    """
+    if board_id is None:
+        return None
+    try:
+        with open(COVERAGE_FILE) as f:
+            doc = json.load(f)
+    except Exception:
+        return None
+    return (doc.get("boards") or {}).get(str(board_id))
+
+
 def keymap():
     """The key tables a client needs to reason about chords, as data.
 
@@ -346,12 +409,33 @@ def keymap():
     firmware -- and a list published by the daemon must not be mistaken for a
     coverage table. See docs/WEBKVM.md sec. 5.2.
     """
+    bid = installed_board_id()
+    cov = key_coverage(bid)
     return {
         "aliases": dict(_CHORD_ALIASES),
         "mod_order": list(MOD_ORDER),
         "reboot": list(REBOOT_CHORD),
         "keys": sorted(NAMED_KEYS),
-        "measured": False,
+        # WHICH BOARD THE COVERAGE IS ABOUT, always present. A consumer that
+        # took the table without checking would apply an IBM PC measurement to
+        # an ADB board, which is the "real value, wrong question" shape this
+        # whole table exists to avoid.
+        "board_id": bid,
+        # HOW TO RESOLVE A NAME INTO A COVERAGE ROW. Without this the page
+        # looks up `-` in a table keyed `minus`, misses, and reports a
+        # measured key as having no verdict -- which is the quiet direction:
+        # it understates what is known rather than overstating it, so nothing
+        # looks wrong.
+        "canonical": canonical_key_names(),
+        "coverage": (cov or {}).get("keys") or None,
+        "coverage_meta": {k: v for k, v in (cov or {}).items() if k != "keys"}
+                         or None,
+        # `measured` was False and unconditional while nothing had been swept.
+        # It is now a fact about THIS BOARD: true when a table exists for it,
+        # false when none does. It never meant "every key works" and still
+        # does not -- the per-key rows carry that, and some of them have no
+        # verdict at all.
+        "measured": cov is not None,
     }
 
 

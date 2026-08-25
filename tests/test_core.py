@@ -2889,6 +2889,93 @@ def test_reboot_is_recognised_by_any_spelling():
           km["measured"] is False)
 
 
+def test_coverage_is_scoped_and_absence_is_not_a_negative():
+    """Measured coverage is a fact about ONE BOARD, and a missing row is not
+    a verdict.
+
+    The greying rule disables a key on `arrives: false`. Three ways that could
+    become a lie, and each is a defect this rig has produced before in another
+    costume:
+
+      1. applying the IBM PC's table to an ADB board -- a real value about the
+         wrong question, which is why coverage is keyed by board and why
+         `board_id` is published beside it;
+      2. reading a MISSING row as a negative, which would grey every key
+         nobody measured -- asserting an absence from an instrument that never
+         looked;
+      3. keying by name rather than keycode, which gives 129 rows for 105
+         facts and lets `printscreen` and `sysrq` -- one physical key --
+         disagree with each other.
+    """
+    print("\ncoverage scoping")
+    import json as _json
+    import tempfile
+
+    cov = _json.load(open(os.path.join(HERE, os.pardir, "daemon",
+                                       "keycoverage.json")))
+    rows = cov["boards"]["1"]["keys"]
+    check("the table is keyed one row per keycode", len(rows) == 105, len(rows))
+    can = vcctrld.canonical_key_names()
+    check("every canonical name maps to itself",
+          all(can[k] == k for k in rows if k in can),
+          [k for k in rows if k in can and can[k] != k][:5])
+    check("every accepted name resolves into the table",
+          all(can[n] in rows for n in vcctrld.NAMED_KEYS),
+          [n for n in vcctrld.NAMED_KEYS if can[n] not in rows][:5])
+    # ABSENCE IS NOT FALSE. A row with no verdict must have no `arrives` key
+    # at all -- the LedsCapability rule, and the one the greying rule leans on.
+    noverdict = [k for k, r in rows.items() if "arrives" not in r]
+    check("rows without a verdict carry no `arrives` field",
+          all("arrives" not in rows[k] for k in noverdict), noverdict[:3])
+    check("and there are some -- the check is not passing on an empty set",
+          len(noverdict) == 10, len(noverdict))
+    check("every row names its witness",
+          all("how" in r for r in rows.values()),
+          [k for k, r in rows.items() if "how" not in r][:5])
+    # The 8 modifiers are no-witness, NOT arrives:false. Confusing those is
+    # what would grey six keys the page draws on a measurement never taken.
+    for k in ("lshift", "rshift", "lctrl", "rctrl", "lalt", "ralt"):
+        c = can[k]
+        check("%s has no verdict, not a negative" % k,
+              rows[c].get("arrives") is None and rows[c].get("why") == "no-witness",
+              rows[c])
+    check("menu IS a measured negative",
+          rows[can["menu"]].get("arrives") is False, rows[can["menu"]])
+
+    # Board scoping, through the real keymap() rather than the file.
+    d = tempfile.mkdtemp(prefix="cov")
+    orig = vcctrld.BoardCapability.FILE
+    try:
+        p = os.path.join(d, "board.json")
+        vcctrld.BoardCapability.FILE = p
+        with open(p, "w") as f:
+            _json.dump({"id": 1}, f)
+        k = vcctrld.keymap()
+        check("board 1 publishes its coverage", k["measured"] is True
+              and len(k["coverage"]) == 105)
+        with open(p, "w") as f:
+            _json.dump({"id": 3}, f)
+        k = vcctrld.keymap()
+        check("a board with no table publishes NONE, not an empty one",
+              k["coverage"] is None and k["measured"] is False, k["coverage"])
+        vcctrld.BoardCapability.FILE = os.path.join(d, "absent.json")
+        k = vcctrld.keymap()
+        check("an unidentified board publishes no coverage",
+              k["coverage"] is None and k["board_id"] is None)
+    finally:
+        vcctrld.BoardCapability.FILE = orig
+
+    # THE PAGE MUST GREY ON `arrives === false` AND NOTHING ELSE. A rule that
+    # greyed on an unrecognised `why` would turn every future vocabulary
+    # addition into a key that silently stops working.
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+                encoding="utf-8").read()
+    check("the greying rule tests arrives === false",
+          "r.arrives === false" in page)
+    check("and the page resolves names through the daemon's canonical map",
+          "keymap.canonical" in page)
+
+
 def test_a_chord_is_ordered_for_every_caller():
     """Modifiers first, in the daemon, so the CLI and the browser agree.
 
