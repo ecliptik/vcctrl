@@ -1523,3 +1523,44 @@ MCP `vcctrl_verify_input`) once to prove and refresh the channel, THEN retry.
 Take a screenshot before concluding a refusal reflects a real machine state —
 twice in the same session the refusal was wrong and the screen showed a
 healthy idle prompt.
+
+## 17. Fit to Screen no longer works — REPORTED 2026-08-26, NOT YET DIAGNOSED
+
+Operator report during a live session, not yet reproduced or root-caused.
+Logged here as a TODO rather than investigated on the spot because a real
+hardware ABBA round was in progress at the time.
+
+**Not confirmed, but worth checking first given the timing:** `daemon/kvm.html`
+had two rounds of edits the same day this was reported -- `f2e84b8` added a
+10px `#scroll` padding that `applyZoom()`'s fit calculation is supposed to
+subtract, and this session's own popover-height fix (:not([hidden]) CSS
+specificity, plus `matchPopHeight()` measuring Sound/Power instead of
+Capture) touched code in the same area of the file, though not `applyZoom()`
+itself. Either could be an unrelated coincidence; nobody has looked yet.
+
+**Next step:** reproduce in a real browser (not just the headless-chromium
+harness in `tests/test_core.py::test_zoom_layout_in_a_browser`, which was
+still passing its `fit`-mode checks as of this entry -- so if this is real,
+the harness either doesn't cover the failing path or something differs
+between the harness's synthetic page and a live session against the real
+daemon).
+
+**UPDATE, same day, real-browser attempt: NOT REPRODUCED under the
+conditions tried.** Live headless-chromium session (CDP, not the
+synthetic-page test harness) against the actual deployed daemon at
+the rig's tailnet host, three sequences: (1) fresh load,
+default fit mode -- canvas measured 842.0x632.0 against a 994x652
+`#scroll` box, which is exactly what `applyZoom()`'s own math predicts
+(994-20)x(652-20) fitted to a 640x480 source, height-constrained, matches
+to the pixel; (2) fit clicked again from fit -- same result; (3)
+fit -> 200% -> 400% -> fit -- 200% measured exactly 1280x960, 400% exactly
+2560x1920, and returning to fit landed back on 842.0x632.0. No JS errors in
+any of the three. **Caveat that keeps this open rather than closing it:**
+the target was powered off throughout, so there was no live video feed --
+if the real bug is tied to a specific video/crop state (the "no signal"
+veil, a crop adopted after an actual mode change on the target, or
+something that only shows up with real frames arriving), a synthetic
+session with no signal would not exercise that path. Needs either the
+target powered back on for a live-signal repro, or more specific steps from
+whoever saw it (which browser/device, and what sequence of clicks --
+immediate on load, or after some other interaction).

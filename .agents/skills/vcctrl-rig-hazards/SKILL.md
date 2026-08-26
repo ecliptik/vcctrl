@@ -60,3 +60,42 @@ on the socket.** The rig has one smart plug and swaps boards by hand
 board is displayed alongside the control so a mismatch is *visible* to a
 human — it is not, and cannot be, a refusal keyed to which physical machine
 is actually plugged in. Don't treat board-scoping as machine-safety.
+
+**A working Ctrl-Alt-Del can take far longer to register than it looks
+like it should.** Measured 2026-08-26: three separate sends each produced a
+clean, correctly-timed Scroll Lock clear→set cycle (~11-12s apart, matching
+`docs/FINDINGS.md` sec. 7) — but the gap between *sending* the chord and
+the clear *starting* was as long as 85 seconds on a chord that worked fine.
+A short timeout reads a working chord as swallowed and resends into a reset
+already under way, which is a race the caller creates for itself, not a
+recovery from anything the target did. If you're timing a reboot by hand
+(not through `vcctrl_send_file`/`_get_file`, which already carry this fix),
+give one send a long wait before concluding it failed.
+
+**A genuine PS/2 hang looks exactly like a lock problem until you check the
+lock.** Measured 2026-08-26: `vcctrl_verify_input` failed persistently
+("no LED change — the PS/2 link is not carrying keystrokes") while the
+Arbiter lock was confirmed free and power/video/board all read healthy —
+not the file-transfer lock bug (that one is silent and doesn't touch
+`verify_input` directly), a real hang. **The operator's standing recovery
+procedure, to follow exactly, not to embellish:** run `vcctrl_verify_input`
+once. If it fails, do a single `vcctrl_power` `cycle` (not a soft
+Ctrl-Alt-Del — the target isn't listening to it), then run
+`vcctrl_verify_input` again. If it now succeeds, proceed normally. **If it
+still fails, stop.** Do not retry, do not power-cycle a second time, do not
+try a different chord or a longer wait — power the target off (`vcctrl_power
+off`) and tell the operator. This is a deliberate one-shot policy, not a
+retry loop: the harness does not attempt to recover a genuine hang without
+a human, and pretending a second cycle might work where the first didn't is
+exactly the kind of automated escalation this rule exists to prevent.
+
+**A hand-written `expect_log`/`set_vars` string is a guess until it's been
+read off a real log.** Measured 2026-08-26: an `expect_log` string built
+from a spec document's prose (not copied from an actual engine log)
+produced a confident, wrong refusal — `returncode=1`, "the cell ran, but
+NOT in the configuration this arm means" — on a cell that had in fact run
+correctly; the string simply never appeared anywhere in the real output.
+Before trusting a new `expect_log`/`set_vars` string for a tag or cell type
+you haven't run before, pull one real log for that tag and grep it for the
+literal string first. This cost a full extra cell run (reboot, ~130s
+gameplay, attestation) to discover the hard way.
