@@ -5093,10 +5093,32 @@ class RegistryDriver(object):
     # waiting too long is a slow refusal and the failure of waiting too little
     # is typing into a machine that is not listening.
     BOOT_TIMEOUT_S = 150.0
-    MENU_TIMEOUT_S = 30.0
+    # HOW LONG ONE SENT CHORD IS GIVEN TO START A RESET, before this class
+    # concludes it needs a resend. NOT the same claim as "how long a reset
+    # takes" -- REVISED 2026-08-26, UPWARD, ON REAL EVIDENCE THAT OVERTURNED
+    # THE EARLIER READING OF THIS SAME RIG. Three Ctrl-Alt-Del sends in one
+    # sitting each produced a clean, correctly-timed cycle -- Scroll Lock
+    # clears, then sets again ~11-12 s later (RDYPULSE), matching FINDINGS
+    # sec. 7 exactly -- so the chord was never being swallowed. What varied
+    # was the gap between SENDING the chord and the clear STARTING: as long
+    # as 85 s in one case. A 30 s window (this constant's value that same
+    # day, before this fix) reads a chord that is genuinely working as a
+    # failure and resends into a reset already under way -- which is a race,
+    # not a recovery. Set past the worst delay actually measured, with real
+    # margin, because the failure of waiting too long is a slow refusal and
+    # the failure of waiting too little is a second chord landing mid-boot.
+    MENU_TIMEOUT_S = 100.0
     PROMPT_TIMEOUT_S = 120.0
     TRANSFER_TIMEOUT_S = 180.0
     LED_POLL_S = 0.5
+    # ONE resend, not a loop of short ones -- see NetJob._reboot_edge. The
+    # 2026-08-26 evidence above points at DELAY, not loss, so eagerly
+    # resending every few seconds was the wrong instinct: it fires a second
+    # chord while the first may still be pending. This stays as a genuine
+    # last resort, given a further RESEND_TIMEOUT_S once the first attempt's
+    # full MENU_TIMEOUT_S has genuinely elapsed with no edge.
+    RESET_ATTEMPTS = 2
+    RESEND_TIMEOUT_S = 30.0
 
     def __init__(self, registry, pace=None):
         self.reg = registry
@@ -5117,6 +5139,20 @@ class RegistryDriver(object):
 
     def combo(self, keys):
         return self._do("combo", keys=list(keys))
+
+    def shot(self):
+        """One diagnostic frame plus its own metadata, or None.
+
+        DIAGNOSIS ONLY, the same seam as screen() above -- no verdict here
+        ever depends on it. Unlike screen() this has a real body: the frame
+        ring is a daemon-side capability this driver already reaches through
+        the registry, the same door combo()/type_line() use, so there is
+        nothing to inject from outside. Exists because a refusal with no
+        picture beside it sends whoever reads the log back to the rig cold --
+        see NetJob._fail().
+        """
+        r = self._do("shot")
+        return r if isinstance(r, dict) else None
 
     def type_line(self, text):
         """Type a line, and RECORD the Caps Lock reading without acting on it.
@@ -5276,9 +5312,17 @@ class RegistryDriver(object):
             self._await_led("scrolllock", True, 5.0)
         return self._led("scrolllock") is True
 
-    def wait_menu(self):
-        """Scroll Lock 1 -> 0: POST ran, so the machine really reset."""
-        return self._await_led("scrolllock", False, self.MENU_TIMEOUT_S)
+    def wait_menu(self, timeout=None):
+        """Scroll Lock 1 -> 0: POST ran, so the machine really reset.
+
+        `timeout` lets a caller use a different window than the class
+        default for one attempt -- NetJob._reboot_edge gives the first send
+        the full MENU_TIMEOUT_S and a resend, if one is needed at all, only
+        RESEND_TIMEOUT_S. Omit it for the plain one-shot behavior.
+        """
+        return self._await_led("scrolllock", False,
+                               self.MENU_TIMEOUT_S if timeout is None
+                               else timeout)
 
     def wait_boot(self):
         """Scroll Lock 0 -> 1: RDYPULSE ran, so AUTOEXEC finished."""
@@ -5425,6 +5469,44 @@ class NetJob(object):
         self.log.append(rec)
         return rec
 
+    def _reboot_edge(self):
+        """Send Ctrl-Alt-Del and wait for the reset edge, resending the
+        chord ONCE, as a last resort, if a full MENU_TIMEOUT_S genuinely
+        finds no edge -- not on a short window, and not repeatedly.
+
+        REVISED 2026-08-26, SAME DAY AS THE FIRST VERSION OF THIS METHOD,
+        ON EVIDENCE THAT OVERTURNED ITS OWN DIAGNOSIS. The first version of
+        this fix (see git history) read two "no-reset" refusals as a
+        swallowed chord and started resending every ~10 s. Then a chord sent
+        with the operator watching the physical screen was seen to actually
+        reboot the machine, live, while `vcctrl_led_changes` still showed no
+        transition at all -- and a few checks later it had: `led_changes`
+        for that sitting shows THREE separate Scroll Lock clear -> set
+        cycles, each ~11-12 s apart, exactly the FINDINGS sec. 7 shape,
+        confirming three clean resets, not zero. What actually happened is
+        that ONE of the cycles started 85 SECONDS after its chord was sent.
+        A 30 s window split three ways (10 s each) reads a chord that is
+        genuinely working as a failure and resends INTO a reset already
+        under way -- a race the harness was creating for itself, not a
+        recovery from anything the target did.
+
+        So the fix is not "resend eagerly", it is "wait long enough for one
+        send to prove itself" -- MENU_TIMEOUT_S is now set well past the
+        worst delay actually measured, and only a single resend follows if
+        that entire window truly finds nothing, itself given a further
+        RESEND_TIMEOUT_S rather than a slice of the first window.
+        """
+        self.d.combo(["ctrl", "alt", "delete"])
+        if self.d.wait_menu(getattr(self.d, "MENU_TIMEOUT_S", 100.0)):
+            return True
+        attempts = getattr(self.d, "RESET_ATTEMPTS", 2)
+        resend_s = getattr(self.d, "RESEND_TIMEOUT_S", 30.0)
+        for _ in range(attempts - 1):
+            self.d.combo(["ctrl", "alt", "delete"])
+            if self.d.wait_menu(resend_s):
+                return True
+        return False
+
     # -- getting there, and back ----------------------------------------------
 
     def _enter_net(self):
@@ -5463,14 +5545,14 @@ class NetJob(object):
         # reporting. Setting it once the boot succeeded would have said False
         # on exactly the paths where it matters most.
         self.in_net = True
-        self.d.combo(["ctrl", "alt", "delete"])
 
         # BLIND, AND TIMED. The CONFIG.SYS menu is text mode 03h at 70 Hz and
         # cannot be captured, so nothing can confirm the selection while it is
         # happening -- FINDINGS sec. 8: the digit alone does not work, the
         # digit AND Enter does, repeated across the window because the POST
-        # edge is not observable either.
-        if not self.d.wait_menu():
+        # edge is not observable either. The chord that gets it there is
+        # retried the same way -- see _reboot_edge.
+        if not self._reboot_edge():
             return self._fail("no-reset",
                               "the machine never reset -- Scroll Lock did not "
                               "clear, so the reboot did not happen")
@@ -5567,14 +5649,17 @@ class NetJob(object):
         armed = self.d.arm() if hasattr(self.d, "arm") else False
         self._say("return", "returning to the menu default")
         PROFILE.invalidate("returning from a file transfer")
-        self.d.combo(["ctrl", "alt", "delete"])
         if not armed:
+            # UNWITNESSABLE, SO ONE SHOT. Resending a chord we cannot see the
+            # result of would not buy anything -- see _reboot_edge for why a
+            # resend loop needs the LED edge to know when to stop.
+            self.d.combo(["ctrl", "alt", "delete"])
             self._say("return", "COULD NOT SET SCROLL LOCK BEFORE THE RETURN "
                                 "REBOOT, so nothing here can see whether the "
                                 "machine came back. It was told to; that is "
                                 "all this can say", warn=True)
             return
-        if not self.d.wait_menu():
+        if not self._reboot_edge():
             self._say("return", "NO RESET AFTER THE RETURN REBOOT -- Scroll "
                                 "Lock never cleared, so the machine may still "
                                 "be in NET, which no measured run may start "
@@ -5688,9 +5773,25 @@ class NetJob(object):
         `unsupported`, `unknown` and `not_configured` reach here unchanged
         from FilesCapability.snapshot(), which is where they are defined, and
         the listing's own words are defined on dos_dir_listing().
+
+        A DIAGNOSTIC FRAME RIDES ALONG, IF ONE IS AVAILABLE. Every `why` above
+        is "something we expected did not happen" -- the exact class of event
+        where an image of the screen at that instant is worth more than
+        another line of reasoning about why it should have worked. Attached
+        here rather than only shown live, because whoever reads this later
+        (a peer session, a human the next morning) was not necessarily
+        watching when it happened. Never a verdict: `shot()` can come back
+        None -- no picture, or the call itself failing -- and the refusal is
+        reported exactly the same either way.
         """
         self._note_caps()
-        self._say("refused", reason, why=why)
+        shot = None
+        if hasattr(self.d, "shot"):
+            try:
+                shot = self.d.shot()
+            except Exception:
+                shot = None
+        self._say("refused", reason, why=why, shot=shot)
         return {"ok": False, "why": why, "reason": reason, "files": [],
                 "left_in_net": self.in_net, "log": self.log}
 

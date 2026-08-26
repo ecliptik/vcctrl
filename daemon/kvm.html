@@ -1638,13 +1638,25 @@
   }
   .pop[hidden] { display:none; }
   #pop-sound { width:min(320px, calc(100vw - 16px)); }
-  /* SAME HEIGHT AS CAPTURE, not a coincidence of content. Sound and Power sit
-     in the same row of buttons as Capture and used to open to whatever height
-     their own rows added up to -- shorter than #scrub, so the one panel that
-     happened to have more in it read as a different kind of control. openPop()
-     sets --pop-match-h from #scrub's own measured height; centring the rows
-     in the extra room reads as intentional rather than as leftover space. */
-  #pop-sound, #pop-power {
+  /* MATCH EACH OTHER, NOT CAPTURE. Sound and Power used to match #scrub's
+     height, and #scrub is the capture/timeline panel -- taller than either
+     of these, for content neither of them has. That read as generous margin
+     rather than an intentional match, because it was: matching a third,
+     unrelated panel's height is not the same idea as matching each other.
+     matchPopHeight() now measures Sound's and Power's own natural content
+     height and sets --pop-match-h to the larger of the two, so they agree
+     with each other and neither carries empty space sized for Capture.
+
+     :not([hidden]), NOT A BARE ID SELECTOR. An ID beats `.pop[hidden]`'s
+     class+attribute specificity outright, so `display:flex` here was
+     overriding `display:none` even while `hidden` was set -- the popover
+     stayed on screen (measured: computedStyle still read `flex` through
+     open AND close), sat at the browser's default fixed-position corner on
+     a fresh load before openPop() ever set an offset, and switching tabs
+     did nothing because there was no invisible state to leave. `:not` keeps
+     this rule and `.pop[hidden]` mutually exclusive by attribute presence,
+     so there is no specificity contest to lose. */
+  #pop-sound:not([hidden]), #pop-power:not([hidden]) {
     min-height:var(--pop-match-h, 0px);
     display:flex; flex-direction:column; justify-content:center;
   }
@@ -3456,9 +3468,7 @@ function rebootWarning() {
   return 'Send Ctrl + Alt + Delete'
     + (boardNow.target ? ' to the ' + boardNow.target : '') + '?'
     + '\n\nThis reboots the machine. Close all programs and save all work first.'
-    + '\n\nNote it is not a reliable reboot on this rig: it is swallowed while '
-    + 'the game is running. If nothing happens, the machine did not get it. '
-    + 'Do not assume it rebooted.';
+    + '\n\nNote: ctrl-alt-del may not work depending on the program running.';
 }
 
 // ONE ROUTE OUT. Every chord this panel can send -- a pre-built button, a
@@ -4768,17 +4778,24 @@ function closePop() {
 // Popups anchored here use the same number so Capture does not read as
 // farther from the bar than Sound and Power are.
 const POP_GAP = 10;
-// SAME HEIGHT AS CAPTURE, MEASURED, NOT ASSUMED. #scrub is the tallest of
-// this row's three panels; a constant here would drift the moment its own
-// content does. Briefly un-hidden at zero visibility to measure -- display
-// keeps its layout height (unlike `hidden`), and nothing paints because
-// visibility is off, so there is nothing to see happen.
+// EACH OTHER'S CONTENT, MEASURED, NOT ASSUMED, AND NOT CAPTURE'S. A constant
+// here would drift the moment either panel's own content does -- and #scrub
+// used to be the thing measured, which sized both to a third panel's height
+// rather than to their own. --pop-match-h is reset to 0 first so a stale
+// value from the last measurement cannot inflate this one, then each panel
+// is briefly un-hidden at zero visibility to measure its bare content height
+// -- display keeps its layout height (unlike `hidden`), and nothing paints
+// because visibility is off, so there is nothing to see happen.
 function matchPopHeight() {
-  const scrub = $('scrub');
-  const wasHidden = scrub.hidden;
-  if (wasHidden) { scrub.hidden = false; scrub.style.visibility = 'hidden'; }
-  const h = scrub.offsetHeight;
-  if (wasHidden) { scrub.hidden = true; scrub.style.visibility = ''; }
+  document.documentElement.style.setProperty('--pop-match-h', '0px');
+  let h = 0;
+  for (const id of ['pop-sound', 'pop-power']) {
+    const el = $(id);
+    const wasHidden = el.hidden;
+    if (wasHidden) { el.hidden = false; el.style.visibility = 'hidden'; }
+    h = Math.max(h, el.offsetHeight);
+    if (wasHidden) { el.hidden = true; el.style.visibility = ''; }
+  }
   if (h) document.documentElement.style.setProperty('--pop-match-h', h + 'px');
 }
 function openPop(name) {

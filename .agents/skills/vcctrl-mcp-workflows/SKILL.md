@@ -18,6 +18,22 @@ Release with `vcctrl_lock_release` when you're done with a sequence of input
 calls rather than leaving it to the 300s idle timeout, if another session may
 be waiting.
 
+**`vcctrl_send_file`/`_get_file`/`_file_refresh` and `_run_cell`/`_run_sweep`/
+`_collect` release THIS session's own lock automatically before they start,
+and you do not need to do it yourself first.** Found the hard way,
+2026-08-26: the real work for all six happens under a DIFFERENT identity than
+this session's (`transfer` for the file-transfer trio, `vcctrl-cell-<tag>` or
+similar for the harness trio) -- so if this session's own lock from an
+earlier gated call (a `vcctrl_preflight`, a `vcctrl_combo`) was still held
+when one of these six started, the daemon's own internal Ctrl-Alt-Del was
+silently refused by THIS session's lock, not sent to the target at all. That
+produced a misleading `no-reset` timeout close to two minutes later --
+"the machine never reset" about a machine that was never asked to. All six
+now call the daemon-side equivalent of `vcctrl_lock_release` first, so a lock
+you forgot to release will not break them. It does mean the lock reads
+unheld immediately after calling one of these, even if you held it the
+moment before -- expected, not a sign something else is wrong.
+
 **Consequential actions require a named `confirm`, not a boolean.** Power
 actions, any `vcctrl_combo` matching the Ctrl-Alt-Delete chord, and anything
 that reboots the target (file send/refresh/get, `run_cell`, `run_sweep`,

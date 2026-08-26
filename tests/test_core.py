@@ -1470,7 +1470,8 @@ HARNESS = r"""
   // where the tab bar opens the same menu the header chip does.
   for (const [nm, anchor] of [['sound', 'soundbtn'], ['power', 'powerbtn']]) {
     openPop(nm);
-    const pr = document.getElementById('pop-' + nm).getBoundingClientRect();
+    const el = document.getElementById('pop-' + nm);
+    const pr = el.getBoundingClientRect();
     const ar = document.getElementById(anchor).getBoundingClientRect();
     const onscreen = pr.width > 60 && pr.left >= 0 && pr.top >= 0
                      && pr.right <= window.innerWidth + 1
@@ -1478,11 +1479,35 @@ HARNESS = r"""
     // Below the anchor, or above it when the anchor is near the bottom --
     // these live in a strip at the foot of the window now.
     const placed = pr.top >= ar.bottom - 1 || pr.bottom <= ar.top + 1;
-    emit(`pop-${nm} ${onscreen ? 1 : 0} ${placed ? 1 : 0}`);
+    // COMPUTED STYLE, NOT THE `hidden` PROPERTY. `display:flex` on the ID
+    // selector used to outrank `.pop[hidden]{display:none}` in specificity,
+    // so `el.hidden` read true/false exactly as it should while the element
+    // stayed rendered regardless -- the JS state was right and the screen
+    // disagreed with it. Measured on the rig 2026-08-26: Power stuck on
+    // screen after being closed, and a fresh load put it in the corner
+    // before openPop() ever set an offset. `getBoundingClientRect` above
+    // would not have caught this either -- a flex box with no inline
+    // position still has a real (if wrong) rect.
+    const shownWhileOpen = getComputedStyle(el).display !== 'none';
     closePop();
+    const hiddenAfterClose = getComputedStyle(el).display === 'none';
+    emit(`pop-${nm} ${onscreen ? 1 : 0} ${placed ? 1 : 0} `
+         + `${shownWhileOpen ? 1 : 0}${hiddenAfterClose ? 1 : 0}`);
   }
+  // Switching straight from one popover to the other has to actually replace
+  // it, not leave the first rendered underneath the second -- the exact
+  // shape the CSS bug took from the user's side: tapping Sound while Power
+  // was open did nothing visible, because Power was `display:flex` no
+  // matter what its `hidden` attribute said.
+  openPop('sound'); openPop('power');
+  emit(`pop-switch ${getComputedStyle(document.getElementById('pop-sound')).display === 'none' ? 1 : 0} `
+       + `${getComputedStyle(document.getElementById('pop-power')).display !== 'none' ? 1 : 0}`);
+  closePop();
   emit(`popclosed ${document.getElementById('pop-sound').hidden
-                       && document.getElementById('pop-power').hidden ? 1 : 0} 0`);
+                       && document.getElementById('pop-power').hidden
+                       && getComputedStyle(document.getElementById('pop-sound')).display === 'none'
+                       && getComputedStyle(document.getElementById('pop-power')).display === 'none'
+                       ? 1 : 0} 0`);
 
   // Settings must work with the side panel collapsed. It used to live INSIDE
   // that panel, so collapsing the column took the settings with it and the
@@ -2055,6 +2080,14 @@ def test_zoom_layout_in_a_browser():
               got["pop-" + nm][0] == 1.0, got["pop-" + nm])
         check("control: and clear of the control that opened it",
               got["pop-" + nm][1] == 1.0, got["pop-" + nm])
+        # The regression that shipped 2026-08-25 and was only caught by a
+        # human on the real page: `.hidden` toggled correctly the whole
+        # time, so this needs the COMPUTED style, not the property, to see
+        # what a viewer actually saw.
+        check("the %s menu is actually rendered while open, not just "
+              "un-hidden" % nm, bars.get("pop-" + nm) == "11", bars.get("pop-" + nm))
+    check("switching from Sound straight to Power hides the first",
+          got["pop-switch"] == (1.0, 1.0), got["pop-switch"])
     check("control: the menus close again", got["popclosed"][0] == 1.0,
           got["popclosed"])
 
@@ -8639,7 +8672,7 @@ class FakeTarget(object):
     def transfer_timeout(self):
         return 6.0
 
-    def wait_menu(self):
+    def wait_menu(self, timeout=None):
         return self.reset
 
     def wait_boot(self):
@@ -8650,6 +8683,10 @@ class FakeTarget(object):
 
     def screen(self):
         return self.screen_text
+
+    def shot(self):
+        self.shots = getattr(self, "shots", 0) + 1
+        return {"ok": True, "picture": True, "mean": 14.1, "state": "locked"}
 
     def _incoming(self, name, data):
         _s, _p, _m, _r, inc = self.cap._dirs()
@@ -10418,7 +10455,7 @@ def test_the_return_reboot_is_witnessed_by_an_edge_not_by_a_level():
     class ReturnBlind(FakeTarget):
         """Resets when told to on the way out, and not on the way back."""
 
-        def wait_menu(self):
+        def wait_menu(self, timeout=None):
             self.menus += 1
             return self.menus == 1
 
@@ -10482,6 +10519,108 @@ def test_the_return_reboot_is_witnessed_by_an_edge_not_by_a_level():
     rS = vcctrld.TransferJob(capS, dS, do_return=True).run()
     check("a send whose return reboot is unseen says so too",
           rS["left_in_net"] is True, rS)
+
+
+def test_a_reset_edge_that_takes_its_time_still_gets_one_resend():
+    """The chord is not swallowed -- REVISED 2026-08-26, same day as the
+    first version of this test. That first version (see git history) read
+    two "no-reset" refusals as a lost chord and had this class resend every
+    ~10 s. Then a chord sent with the operator watching the physical screen
+    visibly rebooted the machine while `vcctrl_led_changes` still showed no
+    transition -- and `led_changes` for that sitting turned out to hold
+    THREE clean Scroll Lock clear -> set cycles, each ~11-12 s apart,
+    exactly the FINDINGS sec. 7 shape. Three real resets, not zero. One
+    cycle's clear started 85 s after its chord was sent. A 30 s window
+    split three ways read a chord that was genuinely working as a failure
+    and resent INTO a reset already under way. So MENU_TIMEOUT_S now gives
+    one send a long, generous window to prove itself, and only a single
+    resend follows -- with its own separate, shorter budget -- if that
+    entire window truly finds nothing.
+    """
+    print("\na slow reset edge is waited out before any resend")
+
+    class ResetFlaky(FakeTarget):
+        """Eats the chord `fail_times` times, then takes it."""
+
+        def __init__(self, cap, fail_times, **kw):
+            super().__init__(cap, **kw)
+            self.fail_times = fail_times
+            self.menu_calls = 0
+
+        def wait_menu(self, timeout=None):
+            self.menu_calls += 1
+            return self.menu_calls > self.fail_times
+
+    import tempfile
+
+    # One swallowed chord, then a clean one: the run still gets there.
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+    _send(cap, "a.txt", b"payload")
+    d = ResetFlaky(cap, fail_times=1)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("one swallowed chord does not fail the run", r["ok"] is True, r)
+    check("the chord was resent rather than given up on after one try",
+          d.combos[:2] == [["ctrl", "alt", "delete"]] * 2, d.combos)
+
+    # Every attempt swallowed: refused, and the log says why -- but only
+    # after RESET_ATTEMPTS resends, not one.
+    cap2 = _mkfiles(tempfile.mkdtemp())
+    cap2.support = lambda: (True, None)
+    cap2._reachable = lambda timeout=None: (True, None)
+    _send(cap2, "a.txt", b"payload")
+    d2 = ResetFlaky(cap2, fail_times=99)
+    r2 = vcctrld.TransferJob(cap2, d2).run()
+    check("a chord that never lands is still refused as no-reset",
+          r2["reason"] == "the machine never reset -- Scroll Lock did not "
+                         "clear, so the reboot did not happen", r2)
+    check("it tried the chord RESET_ATTEMPTS times before giving up",
+          len(d2.combos) == vcctrld.RegistryDriver.RESET_ATTEMPTS, d2.combos)
+
+
+def test_a_refusal_carries_a_diagnostic_frame_never_a_verdict():
+    """Every `_fail()` is "something we expected did not happen" -- exactly
+    the moment a picture of the screen is worth more than another line about
+    why it should have worked, and whoever reads the failure later was not
+    necessarily watching live. So a frame rides along when the driver can
+    produce one, but it is diagnosis, never part of the gate.
+    """
+    print("\na refusal carries a diagnostic frame")
+    import tempfile
+
+    # A real refusal (unreachable file server, before anything reboots)
+    # still gets a frame attached, and taking the frame does not itself
+    # touch input -- no reboot, no lock.
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (False, "no route to the server")
+    _send(cap, "a.txt", b"payload")
+    d = FakeTarget(cap)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("this is really the unreachable path, not some earlier gate",
+          r["why"] == "unreachable", r)
+    refusal = [e for e in r["log"] if e["phase"] == "refused"]
+    check("the refusal is logged", len(refusal) == 1, r["log"])
+    check("and a diagnostic frame rode along with it",
+          refusal[0].get("shot", {}).get("picture") is True, refusal[0])
+    check("taking the frame did not reboot anything",
+          d.combos == [], d.combos)
+
+    # A driver whose shot() itself raises must not take the refusal down
+    # with it -- the diagnostic is additional, never load-bearing.
+    class CameraJams(FakeTarget):
+        def shot(self):
+            raise RuntimeError("v4l2 device busy")
+
+    cap3 = _mkfiles(tempfile.mkdtemp())
+    cap3.support = lambda: (True, None)
+    cap3._reachable = lambda timeout=None: (False, "no route to the server")
+    _send(cap3, "a.txt", b"payload")
+    d3 = CameraJams(cap3)
+    r3 = vcctrld.TransferJob(cap3, d3).run()
+    check("a jammed camera does not take the refusal down with it",
+          r3["ok"] is False and r3["why"] == "unreachable", r3)
 
 
 def test_a_directory_that_will_be_typed_is_whitelisted_not_filtered():

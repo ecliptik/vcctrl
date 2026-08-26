@@ -823,6 +823,20 @@ def vcctrl_send_file(mode: str, dest: "str | None" = None,
     args = ["send-file", "--%s" % mode]
     if dest is not None:
         args += ["--dest", dest]
+    # THE SAME BUG b8bdcc2 FIXED FOR run_cell/run_sweep/collect, missed here
+    # because this job runs IN-PROCESS in vcctrld rather than as a separate
+    # script -- so it does not hard-crash the way vcctrl-cell did, it just
+    # sends its own Ctrl-Alt-Del under the "transfer" identity, gets silently
+    # refused by THIS session's still-held lock (a prior vcctrl_preflight or
+    # vcctrl_combo call), and times out 100+ seconds later reporting
+    # "the machine never reset" -- a real reboot that was never attempted,
+    # not a slow or swallowed one. Found live 2026-08-26 chasing exactly that
+    # symptom: `vcctrl_lock_status` showed this session's own identity still
+    # holding the arbiter minutes after the calls that took it, every
+    # send_file in that window refused at the chord, none of them reported
+    # why. Release proactively, same as the harness-workflow tools -- harmless
+    # if nothing was held.
+    LOCK.release()
     return _run_vcctrl(args, timeout=60.0)
 
 
@@ -876,6 +890,7 @@ def vcctrl_file_refresh(mode: str, from_dir: "str | None" = None,
         args += ["--from", from_dir]
     if already_net:
         args.append("--already-net")
+    LOCK.release()   # see vcctrl_send_file's comment on the same call
     return _run_vcctrl(args, timeout=60.0)
 
 
@@ -910,6 +925,7 @@ def vcctrl_get_file(names: "list[str] | None" = None, fetch_all: bool = False,
         args += ["--from", from_dir]
     if already_net:
         args.append("--already-net")
+    LOCK.release()   # see vcctrl_send_file's comment on the same call
     return _run_vcctrl(args, timeout=60.0)
 
 
