@@ -1564,3 +1564,17 @@ session with no signal would not exercise that path. Needs either the
 target powered back on for a live-signal repro, or more specific steps from
 whoever saw it (which browser/device, and what sequence of clicks --
 immediate on load, or after some other interaction).
+
+**UPDATE, same day, target powered back on: STILL NOT REPRODUCED, with a
+real live video signal this time.** Identical test against the same live
+deployed page, now with the target actually booted and a real captured
+picture streaming (`vcctrl_shot` confirmed `state: locked, picture: true`
+moments before): canvas measured 842.0x632.0 against the same 994x652
+box, byte-for-byte the same result as the no-signal run. Five total
+real-browser reproduction attempts across two power states have now found
+nothing wrong in this code path. Whatever produced the operator's report,
+it isn't reproducible via headless chromium at any window size tried so
+far — next step, if this recurs, is capturing which real browser/device
+and the exact click sequence, since a rendering-engine-specific or
+viewport-specific trigger is now the more likely remaining explanation
+than a code defect in `applyZoom()` itself.
