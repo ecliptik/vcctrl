@@ -868,7 +868,7 @@ populate. Until it lands, the guards above are the only protection.
 
 ---
 
-## 4. Ring dumps are bounded by the ring, not the cell  — MOSTLY FIXED
+## 4. Ring dumps are bounded by the ring, not the cell  — FIXED 2026-08-25
 
 `GMQ3-glass.avi` shared **18,871 of 19,976 frame packets with `GMQ2`** — 94.5%,
 byte-identical. Its window opened twelve seconds after GMQ2's. An analysis
@@ -899,8 +899,24 @@ covered it — and the usage text mentioned neither flag, so nobody reading
 a guard nobody uses**, which is the same family as a check whose output nothing
 consumes. Documented 2026-08-23.
 
-**USE IT.** `--since now` at the start of a run, keep the value, pass it to
-`record`. Without it a dump is bounded by the ring, not by the run.
+**"MOSTLY" because the guard was still opt-in — CLOSED 2026-08-25.** Being
+documented did not stop it being *skippable*: `--since` stayed an optional
+flag, so `vcctrl record --out F.avi` with nothing else silently walked back
+into the exact hazard the whole fix exists to prevent, with no error, no
+warning, nothing — `since` just stayed `None` and the refusal logic never
+engaged. **`bin/vcctrl-client`'s `record` now REQUIRES `--since`**, refusing
+with exit 3 and a message naming what's missing if it's left off, matching
+what `agent/vcctrl_mcp.py`'s `vcctrl_record` MCP tool already enforced (its
+`since` parameter was never optional). The daemon-level primitive itself,
+`VideoCapability.buffer_avi(since=None, ...)`, keeps supporting no-`since` as
+a valid call shape -- `test_a_recording_refuses_a_window_that_predates_its_
+caller` exercises that directly and legitimately, at a layer below where a
+human or script can forget a flag. New test: `test_record_refuses_without_
+since`.
+
+**USE IT** is no longer a request anyone can quietly decline. `--since now` at
+the start of a run, keep the value, pass it to `record` -- or the CLI declines
+to run at all.
 
 ---
 

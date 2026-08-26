@@ -3932,6 +3932,45 @@ def test_burst_is_all_or_nothing():
           c.write_burst({"ok": True, "frames": []}, out3) == 1)
 
 
+def test_record_refuses_without_since():
+    """OPEN-FAULTS.md sec 4: an opt-in guard that can be silently skipped is
+    the same defect as no guard, one layer up.
+
+    `buffer_avi(since=...)` already refuses a window that predates the
+    caller -- but only when `since` is actually given. `--since` shipped as an
+    optional flag, so a caller who simply forgot it got the exact hazard back
+    with no signal at all: a dump bounded by the ring, not the run
+    (GMQ3-glass.avi, 94.5% the previous cell's frames). This checks the CLI
+    refuses before ever asking the daemon, so no mock/daemon connection is
+    needed -- the check has to fire on argument parsing alone.
+    """
+    import contextlib
+    import io
+    c = _client()
+
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = c.main(["record", "--out", "/tmp/does-not-matter.avi"])
+    check("record with no --since is refused, not silently accepted",
+          rc == 3, rc)
+    check("and says what is missing and why",
+          "--since" in buf.getvalue(), buf.getvalue())
+
+    # --since present (either spelling) reaches past the new check. This
+    # asserts only that the new refusal itself does not fire, not that the
+    # command completes -- a real daemon call is out of scope for this test,
+    # so the actual attempt fails downstream instead. Either failure mode is
+    # accepted as "past this gate"; the fixed refusal message ("record needs
+    # --since") must not be among them.
+    for extra in (["--since", "now"], ["--since", "1700000000"]):
+        buf2 = io.StringIO()
+        with contextlib.redirect_stderr(buf2):
+            rc2 = c.main(["record", "--out", "/tmp/does-not-matter.avi"] + extra)
+        check("with --since %r, the missing-since refusal does not fire"
+              % extra, "record needs --since" not in buf2.getvalue(),
+              buf2.getvalue())
+
+
 def test_raw_frames_are_not_judged_as_pictures():
     """`frame` and `burst` are labelled raw and carry no picture judgement.
 

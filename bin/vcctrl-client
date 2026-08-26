@@ -231,7 +231,7 @@ USAGE = """usage: vcctrl <command> [args]
                             sound mode, boot profile. A fully green harness
                             has driven a misconfigured target for a whole
                             round. Passing this says nothing about that.
-  record --out F.avi [a] [b] [--since T|now] [--clip]
+  record --out F.avi --since T|now [a] [b] [--clip]
                             the scrub buffer as an AVI, optionally from seq a
                             to seq b. Takes the pin for the copy and releases
                             it. Two-valued: either F is this run's buffer or F
@@ -242,17 +242,19 @@ USAGE = """usage: vcctrl <command> [args]
                             repeats a frame across a gap to preserve timing,
                             so they differ by exactly the stalls.
 
-                            --since T  IS THE CALLER'S OWN START TIME, and it
-                            is the difference between a dump of whatever the
-                            ring holds and a recording of YOUR run. Pass
-                            `--since now` at the start of a run and keep the
-                            value, or a unix time. Without it, a dump is
-                            bounded by the RING, not by the thing that asked
-                            for it -- GMQ3-glass.avi was 94.5% byte-identical
-                            to the PREVIOUS cell's frames, and an analysis of
-                            it produced a confident wrong conclusion three
-                            cells later. `first_seq` and `first_t` were in the
-                            meta the whole time; nothing refused on them.
+                            --since T  REQUIRED, and IS THE CALLER'S OWN START
+                            TIME -- it is the difference between a dump of
+                            whatever the ring holds and a recording of YOUR
+                            run. Pass `--since now` at the start of a run and
+                            keep the value, or a unix time. It was optional
+                            once; that meant a dump bounded by the RING rather
+                            than the thing that asked for it was one forgotten
+                            flag away, silently -- GMQ3-glass.avi was 94.5%
+                            byte-identical to the PREVIOUS cell's frames, and
+                            an analysis of it produced a confident wrong
+                            conclusion three cells later. `first_seq` and
+                            `first_t` were in the meta the whole time; nothing
+                            refused on them.
 
                             REFUSES with exit 4 when the window opens before
                             --since, naming how many frames are foreign and by
@@ -1053,6 +1055,25 @@ def main(argv):
     if cmd == "record":
         if out is None:
             sys.stderr.write("record needs --out FILE\n")
+            return 3
+        if since is None:
+            # OPEN-FAULTS.md sec 4: the refusal below this point only fires
+            # when --since is actually given, so omitting it was a silent way
+            # back into the exact hazard the refusal exists to catch --
+            # GMQ3-glass.avi was 94.5% the PREVIOUS cell's frames, and nothing
+            # here said so. The guard shipped opt-in and undiscoverable once
+            # already (fixed 2026-08-23 by documenting it); an opt-in guard
+            # that can still be silently skipped is the same defect one layer
+            # up. The MCP tool (agent/vcctrl_mcp.py's vcctrl_record) already
+            # makes `since` a required parameter for the same reason -- this
+            # brings the CLI in line with it rather than leaving the CLI as
+            # the one path where forgetting costs nothing until three cells
+            # later.
+            sys.stderr.write(
+                "record needs --since T|now -- without it a dump is bounded "
+                "by the ring, not by the run that asked for it. Pass "
+                "`--since now` at the start of your run and keep the value, "
+                "or a unix time if you already have one.\n")
             return 3
         first = int(rest[0]) if len(rest) > 0 else None
         last = int(rest[1]) if len(rest) > 1 else None
