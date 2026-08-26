@@ -5,7 +5,7 @@ what is still broken, what is worked around rather than fixed, and what to
 check before trusting a result.** If you are picking this up cold, read this
 before running anything measured.
 
-Last reviewed 2026-08-24.
+Last reviewed 2026-08-25.
 
 ---
 
@@ -1319,7 +1319,7 @@ then returns 0 — which reads as *failed* rather than as *never ran*. Same shap
 as every other well-formed zero in this document.
 
 
-## 15. The profile witness labels more than it measures  — OPEN
+## 15. The profile witness labels more than it measures  — FIXED 2026-08-25
 
 Every cell log carries this line, and it has been read as provenance all week:
 
@@ -1368,3 +1368,142 @@ right up until somebody boots `PGADLIB` and gets a cell that says `PGSB`.
 profile assertion that was never made. **Which BLASTER string belongs to which
 block needs a boot of each profile to establish** — that is real rig time and
 has not been spent.
+
+### FIXED IN CODE 2026-08-25, NOT YET PROVEN ON HARDWARE
+
+`harness/vcctrl-cell`'s profile witness now runs a second `FIND`/count round
+trip after the presence check passes, searching for PGSB's own value string
+rather than the bare variable name:
+
+    SET | FIND /I "BLASTER=A220 I7 D3 P330 T3" | FIND /C "="
+
+Same primitive as every other check on this path — a pattern piped to
+`FIND /C "="`, read back as a single OCR-friendly digit — so this closes the
+gap without ever asking the console to read an arbitrary alphanumeric string
+(which this rig's own OCR cannot do reliably). `count: 0` here means BLASTER
+is set to something OTHER than PGSB's string — almost certainly VIBRA, the
+only other profile that sets it — and the cell now REFUSES rather than
+printing "profile is PGSB" on the strength of presence alone.
+
+**The two strings are the same ones already in `daemon/vcctrld.py`'s
+`TargetProfile.BLASTER_PROFILES`**, which independently corroborates them —
+that class maps a value obtained over a different, file-based channel, so it
+cannot be imported across the control/daemon host boundary; both files now
+carry a comment pointing at the other so they cannot silently drift apart.
+
+**Not yet run against real hardware.** The existing presence check this
+extends has none either (no `FakeTarget`-style harness exists for
+`vcctrl-cell`'s typed-command loop, unlike `daemon/vcctrld.py`'s PullJob/
+TransferJob tests) — this is fixed in the sense that the logic is right and
+matches values already verified from `g2k:AUTOEXEC.BAT`, not in the sense
+that a VIBRA-booted cell has been observed to refuse. The next boot into
+VIBRA (deliberate or accidental) is the real proof.
+
+---
+
+## 16. A `_leg()` fetch can type over its own unfinished command — FIXED 2026-08-25
+
+**2026-08-25, during a live Phase 0 repeat (`D1B`).** `vcctrl-collect`'s
+per-file fetch (`FilesCapability._leg()`, `daemon/vcctrld.py:6141`) types one
+`C:\MTCP\VCCHK.BAT <src> <name>` command per file and waits up to
+`TRANSFER_TIMEOUT_S` (180s) for the named file to land in `incoming/`. Fetching
+two files (`D1B.LOG` then `D1BSDL.LOG`) in the same collect run, the first
+command was truncated by the BIOS keyboard buffer — a screenshot caught the
+prompt showing only `C:\MTCP\VCCHK.B` (15 characters), the exact same
+truncation-length signature already documented and fixed once in this file's
+own comments for `VCGET.BAT` (section 2's neighbourhood, `daemon/vcctrld.py`
+around line 6247: *"a 50-character command went into a machine that was not
+reading, fifteen characters fit in the BIOS buffer"*). Because the first
+command's Enter never landed, DOS was still sitting on that unfinished input
+line when `_leg()` moved on and typed the second file's full command — the two
+concatenated into `C:\MTCP\VCCHK.BC:\MTCP\VCCHK.BAT C:\DOSKUTSU\LOGS\D1BSDL.LOG
+D1BSDL.LOG`, and DOS answered `Bad command or file name`. Caught live by two
+`vcctrl_shot` frames a few seconds apart, not inferred from logs alone.
+
+**Neither file actually arrived** — confirmed by listing `incoming/`,
+which held only the run's `.HW` manifest. The collect job did not hang
+forever: each leg's own 180s timeout fired in turn and the job returned a
+failure after both legs had exhausted their timeouts (~400s total for a
+2-file tag, against ~13s/file when nothing races).
+
+**Not data loss.** The underlying `D1B.LOG`/`D1BSDL.LOG` were confirmed still
+present on the card (the same collect run's own directory listing saw 226
+files) and were fetched cleanly on a later attempt.
+
+**CORRECTED, same session: recovery was not a plain immediate retry.** The
+first retry was refused outright — `"REFUSED: target did not answer the LED
+probe. It is not at a prompt, or something is still running"` — while a
+`vcctrl_shot` taken at the same moment showed the machine genuinely idle at
+`[PGSB] ready` / `C:\>`. This is the LED-channel staleness hazard section 2
+already documents at length (*"a channel can be demonstrably alive and still
+be publishing a word from before the last thing that changed it"*), not a new
+fault — it was simply never seen from this particular caller before. A second
+retry got further (through the reboot/NET/attest/list-request steps) but then
+failed at the list step itself: `"refused the target never sent back a DIR of
+C:\DOSKUTSU\LOGS, so what is on the card is unknown"` — a third, differently-
+shaped failure, still refusing safely rather than reporting a wrong answer. A
+third retry hit the same LED-probe refusal as the first. **Only after an
+explicit `vcctrl_verify_input()` round trip** (which proved the channel and
+left it fresh, per section 2's own "least stale immediately after a round
+trip" finding) did the next retry succeed cleanly, first attempt, at normal
+speed. **Five collect attempts total, three distinct failure shapes, before
+one clean run** — worth stating plainly rather than rounding up to "retried
+and it worked," since a future reader deciding whether this is worth fixing
+should see the real cost, not a tidied version of it.
+
+**Why `VCGET.BAT`'s fix (verification rides in the same BAT, one typed
+command) doesn't already cover this:** `_leg()` already IS one typed command
+per file — the bug isn't a second command chasing the first inside one
+fetch, it's the NEXT file's fetch starting before the FIRST file's command has
+actually been consumed by DOS. `_leg()` waits for the *file to arrive*
+(`_await_incoming`), which is the wrong signal when the command that would
+produce that arrival was itself truncated and never ran — there is nothing to
+wait for, so the 180s is spent doing nothing before the caller (wrongly)
+treats the leg as over and starts the next one on a DOS prompt that was never
+actually free.
+
+**FIXED 2026-08-25, in both directions.** Of the three candidate directions
+originally listed here (confirm the echo, send a synchronizing Enter on
+timeout, or re-verify the prompt before continuing), none of them turned out
+to be necessary. **The actual fix is smaller: stop treating "no-return" as
+safe to continue past.** `wait_prompt()`'s own docstring already says what it
+proves -- "the BIOS keyboard ISR is alive", explicitly "NOT is DOS at a
+prompt" -- so a "no-return" leg (ISR alive, file never arrived) gives no more
+assurance that DOS is at a clean line than "no-prompt" does; it is simply a
+different way of not knowing. Both `PullJob.run()`'s fetch loop and
+`TransferJob.run()`'s send loop (the identical hazard exists symmetrically on
+the push side, confirmed by reading the code -- not yet reproduced live there)
+only aborted the whole batch on `why == "no-prompt"`, continuing to the next
+file on `why == "no-return"`. Both now abort on either value:
+
+    if r.get("why") in ("no-prompt", "no-return"):
+        ...stop, same as the existing "no-prompt" abort...
+
+This does not add any new probing or recovery mechanism -- it removes the
+false confidence that let the loop type over an unfinished line in the first
+place. A batch that hits a "no-return" leg now stops there and reports the
+remaining files as `remaining`/un-fetched, exactly as a "no-prompt" batch
+already did; a caller (`vcctrl-collect`) retries the whole tag, which is
+already what section 16's original write-up did by hand.
+
+**Two new regression tests**, mirroring the existing `no-prompt` test for each
+job class: `test_a_no_return_leg_also_stops_the_send_run_rather_than_typing_
+over_it` and `test_a_no_return_leg_also_stops_the_pull_run_rather_than_typing_
+over_it` (`tests/test_core.py`). Both pass; the full suite (162 of 164 tests,
+the other 2 pre-existing and unrelated) is unaffected.
+
+**Not yet proven on real hardware.** This closes the mechanism the live
+failure demonstrated (continuing past a leg that cannot prove the prompt is
+clean), verified against `FakeTarget`, not against the rig -- the operator
+has held further rig time pending this fix, so the next real `D1B`-shaped
+retry is the actual proof.
+
+**How to recognize the hazard this fix removes, if it or something like it
+recurs:** if a multi-file collect fails, check whether the files actually
+landed in `incoming/` before assuming a real transfer failure — the data on
+the card is unaffected. Separately, a retry may itself be refused by the
+stale-LED-probe hazard (section 2); if so, run `vcctrl verify-input` (or the
+MCP `vcctrl_verify_input`) once to prove and refresh the channel, THEN retry.
+Take a screenshot before concluding a refusal reflects a real machine state —
+twice in the same session the refusal was wrong and the screen showed a
+healthy idle prompt.

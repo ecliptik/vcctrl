@@ -740,7 +740,62 @@ def main(argv):
                 print("   will die in seconds. Reboot to the menu default")
                 print("   (ctrl-alt-del, let the 5s timeout land on PGSB).")
                 return 1
-            print("     BLASTER                          set (profile is PGSB)")
+
+            # THE VALUE, NOT JUST THE PRESENCE (docs/OPEN-FAULTS.md sec 15).
+            #
+            # `count: 1` above proves SOME profile that sets BLASTER is
+            # loaded. It does not prove WHICH ONE -- PGSB and VIBRA both set
+            # it, with distinct strings read straight off g2k:AUTOEXEC.BAT:
+            #     :VIBRA  SET BLASTER=A220 I5 D1 H5 T6 P330
+            #     :PGSB   SET BLASTER=A220 I7 D3 P330 T3
+            # SAME TWO STRINGS AS daemon/vcctrld.py's TargetProfile.
+            # BLASTER_PROFILES -- that class maps a value obtained over a
+            # DIFFERENT, file-based channel (never OCR) to a profile name.
+            # This runs on the CONTROL host against a value this process OCRs
+            # live off the DOS prompt, so it cannot share that Python dict
+            # across the host boundary; if either set of strings ever changes
+            # (e.g. the SOUND-PROFILES.md profile merge), update BOTH.
+            # Every other sound profile (PGADLIB, PGGUS) sets no BLASTER at
+            # all and is already caught by the wv==0 refusal above -- VIBRA is
+            # the ONE profile that can masquerade as PGSB here, because a
+            # presence check cannot see past "yes, something is set".
+            #
+            # Same primitive as every other check on this path: a `FIND`
+            # pattern piped to `FIND /C "="`, read back as a single digit.
+            # Searching for PGSB's own value string (not merely the variable
+            # name) means the match itself is the discriminator -- VIBRA's
+            # differing string cannot satisfy it, so `count: 0` here means
+            # "this is some OTHER BLASTER-setting profile", almost certainly
+            # VIBRA, not "the read failed".
+            print("   -- confirming the VALUE, not just that BLASTER is set --")
+            cmd("CLS")
+            time.sleep(1.0)
+            cmd('SET | FIND /I "BLASTER=A220 I7 D3 P330 T3" | FIND /C "="')
+            pv = None
+            for _try in range(20):
+                time.sleep(1.5)
+                _sh, t5 = read_env_text_raw()
+                if t5 is None:
+                    continue
+                pv = read_count(t5)
+                if pv is not None:
+                    break
+            if pv is None:
+                print("     BLASTER value                    COULD NOT READ")
+                print("   REFUSED: BLASTER is set, but which profile set it")
+                print("   could not be confirmed. That is COULD NOT LOOK, not")
+                print("   a pass.")
+                return 2
+            if pv == 0:
+                print("     BLASTER value                    *** NOT PGSB'S STRING ***")
+                print("   REFUSED: BLASTER is set, but not to PGSB's own value.")
+                print("   The only other profile that sets BLASTER is VIBRA, and")
+                print("   this machine is almost certainly on it instead. Reboot")
+                print("   to the menu default (ctrl-alt-del, let the 5s timeout")
+                print("   land on PGSB).")
+                return 1
+            print("     BLASTER                          set (profile is PGSB, "
+                  "value confirmed)")
 
 
             if forbidden:

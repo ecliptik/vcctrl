@@ -4793,6 +4793,12 @@ class TargetProfile(object):
     # so the VALUE names the profile uniquely where its presence does not.
     # PGADLIB, PGGUS, NET and CLEAN set nothing at all -- which is why an
     # absence is not evidence of any particular one of them.
+    #
+    # SAME TWO STRINGS ARE HARDCODED AGAIN in harness/vcctrl-cell's profile
+    # witness (docs/OPEN-FAULTS.md sec 15) -- that check runs on the CONTROL
+    # host against a value OCR'd live off the DOS prompt (never the file-based
+    # channel this class assumes), so it cannot import this dict across the
+    # host boundary. If either set of strings changes, update BOTH.
     BLASTER_PROFILES = {
         "A220 I7 D3 P330 T3": "PGSB",
         "A220 I5 D1 H5 T6 P330": "VIBRA",
@@ -5721,16 +5727,24 @@ class TransferJob(NetJob):
                 self._say("cancel", "stopped between files, as asked")
                 break
             results.append(self._send_one(rec))
-            if results[-1].get("why") == "no-prompt":
-                # A FILE FAILING IS NOT THE RUN FAILING -- the reboots are
-                # already paid for and stranding the rest wastes them. But a
-                # prompt that never comes back is a different CLASS of event:
-                # at_prompt() tests whether the BIOS ISR is intact, not whether
-                # DOS is reading, so it cannot fail merely because a file did.
-                # The machine's state is unknown and the next VCGET would be
-                # typing into the dark.
-                self._say("abort", "the prompt did not come back; stopping "
-                                   "rather than typing blind")
+            # BOTH why VALUES STOP THE RUN, NOT ONLY "no-prompt" -- same
+            # reasoning as PullJob's identical loop, and the same measured
+            # cause (docs/OPEN-FAULTS.md sec 16). at_prompt()/wait_prompt()
+            # tests the BIOS ISR, not "DOS is at a clean prompt": a VCGET.BAT
+            # command truncated by the keyboard buffer leaves DOS sitting on
+            # an unfinished input line while the ISR stays responsive, which
+            # reports as "no-return" here -- indistinguishable, from this
+            # signal alone, from a prompt that is genuinely fine but a file
+            # that genuinely failed. Typing the next VCGET over that unread
+            # line is exactly the concatenation this function already refuses
+            # for "no-prompt"; there is no cheaper way to tell the two apart.
+            if results[-1].get("why") in ("no-prompt", "no-return"):
+                why = results[-1]["why"]
+                self._say("abort", "%s -- stopping rather than typing blind"
+                                   % ("the prompt did not come back"
+                                      if why == "no-prompt" else
+                                      "a file did not come back and the "
+                                      "prompt's state cannot be trusted"))
                 break
 
         cancelled = self._cancelled()
@@ -5970,9 +5984,28 @@ class PullJob(NetJob):
             r = self._fetch_one(rec)
             results.append(r)
             done.append(rec["name"])
-            if r.get("why") == "no-prompt":
-                self._say("abort", "the prompt did not come back; stopping "
-                                   "rather than typing blind")
+            # BOTH why VALUES STOP THE BATCH, NOT ONLY "no-prompt". A leg that
+            # times out with "no-return" means wait_prompt() found the BIOS
+            # keyboard ISR alive -- which is NOT "DOS is at a clean prompt"
+            # (wait_prompt's own docstring: "NOT is DOS at a prompt"). Measured
+            # 2026-08-25 (docs/OPEN-FAULTS.md sec 16): a VCCHK.BAT command
+            # truncated by the BIOS keyboard buffer leaves its Enter unsent,
+            # so the ISR stays responsive (a "no-return" leg) while DOS is
+            # still sitting on that unfinished input line. The NEXT file's
+            # _fetch_one then typed straight over it -- two commands
+            # concatenated into one, DOS answered "Bad command or file name",
+            # and neither file arrived. Continuing past "no-return" is exactly
+            # the "typing blind" this function already refuses to do for
+            # "no-prompt"; there is no cheap way from here to tell "the file
+            # genuinely never arrived, prompt is fine" apart from "the prompt
+            # has an unconsumed command sitting in it", so both must be
+            # treated as unsafe to type over.
+            if r.get("why") in ("no-prompt", "no-return"):
+                self._say("abort", "%s -- stopping rather than typing blind"
+                                   % ("the prompt did not come back"
+                                      if r["why"] == "no-prompt" else
+                                      "a file did not come back and the "
+                                      "prompt's state cannot be trusted"))
                 break
 
         cancelled = self._cancelled()

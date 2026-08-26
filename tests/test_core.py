@@ -8825,6 +8825,71 @@ def test_a_missing_prompt_stops_the_run_and_a_bad_file_does_not():
     check("nothing was cleared", len(cap._queued()) == 3, cap._queued())
 
 
+def test_a_no_return_leg_also_stops_the_send_run_rather_than_typing_over_it():
+    """OPEN-FAULTS sec 16: "no-return" is not "the prompt is fine".
+
+    wait_prompt() proves the BIOS keyboard ISR is alive, never that DOS is
+    sitting at a clean line ready for another command -- a truncated VCGET.BAT
+    (the BIOS buffer's own depth, measured on hardware) leaves the ISR
+    responsive while DOS still holds the unfinished half of that command. A
+    "no-return" leg carries exactly that ambiguity, so continuing to the next
+    file risks typing straight over an unconsumed line -- the same class of
+    event as "no-prompt", not a lesser one.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    for n in ("one.txt", "two.txt", "three.txt"):
+        _send(cap, n, b"x" * 20)
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    # prompt=True (ISR alive) this time -- only the file fails to come back.
+    d = FakeTarget(cap, prompt=True)
+    d.corrupt = set()
+    orig = d.type_line
+    d.type_line = lambda t: None if "VCGET.BAT" in t else orig(t)
+    r = vcctrld.TransferJob(cap, d).run()
+    check("the run stops at the first no-return leg, same as no-prompt",
+          len(r["files"]) == 1, r["files"])
+    check("named as an unresolved arrival, not a machine-state problem",
+          r["files"][0]["why"] == "no-return", r["files"])
+    check("and the log says why it stopped rather than carrying on",
+          any("typing blind" in e["text"] for e in r["log"]), r["log"])
+    check("nothing was cleared", len(cap._queued()) == 3, cap._queued())
+
+
+def test_a_no_return_leg_also_stops_the_pull_run_rather_than_typing_over_it():
+    """The mirror of the send-side test above, on PullJob's `_leg()`/VCCHK.BAT
+    path -- the actual path that produced the live failure in OPEN-FAULTS sec
+    16 (D1B's collect, 2026-08-25): the first file's VCCHK.BAT was truncated
+    by the BIOS keyboard buffer, `wait_prompt()` still read the ISR as alive
+    ("no-return"), and the loop used to carry on to the second file, typing
+    its full command over the first one's unconsumed remainder.
+    """
+    print("\npull: no-return stops the batch")
+    cap, d = _mkpull(card={"ONE.TXT": b"x" * 20, "TWO.TXT": b"y" * 20},
+                     prompt=True)
+    orig = d.type_line
+
+    def block_first_fetch(t):
+        parts = t.split()
+        if ("VCCHK.BAT" in t and len(parts) >= 3
+                and parts[2] != vcctrld.NetJob.PROOF_NAME):
+            return None
+        return orig(t)
+
+    d.type_line = block_first_fetch
+    r = vcctrld.PullJob(cap, d, names=["ONE.TXT", "TWO.TXT"]).run()
+    check("the run stops after the first no-return leg",
+          len(r["files"]) == 1, r["files"])
+    check("named as an unresolved arrival, not a machine-state problem",
+          r["files"][0]["why"] == "no-return", r["files"])
+    check("and the log says why it stopped rather than carrying on",
+          any("typing blind" in e["text"] for e in r["log"]), r["log"])
+    check("the second file was never typed at the machine",
+          not any("TWO.TXT" in t for t in d.typed), d.typed)
+
+
 def test_leaving_the_machine_in_NET_is_said_out_loud():
     """OPEN-FAULTS sec. 7: a cell died because the machine was still in NET.
 
