@@ -18,6 +18,28 @@ Release with `vcctrl_lock_release` when you're done with a sequence of input
 calls rather than leaving it to the 300s idle timeout, if another session may
 be waiting.
 
+**The 300s idle timeout lives in the MCP client process, not the daemon --
+a crashed client leaves the lock stuck forever.** Measured 2026-08-26: a
+lock sat held for 2.3+ hours, well past 300s, with `vcctrld`'s own log
+showing its owner (`mcp:<host>:<pid>`) went silent right after a normal
+power-off and never called anything again -- a killed/crashed MCP session,
+not a live one. The daemon's own `Arbiter` class (`daemon/vcctrld.py`) has
+no idle logic at all; the 300s watch is `LockManager._idle_watch` inside
+*this session's own* `agent/vcctrl_mcp.py` process, polling every 15s and
+releasing only if that same process is still alive to run it (`atexit` also
+only fires on a clean exit). Kill that process any other way and nothing
+ever releases the lock -- the daemon holds it exactly as designed, forever,
+because from its side nothing is wrong. Before assuming a long-held lock is
+someone's live work: check `vcctrl_activity`/ask peers, then look at
+whether the owner's identity matches any session you can account for.
+**The lightweight fix is the CLI's `vcctrl lock break --as <name>`** (in
+`bin/vcctrl-client`) -- it force-clears the lock and marks the run tainted
+for auditability, purpose-built for exactly this. **It is not exposed as an
+MCP tool** (`vcctrl_lock_status`/`_acquire`/`_release` are, `break` is not),
+so an MCP-only session has no lightweight recovery today and has to escalate
+to an operator with CLI/SSH access -- restarting `vcctrld` also clears it
+(confirmed working) but is heavier than necessary and untracked/untainted.
+
 **`vcctrl_send_file`/`_get_file`/`_file_refresh` and `_run_cell`/`_run_sweep`/
 `_collect` release THIS session's own lock automatically before they start,
 and you do not need to do it yourself first.** Found the hard way,
@@ -47,11 +69,19 @@ a reason to avoid the action, only as a reason to mean it.
 **A keystroke or click landing is not the same as the tool call succeeding.**
 Because of the input hazards in `vcctrl-rig-hazards` (Caps Lock inversion,
 OCR unreliable on digits, DOS's caret/REM quirks if you're driving the target
-via typed batch commands), a `vcctrl_type`/`vcctrl_key` call that returns
-without error is not proof the target received what you intended. Use
-`vcctrl_verify_input` or a follow-up `vcctrl_shot`/`vcctrl_frame` to confirm,
-especially before a step that depends on prior input having landed (e.g.
-before a `confirm`-gated action).
+via typed batch commands, and rapid-fire `vcctrl_type`/`vcctrl_key` calls
+dropping or merging characters -- see `vcctrl-rig-hazards`), a call that
+returns without error is not proof the target received what you intended.
+Use `vcctrl_verify_input` or a follow-up `vcctrl_shot`/`vcctrl_frame` to
+confirm, especially before a step that depends on prior input having landed
+(e.g. before a `confirm`-gated action). **Prefer `vcctrl_burst` over
+`vcctrl_shot` for this right after typing.** Measured 2026-08-26: `shot()`
+returned a "judged" frame 12.85s stale -- the previous screen content --
+immediately after two commands that had, per a `burst()` taken seconds
+later, both landed and rendered correctly. `shot()`'s picture-judgement
+pipeline can lag a fast-changing screen; a raw `burst()` is the fresher
+read when you need "what does the screen show right now," not merely "is
+there a picture at all."
 
 **Board-scoped power is visibility, not enforcement** (see
 `vcctrl-rig-hazards`) -- check `vcctrl_board` before a `vcctrl_power` call if

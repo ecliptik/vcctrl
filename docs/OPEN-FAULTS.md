@@ -5,7 +5,7 @@ what is still broken, what is worked around rather than fixed, and what to
 check before trusting a result.** If you are picking this up cold, read this
 before running anything measured.
 
-Last reviewed 2026-08-25.
+Last reviewed 2026-08-27.
 
 ---
 
@@ -1578,3 +1578,143 @@ far — next step, if this recurs, is capturing which real browser/device
 and the exact click sequence, since a rendering-engine-specific or
 viewport-specific trigger is now the more likely remaining explanation
 than a code defect in `applyZoom()` itself.
+
+## 18. A crashed MCP client's input lock has no lightweight MCP-side recovery — OPEN, WORKAROUND KNOWN
+
+Measured 2026-08-26: an MCP-mode session's input lock (`mcp:<host>:<pid>`)
+sat held for 2.3+ hours. `vcctrld`'s own log showed the story plainly —
+that owner issued a normal power-off, then never called anything again; a
+killed/crashed MCP client process, not a live session doing work. Nobody
+else on the rig (three other live peer sessions, checked directly) held it
+either.
+
+**Root cause, not a bug in the sense of wrong code, but a real gap:** the
+"300s idle auto-release" documented in this project's own skills lives
+entirely client-side, in `LockManager._idle_watch`
+(`agent/vcctrl_mcp.py:239-292`) — a background thread inside *that specific
+MCP server subprocess*, polling every 15s and calling `release()` after
+300s untouched. `atexit.register(self.release)` covers a clean process
+exit. Neither fires if the process is killed any harder than that (SIGKILL,
+OOM, a host-level crash, or whatever actually happened here). `Arbiter`
+(`daemon/vcctrld.py:1034`), the daemon-side lock this all wraps, has **no
+idle logic of its own at all** — `acquire`/`release`/`check`/`status` are
+the entire class, so from the daemon's own vantage a lock held for 2.3 hours
+and one held for 20 seconds look identical. This isn't a latent daemon
+defect so much as a documented safety property (the skills say "releases
+after 300s idle") that is actually a property of one client process
+staying alive, stated as if it were a property of the lock itself.
+
+**The lightweight fix already exists and isn't reachable over MCP.**
+`bin/vcctrl-client` has `lock break --as <name>` — force-clears the lock
+and marks the run tainted, exactly the audited, purpose-built escape hatch
+this situation calls for. But the MCP tool surface only exposes
+`vcctrl_lock_status`/`_acquire`/`_release` — no `vcctrl_lock_break`. An
+MCP-only session (daemon mode or control mode, both) hit this scenario
+with no lightweight recovery available through its own tools.
+
+**What was actually done, and why it's heavier than necessary:** with
+operator authorization, restarted the `vcctrld` systemd service on the
+daemon host over SSH. This works — a fresh process means a fresh
+in-memory `Arbiter` with no owner — but it is not audited the way `lock
+break` is (no taint marker), and it is a bigger blast radius than the
+situation needed (anything else `vcctrld` was mid-doing gets dropped too,
+though nothing was in flight this time).
+
+**Not yet fixed:** no `vcctrl_lock_break` MCP tool exists. Adding one is
+the obvious fix, gated the same way other consequential MCP actions are
+(a named `confirm`, per `vcctrl-mcp-workflows`) — flagged here rather than
+implemented, since it's a new capability decision, not a bug fix, and
+wants the operator's sign-off on exposing a force-break primitive over MCP.
+
+## 19. No raw audio ever leaves the daemon — OPEN, WORKAROUND NONE
+
+Measured 2026-08-26, during a peer session's real-hardware audio check on a
+DOS port: `vcctrl_record` was assumed to capture audio alongside video
+(reasonable — both are "the scrub buffer" conceptually, and the daemon runs
+an audio capture the whole time a video one runs). It does not.
+`ffprobe` on the resulting AVI shows exactly one stream, `mjpeg`/video —
+no audio stream at all, silently. Nothing in the tool's response or
+docstring says so; a caller who doesn't independently check the file with
+`ffprobe` would reasonably believe they'd captured what they asked for.
+
+**What audio access actually exists**, all in `AudioCapability`
+(`daemon/vcctrld.py` `_audio`/`_level`/`_levels`): `state`/`acquire`/
+`release` (device lifecycle only) and `_levels()` (mean/peak dBFS + a
+histogram bucket count over a requested window, computed on demand from
+the in-memory PCM ring). **There is no command that returns the PCM
+samples themselves** — no WAV export, no raw-bytes fetch, nothing
+equivalent to `vcctrl_frame`/`vcctrl_burst` for the audio ring. `_levels()`
+reads `self.ring` directly and only ever returns statistics derived from
+it, never the ring's contents.
+
+**Consequence:** vcctrl can tell you *how loud* something was over a
+window (and therefore rule silence in or out, and catch a level that goes
+flat mid-run), but cannot answer "does this sound right" — tempo, pitch,
+melody, pops/clicks — for anything, ever, without a human listening live
+through whatever the KVM's audio output is physically connected to. A
+request from a peer session for "a recording to judge audio quality" has
+no tool-level answer today; say so rather than sending the video-only
+`vcctrl_record` output and calling it audio evidence.
+
+**Not yet fixed:** a WAV-export command on the audio ring (mirroring
+`vcctrl_record`'s "snapshot with `since`, refuse if the window predates the
+caller" discipline, applied to `AudioCapability.ring` instead of the video
+ring) would close this — flagged here rather than implemented, same reason
+as sec. 18: a new capability, not a bug fix, wants operator sign-off.
+
+## 20. `vcctrl_get_file`'s blind reboot can silently miss its own menu digit  — OPEN, WORKAROUND KNOWN
+
+Measured 2026-08-27, fetching `SDLDBG.LOG` from a DOSSAGE session while the
+game was still running in VESA graphics mode. `_reboot_to_net()`
+(`daemon/vcctrld.py:5540-5570`) sends the reboot chord, then — its own
+comment says this outright — types the menu digit **blind**, "the same way,
+retried," because the CONFIG.SYS multi-config menu is text mode 03h at
+70 Hz and cannot be captured, so nothing can confirm the selection landed.
+`_prove_net()` then waits up to `TRANSFER_TIMEOUT_S` (180s,
+`vcctrld.py:5112`) for the target to phone home over the network it just
+told the target to bring up.
+
+One run of that wait genuinely timed out at 180s and failed clean —
+`why: "no-net"`, exactly as designed, and a plain retry from a confirmed
+`C:\>` prompt succeeded a moment later. That part worked as documented.
+
+**The part worth a hazard entry:** mid-wait, with no visible progress in
+`vcctrl_file_status` for well over a minute, this session power-cycled the
+target out-of-band (`vcctrl_power` action=cycle) to "unstick" what looked
+like a hung reboot. That was the wrong move, and it explains why the *next*
+attempt landed on the default profile instead of NET: the out-of-band
+power cycle raced the job's own `_reboot_edge()`/menu-digit timing, so the
+blind digit-type almost certainly fired at the wrong point in POST (or was
+consumed by a boot the job never expected to happen). The job's `attest`
+step then waited the full 180s for a network stack that provably never
+loaded — confirmed by re-checking the screen directly, which still showed
+the SB/PGSB default-profile banner, not the NET profile's Novell
+ODI/ODIPKT lines. **A blind, unconfirmable keystroke into a boot sequence
+is not something an external actor can safely race against** — including
+this session, and including a human at the KVM.
+
+Also observed on this same target while the game was actively running,
+before any of the above: `vcctrl_verify_input` returned exit 1 ("no LED
+change — the PS/2 link is not carrying keystrokes") even though the game
+was visibly responding to keypresses moments earlier (title→gameplay
+transition, walking). Plausible read: a VESA-mode game reading raw
+keyboard scancodes directly bypasses the BIOS layer that would normally
+toggle Caps Lock, so the LED round-trip this tool relies on isn't evidence
+of a dead input path here — it's evidence the game isn't going through
+BIOS INT 16h. Not fully confirmed; flagged rather than asserted, per
+[[compare-against-the-reference-before-calling-it-a-bug]].
+
+**Workaround:** once a `vcctrl_get_file`/reboot job is started, let it run
+to its own timeout or completion. Don't power-cycle or otherwise touch the
+target out-of-band while `vcctrl_file_status` shows `running: true` — the
+180s `no-net` failure path is safe and self-clearing; an external power
+cycle mid-job is not, and desyncs the very state machine that's supposed
+to recover cleanly on its own.
+
+**Not yet fixed:** the menu-digit type is blind by design (the CONFIG.SYS
+menu genuinely cannot be captured), so there may be no cheap fix beyond
+documenting the hazard and the 180s self-clearing timeout. A
+`vcctrl_file_cancel` that could actually abort mid-reboot (not just
+"after the file in flight," which doesn't apply before a file transfer
+even starts) is the closest thing to a real fix and isn't implemented —
+flagged here rather than built, same sign-off reasoning as sec. 18-19.
