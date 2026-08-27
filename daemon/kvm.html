@@ -1532,6 +1532,12 @@
   .kvtree .kvt-row span:last-child { color:var(--muted); overflow-wrap:anywhere;
                                       text-align:right; }
 
+  #wavehead { display:flex; align-items:stretch; gap:6px; margin-bottom:8px; }
+  #wave {
+    display:block; flex:1; min-width:0; height:40px;
+    background:var(--bg); border:1px solid var(--rule); border-radius:5px;
+  }
+  #wavemode { min-width:38px; border-radius:5px; }
   #meter { display:flex; align-items:center; gap:9px; }
   #volrow { display:flex; align-items:center; gap:6px; margin-top:8px; }
   /* The mute control is the one you reach for while something is playing, so
@@ -1638,28 +1644,16 @@
   }
   .pop[hidden] { display:none; }
   #pop-sound { width:min(320px, calc(100vw - 16px)); }
-  /* MATCH EACH OTHER, NOT CAPTURE. Sound and Power used to match #scrub's
-     height, and #scrub is the capture/timeline panel -- taller than either
-     of these, for content neither of them has. That read as generous margin
-     rather than an intentional match, because it was: matching a third,
-     unrelated panel's height is not the same idea as matching each other.
-     matchPopHeight() now measures Sound's and Power's own natural content
-     height and sets --pop-match-h to the larger of the two, so they agree
-     with each other and neither carries empty space sized for Capture.
-
-     :not([hidden]), NOT A BARE ID SELECTOR. An ID beats `.pop[hidden]`'s
-     class+attribute specificity outright, so `display:flex` here was
-     overriding `display:none` even while `hidden` was set -- the popover
-     stayed on screen (measured: computedStyle still read `flex` through
-     open AND close), sat at the browser's default fixed-position corner on
-     a fresh load before openPop() ever set an offset, and switching tabs
-     did nothing because there was no invisible state to leave. `:not` keeps
-     this rule and `.pop[hidden]` mutually exclusive by attribute presence,
-     so there is no specificity contest to lose. */
-  #pop-sound:not([hidden]), #pop-power:not([hidden]) {
-    min-height:var(--pop-match-h, 0px);
-    display:flex; flex-direction:column; justify-content:center;
-  }
+  /* NOT MATCHED TO POWER. They used to be sized to each other -- see git
+     history if you go looking for --pop-match-h -- which was fine while
+     both held a couple of rows of controls. The waveform gave Sound
+     legitimately more content than Power will ever have, and forcing Power
+     to the taller height reproduced the exact bug that scheme was written
+     to avoid in the first place (matching #scrub's height read as generous
+     margin rather than an intentional match, because it was): Power's
+     buttons sat centered in space sized for a panel they are not part of.
+     Each panel now sizes to its own content, which is what "intentional"
+     means here. */
   .poprow { display:flex; gap:6px; flex-wrap:wrap; }
   #setback[hidden] { display:none; }
   #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
@@ -2286,6 +2280,10 @@
 </aside>
 
 <div id="pop-sound" class="pop" role="dialog" aria-label="Sound" hidden>
+  <div id="wavehead">
+    <canvas id="wave" title="Waveform arriving from the capture stick"></canvas>
+    <button id="wavemode" class="ibtn" title="Switch to spectrum view">📊</button>
+  </div>
   <div id="meter">
     <div id="mbar" title="Level arriving from the capture stick">
       <div id="mrms"></div><div id="mpeak"></div>
@@ -4538,7 +4536,12 @@ addEventListener('blur', () => {
 // AudioWorklet, because AudioWorklet is a SECURE-CONTEXT api and this page is
 // served over plain http. That is not a Safari bug and no amount of debugging
 // the audio graph will find it -- see docs/WEBKVM-AUDIO.md sec. 5.
-let ac = null, aws = null, gain = null, cursor = 0, soundOn = false;
+let ac = null, aws = null, gain = null, analyser = null, cursor = 0, soundOn = false;
+let eqRAF = null;   // requestAnimationFrame handle for the spectrum view
+// Which the canvas shows -- remembered across reloads for the same reason
+// volume is. Neither view runs (and neither costs anything) until sound is
+// actually on: the toggle only changes what the same live samples become.
+let waveMode = localStorage.getItem('vcctrl.wavemode') === 'eq' ? 'eq' : 'wave';
 // Volume is remembered across reloads. Losing it every time the tab is
 // refreshed would be its own small annoyance, and this page gets reloaded a
 // lot while a machine is being watched.
@@ -4599,7 +4602,8 @@ function setSound(on) {
   // and there is no reason to carry it to a viewer who is not listening. The
   // consequence is that the meter goes quiet too, which is why the daemon's
   // own audio state is still reported in the header pill while sound is off.
-  if (on) startAudio(); else stopAudio();
+  if (on) { startAudio(); if (waveMode === 'eq') startEq(); }
+  else stopAudio();
 }
 
 // The strip's speaker and the popover's are the same control in two
@@ -4625,18 +4629,43 @@ $('sbtn').onclick = () => {
     comp.release.value = 0.12;
     gain.connect(comp);
     comp.connect(ac.destination);
+    // A silent tap, not part of the audible chain: the spectrum view reads
+    // this and nothing connects it onward, so it costs nothing when the EQ
+    // view is not even open.
+    analyser = ac.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.75;
+    gain.connect(analyser);
   }
   if (ac && ac.state === 'suspended') ac.resume();
   setSound(!soundOn);
 };
 
+// WinAmp-style toggle: same popover, same live samples, a different picture.
+function setWaveMode(mode) {
+  waveMode = mode;
+  localStorage.setItem('vcctrl.wavemode', mode);
+  $('wavemode').textContent = mode === 'eq' ? '〰' : '📊';
+  $('wavemode').title = mode === 'eq' ? 'Switch to waveform view' : 'Switch to spectrum view';
+  $('wave').title = mode === 'eq' ? 'Spectrum of the audio arriving from the capture stick'
+                                  : 'Waveform arriving from the capture stick';
+  if (mode === 'eq') startEq(); else stopEq();
+}
+$('wavemode').onclick = () => setWaveMode(waveMode === 'eq' ? 'wave' : 'eq');
+setWaveMode(waveMode);
+
 function stopAudio() {
   if (aws) { try { aws.onclose = null; aws.close(); } catch (e) {} aws = null; }
+  stopEq();
   cursor = 0;
   mSmooth = -91;
+  waveGain = 1;
+  eqPeaks = null;
   $('mrms').style.width = '0%';
   $('mpeak').style.left = '0%';
   $('mdb').textContent = '—';
+  const cv = $('wave'), w = cv.clientWidth, h = cv.clientHeight;
+  if (w && h) { cv.width = w; cv.height = h; cv.getContext('2d').clearRect(0, 0, w, h); }
 }
 
 function startAudio() {
@@ -4649,6 +4678,7 @@ function startAudio() {
   aws.onmessage = ev => {
     const pcm = new Int16Array(ev.data);
     meter(pcm);
+    if (waveMode === 'wave') drawWave(pcm);
     if (!soundOn || !ac) return;
     const frames = pcm.length >> 1;
     if (!frames) return;
@@ -4696,6 +4726,156 @@ function meter(pcm) {
   $('mrms').style.width = pct(mSmooth) + '%';
   $('mpeak').style.left = pct(pdb) + '%';
   $('mdb').textContent = rdb <= -90 ? 'silent' : rdb.toFixed(0) + 'dB';
+}
+
+// One glance answering "is there music" faster than reading a dB number can.
+// Same raw samples as meter(), same L/R-agnostic simplification -- this is
+// a shape to look at, not a second measurement. Min/max per column rather
+// than one sample per pixel: a chunk is ~1920 values across ~280px, and
+// picking every Nth sample would alias, drawing a calm line through a loud
+// transient it happened to step over.
+//
+// Sized off clientWidth/clientHeight, not a fixed attribute: the popover is
+// hidden (0x0) whenever Sound is off or the popover is closed, so this both
+// skips the work then and re-fits itself the next time it has a size,
+// without a resize listener of its own.
+// AUTO-ZOOM, not a fixed multiplier. The signal path is speakers -> headphone
+// splitter -> capture stick, through a physical volume knob (FINDINGS 11,
+// WEBKVM-AUDIO.md sec 4) -- real game audio measured -53dB peak, ~0.2% of
+// full scale, which a literal amplitude plot draws as a flat line even with
+// music genuinely on the wire. A fixed gain constant tuned to that would
+// clip flat-topped the moment a louder session or a different game came
+// along, which hides the shape rather than showing it -- worse than not
+// zooming. So this scales to what actually arrives, same discipline as the
+// level meter, and is never fed into anything a comparison is built on.
+let waveGain = 1;
+const WAVE_TARGET = 0.85;  // fraction of half-height the loudest column should reach
+const WAVE_MAX_GAIN = 40;  // caps how far a near-silent noise floor can be blown up
+function drawWave(pcm) {
+  const cv = $('wave');
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  if (cv.width !== w) cv.width = w;
+  if (cv.height !== h) cv.height = h;
+  const x = cv.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const mid = h / 2;
+
+  // Raw per-column extremes first, gain applied after: the gain for THIS
+  // chunk depends on THIS chunk's peak, which is not known until the loop
+  // that finds it has run.
+  const n = pcm.length, perCol = Math.max(1, Math.floor(n / w));
+  const lo = new Int16Array(w), hi = new Int16Array(w);
+  let peak = 0;
+  for (let col = 0; col < w; col++) {
+    const start = col * perCol, end = Math.min(n, start + perCol);
+    let l = 32767, hh = -32768;
+    for (let i = start; i < end; i++) {
+      const v = pcm[i];
+      if (v < l) l = v;
+      if (v > hh) hh = v;
+    }
+    if (start >= end) l = hh = 0;
+    lo[col] = l; hi[col] = hh;
+    const a = Math.max(Math.abs(l), Math.abs(hh));
+    if (a > peak) peak = a;
+  }
+  // Ease UP slowly so the zoom does not visibly jump chunk to chunk; snap
+  // DOWN immediately so a sudden loud passage does not clip off-canvas --
+  // the same asymmetric envelope shape as the level meter's mSmooth.
+  if (peak > 50) {
+    const wanted = Math.max(1, Math.min(WAVE_MAX_GAIN, (WAVE_TARGET * 32768) / peak));
+    waveGain = wanted < waveGain ? wanted : waveGain + (wanted - waveGain) * 0.08;
+  }
+
+  x.clearRect(0, 0, w, h);
+  x.strokeStyle = css.getPropertyValue('--rule').trim();
+  x.beginPath();
+  x.moveTo(0, mid + 0.5); x.lineTo(w, mid + 0.5);
+  x.stroke();
+  x.strokeStyle = css.getPropertyValue('--green').trim();
+  x.beginPath();
+  for (let col = 0; col < w; col++) {
+    const y1 = mid - Math.max(-1, Math.min(1, hi[col] * waveGain / 32768)) * mid;
+    const y2 = mid - Math.max(-1, Math.min(1, lo[col] * waveGain / 32768)) * mid;
+    x.moveTo(col + 0.5, y1);
+    x.lineTo(col + 0.5, y2);
+  }
+  x.stroke();
+}
+
+// A WinAmp-style bar spectrum, off the SAME analyser tap regardless of what
+// the waveform is doing -- this is a second view of the live signal, not a
+// second capture path. Driven by its own rAF loop rather than the chunk
+// arrival rate: an AnalyserNode has fresh data any time it's asked, and
+// tying the redraw to the display's own refresh looks smoother than the
+// ~50/s the audio chunks happen to arrive at.
+const EQ_BARS = 16;
+let eqPeaks = null;   // per-bar peak-hold height, 0..1, survives across frames
+let eqBinRanges = null;
+function eqRanges(nBins) {
+  if (eqBinRanges && eqBinRanges.n === nBins) return eqBinRanges.ranges;
+  // LOG-SPACED, NOT LINEAR. An FFT's bins are linear in Hz, so a linear
+  // grouping spends most of the bars on treble that carries little energy
+  // and crams every bass note most music actually has into bar 1 -- which
+  // is what a linear grouping looks like right up until the first bass
+  // note plays and nothing else on screen moves. Geometric spacing is what
+  // every bar-graph EQ, WinAmp included, actually used.
+  const lo = 1, hi = nBins - 1;   // bin 0 is DC; skip it
+  const ranges = [];
+  for (let i = 0; i < EQ_BARS; i++) {
+    const b0 = Math.round(lo * Math.pow(hi / lo, i / EQ_BARS));
+    const b1 = Math.round(lo * Math.pow(hi / lo, (i + 1) / EQ_BARS));
+    ranges.push([Math.max(lo, b0), Math.max(b0 + 1, b1)]);
+  }
+  eqBinRanges = {n: nBins, ranges};
+  return ranges;
+}
+function drawEq(data) {
+  const cv = $('wave');
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  if (cv.width !== w) cv.width = w;
+  if (cv.height !== h) cv.height = h;
+  const x = cv.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const green = css.getPropertyValue('--green').trim();
+  const yellow = css.getPropertyValue('--yellow').trim();
+  if (!eqPeaks || eqPeaks.length !== EQ_BARS) eqPeaks = new Array(EQ_BARS).fill(0);
+  const ranges = eqRanges(data.length);
+  const gap = 2;
+  const barW = Math.max(1, (w - gap * (EQ_BARS - 1)) / EQ_BARS);
+  x.clearRect(0, 0, w, h);
+  for (let i = 0; i < EQ_BARS; i++) {
+    const [b0, b1] = ranges[i];
+    let m = 0;
+    for (let b = b0; b < b1; b++) if (data[b] > m) m = data[b];
+    const level = m / 255;
+    // The bar itself tracks the signal instantly; the cap on top of it
+    // is what actually reads as "falling" -- it can only go down, and
+    // slowly, so a transient leaves a visible mark that decays rather
+    // than a bar that simply blinks.
+    eqPeaks[i] = Math.max(level, eqPeaks[i] - 0.02);
+    const bx = i * (barW + gap), barH = level * h;
+    x.fillStyle = green;
+    x.fillRect(bx, h - barH, barW, barH);
+    x.fillStyle = yellow;
+    x.fillRect(bx, Math.max(0, h - eqPeaks[i] * h - 2), barW, 2);
+  }
+}
+function startEq() {
+  if (eqRAF || !analyser) return;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  const loop = () => {
+    analyser.getByteFrequencyData(data);
+    drawEq(data);
+    eqRAF = requestAnimationFrame(loop);
+  };
+  loop();
+}
+function stopEq() {
+  if (eqRAF) cancelAnimationFrame(eqRAF);
+  eqRAF = null;
 }
 
 // ------------------------------------------------------------------ settings
@@ -4778,26 +4958,6 @@ function closePop() {
 // Popups anchored here use the same number so Capture does not read as
 // farther from the bar than Sound and Power are.
 const POP_GAP = 10;
-// EACH OTHER'S CONTENT, MEASURED, NOT ASSUMED, AND NOT CAPTURE'S. A constant
-// here would drift the moment either panel's own content does -- and #scrub
-// used to be the thing measured, which sized both to a third panel's height
-// rather than to their own. --pop-match-h is reset to 0 first so a stale
-// value from the last measurement cannot inflate this one, then each panel
-// is briefly un-hidden at zero visibility to measure its bare content height
-// -- display keeps its layout height (unlike `hidden`), and nothing paints
-// because visibility is off, so there is nothing to see happen.
-function matchPopHeight() {
-  document.documentElement.style.setProperty('--pop-match-h', '0px');
-  let h = 0;
-  for (const id of ['pop-sound', 'pop-power']) {
-    const el = $(id);
-    const wasHidden = el.hidden;
-    if (wasHidden) { el.hidden = false; el.style.visibility = 'hidden'; }
-    h = Math.max(h, el.offsetHeight);
-    if (wasHidden) { el.hidden = true; el.style.visibility = ''; }
-  }
-  if (h) document.documentElement.style.setProperty('--pop-match-h', h + 'px');
-}
 function openPop(name) {
   if (openPopName === name) { closePop(); return; }
   closePop();
@@ -4895,7 +5055,6 @@ function measureBars() {
   st.setProperty('--bar-top', Math.max(0, Math.round(top)) + 'px');
   st.setProperty('--bar-bottom',
                  Math.max(0, Math.round(window.innerHeight - bot)) + 'px');
-  matchPopHeight();
 }
 addEventListener('resize', measureBars);
 measureBars();
