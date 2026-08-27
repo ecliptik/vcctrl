@@ -618,7 +618,11 @@ class WebCapability(object):
         # Read-only. `level` is needed by both the page meter and by
         # bin/vcctrl-audio, which reaches the daemon over HTTPS now that plain
         # http is off -- it was missing here and the tool got a 403.
-        "level", "powerlog",
+        # `spectrum` is level's frequency-domain sibling, used by the same
+        # tool the same way, and missed here for the exact same reason on
+        # its first pass -- caught by actually running vcctrl-audio against
+        # the live rig rather than trusting the daemon-side unit tests alone.
+        "level", "spectrum", "powerlog",
         # scrub
         "pin", "timeline", "frame",
         # The change record. vcctrl-94 shipped this with a CLI verb and no

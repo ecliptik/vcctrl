@@ -51,6 +51,20 @@ except ImportError:                                        # source checkout
     vcconfig = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(vcconfig)
 
+# Same two-layout reasoning as vcconfig immediately above. Shared with the
+# control host (bin/, agent/) so AudioCapability's band math and a
+# reference-file analysis on the control host are the same implementation,
+# not two that have to be kept in agreement by hand.
+try:
+    import audio_bands
+except ImportError:                                        # source checkout
+    import importlib.util as _ilu
+    _ab = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "common", "audio_bands.py")
+    _spec = _ilu.spec_from_file_location("audio_bands", _ab)
+    audio_bands = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(audio_bands)
+
 # READ ONCE, AND NEVER FATAL.
 #
 # A malformed config must not stop the daemon: that is the same rule as Rule 2
@@ -3688,9 +3702,20 @@ class AudioCapability(Capability):
     # enough that the per-chunk overhead is irrelevant.
     CHUNK = 3840
     STALLED_AFTER_S = 2.0
+    # The frequency-analysis constants and math now live in
+    # common/audio_bands.py, shared with the control host (bin/, agent/) --
+    # see that module's own comments for what each one means and how it was
+    # calibrated (docs/FINDINGS.md sec 42). These stay as class attributes
+    # so existing call sites (and tests/test_core.py) don't need to change
+    # what they reference.
+    BAND_HZ = audio_bands.BAND_HZ
+    SPECTRUM_FFT_N = audio_bands.SPECTRUM_FFT_N
+    BAND_ACTIVE_MARGIN_DB = audio_bands.BAND_ACTIVE_MARGIN_DB
+    BAND_FLOOR_DB = audio_bands.BAND_FLOOR_DB
 
     def __init__(self, devs, bus=None):
         Capability.__init__(self, devs)
+        self._hann_cache = audio_bands.hann(self.SPECTRUM_FFT_N)
         self.bus = bus
         self.lock = threading.Lock()
         self.ring = collections.deque()
@@ -3843,13 +3868,13 @@ class AudioCapability(Capability):
 
     # -- levels, computed on demand -----------------------------------------
 
-    def _levels(self, ms=3000):
-        """RMS and peak in dBFS over the last `ms`, plus a bucket histogram.
+    def _ring_window(self, ms):
+        """The last `ms` worth of the PCM ring, joined into one fragment.
 
-        Matches what `ffmpeg -af volumedetect` reports, because
-        `bin/vcctrl-audio` reads mean_volume, max_volume and the histogram
-        bucket count, and its verdicts are tuned to those numbers. Changing the
-        scale would silently invalidate every reference level in FINDINGS.
+        Shared by `_levels` and `_spectrum` -- both need the identical slice
+        of recent audio, and reading it twice with two hand-written loops is
+        how they'd quietly drift apart (one gets fixed for an edge case, the
+        other doesn't).
         """
         want = int(self.RATE * self.CHANNELS * self.SAMPLE_BYTES * ms / 1000.0)
         with self.lock:
@@ -3861,7 +3886,19 @@ class AudioCapability(Capability):
                     break
         if not chunks:
             return None
-        frag = b"".join(reversed(chunks))
+        return b"".join(reversed(chunks))
+
+    def _levels(self, ms=3000):
+        """RMS and peak in dBFS over the last `ms`, plus a bucket histogram.
+
+        Matches what `ffmpeg -af volumedetect` reports, because
+        `bin/vcctrl-audio` reads mean_volume, max_volume and the histogram
+        bucket count, and its verdicts are tuned to those numbers. Changing the
+        scale would silently invalidate every reference level in FINDINGS.
+        """
+        frag = self._ring_window(ms)
+        if not frag:
+            return None
 
         full = 32768.0
         import array as _array
@@ -3928,10 +3965,66 @@ class AudioCapability(Capability):
                                    / (self.RATE * self.CHANNELS
                                       * self.SAMPLE_BYTES), 1)}
 
+    def _spectrum(self, ms=3000):
+        """Per-band energy over the last `ms`, and how many bands are active.
+
+        A COMPLEMENT to `_levels`, not a replacement: amplitude alone cannot
+        tell a music/SFX signal apart from a steady tone or hum that happens
+        to sit at a similar level -- `bin/vcctrl-audio`'s existing crest-
+        factor note is an indirect proxy for exactly that gap. This measures
+        it directly: real content spreads energy across multiple frequency
+        bands, a pure tone or mains hum concentrates it in one.
+
+        Unlike mean_db/peak_db, `active_bands` is a comparison of bands to
+        EACH OTHER, not to an absolute scale -- so unlike the rest of this
+        file, it stays meaningful regardless of where the physical volume
+        knob sits (WEBKVM-AUDIO.md sec 4 / FINDINGS sec 11). The per-band
+        dB figures are still informational-only, same as the histogram.
+        """
+        frag = self._ring_window(ms)
+        if not frag:
+            return None
+        import array as _array
+        a = _array.array("h")
+        a.frombytes(frag[:len(frag) // 2 * 2])
+        if sys.byteorder == "big":
+            a.byteswap()
+        frames = len(a) // self.CHANNELS
+        if frames < 2:
+            return None
+
+        # Downmix to mono. _levels can treat interleaved L/R as one long
+        # sequence because a scalar RMS/peak doesn't care about sample
+        # ORDER -- a spectrum absolutely does, and alternating L/R samples
+        # into one sequence would alias real content into fake high-
+        # frequency energy here. Hardware is fixed at 2ch (class docstring),
+        # so this pairs samples directly rather than looping CHANNELS times.
+        mono = [(a[2 * i] + a[2 * i + 1]) * 0.5 for i in range(frames)]
+
+        # The FFT/Hann/band-binning math itself lives in common/audio_bands.py
+        # now, shared with the control host -- see that module for how a
+        # chunk becomes one band_db figure. getattr, not a bare attribute
+        # reference: a test double that skips __init__ (see
+        # tests/test_core.py's Fake(AudioCapability)) would otherwise raise
+        # here instead of exercising the real computation.
+        window = getattr(self, "_hann_cache", None) or audio_bands.hann(self.SPECTRUM_FFT_N)
+        band_db = audio_bands.band_db_from_mono(
+            mono, rate=self.RATE, n_fft=self.SPECTRUM_FFT_N,
+            band_hz=self.BAND_HZ, window=window)
+        if band_db is None:
+            return None
+        active = audio_bands.active_bands(
+            band_db, margin_db=self.BAND_ACTIVE_MARGIN_DB,
+            floor_db=self.BAND_FLOOR_DB)
+        return {"bands_hz": list(self.BAND_HZ), "band_db": band_db,
+                "active_bands": active,
+                "window_ms": round(frames * 1000.0 / self.RATE, 1)}
+
     # -- commands -----------------------------------------------------------
 
     def commands(self):
-        return {"audio": self._audio, "level": self._level}
+        return {"audio": self._audio, "level": self._level,
+                "spectrum": self._spectrum_cmd}
 
     def _state(self):
         with self.lock:
@@ -3994,6 +4087,13 @@ class AudioCapability(Capability):
             return {"ok": True, "level": None, "state": self.state,
                     "reason": "no audio in the ring"}
         return dict({"ok": True, "state": self.state}, **lv)
+
+    def _spectrum_cmd(self, req):
+        sp = self._spectrum(int(req.get("ms", 3000)))
+        if sp is None:
+            return {"ok": True, "spectrum": None, "state": self.state,
+                    "reason": "no audio in the ring"}
+        return dict({"ok": True, "state": self.state}, **sp)
 
 
 

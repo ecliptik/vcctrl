@@ -62,6 +62,16 @@ vcctrld = importlib.util.module_from_spec(_spec)
 sys.modules["vcctrld"] = vcctrld
 _loader.exec_module(vcctrld)
 
+# common/audio_bands.py, loaded directly rather than through vcctrld.audio_bands
+# -- it is shared with the control host (bin/, agent/) and tested as its own
+# module so a test failure points at the shared math, not at the daemon.
+AUDIO_BANDS = os.path.join(HERE, os.pardir, "common", "audio_bands.py")
+_ab_loader = SourceFileLoader("audio_bands", AUDIO_BANDS)
+_ab_spec = importlib.util.spec_from_loader("audio_bands", _ab_loader)
+audio_bands = importlib.util.module_from_spec(_ab_spec)
+sys.modules["audio_bands"] = audio_bands
+_ab_loader.exec_module(audio_bands)
+
 from evdev import ecodes as e
 
 FAILURES = []
@@ -551,6 +561,168 @@ def test_audio_levels():
           d["mean_db"] != d["peak_db"] and d["mean_db"] > -91.0, d)
     check("dither RMS is not integer-truncated (would read ~-90.3)",
           d["mean_db"] > -89.0, d["mean_db"])
+
+
+def test_audio_spectrum():
+    """Frequency spread is a complement to the amplitude checks above, and
+    needs the same validation discipline: `_spectrum` is new arithmetic, and
+    a test that only asserts "the loudest band is the one with the tone in
+    it" would pass even if the normalization were wrong by some constant
+    factor. So the first check below is against the CLOSED-FORM magnitude of
+    a bin-aligned sinusoid (Parseval), the same "exact math, not against
+    itself" discipline test_audio_levels uses for RMS -- everything after it
+    is behavioral, through the real _spectrum() path.
+
+    This replaced an earlier version built on a per-band Goertzel point-probe
+    (one exact frequency per band). It passed against synthetic signals here
+    and still read REAL Passage music as silent on the rig, because a
+    multi-second Goertzel window has sub-Hz resolution -- "is there energy
+    at EXACTLY 800.000 Hz" is a question real music essentially never
+    answers yes to. Bands here are a full octave wide precisely so a test
+    tone (or a real note) does not need to land on an exact frequency to be
+    attributed to the right one; the tests below use each band's nominal
+    center directly rather than a bin-exact frequency, because that is
+    exactly the property being tested for.
+    """
+    print("\naudio spectrum")
+    import collections, math, random, struct, threading
+
+    RATE = 48000
+    n_fft = vcctrld.AudioCapability.SPECTRUM_FFT_N
+
+    class Fake(vcctrld.AudioCapability):
+        def __init__(self, frag):
+            self.lock = threading.Lock()
+            self.ring = collections.deque([(0.0, 1, frag)])
+            self.state = "capturing"
+
+    def stereo(mono_samples):
+        out = bytearray()
+        for v in mono_samples:
+            iv = int(round(v))
+            out += struct.pack("<hh", iv, iv)
+        return bytes(out)
+
+    # -- exact math: the FFT itself, independent of _spectrum's Hann window
+    # and multi-chunk averaging, against the closed-form magnitude of a
+    # bin-aligned sinusoid: |X(k)| == A*N/2.
+    k = 300
+    exact_freq = k * RATE / n_fft
+    amp = 9000.0
+    tone_chunk = [complex(amp * math.cos(2 * math.pi * exact_freq * i / RATE))
+                  for i in range(n_fft)]
+    spec = audio_bands.fft(tone_chunk)
+    mag = abs(spec[k])
+    expected = amp * n_fft / 2.0
+    check("fft bin magnitude matches Parseval (A*N/2) for a bin-aligned tone",
+          abs(mag - expected) / expected < 1e-6,
+          "%.1f vs %.1f" % (mag, expected))
+
+    # -- behavioral, through the real _spectrum() path.
+    ms = 3000
+    n = RATE * ms // 1000
+
+    def const_tone(freq, a=amp):
+        return [a * math.cos(2 * math.pi * freq * i / RATE) for i in range(n)]
+
+    band = vcctrld.AudioCapability.BAND_HZ[3]  # 800 Hz, the nominal center --
+    sp = Fake(stereo(const_tone(band)))._spectrum(ms=ms)  # not a bin-exact one
+    loud_idx = sp["band_db"].index(max(sp["band_db"]))
+    check("a single tone's loudest band is the one it was tuned to",
+          vcctrld.AudioCapability.BAND_HZ[loud_idx] == band, sp)
+    check("a single tone activates close to one band, not several",
+          sp["active_bands"] <= 2, sp)
+
+    # Three bands summed should leave three bands active -- the shape a
+    # chord, or simultaneous music + a sound effect, actually looks like.
+    three = (vcctrld.AudioCapability.BAND_HZ[1], vcctrld.AudioCapability.BAND_HZ[3],
+             vcctrld.AudioCapability.BAND_HZ[5])
+    mix = [0.0] * n
+    for f in three:
+        t = const_tone(f, amp / 3.0)
+        for i in range(n):
+            mix[i] += t[i]
+    sp3 = Fake(stereo(mix))._spectrum(ms=ms)
+    check("three summed tones activate three bands", sp3["active_bands"] == 3, sp3)
+
+    # Broadband noise should spread across most/all bands, not concentrate --
+    # the shape white/pink noise (or a mixed music signal) actually looks
+    # like, as distinct from a pure tone or hum.
+    random.seed(7)
+    noise = [random.uniform(-amp, amp) for _ in range(n)]
+    spn = Fake(stereo(noise))._spectrum(ms=ms)
+    check("broadband noise activates most bands",
+          spn["active_bands"] >= len(vcctrld.AudioCapability.BAND_HZ) - 2, spn)
+
+    # No ring data at all: None, same contract as _levels.
+    check("no ring data -> None, same as _levels", Fake(b"")._spectrum(ms=ms) is None)
+
+    # Digital silence (real zeros, not an empty ring) must NOT read as
+    # "every band active". Flat-across-bands is exactly what a broken/dead
+    # path looks like -- without the floor half of the active-band test,
+    # that flatness would count as maximum spread instead of none, and a
+    # dead capture would misreport as the widest possible signal.
+    zeros = Fake(stereo([0.0] * n))._spectrum(ms=ms)
+    check("digital silence activates no bands, not all of them",
+          zeros["active_bands"] == 0, zeros)
+
+
+def test_audio_verdict_and_similarity():
+    """`common/audio_bands.verdict()`/`similarity()`: the pieces new MCP
+    tools (`vcctrl_audio_verdict`, `vcctrl_audio_match`) build on, tested as
+    plain functions on hand-built numbers -- no ring, no rig, and no
+    dependency on this session's earlier synthetic-signal generators.
+    """
+    print("\naudio verdict/similarity")
+
+    # -- verdict(): same three-way read bin/vcctrl-audio's own main() makes.
+    v = audio_bands.verdict(-91.0, -91.0, {}, None, None)
+    check("mean == peak at the floor -> NO_SIGNAL", v["verdict"] == "NO_SIGNAL", v)
+
+    v = audio_bands.verdict(-85.0, -78.0, {90: 1}, None, None)
+    check("quiet but not flat, below floor -> SILENT", v["verdict"] == "SILENT", v)
+
+    v = audio_bands.verdict(-31.79, -19.67, {20: 18}, 7, 8)
+    check("loud, wide spread, most bands active -> AUDIO_PRESENT, not tone-like",
+          v["verdict"] == "AUDIO_PRESENT" and v["tone_like"] is False, v)
+
+    v = audio_bands.verdict(-30.0, -28.0, {22: 5}, None, None)
+    check("loud but narrow amplitude spread -> tone-like from spread alone",
+          v["verdict"] == "AUDIO_PRESENT" and v["tone_like"] is True, v)
+
+    v = audio_bands.verdict(-30.0, -10.0, {20: 3}, 1, 8)
+    check("wide amplitude spread but only one active band -> tone-like anyway",
+          v["verdict"] == "AUDIO_PRESENT" and v["tone_like"] is True, v)
+
+    # -- similarity(): Jaccard overlap of each vector's own active-band set.
+    # The first version compared raw per-band dB (cosine similarity on each
+    # vector shifted by its own max) and read two UNRELATED pure tones --
+    # 800 Hz and 6400 Hz, nothing in common -- as 78-86% similar, because a
+    # mostly-floor vector's agreement with another mostly-floor vector swamps
+    # the comparison. These are the cases that caught it.
+    hi = 0.0    # a band clearly above the active threshold
+    lo = -140.0  # a band clearly below it (matches band_db_from_mono's own
+                 # floor value for a bin with no energy)
+    one_hot_a = [hi, lo, lo, lo, lo, lo, lo, lo]
+    one_hot_b = [lo, lo, lo, lo, lo, lo, hi, lo]
+    check("two unrelated single-band signals score 0 similarity",
+          audio_bands.similarity(one_hot_a, one_hot_b) == 0.0,
+          audio_bands.similarity(one_hot_a, one_hot_b))
+    check("a signal against itself scores 1.0",
+          audio_bands.similarity(one_hot_a, one_hot_a) == 1.0)
+
+    # Shares band 0 with one_hot_a; also has bands 3 and 5 one_hot_a lacks --
+    # a real partial overlap, not the disjoint case just above.
+    three_hot = [hi, lo, lo, hi, lo, hi, lo, lo]
+    check("partial band overlap scores strictly between 0 and 1",
+          0.0 < audio_bands.similarity(three_hot, one_hot_a) < 1.0,
+          audio_bands.similarity(three_hot, one_hot_a))
+
+    silent = [lo] * 8
+    check("both-silent is defined as 1.0 (trivially the same shape: nothing)",
+          audio_bands.similarity(silent, silent) == 1.0)
+    check("silence vs. a real signal scores 0, not 1",
+          audio_bands.similarity(silent, one_hot_a) == 0.0)
 
 
 def test_watchdogs_survive_one_pass():
@@ -2716,6 +2888,8 @@ if __name__ == "__main__":
     test_event_bus()
     test_activity_age()
     test_audio_levels()
+    test_audio_spectrum()
+    test_audio_verdict_and_similarity()
     test_watchdogs_survive_one_pass()
     test_theme_contrast()
     test_uniform_frame_is_not_picture()

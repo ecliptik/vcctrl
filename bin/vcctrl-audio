@@ -40,6 +40,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import cfg_get  # noqa: E402
 
+# The verdict thresholds (NO SIGNAL / SILENT / AUDIO PRESENT / tone-like)
+# live in common/audio_bands.py now, shared with the new MCP tools
+# (vcctrl_audio_verdict, vcctrl_audio_match) and with the daemon's own
+# _spectrum -- one implementation, so this script's printed text and an
+# agent's structured JSON answer can never quietly disagree.
+_REPO_ROOT = os.path.dirname(HERE)
+try:
+    import audio_bands
+except ImportError:
+    import importlib.util as _ilu
+    _ab = os.path.join(_REPO_ROOT, "common", "audio_bands.py")
+    _spec = _ilu.spec_from_file_location("audio_bands", _ab)
+    audio_bands = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(audio_bands)
+
 HOST = os.environ.get("VCCTRL_HOST",
                       cfg_get("control.daemon_host", "") or "")
 # hw:1,0 is an INDEX and is kept only as a last resort. Config names the
@@ -125,6 +140,31 @@ def measure(seconds):
     return _measure_ffmpeg(seconds)
 
 
+def measure_spectrum(seconds):
+    """Returns (active_bands, n_bands) or (None, None) on any failure.
+
+    Daemon-only, unlike `measure` -- there is no direct-ffmpeg fallback for
+    a spectrum the way there is for volumedetect, and this is a complement
+    to the existing amplitude verdict, not something worth refusing the
+    whole check over. A failure here just means the verdict prints without
+    the frequency note, same as before this existed.
+    """
+    import json
+    import urllib.request
+    url = "%s/cmd" % VCCTRL_WEB
+    body = json.dumps({"cmd": "spectrum", "ms": int(seconds * 1000)}).encode()
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read())
+        if not d.get("ok") or d.get("active_bands") is None:
+            return None, None
+        return d["active_bands"], len(d.get("bands_hz") or [])
+    except Exception:
+        return None, None
+
+
 def _measure_ffmpeg(seconds):
     """The original path, kept for a daemon that is down."""
     r = subprocess.run(
@@ -164,22 +204,24 @@ def main(argv):
     print("== audio, %ds sample ==" % seconds)
     print("  mean %.1f dB   peak %.1f dB" % (mean, peak))
 
-    # A constant signal has mean == max. Real audio, even near-silence, has a
-    # spread -- there is always dither and analog noise. This distinguishes
-    # "nothing on the wire" from "connected but quiet", which a threshold on
-    # the mean alone cannot do.
-    flat = abs(mean - peak) < 0.05
-    if flat and mean <= FLOOR_DB:
+    # FREQUENCY SPREAD, a complement to the amplitude-only checks, not a
+    # replacement. Amplitude alone cannot tell music/SFX apart from a steady
+    # tone or hum at a similar level. Best-effort and additive -- a daemon
+    # that can't answer this just means the verdict prints without it, same
+    # as before this existed.
+    active, n_bands = measure_spectrum(seconds)
+
+    v = audio_bands.verdict(mean, peak, hist, active, n_bands, floor_db=FLOOR_DB)
+
+    if v["verdict"] == "NO_SIGNAL":
         print("  VERDICT: NO SIGNAL")
-        print("  mean equals peak at the floor -- that is a constant, not a")
-        print("  quiet passage. The source is disconnected, powered off, or")
-        print("  muted at the hardware. A low volume KNOB does not look like")
-        print("  this; it still carries noise.")
+        for note in v["notes"]:
+            print("  " + note)
         return 1
-    if mean <= FLOOR_DB:
+    if v["verdict"] == "SILENT":
         print("  VERDICT: SILENT (but connected)")
-        print("  there is a noise floor, so the path is intact and nothing is")
-        print("  playing. Expected at a DOS prompt; a fault during a cell.")
+        for note in v["notes"]:
+            print("  " + note)
         return 1
 
     spread = peak - mean
@@ -187,15 +229,11 @@ def main(argv):
           % (spread, len(hist)))
     if baseline is not None:
         print("  baseline %.1f dB -> %+.1f dB" % (baseline, mean - baseline))
+    if active is not None:
+        print("  %d/%d frequency bands active" % (active, n_bands))
     print("  VERDICT: AUDIO PRESENT")
-    if spread < 3.0:
-        print("  NOTE: peak sits close to mean, which is more like a steady")
-        print("  tone or hum than music. Music has a wide spread. Worth a")
-        print("  listen before calling this a working sound path.")
-    else:
-        print("  spread is wide, which is what music looks like rather than a")
-        print("  steady tone. This does NOT verify the right notes -- only")
-        print("  that a varying signal is present.")
+    for note in v["notes"]:
+        print("  NOTE: " + note if v["tone_like"] else "  " + note)
     return 0
 
 

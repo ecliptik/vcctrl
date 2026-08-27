@@ -65,6 +65,9 @@ USAGE = """usage: vcctrl <command> [args]
                             ALSA capture. The daemon owns hw:1,0 for its
                             lifetime; `release` frees it for a direct capture.
   level [ms]                mean/peak dBFS over the last ms, from the PCM ring
+  spectrum [ms]             per-band energy + active_bands over the last ms
+                            (frequency-domain complement to `level` -- see
+                            AudioCapability._spectrum in daemon/vcctrld.py)
   powerlog [n]              append-only record of every mains action taken
   shot [--out F] [n]        one selected frame, or an explicit "no picture"
   lastgood [--out F]        the last frame that was positively picture, aged
@@ -1175,6 +1178,8 @@ def main(argv):
         req = {"cmd": "audio", "action": rest[0] if rest else "state"}
     elif cmd == "level":
         req = {"cmd": "level", "ms": int(rest[0]) if rest else 3000}
+    elif cmd == "spectrum":
+        req = {"cmd": "spectrum", "ms": int(rest[0]) if rest else 3000}
     elif cmd == "powerlog":
         req = {"cmd": "powerlog", "n": int(rest[0]) if rest else 50}
     elif cmd == "lock":

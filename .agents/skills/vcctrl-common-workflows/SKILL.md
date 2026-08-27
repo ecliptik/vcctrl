@@ -34,6 +34,22 @@ checklist. Full tool reference: `docs/MCP-SERVER.md`.
    apart. Exit 1 means a file failed; exit 2 means it finished but
    `remaining` names work left behind (cancelled or stopped early).
 
+**Landing files into a subdirectory that doesn't exist yet on a fresh
+target (a new port with no established directory tree).** `vcctrl_send_file`
+takes an optional `dest` (default `C:\XFER\IN`), but everything staged in
+one call lands FLAT under that one `dest` -- there is no per-file
+subdirectory support, so a payload with its own `graphics/`/`music/`/etc.
+layout needs one `send_file` call per destination directory, staged and
+sent separately. The target-side batch (`VCGET.BAT`) auto-creates only the
+*deepest* level of `dest` with `MD` -- and DOS 6.22's `MD` cannot create a
+nested path in one shot, so `dest="C:\NEWPORT\GRAPHICS"` fails silently if
+`C:\NEWPORT` doesn't already exist. Measured 2026-08-26, bringing up a new
+port's directory tree for the first time: pre-create the full tree by hand
+first (`MD C:\NEWPORT`, then `MD C:\NEWPORT\GRAPHICS`, etc., one command at
+a time -- see `vcctrl-rig-hazards` on why one at a time), THEN run one
+`send_file(dest=...)` per subdirectory. An established port (doskutsu) never
+hits this because its directory already exists from the last time.
+
 ## Downloading files from the target
 
 1. `vcctrl_file_check()` -- same reasoning as upload: confirm the server is
@@ -61,6 +77,24 @@ checklist. Full tool reference: `docs/MCP-SERVER.md`.
 To re-read the OUT directory without fetching anything, use
 `vcctrl_file_refresh(mode, confirm="refresh")` instead of a full `get_file`
 -- same reboot cost, no files copied, just an updated `file_list`.
+
+**Fetching a specific known file from somewhere other than the OUT
+directory** (a port's own debug log, e.g. `C:\SDLDBG.LOG` or
+`C:\<PORT>\SOMELOG.LOG`, not something the port copies into `C:\XFER\OUT`
+itself) -- `vcctrl_get_file` and `vcctrl_file_list` both take an optional
+`from_dir`, so you do NOT need to hand-type a `COPY` into `C:\XFER\OUT`
+first: `vcctrl_get_file(names=["SDLDBG.LOG"], from_dir="C:\\DOSSAGE",
+confirm="get")` reads directly from that directory. One thing it can't do:
+the daemon's own path guard (`dos_dir_path`, see `docs/MCP-SERVER.md`)
+refuses the bare drive root as a directory -- `from_dir="C:\\"` is
+refused, so a log that genuinely lives at the root (not in a
+subdirectory) still needs the manual `COPY` into a real directory first.
+There is no per-port convention yet for *where* a debug log lives -- this
+session had to ask a peer session for the path rather than reading it from
+anything vcctrl itself knows. Worth raising with a port's own profile
+(`profiles/<port>.yaml`) as a field to add, rather than building a new
+vcctrl tool for it -- `get_file(from_dir=...)` already does the fetch once
+the path is known.
 
 ## Power actions
 
@@ -141,6 +175,99 @@ rather than retrying blind.
   flat-black frames while locked/re-syncing, indistinguishable in one still
   from a genuinely blank screen (`vcctrl-rig-hazards`).
 
+## Checking audio
+
+Audio and video are two *separate* capture pipelines (`v4l2-ffmpeg` for
+video, `alsa-ffmpeg` for audio, per `vcctrl_caps`), with separate rings.
+There is no single tool that gives you both together, and there is
+currently no way to get raw audio out of vcctrl at all -- know this before
+promising a peer a recording:
+
+- **`vcctrl_audio_verdict(ms=3000)` -- start here for "is music/SFX playing
+  right now".** One call, no thresholds to know: it combines `level` and
+  `spectrum` into the same NO_SIGNAL / SILENT / AUDIO_PRESENT judgement
+  `bin/vcctrl-audio` prints as text (same `common/audio_bands.verdict()`
+  function underneath, so the CLI and this tool can't quietly disagree).
+  `tone_like: true` means the signal looks more like a steady tone/hum than
+  music/SFX; `false` means it looks like real content; `null` means there
+  wasn't enough information to judge it either way. This is the automated
+  stand-in for a human listening -- reach for it before composing `level`
+  and `spectrum` yourself and re-deriving the floor/margin logic by hand.
+- `vcctrl_audio_state()` -- device/ring health (rate, channels, bytes
+  flowing, `state: capturing`). This tells you the capture PATH is alive.
+  It says nothing about whether the target is producing anything worth
+  capturing -- a live, healthy ALSA ring with nothing connected to its
+  input, or a target that's silent by design, reads identically to a
+  target with broken audio. Don't treat `state: capturing` as "audio is
+  working."
+- `vcctrl_level(ms=3000)` -- mean/peak dBFS and a histogram over the last
+  `ms`, computed from the audio ring. This is the amplitude-domain half of
+  what `vcctrl_audio_verdict` combines. **It reads from the exact same ring
+  the browser-KVM's live audio websocket streams from** (`serve_ws_audio` in
+  `daemon/vcweb.py` iterates the same `AudioCapability.ring` `_levels()`
+  does) -- there is no separate pipeline, so a `level` reading and what a
+  human hears through the KVM describe the same signal, once you account
+  for timing (next point).
+- `vcctrl_spectrum(ms=3000)` -- per-band energy (8 octave-spaced bands,
+  100Hz-12.8kHz) and `active_bands`, the frequency-domain half of the
+  verdict. Amplitude alone can't tell music/SFX (energy spread across
+  bands) apart from a steady tone or mains hum (concentrated in one) at a
+  similar level -- this is the direct measurement of that, not a proxy.
+  `active_bands` compares bands to EACH OTHER, so unlike `mean_db`/
+  `peak_db` it stays meaningful regardless of the physical volume knob
+  (FINDINGS sec 11 / WEBKVM-AUDIO.md sec 4). Reach for this directly (over
+  `vcctrl_audio_verdict`) when you want the raw per-band numbers, e.g. to
+  compare two readings rather than to get a single yes/no judgement.
+- **Timing pitfall, not a tool bug: a `level`/`spectrum`/`verdict` check and
+  a human's "I hear it" over async chat are not simultaneous.** Measured
+  2026-08-26: calling `vcctrl_level` right after launching a program, then
+  separately asking "do you hear anything" and getting an answer a
+  message-round-trip later, produced a flat noise-floor reading (~-70dB)
+  for a program later confirmed audible. Re-run with the level check fired
+  at the SAME moment the human said "I hear it now" (not before, not
+  after) read -34dB mean / -22.6dB peak -- clearly real signal. The
+  lesson: don't check on a fixed delay after starting something and treat
+  a quiet reading as "confirmed silent" -- either check repeatedly over a
+  longer window, or synchronize the check to an explicit "now" from
+  whoever is listening, the same call-and-check-immediately pattern used
+  above.
+- **`vcctrl_audio_match(file_path, ms=3000)` -- does the live audio
+  resemble a SPECIFIC reference file, not just "is something playing".**
+  Control-mode only (`file_path` is local to the control host -- daemon
+  mode has nothing to reach it with). Decodes the reference file via
+  ffmpeg into the same 8-band signature `vcctrl_spectrum` produces, then
+  reports a Jaccard-overlap similarity score against a fresh live reading.
+  **Read the score as "does the live signal's frequency balance resemble
+  the reference's", never as "is this exact track playing right now"** --
+  8 bands cannot distinguish two tracks with similar broad frequency
+  balance, and it checks nothing about tempo, melody, or timing. No
+  match/no-match threshold is asserted by the tool; judge the number
+  yourself. Use it for a QA question about a *specific* cue ("did the
+  death jingle play"), not as a replacement for `vcctrl_audio_verdict`'s
+  generic liveness check.
+- **`vcctrl_record` captures VIDEO ONLY.** Measured 2026-08-26: the AVI it
+  writes has exactly one stream (`mjpeg`, `codec_type=video`) -- `ffprobe`
+  shows no audio stream at all, even though the daemon is simultaneously
+  running an audio capture. If a peer asks for "a recording" to judge
+  audio quality/tempo/pitch, `vcctrl_record` will not get it for them --
+  there is currently no raw-PCM/WAV export path in the daemon (`_audio`
+  only does state/acquire/release; `_level`/`_spectrum` only return
+  summary stats, never the samples). Say so rather than sending a
+  video-only file and calling it an audio capture.
+- For "does it sound right" (tempo, pitch, melody correctness, pops/
+  clicks) there is no substitute today for a human actually listening
+  live through whatever the KVM's audio output is connected to. `level`/
+  `spectrum`/`verdict` readings can rule silence in or out, catch gross
+  dropouts, and tell music/SFX apart from a tone/hum, but none of them
+  judge musical correctness or verify a specific track's identity.
+- Sequencing hazard specific to games with a title/start-gate: a target
+  that's silent may simply not have received the keypress that starts
+  the state which actually plays audio (e.g. a title screen that mutes
+  music until a key advances past it). Confirm the keypress actually
+  landed (a visible on-screen change, not just the tool call returning
+  `ok`) before concluding a SILENT verdict, or a low `vcctrl_audio_match`
+  score, is a bug.
+
 ## Checking rig health before acting
 
 Cheap, read-only, ungated -- worth calling before a sequence above rather
@@ -152,11 +279,14 @@ than discovering a problem mid-sequence: `vcctrl_status`, `vcctrl_caps`,
 ## Locks, when you want explicit control
 
 Most tools above acquire the input lock automatically on first need and
-release it after 300s idle. Call `vcctrl_lock_acquire()` first if you want
-the lock held before doing anything observable (e.g. to keep a peer out for
-the duration of a multi-step sequence), and `vcctrl_lock_release()` when
-you're done with input for a while and want to let a human or peer back in
-without waiting out the idle timer.
+release it after 300s idle -- but that idle release runs inside *this
+session's own* MCP client process, not the daemon (see `vcctrl-mcp-workflows`).
+It only fires if this process is still alive to run it; call
+`vcctrl_lock_release()` explicitly when you're done with a sequence rather
+than counting on the idle timer, especially before a long pause. Call
+`vcctrl_lock_acquire()` first if you want the lock held before doing
+anything observable (e.g. to keep a peer out for the duration of a
+multi-step sequence).
 
 ## Harness workflows (control mode only: preflight, cells, sweeps, collect)
 

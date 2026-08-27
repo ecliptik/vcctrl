@@ -2436,3 +2436,70 @@ Found by the vcctrl session's MCP tool layer (`agent/vcctrl_mcp.py`,
 worktree `mcp-server`) on its first supervised run against real,
 deliberately-idle hardware — the first thing to call `verify_input` against
 a target confirmed off since sec. 33 landed.
+
+## 42. A frequency probe with sub-Hz resolution reads real music as silence  [measured 2026-08-27]
+
+`AudioCapability._spectrum` (`daemon/vcctrld.py`) exists to answer a gap
+`vcctrl-audio`'s existing amplitude checks (sec. 11) cannot: whether a signal
+is *shaped* like music/SFX — energy spread across several frequency bands —
+or like a steady tone or mains hum, which concentrates it in one, even when
+both read at a similar level. The first version measured one exact
+frequency per band (a Goertzel filter, one point-probe per band) over the
+same multi-second window `_levels` already reads.
+
+Against synthetic sine tones, generated at the exact frequency each probe
+was tuned to, it worked and its own unit tests passed. Against real Passage
+music playing on the rig, at the same moment `_level` read `mean_db: -31.79,
+peak_db: -19.67` (unambiguous, loud, real music by every existing check),
+every one of the 8 bands read below -100 dB and `active_bands` was 0 —
+indistinguishable from the true silence reading at Passage's own (silent)
+title screen taken minutes earlier.
+
+### Why: the window length that helps `_levels` hurts a point-probe
+
+A Goertzel evaluation over N samples has frequency resolution `rate/N`. For
+a 3000 ms window at 48 kHz, N = 144000, so the resolution is 0.33 Hz — the
+probe was effectively asking "is there energy at EXACTLY 800.000 Hz", not
+"is there energy anywhere in this octave band." Real music is essentially
+never sitting on that exact point; the broadband amplitude figures stayed
+correct because RMS/peak don't care what frequency the energy is at, only
+how much there is. The synthetic tests never caught this because they
+generated tones at the bin-exact frequency the code itself computed — the
+test and the code agreed with each other rather than with a reference
+signal that doesn't know what bin the code is asking about. (Compare sec.
+41's own "unconditionally true" gap, and the general rule in
+`vcctrl-repo-conventions`/this session's own memory: a port that
+re-implements its subject agrees with itself.)
+
+### The fix
+
+Replaced the per-band Goertzel point-probe with a real FFT (`_fft`, radix-2,
+pure Python — no numpy dependency; `requirements.txt` stays PyYAML only) over
+short ~85 ms windows (`SPECTRUM_FFT_N = 4096`, 11.7 Hz/bin), Hann-windowed,
+averaged in the linear power domain across however many such windows fit the
+requested `ms`. Each of the 8 bands sums power over its own **range** of
+bins (`center/sqrt(2)` to `center*sqrt(2)`, contiguous since centers double
+each step) rather than reading one bin — "how much energy is in 566-1131 Hz"
+instead of "is there energy at exactly 800.000 Hz." A signal no longer needs
+to land on an exact frequency to be attributed to the right band, which is
+exactly the property real music needs and a synthetic bin-aligned tone
+never tested for.
+
+### Measured, after the fix, real Passage music vs. real silence
+
+Same rig, same moment discipline as sec. 11 (`_level` and `_spectrum` read
+back to back, both against the live ring):
+
+    real Passage gameplay:  mean -35.2 dB, peak -20.8 dB (from `_levels`)
+                             active_bands 7/8, band_db -39.5 .. -79.2 dB
+                             (only the 12.8 kHz band excluded -- this game's
+                             audio genuinely has little content there)
+    Passage's own title screen (silent by design until a keypress):
+                             active_bands 0/8, every band below -100 dB
+
+`BAND_ACTIVE_MARGIN_DB = 30.0` and `BAND_FLOOR_DB = -65.0`
+(`daemon/vcctrld.py`) are calibrated against these two real readings, not
+assumed. `tests/test_core.py::test_audio_spectrum` covers the FFT's own
+math (Parseval, on a bin-exact tone) and the behavioral shape (single tone,
+three summed tones, broadband noise, digital silence) against the corrected
+implementation.

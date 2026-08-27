@@ -104,6 +104,29 @@ if ROLE not in ("control", "daemon"):
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Shared with daemon/vcctrld.py: the frequency-analysis math (and the
+# verdict/similarity logic built on it) has one implementation, not one per
+# side that has to be kept in agreement by hand. Two candidate locations
+# because this file itself has two deployed layouts (see VCCTRL_BIN below):
+# a source checkout keeps it at <repo>/common/audio_bands.py, while
+# pi/install.sh flattens it to $PREFIX/audio_bands.py, a sibling of
+# vcctrld.py -- which, in that layout, is also REPO_ROOT (this file sits at
+# $PREFIX/agent/vcctrl_mcp.py).
+try:
+    import audio_bands
+except ImportError:
+    import importlib.util as _ilu
+    _ab = next((p for p in (
+        os.path.join(REPO_ROOT, "common", "audio_bands.py"),
+        os.path.join(REPO_ROOT, "audio_bands.py"),
+    ) if os.path.isfile(p)), None)
+    if _ab:
+        _spec = _ilu.spec_from_file_location("audio_bands", _ab)
+        audio_bands = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(audio_bands)
+    else:
+        audio_bands = None
+
 # control mode: bin/vcctrl next to this checkout, which SSHes to the
 # daemon host. daemon mode: /usr/local/bin/vcctrl, the same vcctrl-client
 # pi/install.sh already places there -- called directly, no SSH, no host
@@ -529,6 +552,101 @@ def vcctrl_audio_state() -> dict:
 def vcctrl_level(ms: int = 3000) -> dict:
     """Mean/peak dBFS over the last ms, from the PCM ring."""
     return _run_vcctrl(["level", ms], timeout=ms / 1000.0 + 20)
+
+
+@mcp.tool()
+def vcctrl_spectrum(ms: int = 3000) -> dict:
+    """Per-band energy and active_bands over the last ms, from the PCM ring.
+
+    Frequency-domain complement to vcctrl_level: real music/SFX spreads
+    energy across multiple bands, a steady tone or hum concentrates it in
+    one. active_bands compares bands to EACH OTHER, so unlike mean_db/
+    peak_db it stays meaningful regardless of the physical volume knob.
+    """
+    return _run_vcctrl(["spectrum", ms], timeout=ms / 1000.0 + 20)
+
+
+@mcp.tool()
+def vcctrl_audio_verdict(ms: int = 3000) -> dict:
+    """Is music/SFX playing right now -- one call, no thresholds to know.
+
+    Combines vcctrl_level and vcctrl_spectrum into the same NO_SIGNAL /
+    SILENT / AUDIO_PRESENT judgement bin/vcctrl-audio prints as text (same
+    common/audio_bands.verdict() function, so the two can never quietly
+    disagree). This is the automated stand-in for a human listening: call
+    it instead of reading mean_db/active_bands yourself and re-deriving the
+    floor/margin logic.
+
+    `tone_like` is True when the signal looks more like a steady tone/hum
+    than music/SFX, False when it looks like real content, and None when
+    there wasn't enough information to judge (no spectrum reading, and the
+    amplitude spread alone didn't already settle it). Sequencing pitfall:
+    a title/start-gate screen can hold real content silent until a keypress
+    dismisses it -- confirm the keypress landed (a visible on-screen change)
+    before reading a SILENT verdict as a bug.
+    """
+    if audio_bands is None:
+        return {"ok": False, "error": "audio_bands module not found "
+                "(expected beside common/ in a checkout, or beside "
+                "vcctrld.py in a deployed install)"}
+    lv = _run_vcctrl(["level", ms], timeout=ms / 1000.0 + 20)
+    if not lv.get("ok") or lv.get("mean_db") is None:
+        return {"ok": False, "error": "no level reading", "level": lv}
+    sp = _run_vcctrl(["spectrum", ms], timeout=ms / 1000.0 + 20)
+    active = sp.get("active_bands") if sp.get("ok") else None
+    n_bands = len(sp.get("bands_hz") or []) if sp.get("ok") else None
+    v = audio_bands.verdict(lv["mean_db"], lv["peak_db"], lv.get("hist") or {},
+                            active, n_bands)
+    return dict({"ok": True, "mean_db": lv["mean_db"], "peak_db": lv["peak_db"],
+                "active_bands": active, "n_bands": n_bands}, **v)
+
+
+# CONTROL-MODE-ONLY, same reasoning as vcctrl_sweep_list/vcctrl_run_cell
+# below: a reference audio file lives beside the git checkout on the
+# control host, not on the Pi's filesystem, so daemon mode has nothing
+# correct to do with a file_path either.
+if ROLE == "control":
+    @mcp.tool()
+    def vcctrl_audio_match(file_path: str, ms: int = 3000) -> dict:
+        """Does the live audio resemble a reference file's frequency shape?
+
+        Decodes `file_path` (a LOCAL file on this control host -- a game's
+        own music/SFX asset, say) via ffmpeg into the same 8-band signature
+        vcctrl_spectrum produces, then compares it against a fresh live
+        reading with a Jaccard overlap of each side's "active bands" (same
+        active-band test vcctrl_audio_verdict uses). 1.0 is an identical
+        shape, 0.0 is no overlap at all.
+
+        COARSE BY CONSTRUCTION -- read the number as "does the live signal's
+        frequency balance resemble the reference's", never as "is this exact
+        track playing right now". 8 bands cannot distinguish two tracks with
+        similar broad frequency balance, and this checks nothing about
+        tempo, melody, or timing. No match/no-match threshold is asserted
+        here: there is no real-file measurement calibrating one yet (see
+        common/audio_bands.similarity()'s own docstring for why a similar
+        shortcut already went wrong once for this feature). Judge the score
+        yourself until that calibration exists.
+        """
+        if audio_bands is None:
+            return {"ok": False, "error": "audio_bands module not found"}
+        try:
+            ref_bands = audio_bands.decode_file_to_band_db(file_path)
+        except Exception as exc:
+            return {"ok": False, "error": "could not decode %r: %s"
+                    % (file_path, exc)}
+        if ref_bands is None:
+            return {"ok": False, "error": "reference file too short to "
+                    "analyze (needs at least one %d-sample window)"
+                    % audio_bands.SPECTRUM_FFT_N}
+        sp = _run_vcctrl(["spectrum", ms], timeout=ms / 1000.0 + 20)
+        if not sp.get("ok") or sp.get("band_db") is None:
+            return {"ok": False, "error": "no live spectrum reading", "live": sp}
+        live_bands = sp["band_db"]
+        return {"ok": True, "similarity": audio_bands.similarity(ref_bands, live_bands),
+                "reference_bands": ref_bands, "live_bands": live_bands,
+                "bands_hz": sp.get("bands_hz"),
+                "caveat": "coarse spectral-shape match only -- does not "
+                          "verify tempo, melody, or exact track identity"}
 
 
 @mcp.tool()

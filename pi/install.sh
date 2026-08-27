@@ -376,6 +376,10 @@ if [ -d "$SRC/vendor" ]; then
 fi
 
 sudo install -m 0644 -T "$SRC/common/vcconfig.py" "$PREFIX/vcconfig.py"
+# Same flat-deploy as vcconfig.py just above, same reason: AudioCapability's
+# frequency-analysis math lives in common/audio_bands.py now, shared with
+# the control host, so vcctrld.py needs its own copy beside it.
+sudo install -m 0644 -T "$SRC/common/audio_bands.py" "$PREFIX/audio_bands.py"
 if [ -f "$SRC/vcctrl.yaml" ]; then
   sudo install -m 0644 -T "$SRC/vcctrl.yaml" "$PREFIX/vcctrl.yaml"
   echo "installed $PREFIX/vcctrl.yaml"
