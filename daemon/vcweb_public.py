@@ -155,6 +155,18 @@ MAX_VIEWERS = 40
 # viewers there can be.
 POLL_HZ = 1.5
 
+# BELT-AND-SUSPENDERS against a stuck viewer slot, on top of the TCP
+# keepalive in _mjpeg() below -- see that method's own comment for the
+# failure this guards against (found 2026-08-28: diagnostic connections
+# that vanished without a clean FIN/RST held a MAX_VIEWERS slot each,
+# indefinitely, exhausting real viewers' access with nothing actually
+# watching). A real viewer reconnects seamlessly on a forced disconnect
+# (img.onerror -> restart() in kvm-ro.html); a stuck connection now loses
+# its slot within this long at the very worst, even if keepalive somehow
+# never fires (a NAT/relay hop that never delivers keepalive probes,
+# say). Long enough that no genuine viewer should ever notice it.
+MJPEG_MAX_DURATION_S = 1800
+
 # ---------------------------------------------------------------------- data
 #
 # One lock guards every cache below. Contention is not a concern: readers
@@ -996,7 +1008,39 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             self.send_header("Connection", "close")
             self.end_headers()
-            while True:
+            # TCP KEEPALIVE -- guards against a HALF-OPEN connection holding
+            # a viewer slot forever. This loop only ever WRITES; nothing
+            # here reads from the client to notice it's gone, and a
+            # `wfile.write()` to a vanished peer does not fail on its own
+            # until the local send buffer actually fills -- which, at one
+            # ~69KB frame roughly every 0.67s, can take a long time against
+            # a peer that torched the connection without a clean FIN/RST (a
+            # killed process, a relay hop that ate the reset). Found the
+            # hard way 2026-08-28: several diagnostic connections left
+            # exactly like that were still counted as viewers by
+            # `_viewer_sem` with nothing on the other end, and exhausted
+            # MAX_VIEWERS for a real one. Keepalive makes the OS itself
+            # probe for a dead peer and fail the socket in roughly
+            # KEEPIDLE + KEEPINTVL*KEEPCNT seconds (~30s here) instead of
+            # whatever it would take the send buffer to fill.
+            try:
+                self.connection.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                self.connection.setsockopt(
+                    socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)
+                self.connection.setsockopt(
+                    socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                self.connection.setsockopt(
+                    socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            except (AttributeError, OSError):
+                # TCP_KEEPIDLE/INTVL/CNT are Linux-specific; SO_KEEPALIVE
+                # alone (set above, if that didn't already raise) still
+                # gets the OS's own default keepalive schedule, just not
+                # tuned this aggressively. Either way, not fatal to the
+                # stream itself.
+                pass
+            started_at = time.monotonic()
+            while time.monotonic() - started_at < MJPEG_MAX_DURATION_S:
                 with _lock:
                     item = _live or _stale
                 body = item[0] if item is not None else _TEST_PATTERN
@@ -1042,10 +1086,27 @@ class Handler(BaseHTTPRequestHandler):
             # so the read loop below must treat a timeout as "nothing yet",
             # not as a close -- see the `except socket.timeout` below.
             sock.settimeout(5.0)
+            # TCP KEEPALIVE, same reasoning and same incident as _mjpeg()'s
+            # own comment: a `socket.timeout` above is NOT evidence the
+            # peer is gone, only that it said nothing for 5s -- which is
+            # the expected, normal case here (a listener never sends
+            # anything). A half-open connection (peer vanished without a
+            # clean FIN/RST) would `continue` on that timeout forever,
+            # holding an `_audio_sem` slot with nothing listening. Keepalive
+            # makes the OS itself probe for and fail a genuinely dead peer
+            # in ~30s instead of its own multi-hour default.
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            except (AttributeError, OSError):
+                pass
             with _audio_lock:
                 _audio_listeners.add(sock)
             try:
-                while True:
+                started_at = time.monotonic()
+                while time.monotonic() - started_at < MJPEG_MAX_DURATION_S:
                     # NOT `_ws_handle_input`. The only thing read from this
                     # opcode is "did it close" -- no json.loads, no dispatch,
                     # no branch on payload contents. Actual audio bytes reach
