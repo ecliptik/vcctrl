@@ -1596,6 +1596,22 @@ for (const k of Object.keys(OPTS)) {
 }
 const POP = {sound: 'soundbtn', zoom: 'zoombtn'};
 let openPopName = null;
+// FOCUS MOVES WITH THE PANEL. Measured on a real keyboard walk: opening
+// Settings left the browser's focus sitting on <body>, so a keyboard user
+// had to tab from the very top of the page to reach the panel they just
+// opened -- none of these are modal (aria-modal is false or absent
+// throughout, on purpose, so the picture stays reachable while one is
+// open), but a non-modal dialog still owes the person who opened it a
+// sensible place to land, and returning it to whatever opened the panel is
+// the other half: closing must not stay on the dialog itself once it's
+// gone. tabindex=-1 makes each dialog container programmatically
+// focusable without adding it to the normal Tab order.
+for (const el of document.querySelectorAll('[role="dialog"]'))
+  el.tabIndex = -1;
+function focusDialog(el) { el.focus({preventScroll: true}); }
+function returnFocusIfInside(container, anchor) {
+  if (container.contains(document.activeElement) && anchor) anchor.focus();
+}
 
 function caretLabel(name) {
   const b = $(POP[name]);
@@ -1615,8 +1631,10 @@ function setCaret(name, open) {
 function closePop() {
   if (!openPopName) return;
   setCaret(openPopName, false);
-  $('pop-' + openPopName).hidden = true;
+  const el = $('pop-' + openPopName);
   const a = $(POP[openPopName]);
+  returnFocusIfInside(el, a);
+  el.hidden = true;
   if (a) a.setAttribute('aria-expanded', 'false');
   openPopName = null;
   if ($('settings').hidden) $('setback').hidden = true;
@@ -1630,6 +1648,7 @@ function openPop(name) {
   $('setback').hidden = false;
   anchor.setAttribute('aria-expanded', 'true');
   openPopName = name;
+  focusDialog(el);
   const tabbed = (name === 'sound' || name === 'power')
                  && matchMedia('(max-width:640px)').matches;
   if (tabbed) {
@@ -1688,9 +1707,11 @@ measureBars();
 
 function showSettings(on) {
   if (on) { measureBars(); closePop(); showPanel('', false); }
+  else returnFocusIfInside($('settings'), $('gbtn'));
   $('settings').hidden = !on;
   $('setback').hidden = !on;
   $('gbtn').setAttribute('aria-expanded', on ? 'true' : 'false');
+  if (on) focusDialog($('settings'));
 }
 $('gbtn').onclick = () => showSettings($('settings').hidden);
 

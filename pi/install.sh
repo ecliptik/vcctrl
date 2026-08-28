@@ -132,6 +132,73 @@ if [ "${1:-}" = "--mcp-only" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# THE PUBLIC READ-ONLY MIRROR -- daemon/vcweb_public.py, a separate process
+# from vcctrld (see that module's own docstring for why: it is auditable, by
+# grep alone, as incapable of ever sending a command to the target, and that
+# property must survive vcctrld restarting, crashing, or being redeployed
+# without this). A function, not inline, for the same reason install_mcp()
+# is one: `--public-only` (below, and pi/deploy.sh --public) can install or
+# restart the public mirror WITHOUT touching vcctrld, and a full install
+# calls this same function so there is one implementation, not two.
+#
+# Every fallible step is `|| true`-guarded, matching install_mcp(): this Pi
+# may not have `tailscale` configured yet, or the operator may simply not
+# want the public mirror running, and neither should fail a full install of
+# the thing this file exists for.
+install_public() {
+  if [ ! -f "$SRC/daemon/vcweb_public.py" ]; then
+    echo "vcctrl-web-public: daemon/vcweb_public.py not in this checkout, skipping" >&2
+    return 0
+  fi
+  sudo mkdir -p "$PREFIX"
+  sudo install -m 0644 "$SRC/daemon/vcweb_public.py" "$PREFIX/vcweb_public.py"
+  # kvm-ro.html and themes.css are read fresh from disk on every request
+  # (same as kvm.html/vcweb.py), so shipping them here needs no restart to
+  # take effect -- pi/deploy.sh --page already ships both for exactly that
+  # reason. Installed here too so a FRESH Pi (never having run --page) still
+  # has them the first time this function runs.
+  sudo install -m 0644 "$SRC/daemon/kvm-ro.html" "$PREFIX/kvm-ro.html"
+  sudo install -m 0644 "$SRC/daemon/themes.css"  "$PREFIX/themes.css"
+
+  if [ ! -f "$SRC/pi/files/vcctrl-web-public.service" ]; then
+    echo "vcctrl-web-public: pi/files/vcctrl-web-public.service not in this checkout, skipping the unit" >&2
+    return 0
+  fi
+  sudo install -m 0644 "$SRC/pi/files/vcctrl-web-public.service" \
+    /etc/systemd/system/vcctrl-web-public.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable vcctrl-web-public
+  sudo systemctl restart vcctrl-web-public
+  sleep 1
+  sudo systemctl --no-pager --lines=10 status vcctrl-web-public || true
+
+  # TAILNET-ONLY, ON ITS OWN PORT -- matching VCCTRL_PUBLIC_PORT in the
+  # service unit (8091), not a --set-path under the private KVM's own :443.
+  # A distinct port keeps it a single, separate `tailscale serve` rule: the
+  # later, manual, operator-approved `tailscale funnel` step (see
+  # vcweb_public.py's module docstring and the service file's own EXPOSURE
+  # note) then flips exactly this one mapping, not something entangled with
+  # the private page's path. Idempotent, like the :443 mapping above:
+  # re-running only re-asserts the same rule.
+  if command -v tailscale >/dev/null 2>&1; then
+    TS_NAME="$(tailscale status --json 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+    if [ -n "${TS_NAME:-}" ]; then
+      if sudo tailscale serve --bg --https=8091 "http://127.0.0.1:8091" >/dev/null 2>&1; then
+        echo "https://${TS_NAME}:8091/  -> vcctrl-web-public (tailnet only)"
+      else
+        echo "note: could not configure tailscale serve for :8091"
+      fi
+    fi
+  fi
+}
+
+if [ "${1:-}" = "--public-only" ]; then
+  install_public
+  exit 0
+fi
+
 sudo mkdir -p "$PREFIX"
 sudo install -m 0755 "$SRC/daemon/vcctrld.py"    "$PREFIX/vcctrld.py"
 sudo install -m 0644 "$SRC/daemon/vcweb.py"      "$PREFIX/vcweb.py"
@@ -555,3 +622,7 @@ sudo systemctl --no-pager --lines=15 status vcctrld || true
 # Same function --mcp-only uses above, run here so a full install also
 # picks up the MCP server without a second code path to keep in sync.
 install_mcp
+
+# Same reasoning, same function --public-only uses above: a full install
+# also brings up the public read-only mirror, one code path.
+install_public

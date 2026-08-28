@@ -188,7 +188,10 @@ explain_hang() {
 }
 
 if [ "${1:-}" = "--page" ]; then
-  for f in kvm.html themes.css; do
+  # kvm-ro.html included for the same reason kvm.html is: vcweb_public.py's
+  # _serve_file() reads it fresh from disk on every request, same as
+  # vcweb.py does for kvm.html, so shipping it needs no restart of anything.
+  for f in kvm.html kvm-ro.html themes.css; do
     [ -f "$SRC/daemon/$f" ] || continue
     $SCP "$SRC/daemon/$f" "$HOST:/tmp/$f.new" || explain_hang
     $SSH "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
@@ -249,6 +252,31 @@ if [ "${1:-}" = "--mcp" ]; then
   $SSH "$HOST" "bash $rdir/pi/install.sh --mcp-only; rc=\$?; rm -rf $rdir; exit \$rc" \
     || explain_hang
   echo "installed vcctrl-mcp (vcctrld untouched)"
+  exit 0
+fi
+
+
+# ---------------------------------------------------------------------------
+# PUBLIC MIRROR ONLY. Never touches vcctrld -- vcctrl-web-public.service is
+# a separate unit (pi/install.sh's install_public(), see its own comment for
+# why), so this needs no guard_busy check either, same reasoning as --mcp
+# above. Ships daemon/ and pi/ into a throwaway /tmp layout so install.sh
+# --public-only's own $SRC auto-detection resolves correctly and runs the
+# SAME install_public() a full deploy uses.
+if [ "${1:-}" = "--public" ]; then
+  bash -n "$SRC/pi/install.sh" || { echo "refusing: pi/install.sh does not parse" >&2; exit 1; }
+  [ -f "$SRC/daemon/vcweb_public.py" ] || { echo "no $SRC/daemon/vcweb_public.py" >&2; exit 1; }
+  python3 -m py_compile "$SRC/daemon/vcweb_public.py" || \
+    { echo "refusing: daemon/vcweb_public.py does not compile" >&2; exit 1; }
+  rdir="/tmp/vcctrl-public-deploy.$$"
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files" || explain_hang
+  $SCP "$SRC/daemon/vcweb_public.py" "$SRC/daemon/kvm-ro.html" "$SRC/daemon/themes.css" \
+    "$HOST:$rdir/daemon/" || explain_hang
+  $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
+  $SCP "$SRC/pi/files/vcctrl-web-public.service" "$HOST:$rdir/pi/files/" || explain_hang
+  $SSH "$HOST" "bash $rdir/pi/install.sh --public-only; rc=\$?; rm -rf $rdir; exit \$rc" \
+    || explain_hang
+  echo "installed vcctrl-web-public (vcctrld untouched)"
   exit 0
 fi
 

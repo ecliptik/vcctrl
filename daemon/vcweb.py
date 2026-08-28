@@ -416,13 +416,25 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ------------------------------------------------------------
 
-    def _send(self, code, body, ctype="application/json", extra=None):
+    def _send(self, code, body, ctype="application/json", extra=None, csp=None):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        # Hardening headers, matching vcweb_public.py's own (added there for
+        # F3 of the public-mirror security audit; ported here afterward for
+        # consistency -- this page is tailnet-only, so Tailscale is the real
+        # authentication boundary and these are defense-in-depth, not closing
+        # an actual gap the way they were for the public mirror). ONE
+        # Content-Security-Policy header, one full policy, same reasoning as
+        # vcweb_public.py's own _send: two separate CSP headers are enforced
+        # as an INTERSECTION, not a union, so passing the whole string
+        # through `csp` keeps every route's policy self-contained.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", csp or "frame-ancestors 'none'")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -430,6 +442,55 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, obj, code=200, extra=None):
         self._send(code, json.dumps(obj), "application/json", extra)
+
+    # A FRESH NONCE PER RESPONSE, spent once -- same reasoning as
+    # vcweb_public.py's own _serve_html_with_csp: a nonce that could be
+    # replayed across requests would not actually prove "the server emitted
+    # this specific script tag just now."
+    def _serve_page_with_csp(self):
+        body = self.cap.page()
+        nonce = base64.b64encode(os.urandom(16)).decode("ascii")
+        # ONE nonce'd tag: kvm.html has exactly one <script>, no attributes
+        # (grep confirms it), so a plain byte-replace is exact and cannot
+        # match inside a JS string/comment the way a regex over the whole
+        # file could.
+        body = body.replace(b"<script>",
+                             ('<script nonce="%s">' % nonce).encode("ascii"),
+                             1)
+        # Same shape as vcweb_public.py's policy, widened only where this
+        # page genuinely needs more:
+        #   connect-src: 'self' already covers ws:/wss: to the SAME host and
+        #                port as this response (CSP upgrades the scheme for
+        #                comparison purposes -- an https page's 'self' does
+        #                match a same-host wss: connection). What it does
+        #                NOT cover is this page's own :443->:tls_port
+        #                reachability probe (see wsURL()/checkPort() in
+        #                kvm.html, and F1's own comment on _state_cors): a
+        #                same-host, DIFFERENT-port fetch() and WebSocket,
+        #                which CSP treats as a different origin. That's the
+        #                one thing added beyond 'self', host-wildcarded
+        #                rather than naming the tailnet hostname so the
+        #                policy carries no rig identifier.
+        #   default-src/script-src/style-src/img-src/media-src/base-uri/
+        #                form-action/frame-ancestors: identical to the
+        #                public mirror's policy -- kvm.html's own inline
+        #                <style> block, dozen-plus style="" attributes,
+        #                /themes.css link, mjpeg <img>, and fetched-then-
+        #                createObjectURL'd frames all match that page's
+        #                shape exactly.
+        tls_port = getattr(self.cap, "tls_port", 0)
+        connect_extra = (" https://*:%d wss://*:%d" % (tls_port, tls_port)
+                          if tls_port else "")
+        csp = ("default-src 'none'; "
+               "script-src 'nonce-%s'; "
+               "style-src 'self' 'unsafe-inline'; "
+               "img-src 'self' data: blob:; "
+               "connect-src 'self'%s; "
+               "media-src 'self'; "
+               "base-uri 'none'; "
+               "form-action 'none'; "
+               "frame-ancestors 'none'" % (nonce, connect_extra))
+        return self._send(200, body, "text/html; charset=utf-8", csp=csp)
 
     def _state_cors(self):
         """CORS headers for /state.json, reflecting the request's Origin ONLY
@@ -461,7 +522,7 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         try:
             if path == "/":
-                return self._send(200, self.cap.page(), "text/html; charset=utf-8")
+                return self._serve_page_with_csp()
             if path == "/themes.css":
                 with open(os.path.join(HERE, "themes.css"), "rb") as f:
                     return self._send(200, f.read(), "text/css; charset=utf-8")

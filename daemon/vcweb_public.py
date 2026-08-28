@@ -756,7 +756,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ------------------------------------------------------------
 
-    def _send(self, code, body, ctype="application/json", extra=None):
+    def _send(self, code, body, ctype="application/json", extra=None, csp=None):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
@@ -764,14 +764,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         # Hardening headers on every response from the public-facing process
-        # (F3). frame-ancestors 'none' blocks the page being embedded to
-        # impersonate the feed; it is a CSP directive unaffected by the page's
-        # inline <script>/<style>, so it does not need nonces. A full
-        # default-src/script-src CSP is deliberately NOT set here -- the
-        # inline-heavy page would break without serve-time nonce injection.
+        # (F3/F3-followup). frame-ancestors 'none' alone was the baseline --
+        # a full default-src/script-src policy needed serve-time nonce
+        # injection, which the one `<script>` in kvm-ro.html now gets (see
+        # do_GET's `/` route). ONE header, ONE full policy: two separate
+        # Content-Security-Policy headers are enforced as an INTERSECTION
+        # (each directive wins from whichever header states it), which reads
+        # as "additive" and is not -- passing the whole string through `csp`
+        # keeps every route's policy a single, complete, readable value
+        # rather than something that only makes sense combined with the
+        # default this method would otherwise send.
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy", csp or "frame-ancestors 'none'")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -783,13 +788,72 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200, extra=None):
         self._send(code, json.dumps(obj), "application/json", extra)
 
-    def _serve_file(self, name, ctype):
+    def _serve_file(self, name, ctype, csp=None):
         try:
             with open(os.path.join(HERE, name), "rb") as f:
                 body = f.read()
         except OSError as exc:
             return self._json({"error": str(exc)}, 500)
-        return self._send(200, body, ctype)
+        return self._send(200, body, ctype, csp=csp)
+
+    # A FRESH NONCE PER RESPONSE, spent once. Reusing one across requests
+    # would let a script injected via some OTHER hole (this file has none
+    # known, but a CSP's whole point is to survive one appearing) replay a
+    # previously-seen nonce; generating one per GET of `/` is what makes the
+    # nonce actually mean "the server emitted this specific script tag just
+    # now," not "the server knows a password."
+    def _serve_html_with_csp(self):
+        try:
+            with open(os.path.join(HERE, "kvm-ro.html"), "rb") as f:
+                body = f.read()
+        except OSError as exc:
+            return self._json({"error": str(exc)}, 500)
+        nonce = base64.b64encode(os.urandom(16)).decode("ascii")
+        # ONE nonce'd tag: `<script>` is a literal opening tag with no
+        # attributes today (grep confirms exactly one in kvm-ro.html), so a
+        # plain byte-replace is exact and does not risk matching inside a
+        # JS string/comment the way a regex over the whole file could.
+        body = body.replace(b"<script>",
+                             ('<script nonce="%s">' % nonce).encode("ascii"),
+                             1)
+        # default-src 'none': every category below is opted in explicitly,
+        # so a resource type nobody has thought to write a rule for is
+        # refused rather than silently inheriting a permissive default.
+        #   script-src   the nonce, and nothing else -- no 'unsafe-inline',
+        #                no 'self' (this process serves no OTHER .js file
+        #                for a same-origin script tag to point at).
+        #   style-src    'self' for /themes.css, 'unsafe-inline' for the one
+        #                inline <style> block and this page's dozen inline
+        #                style="" attributes. CSS injection cannot execute
+        #                script; nonce-per-attribute is impractical here, so
+        #                this is the one directive with a real trade-off,
+        #                same one F3 already accepted for this page.
+        #   img-src      'self' for /shot.jpg,/lastgood.jpg, data: for the
+        #                favicon links, blob: for the fetched-then-
+        #                createObjectURL'd stale-frame image.
+        #   connect-src  'self' for /state.json,/events,/shot.jpg,
+        #                /lastgood.jpg's fetch() calls, and (CSP upgrades
+        #                the scheme for comparison purposes) the same-origin
+        #                /wsaudio websocket -- no separate ws:/wss: entry
+        #                needed since nothing here opens one to any other
+        #                host or port.
+        #   media-src    'self' for the mjpeg <img> stream (browsers file
+        #                multipart/x-mixed-replace under img-src OR media-src
+        #                depending on engine; both list it to not depend on
+        #                which one a given browser chooses).
+        #   base-uri/form-action 'none': nothing on this page ever needed
+        #                either, so neither should ever silently start being
+        #                usable by something injected.
+        csp = ("default-src 'none'; "
+               "script-src 'nonce-%s'; "
+               "style-src 'self' 'unsafe-inline'; "
+               "img-src 'self' data: blob:; "
+               "connect-src 'self'; "
+               "media-src 'self'; "
+               "base-uri 'none'; "
+               "form-action 'none'; "
+               "frame-ancestors 'none'" % nonce)
+        return self._send(200, body, "text/html; charset=utf-8", csp=csp)
 
     # -- routes ---------------------------------------------------------
     #
@@ -812,8 +876,7 @@ class Handler(BaseHTTPRequestHandler):
             path = path[len(PREFIX):] or "/"
         try:
             if path == "/":
-                return self._serve_file("kvm-ro.html",
-                                        "text/html; charset=utf-8")
+                return self._serve_html_with_csp()
             if path == "/themes.css":
                 return self._serve_file("themes.css", "text/css; charset=utf-8")
             if path == "/state.json":
