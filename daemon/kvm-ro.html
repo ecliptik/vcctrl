@@ -1074,6 +1074,29 @@
 
 <script>
 addEventListener('error', e => {
+  // NOT EVERY GLOBAL 'error' EVENT IS THIS PAGE'S OWN SCRIPT DYING --
+  // confirmed live 2026-08-28 via Safari's Web Inspector: sharing this
+  // page from Safari's Share Sheet threw inside Apple's OWN injected
+  // extractor (`SharingLinkExtractorJS.viewportDominantIFrameHandle`,
+  // hunting for an iframe to preview -- this page has none, so it got
+  // null and dereferenced it), not in any code below. That script runs in
+  // the SAME global scope as this one, so its error bubbles up to this
+  // SAME listener.
+  //
+  // FIRST ATTEMPT AT THIS FILTER WAS WRONG: checked e.filename against
+  // location.origin, on the assumption a third-party/injected script would
+  // report a different filename. Still showed the banner -- Web Inspector
+  // (which has full debugger access) sees the detailed
+  // "SharingLinkExtractorJS"/line info, but THIS listener, same as any
+  // page-level error handler, gets WebKit's standard OPAQUE form for an
+  // error it does not have full visibility into: message is the literal
+  // string "Script error." with no filename/line/column at all -- which is
+  // also exactly what this page saw the FIRST time this bug was reported,
+  // before Web Inspector was attached. That opaque shape is the actual,
+  // reliable signal (this page's OWN inline script errors always carry a
+  // real message and line number, being fully same-context to itself);
+  // filename was never it.
+  if (e.message === 'Script error.' && !e.lineno && !e.colno) return;
   const box = document.getElementById('bootfail') || (() => {
     const d = document.createElement('div');
     d.id = 'bootfail';
@@ -1086,6 +1109,21 @@ addEventListener('error', e => {
   box.textContent = 'PAGE SCRIPT ERROR - everything after this line stopped\n'
     + (e.message || e.error) + '\n' + (e.filename || '') + ':'
     + (e.lineno || '?') + ':' + (e.colno || '?');
+  // BEST EFFORT, NEVER LETS A REPORTING FAILURE COMPOUND THE ORIGINAL ONE --
+  // this handler already runs in exactly the worst case (something threw
+  // before most of the page's own state exists), so the beacon itself
+  // must not assume anything beyond fetch() existing. sendBeacon is tried
+  // first because it is specifically built to survive the page unloading
+  // right after (the PAGE SCRIPT ERROR banner is sometimes the last thing
+  // that renders); fetch(keepalive) is the fallback for a browser without
+  // it. Message capped client-side too, matching the server's own cap --
+  // belt and suspenders, not a substitute for the server-side one.
+  try {
+    const msg = String(e.message || e.error || 'unknown').slice(0, 160);
+    const payload = JSON.stringify({kind: 'error', message: msg});
+    if (navigator.sendBeacon) navigator.sendBeacon('/telemetry', payload);
+    else fetch('/telemetry', {method: 'POST', body: payload, keepalive: true}).catch(() => {});
+  } catch (err) {}
 });
 addEventListener('unhandledrejection', e =>
   dispatchEvent(new ErrorEvent('error',
@@ -1195,6 +1233,17 @@ function sourceIsLive() {
 function gotFrame() {
   const el = mediaEl();
   const nw = el.naturalWidth || el.width, nh = el.naturalHeight || el.height;
+  if (!frames) {
+    // ONCE PER PAGE LOAD ONLY (frames is still 0 here, checked before the
+    // increment below) -- performance.now() is elapsed time since
+    // navigation start, i.e. exactly "how long did the first picture take
+    // to show up," the number a viewer actually experiences as page speed.
+    try {
+      const payload = JSON.stringify({kind: 'first-frame', ms: Math.round(performance.now())});
+      if (navigator.sendBeacon) navigator.sendBeacon('/telemetry', payload);
+      else fetch('/telemetry', {method: 'POST', body: payload, keepalive: true}).catch(() => {});
+    } catch (e) {}
+  }
   if (!frames || (nw > 1 && nh > 1 && (nw !== capW || nh !== capH))) {
     crop = null; cropUnion = null; cropStableTicks = 0; cropNullStreak = 0;
     setTimeout(() => applyZoom(true), 60);

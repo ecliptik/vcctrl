@@ -17,6 +17,13 @@ Environment=VCCTRL_PUBLIC_PORT=8091
 Environment=VCCTRL_WEB_PORT=8080
 Restart=always
 RestartSec=2
+# WHERE TELEMETRY PERSISTS -- NOT /opt/vcctrl (root:root 755; `vcctrl-ro`
+# cannot write there, see vcweb_public.py's own STATE_DIR comment).
+# StateDirectory= creates and chows this to User= below automatically, the
+# same mechanism tailscaled-ro.service already uses for its own state dir.
+Environment=VCCTRL_PUBLIC_STATE_DIR=/var/lib/vcctrl-web-public
+StateDirectory=vcctrl-web-public
+StateDirectoryMode=0700
 # UNPRIVILEGED, AND NOT AS `pi` -- this process never touches /dev/uinput
 # or any device, it only ever makes loopback HTTP GET requests to the
 # private daemon's already-read-only endpoints, but `pi` carries group

@@ -4,16 +4,27 @@ viewing.
 
 Deliberately its own file, importing nothing from vcctrld.py or vcweb.py:
 this process must be auditable, by grep alone, as incapable of ever sending
-a command to the target. It has no `/cmd` route -- `do_POST` is not defined
-anywhere in this file, so `BaseHTTPRequestHandler`'s stock handler answers
-any POST with 501 -- and it never implements vcweb.py's `/ws`. That is not
-caution for its own sake: `/ws` was checked directly against
-`_ws_handle_input` (daemon/vcweb.py:1253-1310) and found to be a genuine
-second, bidirectional command channel -- it parses client JSON and
-dispatches `keydown`/`keyup`/`type`/`combo`/`release_all` -- not just a video
-feed. Video reaches viewers here only as `multipart/x-mixed-replace`, which
-is architecturally one-directional: there is no code path in an HTTP
+a command to the target. It has no `/cmd` route, and it never implements
+vcweb.py's `/ws`. That is not caution for its own sake: `/ws` was checked
+directly against `_ws_handle_input` (daemon/vcweb.py:1253-1310) and found to
+be a genuine second, bidirectional command channel -- it parses client JSON
+and dispatches `keydown`/`keyup`/`type`/`combo`/`release_all` -- not just a
+video feed. Video reaches viewers here only as `multipart/x-mixed-replace`,
+which is architecturally one-directional: there is no code path in an HTTP
 response body that can carry a client-to-server message.
+
+`do_POST` EXISTS NOW (added 2026-08-28), and answers exactly one path,
+`/telemetry` -- aggregate-only visit/performance/error counters, allowlisted
+`kind`, size-capped body, every value validated before it touches shared
+state (see `Handler.do_POST`'s own docstring). Every other path, `/cmd`
+included, still falls through to a 404 -- this method changed what an
+UNKNOWN path returns (501 with no `do_POST` at all, before; 404 from a
+`do_POST` that only recognizes one path, now) but not what accepting a
+command would look like, because nothing here accepts one. The data this
+collects never reaches the target, never reaches vcctrld over a network
+call at all -- it is a local file this process writes and
+`PublicTelemetryCapability` (daemon/vcctrld.py) reads directly off the same
+Pi's filesystem, one-way, no route back.
 
 Everything this process shows comes from ONE background thread family
 polling the existing, unmodified private vcweb.py over loopback at a fixed,
@@ -140,6 +151,15 @@ PORT = int(os.environ.get("VCCTRL_PUBLIC_PORT", "8091"))
 # without this, every route below would need its own prefixed twin instead
 # of matching once. Stripped in do_GET, before any route comparison.
 PREFIX = os.environ.get("VCCTRL_PUBLIC_PREFIX", "").rstrip("/")
+
+# WHERE TELEMETRY PERSISTS ACROSS RESTARTS -- NOT /opt/vcctrl (this process's
+# own install dir, root:root 755, `vcctrl-ro` cannot write there by design).
+# pi/files/vcctrl-web-public.service grants a StateDirectory= of the same
+# name, which systemd creates and chowns to `vcctrl-ro` the same way it
+# already does for tailscaled-ro's own dirs -- see that unit's own comment.
+STATE_DIR = os.environ.get("VCCTRL_PUBLIC_STATE_DIR",
+                           "/var/lib/vcctrl-web-public")
+TELEMETRY_PATH = os.path.join(STATE_DIR, "telemetry.json")
 
 # The Pi this runs on has limited free memory and no swap (docs/WEBKVM.md
 # sec. 3). At the shared, low poll rate below, only outbound BANDWIDTH scales
@@ -437,6 +457,101 @@ _events_seq = 0        # highest event seq already folded into _events
 
 _viewer_sem = threading.Semaphore(MAX_VIEWERS)
 
+# ------------------------------------------------------------------ telemetry
+#
+# AGGREGATE ONLY, NEVER PER-VISITOR -- no IP, no user-agent, no cookie, no
+# session id is ever stored here, by construction: nothing below even reads
+# those off the request. This is the operator's own scoping decision
+# (2026-08-28): visit counts, first-frame timing, and client-side error
+# counts by message, nothing that could identify who looked. This process
+# already sees a visitor's source IP at the TCP level for every request --
+# nothing here changes that exposure -- but nothing here RETAINS it either.
+#
+# PRIVATE BY CONSTRUCTION, NOT BY A CHECK ON THE READER: there is no GET
+# route that serves this back. The only way it leaves this process is the
+# local file it's periodically written to (see _telemetry_save), which
+# PublicTelemetryCapability (daemon/vcctrld.py) reads directly off disk --
+# the two processes share a filesystem, on the same Pi, not a network route.
+_telemetry_lock = threading.Lock()
+_telemetry = {
+    "started_at": time.time(),
+    "visits_total": 0,
+    "visits_by_day": {},        # "YYYY-MM-DD" (UTC) -> count
+    "first_frame_ms": [],       # rolling window of recent samples
+    "errors": {},               # capped/truncated message -> count
+}
+TELEMETRY_MAX_PERF_SAMPLES = 500
+TELEMETRY_MAX_DISTINCT_ERRORS = 100
+TELEMETRY_MAX_ERROR_LEN = 160
+TELEMETRY_MAX_DAYS = 90
+TELEMETRY_SAVE_INTERVAL_S = 60
+
+
+def _telemetry_load():
+    """Best-effort restore from the last save. A deploy restarts this
+    process often (every `pi/deploy.sh --public`) -- without this, visit
+    history would reset to zero on every redeploy, which is a worse failure
+    for a COUNTER than for NoteCapability's deliberately-ephemeral text."""
+    try:
+        with open(TELEMETRY_PATH) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return
+    with _telemetry_lock:
+        for k in _telemetry:
+            if k in saved:
+                _telemetry[k] = saved[k]
+        _telemetry["started_at"] = time.time()
+
+
+def _telemetry_save():
+    """Atomic write (temp file + rename) so a reader (PublicTelemetryCapability,
+    polling from a separate process) never sees a half-written file."""
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with _telemetry_lock:
+            snapshot = json.dumps(_telemetry)
+        tmp = TELEMETRY_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(snapshot)
+        os.replace(tmp, TELEMETRY_PATH)
+    except OSError as exc:
+        print("vcweb_public: telemetry save failed: %s: %s"
+              % (type(exc).__name__, exc))
+
+
+def _telemetry_record_visit():
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    with _telemetry_lock:
+        _telemetry["visits_total"] += 1
+        by_day = _telemetry["visits_by_day"]
+        by_day[day] = by_day.get(day, 0) + 1
+        if len(by_day) > TELEMETRY_MAX_DAYS:
+            del by_day[min(by_day)]
+
+
+def _telemetry_record_perf(ms):
+    with _telemetry_lock:
+        samples = _telemetry["first_frame_ms"]
+        samples.append(ms)
+        if len(samples) > TELEMETRY_MAX_PERF_SAMPLES:
+            del samples[:len(samples) - TELEMETRY_MAX_PERF_SAMPLES]
+
+
+def _telemetry_record_error(message):
+    # CAPPED LENGTH AND CAPPED DISTINCT COUNT -- this field is the one place
+    # a visitor's browser gets to put arbitrary text into this process at
+    # all (see Handler.do_POST's own comment on why that's still safe). A
+    # long string just gets truncated; a flood of distinct garbage messages
+    # collapses into "(other)" once the distinct-message cap is hit, rather
+    # than growing this dict without bound.
+    message = (message or "")[:TELEMETRY_MAX_ERROR_LEN].strip() or "(empty)"
+    with _telemetry_lock:
+        errs = _telemetry["errors"]
+        if message not in errs and len(errs) >= TELEMETRY_MAX_DISTINCT_ERRORS:
+            message = "(other)"
+        errs[message] = errs.get(message, 0) + 1
+
 
 def _get(path, timeout=2.0):
     """GET `path` on the trusted, loopback-only private daemon.
@@ -611,11 +726,16 @@ def _poll_events():
 
 
 def _start_pollers():
+    _telemetry_load()
     for name, interval, fn in (
         ("shot", 0.6, _poll_shot),
         ("stale", 5.0, _poll_stale),
         ("state", 1.75, _poll_state),
         ("events", 2.5, _poll_events),
+        # Not an upstream poll like the four above -- reuses _poll_loop's
+        # "run forever, one bad iteration doesn't kill the thread" shape
+        # because that's exactly what periodic persistence needs too.
+        ("telemetry-save", TELEMETRY_SAVE_INTERVAL_S, _telemetry_save),
     ):
         t = threading.Thread(target=_poll_loop, args=(name, interval, fn),
                              daemon=True, name="poll-%s" % name)
@@ -820,6 +940,16 @@ class Handler(BaseHTTPRequestHandler):
                 body = f.read()
         except OSError as exc:
             return self._json({"error": str(exc)}, 500)
+        # A SERVER-SIDE VISIT COUNT, not the client-side "pageload" beacon
+        # (kvm-ro.html's own JS, sent to /telemetry once it runs) -- this
+        # one fires even for a visitor whose JS never runs at all (blocked,
+        # or the same restricted-context class of failure the PAGE SCRIPT
+        # ERROR banner exists for), so "how many times was the page served"
+        # stays accurate independent of whether the client-side beacon
+        # would have. Both feed the same visits_total/visits_by_day -- there
+        # is deliberately no attempt to de-duplicate one visit counted
+        # twice; this is a traffic gauge, not an analytics platform.
+        _telemetry_record_visit()
         nonce = base64.b64encode(os.urandom(16)).decode("ascii")
         # ONE nonce'd tag: `<script>` is a literal opening tag with no
         # attributes today (grep confirms exactly one in kvm-ro.html), so a
@@ -886,8 +1016,13 @@ class Handler(BaseHTTPRequestHandler):
     #
     # Deliberately absent from this list, not 403'd, not gated: /cmd, /ws,
     # /buffer.avi, /pulled, /keymap.json, /config, /timeline.json. A request
-    # for any of them falls through to the 404 at the bottom. There is no
-    # `do_POST` on this class at all -- see the module docstring.
+    # for any of them falls through to the 404 at the bottom. `do_POST`
+    # exists now (added 2026-08-28, see its own docstring below) but only
+    # ever answers ONE path, /telemetry, with aggregate-only counters --
+    # every other POST, /cmd included, still falls through to the same 404
+    # this method returns for an unknown GET path. See the module docstring
+    # for why that one addition doesn't reopen the command-channel question
+    # F1/the security audit closed.
     #
     # /wsaudio IS implemented here, and it is the one websocket route this
     # file offers -- worth explaining why that's not a contradiction of "no
@@ -953,6 +1088,59 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except Exception as exc:
+            try:
+                self._json({"error": "%s: %s" % (type(exc).__name__, exc)}, 500)
+            except Exception:
+                pass
+
+    TELEMETRY_KINDS = {"first-frame", "error"}
+    TELEMETRY_MAX_BODY = 2048
+
+    def do_POST(self):
+        """The ONLY thing a POST to this process can ever do: submit one
+        aggregate telemetry sample to /telemetry. Every other path --
+        including /cmd -- falls through to the same 404 do_GET returns for
+        an unknown path, not to some richer handler; adding this method
+        does not change what POST /cmd gets back in any way that matters
+        (501 with no do_POST at all, 404 with one that only answers
+        /telemetry -- neither is "the command was accepted"). See the
+        module docstring for the fuller reasoning.
+
+        kvm-ro.html's own JS is the only intended caller, but nothing here
+        trusts that: `kind` is allowlisted, the body is size-capped before
+        it's even read, and every value pulled out of it is validated and
+        clamped before touching shared state -- the same "untrusted input,
+        never let it reach an exception past this boundary" posture as
+        _get()'s own docstring above."""
+        path = self.path.split("?", 1)[0]
+        if PREFIX and path.startswith(PREFIX):
+            path = path[len(PREFIX):] or "/"
+        if path != "/telemetry":
+            return self._json({"error": "not found"}, 404)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > self.TELEMETRY_MAX_BODY:
+                return self._json({"error": "bad request"}, 400)
+            body = self.rfile.read(length)
+            obj = json.loads(body)
+            kind = obj.get("kind")
+            if kind not in self.TELEMETRY_KINDS:
+                return self._json({"error": "bad request"}, 400)
+            if kind == "first-frame":
+                ms = obj.get("ms")
+                if isinstance(ms, (int, float)) and 0 <= ms < 300000:
+                    _telemetry_record_perf(ms)
+            elif kind == "error":
+                _telemetry_record_error(str(obj.get("message", "")))
+            return self._send(204, b"")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except (ValueError, TypeError, OSError):
+            try:
+                return self._json({"error": "bad request"}, 400)
+            except Exception:
+                pass
         except Exception as exc:
             try:
                 self._json({"error": "%s: %s" % (type(exc).__name__, exc)}, 500)

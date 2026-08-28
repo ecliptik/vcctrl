@@ -1067,14 +1067,24 @@ def test_page_dom_references():
 
 def test_public_mirror_write_path_isolation():
     """The public read-only mirror's whole safety argument -- daemon/
-    vcweb_public.py cannot send a command to the target -- rests on three
-    facts held today only by discipline and comments: no do_POST, no /ws,
-    and nothing read from a listener ever gets forwarded upstream. A security
-    audit of this feature confirmed all three hold, and flagged that nothing
-    guards them against a future edit that "completes" one the wrong way
-    (CLAUDE.md phase-7; see also "a new driver inherits no guards" in
-    project memory). This is that guard: cheap, static, and it fails on the
-    edit before anyone has to notice the behavior.
+    vcweb_public.py cannot send a command to the target -- rests on facts
+    held today only by discipline and comments: no /ws, nothing read from a
+    listener ever gets forwarded upstream, and (as of 2026-08-28) exactly
+    one narrow POST route that only ever touches its own local aggregate
+    counters. A security audit of this feature confirmed the pre-telemetry
+    version held, and flagged that nothing guards it against a future edit
+    that "completes" one the wrong way (CLAUDE.md phase-7; see also "a new
+    driver inherits no guards" in project memory). This is that guard:
+    cheap, static, and it fails on the edit before anyone has to notice the
+    behavior.
+
+    do_POST EXISTS NOW, on purpose (the /telemetry route) -- the check below
+    is not "no do_POST" any more, it is "do_POST exists, and its own body
+    never touches the target": no `registry`, no `.dispatch(`, no `import`
+    of the control-path modules, and only `/telemetry` is recognized as a
+    path -- everything else, /cmd included, still falls through to the same
+    404 as an unrecognized GET path. do_PUT/do_DELETE/do_PATCH remain
+    entirely absent -- nothing added them and nothing should.
     """
     print("\npublic mirror write-path isolation")
     import re
@@ -1083,12 +1093,33 @@ def test_public_mirror_write_path_isolation():
     with open(path, encoding="utf-8") as f:
         src = f.read()
 
-    check("no do_POST/do_PUT/do_DELETE/do_PATCH defined",
-          not re.search(r"^\s*def do_(POST|PUT|DELETE|PATCH)\b", src,
-                        re.M))
+    check("no do_PUT/do_DELETE/do_PATCH defined",
+          not re.search(r"^\s*def do_(PUT|DELETE|PATCH)\b", src, re.M))
     check("imports nothing from the control-path modules",
           not re.search(r"^\s*(import|from)\s+(vcctrld|vcweb)\b", src, re.M))
     check("no evdev import", "evdev" not in src)
+
+    m = re.search(r"^    def do_POST\(self\):\n(?:.*?\n)*?"
+                  r"(?=^    def |^class |\Z)", src, re.M)
+    check("do_POST is present to check", m is not None)
+    if m:
+        # STRIP THE DOCSTRING FIRST -- it explains, in prose, what happens
+        # to a POST /cmd (still 404), and a plain substring check over the
+        # whole method body would flag its own explanation as if it were a
+        # route. The CODE is what has to prove the property; the docstring
+        # is not evidence either way.
+        body = re.sub(r'"""(?:.*?)"""', "", m.group(0), count=1, flags=re.S)
+        for banned in ("registry.", ".dispatch(", "import vcctrld",
+                       "import vcweb"):
+            check("do_POST's code does not reference %r" % banned,
+                  banned not in body)
+        # THE ONLY STRING LITERAL `path` IS EVER COMPARED AGAINST, either
+        # way (`==` or `!=`), must be "/telemetry" -- whichever style the
+        # code uses to gate on it, there must be exactly one recognized
+        # path and it must be this one.
+        literals = set(re.findall(r'path\s*[=!]=\s*"([^"]*)"', body))
+        check("do_POST's code compares `path` against exactly one literal",
+              literals == {"/telemetry"}, literals)
 
     # _audio_upstream_loop is the one function that reads from a trusted
     # upstream socket AND writes to public listener sockets. The invariant

@@ -1173,6 +1173,8 @@ def main(argv):
         req = {"cmd": "board"}
     elif cmd == "sysinfo":
         req = {"cmd": "sysinfo"}
+    elif cmd in ("public-telemetry", "public_telemetry"):
+        req = {"cmd": "public_telemetry"}
     elif cmd == "events":
         req = {"cmd": "events", "since": int(rest[0]) if rest else 0}
     elif cmd == "activity":

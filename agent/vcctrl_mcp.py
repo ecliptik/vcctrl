@@ -386,6 +386,20 @@ def vcctrl_sysinfo() -> dict:
 
 
 @mcp.tool()
+def vcctrl_public_telemetry() -> dict:
+    """Aggregate, non-identifying usage stats for the public read-only KVM
+    mirror (kvm-ro, e.g. straylight): visit counts by day, first-frame
+    load-time samples (ms), and client-side error counts by message. No
+    per-visitor data of any kind -- no IP, no user-agent, no cookie, no
+    session id -- is ever collected, let alone returned here; this is a
+    local file daemon/vcweb_public.py writes and this daemon reads directly
+    off the same Pi's filesystem, never served back to a visitor over the
+    network. `available: false` means no telemetry file exists yet (the
+    mirror has never run, or hasn't completed its first save cycle)."""
+    return _run_vcctrl(["public-telemetry"])
+
+
+@mcp.tool()
 def vcctrl_caps() -> dict:
     """Capability health across input, leds, power, video, audio, files."""
     return _run_vcctrl(["caps"])

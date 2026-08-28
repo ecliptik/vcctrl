@@ -8481,6 +8481,56 @@ NoteCapability.BACKENDS = {"in-memory": NoteCapability}
 NoteCapability.DEFAULT_BACKEND = NoteCapability
 NoteCapability.DEFAULT_BACKEND_NAME = 'in-memory'
 
+
+class PublicTelemetryCapability(Capability):
+    """Aggregate, non-identifying usage counters from the public read-only
+    mirror (daemon/vcweb_public.py) -- visit counts by day, first-frame
+    timing distribution, client-side error counts by message.
+
+    READS ONLY, FROM A FILE, same shape as SysinfoCapability above:
+    vcweb_public.py writes its own state to
+    /var/lib/vcctrl-web-public/telemetry.json on its own schedule (see that
+    file's _telemetry_save()) and this capability just reads it back
+    whenever asked -- no network call, no IPC, nothing that crosses the
+    boundary vcweb_public.py's own module docstring is so careful about.
+    The two processes share a filesystem, on the same Pi; they do not share
+    a wire. This is why the data can be "server-side, private-daemon-only"
+    at all -- vcweb_public.py's own HTTP server never serves this file back
+    to a visitor, and this capability's only route in is a local read. The
+    file itself is mode 0700, owned by `vcctrl-ro` (the unprivileged user
+    vcweb_public.py runs as) -- readable here anyway because this daemon
+    runs as root, which was checked, not assumed, before relying on it.
+
+    NEVER PER-VISITOR. vcweb_public.py's own collection is deliberately
+    aggregate-only -- no IP, no user-agent, no cookie, no session id ever
+    reaches the file this reads. This capability adds no aggregation of its
+    own; it reports exactly what is on disk.
+    """
+
+    name = "public_telemetry"
+    PATH = "/var/lib/vcctrl-web-public/telemetry.json"
+
+    def commands(self):
+        return {"public_telemetry": self._telemetry}
+
+    def _telemetry(self, req):
+        try:
+            with open(self.PATH) as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return {"ok": True, "available": False, "data": None,
+                    "reason": "no telemetry file yet -- vcctrl-web-public "
+                              "has not persisted one yet, or has never run"}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "available": False, "data": None,
+                    "error": "%s: %s" % (type(exc).__name__, exc)}
+        return {"ok": True, "available": True, "data": data, "reason": None}
+
+
+PublicTelemetryCapability.BACKENDS = {"file": PublicTelemetryCapability}
+PublicTelemetryCapability.DEFAULT_BACKEND = PublicTelemetryCapability
+PublicTelemetryCapability.DEFAULT_BACKEND_NAME = 'file'
+
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 VideoCapability, AudioCapability, BoardCapability,
                 FilesCapability,
@@ -8490,7 +8540,8 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 # runs), only that it is the honest place to put a
                 # capability whose data depends on another's.
                 SysinfoCapability,
-                NoteCapability]
+                NoteCapability,
+                PublicTelemetryCapability]
 
 # vcweb holds the TLS paths as class attributes; the resolved config lives
 # here. Pushed rather than pulled so there is exactly one loader in the
