@@ -1162,6 +1162,8 @@ def main(argv):
         req = {"cmd": "config"}
     elif cmd == "board":
         req = {"cmd": "board"}
+    elif cmd == "sysinfo":
+        req = {"cmd": "sysinfo"}
     elif cmd == "events":
         req = {"cmd": "events", "since": int(rest[0]) if rest else 0}
     elif cmd == "activity":
@@ -1308,6 +1310,22 @@ def main(argv):
                 return 3
             req["names"] = names
             req["paranoid"] = "--paranoid" in argv
+    elif cmd in ("file-scan", "file_scan"):
+        # SAME RULE AS send-file/get-file, AND FOR THE SAME REASON: this
+        # reboots the machine twice (once to a clean menu default before
+        # typing DINSPECT, once into NET to fetch what it wrote).
+        req = {"cmd": "file_scan"}
+        if "--stay" in argv:
+            req["return"] = False
+        elif "--return" in argv:
+            req["return"] = True
+        else:
+            sys.stderr.write(
+                "file-scan needs --return or --stay.\n"
+                "  --return  reboot back to the menu default afterwards\n"
+                "  --stay    leave the machine in NET (NO measured run may\n"
+                "            start from there)\n")
+            return 3
     elif cmd == "pulled":
         action = rest[0] if rest else "list"
         if action == "save":

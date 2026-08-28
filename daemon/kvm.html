@@ -2268,6 +2268,17 @@
       <label><input type="checkbox" id="opt-mine">
         This browser&rsquo;s own commands</label>
       <div class="hint">Off by default: you know what you just did.</div>
+      <label><input type="checkbox" id="opt-mcp">
+        MCP tool calls</label>
+      <div class="hint">On by default: an agent (Claude Code or another MCP
+        client) driving the rig shows up the same way a person typing
+        does.</div>
+      <label><input type="checkbox" id="opt-rate">
+        Stream rate changes</label>
+      <div class="hint">Off by default: this tab asking for a different frame
+        rate, and what the daemon says it is actually sending, logged each
+        time either one changes -- noisy, and rarely the thing you are
+        looking for.</div>
 
       <h2 style="margin-top:14px">System config</h2>
       <!-- WHAT THE DAEMON RESOLVED, not the file on disk. Same source as
@@ -2455,7 +2466,7 @@ const BUILD = '__BUILD__';
 // is separate from the one where they ticked it last time, is a trap. The page
 // falls back to mjpeg by itself if the socket does not deliver, so defaulting
 // on costs nothing when it cannot work and saves a support round when it can.
-const OPTS = {probe:false, poll:false, mine:false};
+const OPTS = {probe:false, poll:false, mine:false, mcp:true, rate:false};
 // Settings are versioned. `ws` defaulted to false while the WebSocket could
 // not work, and browsers that saved settings in that period keep the false
 // forever -- a stored preference from an era whose reasoning no longer holds,
@@ -4179,6 +4190,28 @@ async function startPull(body, said) {
   watchTransfer();
 }
 
+// TWO REBOOTS, LIKE THE PICKER'S OWN COMMENT ABOVE SAYS FOR ONE -- this one
+// costs a second: a blind reboot to the menu default before DINSPECT is
+// typed there, then the usual NET round trip to fetch what it wrote. See
+// ScanJob in daemon/vcctrld.py for why the first reboot exists at all.
+async function startScan() {
+  const stay = !confirm('Re-scan ' + targetName() + "'s hardware?\n\n"
+    + 'Reboots ' + targetName() + ' TWICE, anything running is lost. '
+    + 'Several minutes.\n\n'
+    + 'OK: come back afterwards (recommended)\n'
+    + 'Cancel: stay on the network profile\n\n'
+    + 'No measured run may start from the network profile.');
+  const started = await post('file_scan', {return: !stay});
+  if (!started || !started.ok) {
+    addLine(new Date(), 'file', 'scan refused: '
+      + ((started && started.error) || 'no answer'), 'k-warn');
+    return;
+  }
+  addLine(new Date(), 'file', 'scanning hardware, the reboots are the wait',
+          'k-cmd');
+  watchTransfer();
+}
+
 $('get-refresh').onclick = () => {
   closePop();
   if (!confirm('Read ' + (filesNow.out_dir || (targetName() + "'s outgoing directory"))
@@ -4229,20 +4262,24 @@ function watchTransfer() {
     if (!j.running) {
       clearInterval(xferTimer); xferTimer = null;
       const bad = (j.files || []).filter(f => !f.ok);
-      // THE TWO DIRECTIONS DO NOT GET THE SAME SENTENCE. "Verified byte for
+      // THE THREE KINDS DO NOT GET THE SAME SENTENCE. "Verified byte for
       // byte" is earned on the way out, where the staged copy was sha256'd
       // before anything moved. Coming back there is no such copy to compare
       // against, and borrowing the phrase would be claiming the stronger
-      // check by writing it down.
+      // check by writing it down. A scan is a pull with an extra reboot in
+      // front of it -- same verification, different word for what ran.
       const pull = j.kind === 'pull';
+      const scan = j.kind === 'scan';
       const win = pull
         ? (j.refresh
            ? 'the directory was read'
            : 'fetched, every file came back the size the card says it is')
+        : scan
+        ? 'scanned, the reading came back the size the card says it is'
         : 'transfer complete, every file verified byte for byte';
       addLine(new Date(), 'file',
         j.ok ? win
-             : (pull ? 'fetch' : 'transfer') + ' finished with '
+             : (pull || scan ? 'fetch' : 'transfer') + ' finished with '
                + (bad.length || 1) + ' problem'
                + (bad.length === 1 ? '' : 's')
                + (j.reason ? ': ' + j.reason : ''),
@@ -4253,7 +4290,10 @@ function watchTransfer() {
       }
       // The picker is now out of date in two ways at once -- the listing was
       // refreshed and files may have arrived -- so it is repainted rather
-      // than left showing the state that produced the job.
+      // than left showing the state that produced the job. A scan's own
+      // reading repaints itself the same way everything else in the State
+      // panel does, through the next pollState() below -- j.sysinfo there
+      // is fed straight from the capability, not from this job record.
       if (pull) paintGet();
       if (j.left_in_net) {
         addLine(new Date(), 'file',
@@ -5148,10 +5188,19 @@ function isPoll(e) {
   return (e.cmd === 'power' || e.cmd === 'video' || e.cmd === 'pin')
          && e.detail === 'state';
 }
+// `by` is `mcp:<host>:<pid>` for every call an MCP client made (agent/
+// vcctrl_mcp.py sets OWNER to exactly that shape) -- an agent driving the
+// rig through Claude Code or another MCP client, not a browser tab and not
+// a bare CLI call (those carry no `--as` and `by` is null).
+function isMcp(e) {
+  return e.kind === 'cmd' && typeof e.by === 'string' && e.by.startsWith('mcp:');
+}
 function visible(e) {
   if (!OPTS.probe && isProbe(e)) return false;
   if (!OPTS.poll && isPoll(e)) return false;
   if (!OPTS.mine && e.kind === 'cmd' && e.by === 'browser') return false;
+  if (!OPTS.mcp && isMcp(e)) return false;
+  if (!OPTS.rate && e.kind === 'rate') return false;
   return true;
 }
 
@@ -6499,6 +6548,75 @@ function statsRows(j) {
     + esc(v == null ? '—' : String(v)) + '</span></div>');
   const v = j.video || {}, a = j.audio || {}, w = j.ws || {};
 
+  // WHAT THE MACHINE IS, FIRST -- everything below this is either about the
+  // stream or about the Pi, and neither answers "what am I even looking
+  // at" the way this does.
+  const b = j.board || {};
+  g('Target');
+  if (b.id == null) kv('board', b.reason || 'not reported', 'unk');
+  else {
+    kv('target', b.target || b.name || ('board ' + b.id));
+    kv('board', (b.name || '?') + ' · PBID ' + b.id);
+    kv('read from', b.source + (b.stale ? ' (stale)' : ''), b.stale ? 'warn' : '');
+  }
+
+  // DOS-ONLY, AND GATED ON THE KEYBOARD LAYOUT THE BOARD ITSELF RESOLVES
+  // TO, not a new field invented for this. `keyboard: 'pc-at-101'` is
+  // already the daemon's own answer to "is this a PC-compatible machine"
+  // (BoardCapability.KEYBOARDS, daemon/vcctrld.py) -- dinspect is a DOS
+  // .EXE, so a Mac Plus (keyboard 'mac-plus') or an unresolved board
+  // (null) would show either a report from a machine that is not
+  // connected any more or a permanent "no scan has ever completed" for
+  // hardware that could never run one. Neither belongs here.
+  if (b.keyboard === 'pc-at-101') {
+    // A READING, NOT A POLL. Unlike everything else in this panel, this is
+    // not a live fact about the rig right now -- it is what dinspect found
+    // on the card at some point in the past, fetched over the same reboot
+    // that Download-from-target uses. `si.fields` is null until the first
+    // scan ever completes; `si.stale` is never a positive "still accurate"
+    // claim (see SysinfoCapability's docstring in vcctrld.py) -- it means
+    // only that the USB4VC board has NOT changed since this reading, which
+    // says nothing about the CPU, sound card or video adapter this daemon
+    // cannot watch for a swap.
+    const si = j.sysinfo || {};
+    g('DOS System (dinspect)');
+    if (!si.fields) {
+      kv('reading', si.reason || 'no scan has ever completed', 'unk');
+    } else {
+      const f = si.fields;
+      for (const [label, key] of [
+        ['CPU', 'CPU'], ['CPU speed', 'CPU Speed'],
+        ['CPU features', 'CPU Features'],
+        ['memory', null], ['video', 'Video'],
+        ['video memory', 'Video Memory'],
+        ['sound (BLASTER)', 'Sound BLASTER'], ['sound (OPL)', 'Sound OPL'],
+        ['sound (SB DSP)', 'Sound SB DSP'],
+      ]) {
+        if (key === null) {
+          const mem = [f['Base Memory'], f['Ext. Memory']]
+            .filter(Boolean).join(' + ');
+          if (mem) kv('memory', mem);
+          continue;
+        }
+        if (f[key]) kv(label, f[key]);
+      }
+      kv('read from', si.source + (si.stale ? ' (stale)' : ''),
+         si.stale ? 'warn' : '', si.reason || '');
+      kv('last scanned', si.age_s != null ? fmtAge(si.age_s) + ' ago' : '—');
+    }
+    // INLINE onclick, DELIBERATELY -- this whole panel is regenerated by
+    // innerHTML on every poll (see the call sites), so a handler attached
+    // the usual by-id .onclick way would need re-binding at every one of
+    // them or it would die with the DOM node that carried it.
+    //
+    // SAME ROW SHAPE AS SETTINGS -> INPUT -> "Verify input link": one
+    // control, no left indent, the warning lives in the confirm() only
+    // (see startScan) -- the same place the power buttons put theirs, not
+    // as standing text beside the button.
+    out.push('<div class="row" style="margin-bottom:6px">'
+      + '<button onclick="startScan()">Re-scan hardware</button></div>');
+  }
+
   g('Picture');
   kv('state', v.state || '—',
      v.state === 'locked' ? '' : 'warn');
@@ -6659,15 +6777,6 @@ function statsRows(j) {
     } else if (ledLogErr) {
       kv('record', ledLogErr, 'unk');
     }
-  }
-
-  const b = j.board || {};
-  g('Target');
-  if (b.id == null) kv('board', b.reason || 'not reported', 'unk');
-  else {
-    kv('target', b.target || b.name || ('board ' + b.id));
-    kv('board', (b.name || '?') + ' · PBID ' + b.id);
-    kv('read from', b.source + (b.stale ? ' (stale)' : ''), b.stale ? 'warn' : '');
   }
 
   const pw = j.power || {};

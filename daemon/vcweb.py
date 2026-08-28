@@ -850,6 +850,16 @@ class WebCapability(object):
                           {"id": None, "name": None, "target": None,
                            "source": None, "stale": None,
                            "reason": "board capability failed to start"}),
+                # The DOS target's own hardware, as dinspect last measured
+                # it -- a READING with an age, never a live poll (a scan
+                # reboots the machine twice). `null` fields and `source:
+                # null` mean no scan has ever been pulled, not "unknown
+                # hardware" -- see SysinfoCapability.snapshot().
+                "sysinfo": (self.registry.caps["sysinfo"].snapshot()
+                            if "sysinfo" in self.registry.caps else
+                            {"fields": None, "other": None, "source": None,
+                             "age_s": None, "stale": None,
+                             "reason": "sysinfo capability failed to start"}),
                 # Whether this machine can be sent a file at all, and if
                 # not, WHICH not -- the page greys the transfer entry with the
                 # reason rather than hiding it or letting it fail on click.

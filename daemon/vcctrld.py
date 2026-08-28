@@ -38,6 +38,24 @@ import time
 
 from evdev import UInput, ecodes as e
 
+# Same directory, deployed alongside this file -- so a plain import works
+# once vcctrld itself is on the path. It is not always: tests/test_core.py
+# loads this file directly by path via SourceFileLoader, which puts
+# neither this file's own directory nor daemon/ on sys.path, so the same
+# fallback vcconfig/audio_bands need below is needed here too -- sourced
+# from THIS file's directory rather than common/, since that is where
+# vcsysinfo.py actually lives.
+try:
+    from vcsysinfo import parse_dinspect_report
+except ImportError:                                        # loaded by path
+    import importlib.util as _ilu
+    _vs = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "vcsysinfo.py")
+    _spec = _ilu.spec_from_file_location("vcsysinfo", _vs)
+    vcsysinfo = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(vcsysinfo)
+    parse_dinspect_report = vcsysinfo.parse_dinspect_report
+
 # The configuration loader. Deployed beside this file on the daemon host; in a
 # source checkout it is one directory up. Imported by path rather than by
 # package so neither layout needs a sys.path entry set by whoever launched us.
@@ -4354,6 +4372,126 @@ class BoardCapability(Capability):
         return {"ok": True, "board": self.snapshot()}
 
 
+class SysinfoCapability(Capability):
+    """The DOS target's own hardware, as dinspect measured it -- CPU,
+    memory, video, sound -- not what the boot profile implies and not
+    what a config file asserts. Modeled directly on BoardCapability
+    (above): every key always present, `source` says where the value
+    came from, `reason` says why when something is unknown.
+
+    READS, NEVER DRIVES. The scan itself -- the reboot, the typing, the
+    fetch -- is FilesCapability.file_scan's job (see ScanJob); this
+    capability only ever looks at the report file that job's PullJob
+    already verified and wrote to the pulled directory, via
+    FilesCapability._pulled() -- a query, the same kind vcweb.py's
+    state builder already makes across capabilities for presentation.
+    Nothing here calls registry.execute() or anything that would type at
+    the target.
+
+    `stale` IS NEVER A POSITIVE "STILL ACCURATE" CLAIM, because it
+    cannot be one -- unlike a USB4VC board swap, this daemon has no
+    channel that would notice a CPU, sound card or video adapter being
+    physically swapped. `stale` is computed from ONE corroborating
+    signal: has `board.changed` fired on the bus since this reading was
+    taken? If so, the board capability at least saw *something* change
+    at the wire, which is reason to distrust an inventory taken before
+    it. If not, `stale: false` says exactly that and no more -- see
+    `_staleness` for the sentence this carries into `reason`.
+    """
+
+    name = "sysinfo"
+    REPORT_NAME = "SYSINFO.TXT"
+
+    def __init__(self, *a, **kw):
+        super(SysinfoCapability, self).__init__(*a, **kw)
+        self._cache_mtime = None
+        self._cache = None
+        self._last_fields = _UNSET
+
+    def commands(self):
+        return {"sysinfo": self._sysinfo}
+
+    def _pulled_record(self):
+        """The pulled SYSINFO.TXT's own record, or None if none exists.
+
+        Name matched case-insensitively: FilesCapability promotes names
+        through dos_filename(), which upper-cases -- this does not repeat
+        that logic, it just does not assume a particular case out of it.
+        """
+        files = (self.registry.caps.get("files") if self.registry else None)
+        if files is None:
+            return None
+        for rec in files._pulled():
+            if (rec.get("name") or "").upper() == self.REPORT_NAME:
+                return rec
+        return None
+
+    def _staleness(self, since):
+        """(stale, reason) from ONE corroborating signal: a board swap
+        seen on the bus after `since`. See the class docstring."""
+        if self.bus is None:
+            return None, "no event bus to check for a board change since"
+        for ev in list(self.bus.events):
+            if ev.get("kind") == "board.changed" and ev.get("t", 0) > since:
+                return True, ("the USB4VC board changed after this reading "
+                              "was taken -- it is very likely describing a "
+                              "machine that is no longer connected")
+        return False, ("no board change seen since this reading was taken "
+                       "-- that does NOT mean nothing changed, only that "
+                       "nothing this daemon can observe did")
+
+    def snapshot(self):
+        rec = self._pulled_record()
+        if rec is None:
+            out = {"fields": None, "other": None, "source": None,
+                   "age_s": None, "stale": None,
+                   "reason": "no dinspect report has been pulled yet -- "
+                             "run file_scan"}
+            self._publish_if_changed(out)
+            return out
+        path = rec.get("path")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError as exc:
+            out = {"fields": None, "other": None, "source": "pulled",
+                   "age_s": None, "stale": None,
+                   "reason": "the pulled report is recorded but unreadable "
+                             "on this host: %s" % errstr(exc)}
+            self._publish_if_changed(out)
+            return out
+        if mtime != self._cache_mtime:
+            try:
+                with open(path) as f:
+                    text = f.read()
+            except OSError as exc:
+                out = {"fields": None, "other": None, "source": "pulled",
+                       "age_s": None, "stale": None,
+                       "reason": "the pulled report could not be read: %s"
+                                 % errstr(exc)}
+                self._publish_if_changed(out)
+                return out
+            self._cache = parse_dinspect_report(text)
+            self._cache_mtime = mtime
+        stale, reason = self._staleness(mtime)
+        out = {"fields": self._cache["fields"], "other": self._cache["other"],
+               "source": "pulled", "age_s": round(time.time() - mtime, 1),
+               "stale": stale, "reason": reason}
+        self._publish_if_changed(out)
+        return out
+
+    def _publish_if_changed(self, out):
+        """Emit sysinfo.changed on a transition, never on the first
+        reading -- same contract as BoardCapability._publish_if_changed."""
+        if out["fields"] != self._last_fields:
+            if self._last_fields is not _UNSET and self.bus:
+                self.bus.publish("sysinfo.changed",
+                                 source=out["source"], stale=out["stale"])
+            self._last_fields = out["fields"]
+
+    def _sysinfo(self, req):
+        return {"ok": True, "sysinfo": self.snapshot()}
+
+
 # The registry. A table in the source, in load order. Video, web, audio, reset
 # and files join this list; each is one entry and touches nothing above it.
 class _Disabled(object):
@@ -6390,6 +6528,88 @@ class PullJob(NetJob):
         return (path, None) if path else (None, "no-return")
 
 
+class ScanJob(NetJob):
+    """Run dinspect at whatever profile the menu default boots into, then
+    hand off to PullJob for the NET-side fetch of its report.
+
+    TWO REBOOTS, NOT ONE, AND THAT IS DELIBERATE. Typing DINSPECT.EXE
+    against whatever profile happens to already be on screen would
+    blind-type into unknown machine state -- the same hazard
+    vcctrl-cell's guard #3 exists for (confirm the machine is not mid
+    something before driving it). So this job's own first reboot lands on
+    the menu default the same way NetJob._leave_net's RETURN leg already
+    does: nothing is typed at the menu, the timeout picks the default, and
+    nothing here asserts which profile that is -- only that a reset really
+    happened and a boot really finished. Only THEN is DINSPECT typed. The
+    second reboot, into NET to fetch the report back, is the existing,
+    unmodified PullJob -- this class adds no new NET logic at all.
+
+    WHAT THIS CANNOT CHECK: whether DINSPECT.EXE is actually staged at
+    C:\\XFER\\IN on the card. Unlike a push (sha256'd on this host before
+    it is sent) there is no cheap pre-reboot proof of what is already on
+    the card -- the closest thing, a VCLIST of C:\\XFER\\OUT, reads the
+    OUT directory, not IN. If it is missing, the typed command fails at
+    the DOS prompt and PullJob's own listing check below simply never
+    finds SYSINFO.TXT -- reported as `not-listed`, not silently as
+    success. See the vcctrl-dinspect-sysinfo skill for staging it first.
+    """
+
+    REPORT_NAME = "SYSINFO.TXT"
+    DINSPECT_CMD = ("C:\\XFER\\IN\\DINSPECT.EXE -o C:\\XFER\\OUT\\%s "
+                     "--show-undetected" % REPORT_NAME)
+
+    # BLIND, LIKE THE MENU SELECTION ABOVE IT -- dinspect's own README
+    # documents a "Runtime" field precisely so external tooling can
+    # calibrate a wait like this one, but that field is INSIDE the report
+    # this wait exists to let it finish writing, so it cannot bootstrap
+    # itself. This is a placeholder pending a real timed run on the actual
+    # Gateway 2000 (see docs/DINSPECT-SYSINFO.md once that run has
+    # happened) -- CLAUDE.md's rule applies: a measured number goes to
+    # docs/ with its conditions, not silently in as a new default here.
+    RUN_WAIT_S = 15.0
+
+    def _boot_to_default(self):
+        """Reboot with nothing typed at the menu -- the SAME primitive
+        NetJob._leave_net uses for its return leg, run here as the ENTRY
+        step instead. Deliberately does not assert which profile it
+        landed on; only that a reset really happened and a boot really
+        finished.
+        """
+        armed = self.d.arm() if hasattr(self.d, "arm") else False
+        self._say("reboot", "rebooting to the menu default before the scan")
+        PROFILE.invalidate("rebooting for a system-inventory scan")
+        if not armed:
+            self.d.combo(["ctrl", "alt", "delete"])
+            return self._fail("no-witness",
+                              "could not set Scroll Lock, so a reboot would "
+                              "be invisible -- refusing rather than "
+                              "rebooting blind")
+        if not self._reboot_edge():
+            return self._fail("no-reset",
+                              "the machine never reset -- Scroll Lock did "
+                              "not clear, so the reboot did not happen")
+        if not self.d.wait_boot():
+            return self._fail("no-boot",
+                              "no readiness pulse after the reboot: the "
+                              "machine did not finish booting, or "
+                              "RDYPULSE.COM is missing from the card")
+        self._say("boot", "the machine booted; which profile is unread")
+        return True
+
+    def run(self):
+        gate = self._boot_to_default()
+        if gate is not True:
+            return gate
+        self._say("scan", "typing the dinspect invocation, blind")
+        self.d.type_line(self.DINSPECT_CMD)
+        self.d.sleep(self.RUN_WAIT_S)
+        self._say("scan", "handing off to the fetch")
+        pull = PullJob(self.cap, self.d, names=[self.REPORT_NAME],
+                       out_dir=self.cap._out_dir(), do_return=self.do_return,
+                       log=self.log)
+        return pull.run()
+
+
 class FilesCapability(Capability):
     """Putting a file onto the target, over the target's own FTP client.
 
@@ -6430,7 +6650,12 @@ class FilesCapability(Capability):
                 # lives on this host.
                 "file_pull": self._file_pull,
                 "file_listing": self._file_listing,
-                "file_pulled": self._file_pulled}
+                "file_pulled": self._file_pulled,
+                # A third direction, sharing the same slot: reboot to the
+                # menu default, run dinspect there, reboot into NET to
+                # fetch what it wrote. See ScanJob for why it is not just
+                # `file_pull` with an extra step.
+                "file_scan": self._file_scan}
 
     # -- the two BATs the card needs ------------------------------------------
     #
@@ -6807,6 +7032,57 @@ SET VLD=
             # THE MACHINE'S STATE AFTER A CRASH IS THE PART WORTH SAYING. A
             # run that died between the two reboots has left the target in
             # NET, and nothing downstream can tell that from a tidy exit.
+            if out.get("why") == "crashed":
+                job["left_in_net"] = True
+
+        threading.Thread(target=run, daemon=True).start()
+        return {"ok": True, "started": True, "status": FilesCapability._job}
+
+    def _file_scan(self, req):
+        """Reboot, run dinspect at the menu default, fetch its report.
+
+        SAME SLOT AS SEND AND PULL, for the identical reason: this reboots
+        the machine (twice), so it cannot run alongside either direction
+        without each misreading the other's machine state.
+
+        Nothing here validates that DINSPECT.EXE is actually staged on the
+        card -- see ScanJob's docstring for why that cannot be checked
+        cheaply. A scan against a card that never had it pushed reboots
+        twice and comes back `not-listed`, same as asking `file_pull` for
+        a name the target never had.
+        """
+        with FilesCapability._job_lock:
+            cur = FilesCapability._job
+            if cur and cur.get("running"):
+                return {"ok": False, "why": "busy",
+                        "error": "a transfer is already running -- the two "
+                                 "directions share one machine",
+                        "status": cur}
+            if self.registry is None:
+                return {"ok": False, "why": "unsequenced",
+                        "error": "no registry to sequence input through"}
+            job = {"kind": "scan", "running": True, "started_at": time.time(),
+                   "log": [], "files": [], "ok": None, "why": None,
+                   "reason": None, "out_dir": self._out_dir(),
+                   "names": [ScanJob.REPORT_NAME], "all": False,
+                   "refresh": False, "paranoid": False, "already_net": False,
+                   "return": bool(req.get("return", True))}
+            FilesCapability._job = job
+
+        def run():
+            drv = RegistryDriver(self.registry, pace=req.get("pace"))
+            sj = ScanJob(self, drv, do_return=job["return"], log=job["log"])
+            try:
+                out = sj.run()
+            except Exception as exc:
+                out = {"ok": False, "why": "crashed",
+                       "reason": "%s: %s" % (type(exc).__name__, exc),
+                       "files": [], "log": sj.log}
+                sys.stderr.write("scan crashed: %s\n" % exc)
+            out.pop("log", None)        # already live in job["log"]
+            job.update(out)
+            job["running"] = False
+            job["finished_at"] = time.time()
             if out.get("why") == "crashed":
                 job["left_in_net"] = True
 
@@ -8138,9 +8414,23 @@ FilesCapability.BACKENDS = {"mtcp-ftp": FilesCapability}
 FilesCapability.DEFAULT_BACKEND = FilesCapability
 FilesCapability.DEFAULT_BACKEND_NAME = 'mtcp-ftp'
 
+# One implementation, like Video/Audio/Files above -- it reads a pulled
+# file rather than talking to a device, but the registry's config schema
+# treats every capability uniformly, so it still needs a name rather than
+# being a special case that only works unconfigured.
+SysinfoCapability.BACKENDS = {"dinspect-pulled": SysinfoCapability}
+SysinfoCapability.DEFAULT_BACKEND = SysinfoCapability
+SysinfoCapability.DEFAULT_BACKEND_NAME = 'dinspect-pulled'
+
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 VideoCapability, AudioCapability, BoardCapability,
-                FilesCapability]
+                FilesCapability,
+                # Reads FilesCapability._pulled(), so it is registered
+                # after it -- not that load order enforces this (every
+                # capability is fully constructed before any start()
+                # runs), only that it is the honest place to put a
+                # capability whose data depends on another's.
+                SysinfoCapability]
 
 # vcweb holds the TLS paths as class attributes; the resolved config lives
 # here. Pushed rather than pulled so there is exactly one loader in the

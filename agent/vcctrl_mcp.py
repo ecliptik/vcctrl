@@ -373,6 +373,19 @@ def vcctrl_board() -> dict:
 
 
 @mcp.tool()
+def vcctrl_sysinfo() -> dict:
+    """The DOS target's own hardware -- CPU, memory, video, sound -- as a
+    dinspect report last pulled off the card. A READING, not a live poll:
+    `age_s` says how old it is and `source: null` means none has ever
+    been pulled. `stale: true` means the USB4VC board changed since this
+    reading was taken; `stale: false` does NOT mean nothing changed, only
+    that nothing this daemon can observe did -- most hardware this
+    reports on (CPU, sound card, video adapter) cannot be detected by
+    the daemon at all. Use vcctrl_file_scan to take a fresh reading."""
+    return _run_vcctrl(["sysinfo"])
+
+
+@mcp.tool()
 def vcctrl_caps() -> dict:
     """Capability health across input, leds, power, video, audio, files."""
     return _run_vcctrl(["caps"])
@@ -1043,6 +1056,30 @@ def vcctrl_get_file(names: "list[str] | None" = None, fetch_all: bool = False,
         args += ["--from", from_dir]
     if already_net:
         args.append("--already-net")
+    LOCK.release()   # see vcctrl_send_file's comment on the same call
+    return _run_vcctrl(args, timeout=60.0)
+
+
+@mcp.tool()
+def vcctrl_file_scan(mode: str = "return",
+                     confirm: "str | None" = None) -> dict:
+    """Take a fresh dinspect reading of the DOS target's own hardware.
+    REBOOTS THE TARGET TWICE: once to the menu default (typed blind --
+    nothing here can confirm the machine is at a usable prompt first, so
+    only call this when you know it is not mid-boot or mid-something-else)
+    to run DINSPECT.EXE there, then into NET to fetch its report. Requires
+    confirm="scan". DINSPECT.EXE must already be staged at C:\\XFER\\IN on
+    the card (see the vcctrl-dinspect-sysinfo skill) -- if it is not, this
+    still reboots twice and comes back `not-listed` rather than silently
+    doing nothing. Returns at once -- poll with vcctrl_file_status, then
+    read the result with vcctrl_sysinfo."""
+    if mode not in ("return", "stay"):
+        return {"ok": False, "error": 'mode must be "return" or "stay"'}
+    if confirm != "scan":
+        return {"ok": False,
+                "error": ('reboots the target twice -- pass confirm="scan" '
+                          "to proceed")}
+    args = ["file-scan", "--%s" % mode]
     LOCK.release()   # see vcctrl_send_file's comment on the same call
     return _run_vcctrl(args, timeout=60.0)
 

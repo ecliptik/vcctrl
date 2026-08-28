@@ -135,6 +135,10 @@ fi
 sudo mkdir -p "$PREFIX"
 sudo install -m 0755 "$SRC/daemon/vcctrld.py"    "$PREFIX/vcctrld.py"
 sudo install -m 0644 "$SRC/daemon/vcweb.py"      "$PREFIX/vcweb.py"
+# vcctrld.py imports this at module load, same directory, same reasoning as
+# vcweb.py -- forgetting it is not a missing feature, it is vcctrld refusing
+# to start at all (ImportError before a single capability is registered).
+sudo install -m 0644 "$SRC/daemon/vcsysinfo.py"  "$PREFIX/vcsysinfo.py"
 sudo install -m 0644 "$SRC/daemon/kvm.html"      "$PREFIX/kvm.html"
 sudo install -m 0644 "$SRC/daemon/themes.css"    "$PREFIX/themes.css"
 # THE MEASURED KEY COVERAGE. Named explicitly like everything else here, and
