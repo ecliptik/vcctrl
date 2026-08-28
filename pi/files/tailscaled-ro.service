@@ -14,19 +14,33 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-# UNPRIVILEGED, AND NOT AS `pi` -- this instance never touches /dev/net/tun
-# or needs CAP_NET_ADMIN: --tun=userspace-networking replaces the kernel TUN
-# device with tailscaled's own userspace netstack, and `tailscale serve`/
-# `funnel` terminate TLS inside tailscaled itself, so neither needs root.
-# `pi` was the first choice (matching vcweb_public.py's own posture) but
-# carries group memberships this process has no use for -- `input` above
-# all, which owns the virtual keyboard/mouse device nodes vcctrld drives
-# the DOS target through (see pi/install.sh's ensure_vcctrl_ro_user() for
-# the full reasoning: write access to those nodes can inject real input,
-# not just read it). `vcctrl-ro` is a dedicated system user with no shell,
-# no password and no supplementary groups, created idempotently by
-# pi/install.sh before this unit starts.
+# NOT `--tun=userspace-networking` ANY MORE -- switched 2026-08-28, the hard
+# way. Userspace mode was the first choice specifically to avoid needing
+# CAP_NET_ADMIN, but it uses Tailscale's own gVisor-based netstack, which
+# Tailscale's own docs call "not as optimized as the Linux kernel" -- its
+# fixed-size (512 packet) internal queue drops packets under real load. Real
+# visitors over Funnel got intermittent `net::ERR_TIMED_OUT` /
+# `net::ERR_NETWORK_CHANGED` failures on BOTH the long-lived mjpeg stream and
+# separate short state.json/events fetches -- reproducible in Chrome/Safari
+# (aggressive HTTP/2 connection reuse stresses the netstack harder) but NOT
+# Firefox, and NOT visible to raw HTTP/1.1 probing at all, which is why it
+# took real browser instrumentation to catch. The primary instance (kernel
+# networking, real TUN) has never shown this. A dropped or corrupted-looking
+# frame is the SAME failure this codebase already knows from the capture
+# stick's own black-frame hazard -- but this one was the netstack, not the
+# hardware, and only on this node's own second identity.
+#
+# `--tun=tailscale-ro` (NOT the default "tailscale0" -- that's the PRIMARY
+# instance's own kernel interface; a second tailscaled asking for the same
+# name would collide) needs CAP_NET_ADMIN to create/configure the interface.
+# /dev/net/tun itself is world-writable (crw-rw-rw-, checked live) so no
+# device-file grant is needed, only the capability below -- narrower than
+# root, and it changes NOTHING else from `vcctrl-ro`'s posture (still no
+# shell, no password, no supplementary groups -- `input`/`dialout`/etc. stay
+# exactly as unreachable to this process as before).
 User=vcctrl-ro
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
 # --statedir EXPLICIT, NOT DERIVED -- found the hard way bringing this up
 # for real: `tailscaled --help` says statedir "is derived from --state when
 # possible", but leaving it implicit here left tailscaled with nowhere to
@@ -35,7 +49,7 @@ User=vcctrl-ro
 # same way). --statedir is also where TLS certs, temporary Taildrop files,
 # etc. live, not just `--state`'s single state file.
 ExecStart=/usr/sbin/tailscaled \
-  --tun=userspace-networking \
+  --tun=tailscale-ro \
   --state=/var/lib/tailscale-ro/tailscaled.state \
   --statedir=/var/lib/tailscale-ro \
   --socket=/run/tailscale-ro/tailscaled.sock \
@@ -43,7 +57,7 @@ ExecStart=/usr/sbin/tailscaled \
 Restart=on-failure
 RestartSec=2
 
-# systemd creates and chowns these to User=pi above -- no manual mkdir/chown
+# systemd creates and chowns these to User=vcctrl-ro above -- no manual mkdir/chown
 # needed in install.sh, the same mechanism the STOCK tailscaled.service uses
 # for /var/lib/tailscale and /run/tailscale. Names deliberately distinct
 # from the stock unit's own dirs so the two instances can never collide on
