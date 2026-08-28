@@ -133,6 +133,34 @@ daemon:
     port: 8091
     upstream_port: 8080
 
+  # THE MIRROR'S OWN TAILNET IDENTITY. vcweb_public.py is proxied by a
+  # SECOND, unprivileged tailscaled instance (pi/install.sh's
+  # install_tailscaled_ro(), unit pi/files/tailscaled-ro.service), not by
+  # sharing the control node's own hostname on an alternate port -- gives
+  # the mirror a hostname of its own (e.g. https://<ro-hostname>.<tailnet>.
+  # ts.net/) with its own ACL/exposure surface, decoupled from the control
+  # node's. Not a container: a second tailscaled is the standard supported
+  # way to get a second tailnet identity on one host, and vcweb_public.py
+  # already has every isolation property a container would add on top (see
+  # its own module docstring: no import of vcctrld.py/vcweb.py, no /cmd
+  # route, no /ws).
+  #
+  # `tailscale up` for this instance is a ONE-TIME, MANUAL operator step
+  # (Tailscale admin console: a tag, an authkey scoped to it, and a
+  # funnel-ports ACL grant for that tag) -- never scripted, matching the
+  # fact that this repo never scripts `tailscale up` for the primary
+  # instance either. Until that step has been run once, `install_public()`
+  # still installs and starts everything else; the mirror simply is not
+  # yet reachable under its own hostname.
+  #
+  # FUNNEL-PORTS ACL IS GRANTED PER NODE, NOT PER TAILNET -- a freshly
+  # tagged node's own CapMap is not assumed to grant the same ports the
+  # primary node's does (that grant was read off the EXISTING `usb4vc`
+  # node, not a Tailscale default). Check
+  # `tailscale --socket=/run/tailscale-ro/tailscaled.sock status --json`
+  # -> Self.CapMap on the live instance before relying on a port, the same
+  # "checked, not assumed" discipline the :10000 note above exists for.
+
 # ---------------------------------------------------------------------------
 # Capabilities. Each names a backend; `none` is always available and always
 # honest -- a `none` backend answers "not configured", never a zero, never a

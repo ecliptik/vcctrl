@@ -133,6 +133,136 @@ if [ "${1:-}" = "--mcp-only" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# THE DEDICATED USER FOR BOTH READ-ONLY-MIRROR-ADJACENT SERVICES -- neither
+# vcweb_public.py nor tailscaled-ro.service needs anything `pi` carries.
+#
+# THIS IS NOT COSMETIC. Checked against the live Pi, not assumed: `pi` has
+# no sudo and no shell/SSH access of its own, so it looked safe at a glance
+# -- but `pi` is also in the `input` group, which owns
+# /dev/input/eventN for the virtual keyboard/mouse vcctrld already created
+# via /dev/uinput (itself root-only, mode 600, and NOT in pi's reach). A
+# process with write access to one of those event nodes can inject real key
+# and motion events into it -- evdev's write() path validates against the
+# DEVICE'S OWN registered capability bitmap, not a fixed "LED/sound only"
+# allowlist -- which means a bug in either service, running as `pi`, would
+# be one step from injecting input into the DOS target directly, bypassing
+# vcctrld's lock, activity log and every `confirm=` gate entirely. Neither
+# service has any legitimate reason to touch that group, or `dialout`,
+# `audio`, `video`, `adm`, `plugdev`, `netdev`, `spi`, `i2c`, `gpio` --
+# `vcweb_public.py` only ever makes loopback HTTP calls, `tailscaled-ro`
+# only ever needs ordinary network access.
+#
+# `useradd --system` gives this user its own private group and no
+# supplementary groups at all unless told to add some -- exactly what both
+# services need, which is none.
+ensure_vcctrl_ro_user() {
+  if ! id vcctrl-ro >/dev/null 2>&1; then
+    sudo useradd --system --no-create-home --shell /usr/sbin/nologin vcctrl-ro
+    echo "vcctrl-ro: created dedicated system user (no shell, no supplementary groups)"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# THE READ-ONLY MIRROR'S OWN TAILNET IDENTITY -- a second, unprivileged
+# `tailscaled` instance (pi/files/tailscaled-ro.service), not a container:
+# see that unit file's own comment for why. Gives the mirror a hostname of
+# its own instead of living on an alternate port under the private control
+# KVM's own hostname, so its ACL/exposure surface is decoupled from the
+# control node's.
+#
+# INSTALLS AND STARTS THE DAEMON, AND -- once it reports authenticated --
+# POINTS ITS OWN HOSTNAME'S :443 AT THE MIRROR. NEVER RUNS `tailscale up`:
+# registering this node needs an authkey from the Tailscale admin console
+# and stays a one-time, manual operator step, matching the fact that this
+# script never calls `tailscale up` for the PRIMARY instance either (see the
+# top of this file: it assumes that one is already authenticated
+# out-of-band). A freshly installed, unauthenticated instance is a
+# supported, harmless state, not a fault -- the function reports it and
+# returns rather than treating it as an error.
+#
+# Every fallible step is `|| true`-guarded, matching install_mcp()/
+# install_public(): a Pi that has never run the manual bootstrap step for
+# THIS instance, or is missing /usr/sbin/tailscaled outright, must not fail
+# a full install, or even a `--public-only` mirror install.
+RO_SOCK=/run/tailscale-ro/tailscaled.sock
+install_tailscaled_ro() {
+  if [ ! -f "$SRC/pi/files/tailscaled-ro.service" ]; then
+    echo "tailscaled-ro: pi/files/tailscaled-ro.service not in this checkout, skipping" >&2
+    return 0
+  fi
+  if [ ! -x /usr/sbin/tailscaled ]; then
+    echo "tailscaled-ro: /usr/sbin/tailscaled not found -- install the tailscale package first, skipping" >&2
+    return 0
+  fi
+  ensure_vcctrl_ro_user
+  sudo install -m 0644 "$SRC/pi/files/tailscaled-ro.service" \
+    /etc/systemd/system/tailscaled-ro.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable tailscaled-ro
+  sudo systemctl restart tailscaled-ro
+  sleep 1
+  sudo systemctl --no-pager --lines=10 status tailscaled-ro || true
+
+  # A RESTART OF AN ALREADY-REGISTERED NODE STILL NEEDS A FEW SECONDS to
+  # reconnect to the control plane before `status` reports it authenticated
+  # again -- measured the hard way redeploying onto an already-registered
+  # instance: a single `sleep 1` before the check below reported "NOT yet
+  # authenticated" for a node that was, seconds later, fine. Poll briefly
+  # rather than trust one sample taken too soon after a restart.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sudo tailscale --socket=$RO_SOCK status >/dev/null 2>&1 && break
+    sleep 1
+  done
+
+  # PLAIN `sudo`, NOT `sudo -u pi`, for every query below -- found the hard
+  # way bringing this up for real: this Pi's sudoers only grants passwordless
+  # NOPASSWD to root ("(root) NOPASSWD: ALL"), not to arbitrary target users,
+  # so `sudo -u pi tailscale ...` prompts for a password non-interactively,
+  # fails, and lands in the same branch as "not authenticated" regardless of
+  # the real state -- a silent false negative, not a permission boundary
+  # doing its job. Root can read/write the RO socket directly (root bypasses
+  # the socket file's own permissions), so there is no need to impersonate
+  # pi at all here. This does NOT reduce the daemon's own privilege drop --
+  # tailscaled-ro.service itself still runs as User=pi throughout, per
+  # tailscaled-ro.service; only these CLI queries against its socket run as
+  # root, same as every other `sudo tailscale ...` call in this file.
+  if sudo tailscale --socket=$RO_SOCK status >/dev/null 2>&1; then
+    echo "tailscaled-ro: running and already authenticated"
+  else
+    echo "tailscaled-ro: running, NOT yet authenticated -- run the manual"
+    echo "  'tailscale up --socket=$RO_SOCK ...' bootstrap step once (see docs)"
+    return 0
+  fi
+
+  # Point the RO node's own hostname at the mirror -- needs no secret, so
+  # (unlike `tailscale up`) this part is scripted, the same as the :443
+  # mapping the main HTTPS block below sets up for the primary instance.
+  RO_NAME="$(sudo tailscale --socket=$RO_SOCK status --json 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+  if [ -n "${RO_NAME:-}" ]; then
+    if sudo tailscale --socket=$RO_SOCK serve --bg --https=443 "http://127.0.0.1:8091" >/dev/null 2>&1; then
+      echo "https://${RO_NAME}/  -> vcctrl-web-public (tailnet only until funneled)"
+    else
+      echo "note: could not configure tailscale serve on the RO instance (:443)"
+    fi
+    # Read back rather than trust the exit code alone -- the 7473eb5 lesson:
+    # confirms the mapping actually landed, and surfaces this node's real
+    # CapMap so funnel-ports coverage for :443 can be checked before anyone
+    # runs `funnel` against it by hand (a FRESH node/tag's CapMap is not
+    # assumed to match the primary's -- see vcctrl-web-public.service's own
+    # funnel-ports-ACL-is-per-node note).
+    sudo tailscale --socket=$RO_SOCK serve status || true
+    sudo tailscale --socket=$RO_SOCK status --json 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("CapMap",{}))' || true
+  fi
+}
+
+if [ "${1:-}" = "--tailscaled-ro-only" ]; then
+  install_tailscaled_ro
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # THE PUBLIC READ-ONLY MIRROR -- daemon/vcweb_public.py, a separate process
 # from vcctrld (see that module's own docstring for why: it is auditable, by
 # grep alone, as incapable of ever sending a command to the target, and that
@@ -151,6 +281,14 @@ install_public() {
     echo "vcctrl-web-public: daemon/vcweb_public.py not in this checkout, skipping" >&2
     return 0
   fi
+
+  # The mirror's OWN tailnet identity, before the mirror itself -- see
+  # install_tailscaled_ro()'s own comment. Never fails a public-mirror
+  # install: a Pi that has never run the manual `tailscale up` bootstrap
+  # for this instance still gets the mirror installed and running, just
+  # not yet reachable under its own hostname.
+  install_tailscaled_ro
+
   sudo mkdir -p "$PREFIX"
   sudo install -m 0644 "$SRC/daemon/vcweb_public.py" "$PREFIX/vcweb_public.py"
   # kvm-ro.html and themes.css are read fresh from disk on every request
@@ -165,6 +303,7 @@ install_public() {
     echo "vcctrl-web-public: pi/files/vcctrl-web-public.service not in this checkout, skipping the unit" >&2
     return 0
   fi
+  ensure_vcctrl_ro_user
   sudo install -m 0644 "$SRC/pi/files/vcctrl-web-public.service" \
     /etc/systemd/system/vcctrl-web-public.service
   sudo systemctl daemon-reload
@@ -173,41 +312,23 @@ install_public() {
   sleep 1
   sudo systemctl --no-pager --lines=10 status vcctrl-web-public || true
 
-  # TAILNET-ONLY, ON ITS OWN PORT -- distinct from the private KVM's own
-  # :443, so the later, manual, operator-approved `tailscale funnel` step
-  # (see vcweb_public.py's module docstring and the service file's own
-  # EXPOSURE note) flips exactly this one mapping, not something entangled
-  # with the private page's path. Idempotent, like the :443 mapping above:
-  # re-running only re-asserts the same rule.
+  # NO LONGER MAPS :10000 ON THE PRIMARY INSTANCE HERE. Used to -- this
+  # mirror lived at https://<control-hostname>:10000/, an alternate port on
+  # the SAME Tailscale node as the private control UI -- until it got its
+  # own tailnet identity (install_tailscaled_ro(), above; see
+  # vcctrl-web-public.service's EXPOSURE comment for the full history).
+  # Deliberately NOT idempotently re-asserted here any more: a scripted
+  # block that re-creates :10000 on every `--public`/`--public-only` deploy
+  # would silently undo that cutover the next time anyone redeploys.
   #
-  # PORT 10000, NOT VCCTRL_PUBLIC_PORT (8091) -- LEARNED THE HARD WAY.
-  # `tailscale serve`/`funnel` accept any local port as a PROXY TARGET, but
-  # actually reaching the public internet through `funnel` additionally
-  # needs the EXTERNAL port to be one the tailnet's own ACL grants this
-  # node via the `funnel-ports` node capability (check with `tailscale
-  # status --json`, under Self.CapMap, key
-  # "https://tailscale.com/cap/funnel-ports?ports=...") -- commonly
-  # 443,8443,10000 as Tailscale's own defaults. `tailscale funnel` on a
-  # port outside that list reports success locally (AllowFunnel: true in
-  # `tailscale funnel status --json`, HTTPS: true, no error at all) and is
-  # simply never reachable from outside the tailnet -- silent, no warning,
-  # discovered only by testing from a device that is genuinely off the
-  # tailnet. 10000 is the one of the three defaults not already spoken for
-  # by the private KVM (443, 8443), so the external port here is 10000
-  # while the service itself keeps listening on 8091 -- this proxies one
-  # to the other, nothing about VCCTRL_PUBLIC_PORT or the service unit
-  # changes.
-  if command -v tailscale >/dev/null 2>&1; then
-    TS_NAME="$(tailscale status --json 2>/dev/null \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
-    if [ -n "${TS_NAME:-}" ]; then
-      if sudo tailscale serve --bg --https=10000 "http://127.0.0.1:8091" >/dev/null 2>&1; then
-        echo "https://${TS_NAME}:10000/  -> vcctrl-web-public (tailnet only until funneled)"
-      else
-        echo "note: could not configure tailscale serve for :10000"
-      fi
-    fi
-  fi
+  # ROLLBACK, if the RO instance's own identity ever needs abandoning: the
+  # exact commands that used to run here, unchanged, run by hand on the
+  # PRIMARY socket (no --socket= flag):
+  #   TS_NAME="$(tailscale status --json | python3 -c \
+  #     'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
+  #   sudo tailscale serve --bg --https=10000 "http://127.0.0.1:8091"
+  # Verify the same way install_tailscaled_ro()'s own mapping is verified:
+  # read back `tailscale serve status`, don't trust the exit code alone.
 }
 
 if [ "${1:-}" = "--public-only" ]; then

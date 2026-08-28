@@ -17,10 +17,15 @@ Environment=VCCTRL_PUBLIC_PORT=8091
 Environment=VCCTRL_WEB_PORT=8080
 Restart=always
 RestartSec=2
-# Unprivileged on purpose, unlike vcctrld: this process never touches
-# /dev/uinput or any device, it only ever makes loopback HTTP GET requests
-# to the private daemon's already-read-only endpoints.
-User=pi
+# UNPRIVILEGED, AND NOT AS `pi` -- this process never touches /dev/uinput
+# or any device, it only ever makes loopback HTTP GET requests to the
+# private daemon's already-read-only endpoints, but `pi` carries group
+# memberships (`input` above all -- see pi/install.sh's ensure_vcctrl_ro_user()
+# for the full reasoning) it has no use for and that a bug here would
+# otherwise inherit for free. `vcctrl-ro` is a dedicated system user with no
+# shell, no password and no supplementary groups, created idempotently by
+# pi/install.sh before this unit starts.
+User=vcctrl-ro
 
 [Install]
 WantedBy=multi-user.target
@@ -28,28 +33,39 @@ WantedBy=multi-user.target
 # --------------------------------------------------------------------------
 # WIRED INTO pi/install.sh's install_public() (and pi/deploy.sh --public /
 # --public-only), which installs this unit, copies vcweb_public.py,
-# kvm-ro.html and themes.css into /opt/vcctrl, and sets up the tailnet-only
-# `tailscale serve` mapping below -- one code path, not copied here.
+# kvm-ro.html and themes.css into /opt/vcctrl, and calls
+# install_tailscaled_ro() -- see tailscaled-ro.service and its own comment.
 #
-# EXPOSURE: TAILNET-ONLY BY DEFAULT. install_public() maps
-#   https://<tailnet-host>:10000/ -> http://127.0.0.1:8091 (this service)
-# reachable to the tailnet the same way the control UI is (or, for a quick
-# look without touching `tailscale serve` config at all:
+# EXPOSURE: ITS OWN TAILNET IDENTITY, NOT A PORT ON THE CONTROL HOSTNAME.
+# This mirror used to live at https://<control-hostname>:10000/ -- an
+# alternate port on the SAME Tailscale node as the private control UI, so
+# its ACL/exposure surface was entangled with the control node's. It now has
+# a second, unprivileged `tailscaled` instance of its own
+# (tailscaled-ro.service, socket /run/tailscale-ro/tailscaled.sock), mapping
+#   https://<ro-hostname>.<tailnet>.ts.net/ -> http://127.0.0.1:8091 (this service)
+# where <ro-hostname> is whatever hostname that instance registered under
+# (`tailscale up --socket=/run/tailscale-ro/tailscaled.sock ...`, a one-time
+# MANUAL operator step -- see install_tailscaled_ro()'s own comment; this
+# unit's own service never runs `tailscale up` or `tailscale funnel`). For a
+# quick look without touching tailscale config at all:
 #   ssh -L 8091:127.0.0.1:8091 pi@<tailnet-host>
-# ).
 #
-# PORT 10000, NOT 8091 or 8443 -- LEARNED THE HARD WAY. The external port
-# above is 10000, not this service's own VCCTRL_PUBLIC_PORT (8091): making
-# this reachable from the OPEN INTERNET is a separate, later, manual
-# `tailscale funnel` step the operator takes after reviewing it over the
-# tailnet (this unit does not run funnel, and nothing in vcweb_public.py
-# assumes it ever will be) -- but `tailscale funnel` only actually reaches
-# the public internet on ports the tailnet's own ACL grants this node via
-# the `funnel-ports` node capability (check `tailscale status --json` ->
-# Self.CapMap; commonly 443, 8443, 10000 by Tailscale's own default).
-# Funnel on a port outside that grant reports success locally (AllowFunnel:
-# true, HTTPS: true, `tailscale funnel status` shows "Funnel on") with NO
-# warning at all, and is simply never reachable from outside the tailnet --
-# discovered only by testing from a device genuinely off the tailnet, which
-# is exactly how this was found. 10000 is the one of the three commonly-
-# granted defaults not already spoken for by the private KVM (443, 8443).
+# THE FUNNEL-PORTS ACL GRANT IS PER NODE, NOT PER TAILNET -- LEARNED THE
+# HARD WAY, TWICE. First as the reason the old setup used port 10000 rather
+# than 8091 externally (a tailnet's ACL grants Funnel only on specific
+# ports, via the `funnel-ports` node capability -- check `tailscale status
+# --json` -> Self.CapMap; commonly 443, 8443, 10000 by Tailscale's own
+# default -- and Funnel on a port outside that grant reports success
+# locally with NO warning at all, discovered only by testing from a device
+# genuinely off the tailnet). Second, bringing up this RO node's own
+# identity: TAGGING a freshly-registered node can silently DROP capabilities
+# it had while untagged (this one lost `funnel`/`funnel-ports` the moment
+# `tag:vcctrl-kvm-ro` was applied, because it had been inheriting them from
+# the registering owner identity, not from any grant to the tag) -- the
+# tag's own ACL policy needs an explicit `nodeAttrs` grant
+# (`{"target": ["tag:vcctrl-kvm-ro"], "attr": ["funnel"]}` or equivalent)
+# before Funnel works again. Same discipline both times: check
+# `tailscale --socket=/run/tailscale-ro/tailscaled.sock status --json` ->
+# Self.CapMap on the LIVE instance before trusting a port or a tag, and
+# confirm reachability from a device genuinely off the tailnet before
+# treating Funnel as working.

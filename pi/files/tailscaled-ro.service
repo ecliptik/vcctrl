@@ -1,0 +1,80 @@
+[Unit]
+Description=Tailscale node agent -- read-only KVM mirror's own tailnet identity
+Documentation=https://tailscale.com/kb/1113/tailscale-up/
+# Ordering only, deliberately -- matching vcctrl-web-public.service's own
+# comment: this must be able to run, restart or fail independently of BOTH
+# the primary tailscaled instance (tailscaled.service) and vcctrld. There is
+# nothing here for a Requires=/Wants= on either to protect -- separate state
+# dir, separate socket, separate tailnet identity, on purpose (see
+# pi/install.sh's install_tailscaled_ro() and the plan this shipped under:
+# a second tailscaled instance is how the read-only mirror gets its own
+# tailnet hostname without a container).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+# UNPRIVILEGED, AND NOT AS `pi` -- this instance never touches /dev/net/tun
+# or needs CAP_NET_ADMIN: --tun=userspace-networking replaces the kernel TUN
+# device with tailscaled's own userspace netstack, and `tailscale serve`/
+# `funnel` terminate TLS inside tailscaled itself, so neither needs root.
+# `pi` was the first choice (matching vcweb_public.py's own posture) but
+# carries group memberships this process has no use for -- `input` above
+# all, which owns the virtual keyboard/mouse device nodes vcctrld drives
+# the DOS target through (see pi/install.sh's ensure_vcctrl_ro_user() for
+# the full reasoning: write access to those nodes can inject real input,
+# not just read it). `vcctrl-ro` is a dedicated system user with no shell,
+# no password and no supplementary groups, created idempotently by
+# pi/install.sh before this unit starts.
+User=vcctrl-ro
+# --statedir EXPLICIT, NOT DERIVED -- found the hard way bringing this up
+# for real: `tailscaled --help` says statedir "is derived from --state when
+# possible", but leaving it implicit here left tailscaled with nowhere to
+# put ACME certs (`cert refresh: ...: no TailscaleVarRoot` in its own log,
+# and every `tailscale serve` HTTPS connection failed the TLS handshake the
+# same way). --statedir is also where TLS certs, temporary Taildrop files,
+# etc. live, not just `--state`'s single state file.
+ExecStart=/usr/sbin/tailscaled \
+  --tun=userspace-networking \
+  --state=/var/lib/tailscale-ro/tailscaled.state \
+  --statedir=/var/lib/tailscale-ro \
+  --socket=/run/tailscale-ro/tailscaled.sock \
+  --port=0
+Restart=on-failure
+RestartSec=2
+
+# systemd creates and chowns these to User=pi above -- no manual mkdir/chown
+# needed in install.sh, the same mechanism the STOCK tailscaled.service uses
+# for /var/lib/tailscale and /run/tailscale. Names deliberately distinct
+# from the stock unit's own dirs so the two instances can never collide on
+# state OR socket path -- every `tailscale` CLI call meant for THIS instance
+# must carry an explicit --socket=/run/tailscale-ro/tailscaled.sock, or it
+# silently targets the PRIMARY instance's default socket instead. Same
+# failure shape as the missing-`--https=` mistake in commit 7473eb5
+# (`tailscale funnel --bg 8091` briefly funneled the private control KVM to
+# the open internet) -- an unqualified command doesn't error, it just hits
+# the wrong thing.
+RuntimeDirectory=tailscale-ro
+RuntimeDirectoryMode=0750
+StateDirectory=tailscale-ro
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
+
+# --------------------------------------------------------------------------
+# WIRED INTO pi/install.sh's install_tailscaled_ro() (called from the top of
+# install_public(), so it's covered by the existing --public/--public-only
+# surface), which installs this unit, starts it, and -- once it reports
+# authenticated -- points its own hostname's :443 at the mirror the same way
+# install_public() already does for the primary instance's own mappings.
+#
+# NEVER RUNS `tailscale up`. Registering this node (authkey, hostname, the
+# funnel-ports ACL grant for its tag) is a one-time MANUAL operator step,
+# taken from the Tailscale admin console and a single interactive command --
+# matching the fact that this repo never scripts `tailscale up` for the
+# PRIMARY instance either (it assumes that one is already authenticated
+# out-of-band too). Until that step has been done once, this unit is up and
+# healthy but the node is unregistered (`tailscale --socket=/run/tailscale-ro/
+# tailscaled.sock status` reports NeedsLogin) -- expected and harmless, not
+# a fault.

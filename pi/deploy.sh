@@ -273,7 +273,8 @@ if [ "${1:-}" = "--public" ]; then
   $SCP "$SRC/daemon/vcweb_public.py" "$SRC/daemon/kvm-ro.html" "$SRC/daemon/themes.css" \
     "$HOST:$rdir/daemon/" || explain_hang
   $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
-  $SCP "$SRC/pi/files/vcctrl-web-public.service" "$HOST:$rdir/pi/files/" || explain_hang
+  $SCP "$SRC/pi/files/vcctrl-web-public.service" "$SRC/pi/files/tailscaled-ro.service" \
+    "$HOST:$rdir/pi/files/" || explain_hang
   $SSH "$HOST" "bash $rdir/pi/install.sh --public-only; rc=\$?; rm -rf $rdir; exit \$rc" \
     || explain_hang
   echo "installed vcctrl-web-public (vcctrld untouched)"
