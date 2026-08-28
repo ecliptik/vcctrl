@@ -22,7 +22,7 @@ KNOWN_FIELDS = (
     "OS", "Shell", "CPU", "CPU Speed", "CPU Features",
     "Floating Point Unit", "L1 Cache", "L2 Cache",
     "Base Memory", "Ext. Memory",
-    "Video", "Video Memory",
+    "Video", "Video Memory", "Video Chipset",
     "Sound BLASTER", "Sound OPL", "Sound SB DSP", "Sound MPU-401",
     "PicoGUS",
     "Network Packet Driver", "Network IP Config",

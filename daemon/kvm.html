@@ -1,7 +1,8 @@
 <!doctype html>
+<html lang="en">
 <meta charset="utf-8">
 <title>vcctrl-kvm</title>
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" id="tcolor" content="#17150F">
 <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNSIgZmlsbD0iIzE3MTUwZiIvPjxyZWN0IHg9IjMuNSIgeT0iNSIgd2lkdGg9IjI1IiBoZWlnaHQ9IjE3LjUiIHJ4PSIyLjUiIGZpbGw9IiMzYTM1MmMiIHN0cm9rZT0iIzhhODI3NiIgc3Ryb2tlLXdpZHRoPSIxIi8+PHJlY3QgeD0iNiIgeT0iNy41IiB3aWR0aD0iMjAiIGhlaWdodD0iMTIuNSIgcng9IjEiIGZpbGw9IiMwNDEyMGEiLz48cGF0aCBkPSJNOC41IDExaDlNOC41IDE0aDEzTTguNSAxN2g2IiBzdHJva2U9IiM1NWZmNTUiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cmVjdCB4PSIxMyIgeT0iMjIuNSIgd2lkdGg9IjYiIGhlaWdodD0iMyIgZmlsbD0iIzhhODI3NiIvPjxyZWN0IHg9IjkiIHk9IjI1LjUiIHdpZHRoPSIxNCIgaGVpZ2h0PSIyLjQiIHJ4PSIxLjIiIGZpbGw9IiM4YTgyNzYiLz48L3N2Zz4=">
@@ -191,6 +192,13 @@
   #tabs { display:none; }
   @media (max-width:640px) {
     h1 { display:none; }
+    /* THE SLIDER NEVER GREW, on any width -- #vol's flex-basis was a flat
+       120px with no flex-grow, so mute/−/slider/+/percent always packed to
+       the row's left edge and left the rest of #pop-sound's ~320px empty.
+       Widened here rather than in the base rule: the desktop popover reads
+       as intentionally compact already, and this is the one place it was
+       reported as looking unfinished rather than merely narrow. */
+    body #vol { flex:1 1 auto; }
     /* These overflow the rail; the same values live in the State panel. */
     /* Transport stays: which path is carrying the picture is worth knowing at
        a glance, and it was the one thing the operator missed when the rail was
@@ -245,6 +253,30 @@
        colour-blind reader both need more than colour, "on" is also heavier
        and underscored, and "stale" is dashed. */
     body .lamp span { font-size:10px; }
+    /* THE ROW ALREADY SCROLLS WHEN IT DOES NOT FIT -- flex:0 1 auto plus
+       overflow-x:auto on #hdrstatus, above -- but a phone narrow enough that
+       even C/N/S at 10px still overflows starts scrolled to the LEFT, so the
+       last lamp sits half-cut against the container's own edge with nothing
+       saying there is more to see. Reported as "Scroll Lock is cut off".
+       Nothing here says any of these eight readings matters less than the
+       others, so the row keeps all of them rather than dropping one.
+
+       THE REAL FIX IS THE GAP, not a scroll hint: the desktop gap (11px, set
+       above on #hdrstatus) was never narrowed for a phone, so eight lamps
+       paid for nine full-width gaps between them before a single letter was
+       drawn. #lamps' internal C/N/S gap comes down with it so the
+       three-letter group does not read as wider-spaced than the row it sits
+       in. A mask-image fade lived here first, on the assumption the row
+       would still overflow -- removed once the gap alone stopped it needing
+       one. */
+    body #hdrstatus { gap:5px; }
+    body #lamps { gap:4px; }
+    /* The desktop 5px 11px is a comfortable click target's worth of
+       breathing room around one line of --t-micro text; on a phone,
+       where every row is already fighting the tab bar for space, that
+       reads as dead air above and below the sentence rather than as
+       room to tap. */
+    body #worklabelbar { padding:2px 7px; }
 
     /* ── the key rail ─────────────────────────────────────────────────────
        One flat scrolling row, no boxes, generous targets. Bordered buttons at
@@ -443,7 +475,7 @@
       flex:0 0 auto; padding:0 6px;
       min-width:0; border:0; border-radius:0; background:transparent;
       color:var(--dim); font:var(--t-micro)/1 var(--mono);
-      letter-spacing:.06em; min-height:46px; padding:0;
+      letter-spacing:.06em; min-height:46px;
       border-top:2px solid transparent;
     }
     #tabs button.on { color:var(--green); border-top-color:var(--green); }
@@ -506,8 +538,28 @@
      Lit, hollow or crossed: never colour alone. */
   #lamps { display:flex; gap:7px; flex:none; align-items:center;
            background:transparent; border:0; padding:0 2px; min-height:0;
-           cursor:default; }
-  @media (pointer:coarse) { #lamps { min-height:var(--tap); } }
+           cursor:default; position:relative; }
+  /* THE HIT AREA GROWS; THE BOX DOES NOT. min-height:var(--tap) here grew
+     the VISUAL box to 44px, which is taller than #hdrstatus's own 46px
+     header on desktop (clipping the pill's rounded corners -- a "more
+     rounded menu" reading as squared-off, see the a11y doc) and, on a
+     phone, taller than the mobile header's 38px too -- so accommodating
+     it meant growing the header itself, and the header is the one thing
+     on this page every other element takes its height from. WCAG 2.5.8
+     doesn't require the visible target to be 44px, only the clickable
+     one -- an invisible ::before, positioned and sized independently of
+     layout, gives touch the full 44x44 without the row (or its
+     container) ever needing to grow to fit it. Gated to touch for the
+     same reason the old rule was: a mouse pointer doesn't need it, and
+     an invisible box a mouse can "miss" past its visible edges would be
+     a worse click target than the visible one alone. */
+  @media (pointer:coarse) {
+    #lamps::before {
+      content:''; position:absolute; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      width:var(--tap); height:var(--tap);
+    }
+  }
   /* THE WORD IS THE LAMP. This was a dot with a label under it, and on a
      phone the label was hidden to save width -- which left three unlabelled
      specks, the one indicator on the page that could not be read at all.
@@ -1077,6 +1129,22 @@
   /* ── rails ───────────────────────────────────────────────────────────── */
   /* Full width under the picture: a command line in a 340px sidebar could not
      show a DOS path and its arguments at once. */
+  /* THE ONE-SENTENCE "WHAT IS HAPPENING RIGHT NOW". NoteCapability
+     (daemon/vcctrld.py) already exists for exactly this -- "set by
+     whoever is driving the rig... e.g. rebooting into NET profile to
+     copy log files for review" -- and kvm-ro.html's own #worklabel
+     already shows it, but this page never wired it in, so an operator
+     watching the FULL page had no more insight than "No Signal" while a
+     scan or transfer was mid-reboot. Same source, same default ("Idle"
+     until the first note lands), same no-expiry behaviour: a stale
+     sentence is still the last true thing anyone said, and its own age
+     (shown alongside it) is what marks it stale rather than current. */
+  #worklabelbar {
+    flex:none; padding:5px 11px; background:var(--panel);
+    border-bottom:1px solid var(--rule); color:var(--dim);
+    font:var(--t-micro)/1.4 var(--sans); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;
+  }
   #cmdbar {
     flex:none; display:flex; gap:7px; padding:7px 9px; background:var(--panel);
     border-bottom:1px solid var(--rule); align-items:center;
@@ -1446,7 +1514,7 @@
      rather than by taking their space back: reflowing the stage would
      resize and re-fit the picture every time you reached for a control,
      which is the opposite of looking directly connected. */
-  body.fs header, body.fs #cmdbar,
+  body.fs header, body.fs #cmdbar, body.fs #worklabelbar,
   body.fs #tabs, body.fs #body { display:none; }
   body.fs.peek header, body.fs.peek #cmdbar {
     display:flex; position:fixed; left:0; right:0; z-index:80;
@@ -1659,7 +1727,14 @@
   #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
                     font:var(--t-read)/1.3 var(--sans); cursor:pointer; }
   #settings input[type=checkbox] { accent-color:var(--green); width:17px;
-                                   height:17px; flex:none; }
+                                   height:17px; flex:none; margin:0; }
+  /* THE HINT BELOW EACH CHECKBOX IS A SIBLING, NOT A CHILD, so its fixed
+     26px (checkbox + gap) only lines up under the label's own text if the
+     checkbox itself carries no margin of its own -- the browser default is
+     not zero (Chrome's UA sheet gives <input> ~4px), which was pushing
+     "LED and probe traffic" a few px further right than ".hint"'s own
+     26px, e.g. "Caps Lock toggles..." starting under the checkbox's
+     left edge rather than under the label text above it. */
   .hint { color:var(--dim); font:var(--t-micro)/1.5 var(--sans);
           margin:0 0 9px 26px; }
   /* Twenty-five named buttons filled the settings panel and pushed
@@ -1745,6 +1820,14 @@
     #zoombtn { min-width:52px; }
   }
 
+  /* THE SETTING ITSELF, not just its effect, stays out of sight below the
+     width where it does anything -- a selector that visibly exists but
+     silently does nothing is worse than one that isn't there to wonder
+     about. Same 1100px line the rule below enforces. */
+  @media (max-width:1099px) {
+    #btnstylesection { display:none; }
+  }
+
   /* THE MANUAL CHOICE, and only above the width where the toolbar already
      narrows itself to fit -- below 1100px icon-only is a fit constraint, not
      a preference, and stays forced regardless of this setting. Same button
@@ -1801,7 +1884,8 @@
        here; everything the target IS lives up there. The two used to be
        mixed, which is why a power chip that looked like a readout was also a
        menu, and a keyboard chip nobody could see a reason to press. */
-    #cmdbar { grid-column:1/-1; grid-row:3; }
+    #worklabelbar { grid-column:1/-1; grid-row:3; }
+    #cmdbar { grid-column:1/-1; grid-row:4; }
     /* The side panel is 340px of a 1580px window. Collapsing the COLUMN as
        well as hiding the panel is the load-bearing half: display:none on the
        panel alone leaves the track sized and the picture exactly where it
@@ -1856,11 +1940,11 @@
          colour means. They replace two chips that spent most of their width
          restating a label nobody needed twice. -->
     <span class="sep" aria-hidden="true">|</span>
-    <span class="lamp" id="lamp-pwr"><i></i><span>PWR</span></span>
-    <span class="lamp" id="lamp-link"><i></i><span>LNK</span></span>
-    <span class="lamp" id="lamp-audio"><i></i><span>AUD</span></span>
-    <span class="lamp lockable" id="lamp-kbd"><i></i><span>KBD</span></span>
-    <span class="lamp lockable" id="lamp-mouse"><i></i><span>MOS</span></span>
+    <span class="lamp" id="lamp-pwr" aria-label="Power"><i></i><span>PWR</span></span>
+    <span class="lamp" id="lamp-link" aria-label="Link"><i></i><span>LNK</span></span>
+    <span class="lamp" id="lamp-audio" aria-label="Audio"><i></i><span>AUD</span></span>
+    <span class="lamp lockable" id="lamp-kbd" aria-label="Keyboard"><i></i><span>KBD</span></span>
+    <span class="lamp lockable" id="lamp-mouse" aria-label="Mouse"><i></i><span>MOS</span></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
     <span class="sep" aria-hidden="true">|</span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs"
@@ -1921,7 +2005,7 @@
             title="Switch between the light and dark half of this theme">☀️</button>
   </header>
 
-  <div id="stage">
+  <main id="stage">
    <!-- Under the header, over the picture. As a row in the flow it sat down
         by the control strip -- far from anything it was about -- and it took
         a row of the picture and re-fitted it the moment it appeared. It is a
@@ -2039,9 +2123,11 @@
          often the only picture there is -- but a dismissed warning with no way
          back is a warning you have deleted. -->
     <button id="veilback" title="Show the No Signal notice again" hidden>⚠</button>
-  </div>
+  </main>
 
-  <div id="cmdbar">
+  <div id="worklabelbar"><span id="worklabel">—</span></div>
+
+  <div id="cmdbar" role="region" aria-label="Command bar">
     <!-- The paper clip lives INSIDE the field, because "put a file in" is the
          same gesture as "put text in" and they belong in the same place. -->
     <div id="linewrap">
@@ -2072,7 +2158,7 @@
               aria-controls="pop-keys"
               title="Keys this field cannot type (Esc, F-keys, Ctrl-Alt-Del)"><span
               class="gly">⌨️</span></button>
-      <input id="line" placeholder="type a command"
+      <input id="line" placeholder="type a command" aria-label="Command to type"
              autocapitalize="off" autocorrect="off" spellcheck="false">
       <!-- THE WORD IS A LUXURY OF WIDTH. On a desktop the row has room and
            "Send ↵" is plainer than an arrow alone; on a phone that word was
@@ -2205,6 +2291,12 @@
       <label><input type="checkbox" id="opt-auto">
         Follow the system light/dark setting</label>
 
+      <h2 style="margin-top:14px">Status bar</h2>
+      <label><input type="checkbox" id="opt-worklabel">
+        Show status bar</label>
+      <div class="hint" style="margin-left:0">One line for what the rig is
+        doing right now, e.g. mid-reboot.</div>
+
       <h2 style="margin-top:14px">Input</h2>
       <div class="row" style="margin-bottom:6px">
         <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
@@ -2213,21 +2305,25 @@
         the PS/2 LED to come back. Worth running when the target stops
         responding and you need to know which half is at fault.</div>
 
-      <h2 style="margin-top:14px">Buttons</h2>
-      <div class="row" style="margin-bottom:4px">
-        <span style="flex:1 1 auto">Show</span>
-        <!-- ≥1100px only. Below that, the toolbar already forces icon-only to
-             fit -- see the 641-1099px band and the ≤640px sheet UI -- so a
-             manual choice there would just clip. Default is "both", which is
-             every existing layout unchanged until someone opens this menu. -->
-        <select id="btnstylesel" title="How toolbar buttons are labelled on a wide window">
-          <option value="both">Icon + text</option>
-          <option value="icon">Icon only</option>
-          <option value="text">Text only</option>
-        </select>
+      <!-- HIDDEN, NOT JUST INERT, BELOW 1100PX. The control already had no
+           effect there -- below 1100px the toolbar already forces icon-only
+           to fit -- and a selector that visibly exists but silently does
+           nothing is worse than one that isn't there to wonder about. -->
+      <div id="btnstylesection">
+        <h2 style="margin-top:14px">Buttons</h2>
+        <div class="row" style="margin-bottom:4px">
+          <span style="flex:1 1 auto">Show</span>
+          <!-- ≥1100px only. Below that, the toolbar already forces icon-only to
+               fit -- see the 641-1099px band and the ≤640px sheet UI -- so a
+               manual choice there would just clip. Default is "both", which is
+               every existing layout unchanged until someone opens this menu. -->
+          <select id="btnstylesel" title="How toolbar buttons are labelled on a wide window">
+            <option value="both">Icon + text</option>
+            <option value="icon">Icon only</option>
+            <option value="text">Text only</option>
+          </select>
+        </div>
       </div>
-      <div class="hint" style="margin-left:0">Below 1100px the toolbar already
-        switches to icons only to fit, whatever this says.</div>
 
       <h2 style="margin-top:14px">Video</h2>
       <div class="row" style="margin-bottom:4px">
@@ -2279,6 +2375,12 @@
         rate, and what the daemon says it is actually sending, logged each
         time either one changes -- noisy, and rarely the thing you are
         looking for.</div>
+      <label><input type="checkbox" id="opt-transport">
+        Transport messages</label>
+      <div class="hint">Off by default: reconnects, websocket retries,
+        stalled-stream restarts -- true, but about the connection to this
+        page rather than the target, and noise next to everything else
+        here.</div>
 
       <h2 style="margin-top:14px">System config</h2>
       <!-- WHAT THE DAEMON RESOLVED, not the file on disk. Same source as
@@ -2386,8 +2488,8 @@
   <div class="hint" id="plugid" style="margin:9px 0 0">—</div>
 </div>
 
-  <div id="tabs">
-    <button data-tab="none" class="on" title="Just the picture">SCREEN</button>
+  <div id="tabs" role="navigation" aria-label="Panel view">
+    <button data-tab="none" class="on" aria-current="true" title="Just the picture">SCREEN</button>
     <!-- TYPE, not KEYS. This tab opens the COMMAND LINE -- a field you type
          into -- and the key menu is a button inside it. Calling it KEYS named
          the smaller thing behind the bigger one, and on a phone, where the
@@ -2403,7 +2505,7 @@
     <button data-tab="stats" title="Measured state of the rig">STATUS</button>
   </div>
 
-  <div id="body">
+  <div id="body" role="complementary" aria-label="Status and activity">
    <div id="sheethdr">
      <span id="sheettitle">Activity</span>
      <button id="sheetclose" title="Close this panel">✕ Close</button>
@@ -2466,7 +2568,8 @@ const BUILD = '__BUILD__';
 // is separate from the one where they ticked it last time, is a trap. The page
 // falls back to mjpeg by itself if the socket does not deliver, so defaulting
 // on costs nothing when it cannot work and saves a support round when it can.
-const OPTS = {probe:false, poll:false, mine:false, mcp:true, rate:false};
+const OPTS = {probe:false, poll:false, mine:false, mcp:true, rate:false,
+              transport:false};
 // Settings are versioned. `ws` defaulted to false while the WebSocket could
 // not work, and browsers that saved settings in that period keep the false
 // forever -- a stored preference from an era whose reasoning no longer holds,
@@ -5201,6 +5304,7 @@ function visible(e) {
   if (!OPTS.mine && e.kind === 'cmd' && e.by === 'browser') return false;
   if (!OPTS.mcp && isMcp(e)) return false;
   if (!OPTS.rate && e.kind === 'rate') return false;
+  if (!OPTS.transport && e.kind === 'transport') return false;
   return true;
 }
 
@@ -6068,6 +6172,16 @@ function hideStale() {
   staleBlob = null;      // saving now takes the live frame instead
 }
 
+function showWorkNote(note) {
+  const el = $('worklabel');
+  if (!el) return;
+  note = note || {};
+  if (!note.text) { el.textContent = 'Idle'; return; }
+  el.textContent = note.text
+    + (note.at != null
+       ? ' · ' + fmtAge((Date.now() / 1000) - note.at) + ' ago' : '');
+}
+
 // ------------------------------------------------------------------ status
 const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
   : s < 5400 ? (s/60).toFixed(1)+'m' : (s/3600).toFixed(1)+'h';
@@ -6214,6 +6328,7 @@ async function pollState() {
     veil.classList.toggle('show', !veilHidden);
     $('veilback').hidden = !veilHidden;
   }
+  showWorkNote(j.note);
   const L = j.lock || {};
   const inf = j.inflight || [];
   showPower(j.power);
@@ -6588,7 +6703,7 @@ function statsRows(j) {
         ['CPU', 'CPU'], ['CPU speed', 'CPU Speed'],
         ['CPU features', 'CPU Features'],
         ['memory', null], ['video', 'Video'],
-        ['video memory', 'Video Memory'],
+        ['video memory', 'Video Memory'], ['video chipset', 'Video Chipset'],
         ['sound (BLASTER)', 'Sound BLASTER'], ['sound (OPL)', 'Sound OPL'],
         ['sound (SB DSP)', 'Sound SB DSP'],
       ]) {
@@ -6981,8 +7096,12 @@ function setTab(name) {
   // at the bottom. Reading a log through a 150px window is not reading.
   // Settings is a drawer of its own now, not one of these panels.
   const asSheet = (name === 'log' || name === 'stats');
-  for (const b of document.querySelectorAll('#tabs button'))
-    b.classList.toggle('on', b.dataset.tab === name);
+  for (const b of document.querySelectorAll('#tabs button')) {
+    const active = b.dataset.tab === name;
+    b.classList.toggle('on', active);
+    if (active) b.setAttribute('aria-current', 'true');
+    else b.removeAttribute('aria-current');
+  }
   $('cmdbar').classList.toggle('open', name === 'keys');
   body.className = '';
   panels.className = '';
@@ -7681,6 +7800,23 @@ matchMedia('(prefers-color-scheme: light)')
 
 applyTheme(theme, false);
 if (autoTheme) autoPick();
+
+// OFF BY DEFAULT HERE, ON BY DEFAULT ON THE READ-ONLY PAGE. This page
+// already has the command bar, the log and every panel telling an
+// operator what is going on; the read-only mirror has none of that, so
+// its own copy of this same bar defaults the other way -- see its
+// matching block for why the default there is '!== 0' instead.
+let showWorklabel = localStorage.getItem('vcctrl.worklabel') === '1';
+function applyWorklabelVisibility() {
+  $('worklabelbar').style.display = showWorklabel ? '' : 'none';
+}
+applyWorklabelVisibility();
+$('opt-worklabel').checked = showWorklabel;
+$('opt-worklabel').onchange = () => {
+  showWorklabel = $('opt-worklabel').checked;
+  localStorage.setItem('vcctrl.worklabel', showWorklabel ? '1' : '0');
+  applyWorklabelVisibility();
+};
 
 // ══════════════════════════════════════════════════════════ the lamps
 // Caps / Num / Scroll straight off /sys/class/leds. Lit, hollow, or dashed:
