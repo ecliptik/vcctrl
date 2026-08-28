@@ -1094,17 +1094,37 @@ addEventListener('unhandledrejection', e =>
 const $ = id => document.getElementById(id);
 const BUILD = '__BUILD__';
 
+// localStorage THROWS, NOT JUST "MAY BE EMPTY", IN SOME VIEWING CONTEXTS --
+// found the hard way 2026-08-28: Safari's Share Sheet link-preview renders
+// this page in what behaves like a sandboxed context, where storage access
+// raises a SecurityError. The very FIRST unguarded call used to be
+// lsSet() a few lines below (the matching getItem() right
+// above it happened to already be inside a try/catch for an unrelated
+// reason -- catching JSON.parse on a corrupt stored value -- but the write
+// right after it was not), and an uncaught throw that early kills every
+// line of this script that follows, which is the whole page: the
+// PAGE SCRIPT ERROR banner (this file's own addEventListener('error', ...)
+// a few lines up) is doing exactly its job when that happens, but the
+// right fix is to not let a missing/blocked storage API take down a page
+// that has nothing essential riding on it -- every use here is a
+// remembered UI preference, never something the page can't function
+// without. lsGet/lsSet replace every direct localStorage.getItem/setItem
+// call in this file; a viewer in a context where storage is blocked just
+// gets defaults every time instead of a dead page.
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
 const OPTS = {probe:false, poll:false, mine:false, mcp:true, rate:false,
               transport:false};
 const OPTS_V = 3;
 try {
-  const saved = JSON.parse(localStorage.getItem('vcctrl.opts') || '{}');
+  const saved = JSON.parse(lsGet('vcctrl.opts') || '{}');
   if (saved.v !== OPTS_V) delete saved.ws;
   delete saved.v;
   Object.assign(OPTS, saved);
 } catch (e) {}
 OPTS.v = OPTS_V;
-localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
+lsSet('vcctrl.opts', JSON.stringify(OPTS));
 const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
 const img = $('mjpeg'), veil = $('veil');
 
@@ -1377,9 +1397,9 @@ setInterval(() => {
 
 let ac = null, aws = null, gain = null, analyser = null, cursor = 0, soundOn = false;
 let eqRAF = null;
-let waveMode = localStorage.getItem('vcctrl.wavemode') === 'eq' ? 'eq' : 'wave';
+let waveMode = lsGet('vcctrl.wavemode') === 'eq' ? 'eq' : 'wave';
 let volume = (() => {
-  const v = parseInt(localStorage.getItem('vcctrl.vol'), 10);
+  const v = parseInt(lsGet('vcctrl.vol'), 10);
   return isNaN(v) ? 80 : Math.max(0, Math.min(100, v));
 })();
 const LEAD = 0.12;
@@ -1391,7 +1411,7 @@ const gainFor = pct => ((pct / 100) ** 2) * MAX_GAIN;
 function applyVolume() {
   $('vol').value = volume;
   $('vpct').textContent = volume + '%';
-  localStorage.setItem('vcctrl.vol', String(volume));
+  lsSet('vcctrl.vol', String(volume));
   if (gain && ac) {
     try { gain.gain.setTargetAtTime(gainFor(volume), ac.currentTime, 0.015); }
     catch (e) { gain.gain.value = gainFor(volume); }
@@ -1447,7 +1467,7 @@ $('sbtn').onclick = () => {
 
 function setWaveMode(mode) {
   waveMode = mode;
-  localStorage.setItem('vcctrl.wavemode', mode);
+  lsSet('vcctrl.wavemode', mode);
   $('wavemode').textContent = mode === 'eq' ? '〰' : '📊';
   $('wavemode').title = mode === 'eq' ? 'Switch to waveform view' : 'Switch to spectrum view';
   $('wave').title = mode === 'eq' ? 'Spectrum of the audio arriving from the capture stick'
@@ -1637,7 +1657,7 @@ for (const k of Object.keys(OPTS)) {
   el.checked = !!OPTS[k];
   el.onchange = () => {
     OPTS[k] = el.checked;
-    localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
+    lsSet('vcctrl.opts', JSON.stringify(OPTS));
     renderLog();
   };
 }
@@ -1858,7 +1878,7 @@ async function pollEvents() {
 }
 
 let staleAt = 0;
-let staleFull = localStorage.getItem('vcctrl.stalefull') === '1';
+let staleFull = lsGet('vcctrl.stalefull') === '1';
 let staleBlob = null, staleAge = null;
 
 function applyStale() {
@@ -2160,13 +2180,13 @@ function applyBtnStyle(v) {
   document.body.classList.remove('btn-icon', 'btn-text', 'btn-both');
   document.body.classList.add('btn-' + v);
 }
-const btnStyle = ['icon', 'text', 'both'].includes(localStorage.getItem('vcctrl.btnstyle'))
-  ? localStorage.getItem('vcctrl.btnstyle') : 'both';
+const btnStyle = ['icon', 'text', 'both'].includes(lsGet('vcctrl.btnstyle'))
+  ? lsGet('vcctrl.btnstyle') : 'both';
 $('btnstylesel').value = btnStyle;
 applyBtnStyle(btnStyle);
 $('btnstylesel').onchange = () => {
   const v = $('btnstylesel').value;
-  localStorage.setItem('vcctrl.btnstyle', v);
+  lsSet('vcctrl.btnstyle', v);
   applyBtnStyle(v);
 };
 
@@ -2359,7 +2379,7 @@ function setTab(name) {
   else if (name === 'sound') { openPop('sound'); body.classList.add('closed'); }
   else if (name === 'set')   { showSettings(true); body.classList.add('closed'); }
   else body.classList.add('closed');
-  localStorage.setItem('vcctrl.tab', name);
+  lsSet('vcctrl.tab', name);
   setTimeout(() => { measureBars(); applyZoom(true); }, 80);
 }
 for (const b of document.querySelectorAll('#tabs button'))
@@ -2367,7 +2387,7 @@ for (const b of document.querySelectorAll('#tabs button'))
 if (matchMedia('(max-width:640px)').matches) setTab('none');
 
 const ZOOMS = ['fit', '1', '2', '4'];
-let zoomMode = localStorage.getItem('vcctrl.zoom2') || 'fit';
+let zoomMode = lsGet('vcctrl.zoom2') || 'fit';
 if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
 let crop = null, lastHinted = null, hintTimer = null;
 let cropUnion = null, cropStableTicks = 0, cropNullStreak = 0;
@@ -2478,7 +2498,7 @@ const ZOOMLABEL = {fit: 'Fit to Screen', '1': 'Original',
                    '2': '200%', '4': '400%'};
 function setZoom(m) {
   zoomMode = m;
-  localStorage.setItem('vcctrl.zoom2', m);
+  lsSet('vcctrl.zoom2', m);
   $('zoomlabel').textContent = ZOOMLABEL[m] || m;
   for (const b of document.querySelectorAll('#pop-zoom button'))
     b.classList.toggle('sel', b.dataset.zoom === m);
@@ -2538,7 +2558,7 @@ function showPanel(which, remember) {
   for (const [name, id] of [['log','actbtn'], ['stats','statbtn']])
     $(id).setAttribute('aria-expanded', which === name ? 'true' : 'false');
   if (which === 'stats' && lastState) $('stats').innerHTML = statsRows(lastState);
-  if (remember !== false) localStorage.setItem('vcctrl.panel', which);
+  if (remember !== false) lsSet('vcctrl.panel', which);
   applyZoom(true);
 }
 (function sidepanel() {
@@ -2549,7 +2569,7 @@ function showPanel(which, remember) {
   // stored preference at all got the Activity panel expanded regardless,
   // which is exactly backwards for a public read-only viewer whose first
   // look should be the picture, not an internal-sounding log.
-  const saved = localStorage.getItem('vcctrl.panel');
+  const saved = lsGet('vcctrl.panel');
   const start = saved === 'stats' ? 'stats'
               : saved === 'log' ? 'log'
               : '';
@@ -2656,9 +2676,9 @@ const PAIRS = THEMES.filter(t => t.dark)
                                 label: t.label.replace(/\s+(Dark|Light)$/, ''),
                                 group: t.group}));
 
-let theme = localStorage.getItem('vcctrl.theme') || 'vga';
+let theme = lsGet('vcctrl.theme') || 'vga';
 if (!BY[theme]) theme = 'vga';
-let autoTheme = localStorage.getItem('vcctrl.autotheme') !== '0';
+let autoTheme = lsGet('vcctrl.autotheme') !== '0';
 
 function pairOf(name) {
   const v = getComputedStyle(document.documentElement)
@@ -2674,7 +2694,7 @@ function endPreview() {
 function applyTheme(name, remember) {
   theme = name;
   document.documentElement.setAttribute('data-theme', name);
-  if (remember) localStorage.setItem('vcctrl.theme', name);
+  if (remember) lsSet('vcctrl.theme', name);
   requestAnimationFrame(() => {
     const bg = getComputedStyle(document.documentElement)
                  .getPropertyValue('--bg').trim();
@@ -2725,7 +2745,7 @@ function autoPick() {
     b.onmouseleave = leave;
     b.onblur = leave;
     b.onclick = () => { autoTheme = false;
-      localStorage.setItem('vcctrl.autotheme','0');
+      lsSet('vcctrl.autotheme','0');
       $('opt-auto').checked = false; applyTheme(b.dataset.theme, true); };
     host.appendChild(b);
   });
@@ -2735,14 +2755,14 @@ function autoPick() {
 $('dbtn2').onclick = () => $('dbtn').onclick();
 $('dbtn').onclick = () => {
   autoTheme = false;
-  localStorage.setItem('vcctrl.autotheme','0');
+  lsSet('vcctrl.autotheme','0');
   $('opt-auto').checked = false;
   applyTheme(pairOf(theme), true);
 };
 $('opt-auto').checked = autoTheme;
 $('opt-auto').onchange = () => {
   autoTheme = $('opt-auto').checked;
-  localStorage.setItem('vcctrl.autotheme', autoTheme ? '1' : '0');
+  lsSet('vcctrl.autotheme', autoTheme ? '1' : '0');
   if (autoTheme) autoPick();
 };
 matchMedia('(prefers-color-scheme: light)')
@@ -2751,7 +2771,7 @@ matchMedia('(prefers-color-scheme: light)')
 applyTheme(theme, false);
 if (autoTheme) autoPick();
 
-let showWorklabel = localStorage.getItem('vcctrl.worklabel') !== '0';
+let showWorklabel = lsGet('vcctrl.worklabel') !== '0';
 function applyWorklabelVisibility() {
   $('worklabel').style.display = showWorklabel ? '' : 'none';
 }
@@ -2759,7 +2779,7 @@ applyWorklabelVisibility();
 $('opt-worklabel').checked = showWorklabel;
 $('opt-worklabel').onchange = () => {
   showWorklabel = $('opt-worklabel').checked;
-  localStorage.setItem('vcctrl.worklabel', showWorklabel ? '1' : '0');
+  lsSet('vcctrl.worklabel', showWorklabel ? '1' : '0');
   applyWorklabelVisibility();
 };
 
