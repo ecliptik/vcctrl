@@ -125,6 +125,12 @@ keyboard now, drawn from a layout the daemon names per protocol board, and
 sweep gates step 8 in the pacing table and step 8 shipped without it. The panel
 says so itself rather than the fact living only here.
 
+**`DINSPECT-SYSINFO.md`** — the Status panel's DOS System section, grounded
+in a real `dinspect` run: one full scan (both reboots) cost **161s**, and
+its actual report is in there verbatim. **One run, no repeatability figure
+yet** — `ScanJob.RUN_WAIT_S` is proven sufficient once, not measured with a
+margin.
+
 ## Hardware facts
 
 `BOARD-IDENTITY.md`, `VIDEO-SWAP.md`, `SOUND-PROFILES.md`,
