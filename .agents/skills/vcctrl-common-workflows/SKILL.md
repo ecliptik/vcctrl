@@ -323,3 +323,23 @@ orchestration scripts with nothing correct to do on the daemon host itself.
 check distinguishes "never written" from "transfer failed," but neither
 proves the run itself was sound -- check `expect_log` assertions and the
 per-cell profile/lever assertions your run sheet actually calls for.
+
+## Narrating what you're doing, for whoever else is watching
+
+`vcctrl_note(text)` sets a one-sentence "what's happening right now" that
+both `kvm.html` and `kvm-ro.html` show (a work-note bar; off by default on
+the full page's Settings, on by default on the read-only one). It exists
+because the activity log has command names, not narration, and a human
+watching the KVM live -- especially on the read-only mirror, which has no
+other way to ask "why" -- otherwise sees a "No Signal" or a frozen picture
+with nothing explaining that it's mid-reboot rather than actually stuck.
+
+Call it before a multi-step sequence that reboots the target or takes more
+than a few seconds (a `file_scan`, `send_file`/`get_file`, a sweep, a power
+cycle you expect to take a while) -- one short sentence, e.g. "rebooting
+into NET to copy log files for review", not a running commentary per step.
+It has no expiry: the sentence stands, with its own age shown alongside
+it, until the next call replaces it -- there is no need (and no way) to
+clear it back to "Idle" when you're done, and no obligation to update it
+for every intermediate step, only for the ones that would otherwise read
+as "stuck."

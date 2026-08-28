@@ -2502,10 +2502,17 @@ function showPanel(which, remember) {
   applyZoom(true);
 }
 (function sidepanel() {
+  // CLOSED ON A FRESH SESSION -- unlike kvm.html's own copy of this
+  // function, which defaults an unrecognized/absent value to 'log' as a
+  // migration from an old collapse toggle that predates this page ever
+  // existing. This page has no such history: a first-time visitor with no
+  // stored preference at all got the Activity panel expanded regardless,
+  // which is exactly backwards for a public read-only viewer whose first
+  // look should be the picture, not an internal-sounding log.
   const saved = localStorage.getItem('vcctrl.panel');
   const start = saved === 'stats' ? 'stats'
-              : (saved === 'hidden' || saved === '') ? ''
-              : 'log';
+              : saved === 'log' ? 'log'
+              : '';
   showPanel(start);
   $('actbtn').onclick  = () => showPanel(sidePanel === 'log'   ? '' : 'log');
   $('statbtn').onclick = () => showPanel(sidePanel === 'stats' ? '' : 'stats');

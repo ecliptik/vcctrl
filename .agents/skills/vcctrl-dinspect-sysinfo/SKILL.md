@@ -59,10 +59,24 @@ one.
    `make`).
 2. Copy the built `dinspect.exe` to `vcctrl/vendor/dinspect.exe`, replacing
    the checked-in copy.
-3. **If the field list changed**, update `KNOWN_FIELDS` in
-   `daemon/vcsysinfo.py` by hand against a real report from the new
-   build — it is not read from `dosfetch` at runtime or at build time, see
-   that file's own header comment for why.
+3. **If the field list changed, TWO places need updating, not one** —
+   found the hard way 2026-08-28, adding a "Video Chipset" field: it
+   showed up correctly in `vcctrl_sysinfo()`'s `fields` after fixing only
+   the first of these, and still didn't render in the KVM panel until the
+   second was fixed too.
+   - `KNOWN_FIELDS` in `daemon/vcsysinfo.py`, by hand against a real
+     report from the new build — it is not read from `dosfetch` at
+     runtime or at build time, see that file's own header comment for
+     why. A label not in this list lands in `other`, not `fields`, and
+     the daemon needs restarting (`sudo systemctl restart vcctrld`) to
+     pick up the change, same as any other vcctrld.py/vcweb.py edit.
+   - The `[label, key]` list inside `g('DOS System (dinspect)')`'s
+     render loop, in **both** `daemon/kvm.html` and `daemon/kvm-ro.html`
+     — this is a second, independent hardcoded list, not a generic
+     "show every field" loop, so a label landing correctly in `fields`
+     still renders nothing until it's added here too. `pi/deploy.sh
+     --page` picks this one up with no restart, same as any other page
+     change.
 4. Push the new binary to the card over the standard upload recipe (see
    `vcctrl-common-workflows`' "Uploading a file to the target"):
    `vcctrl_file_check()` → `vcctrl_stage_file("vendor/dinspect.exe",
