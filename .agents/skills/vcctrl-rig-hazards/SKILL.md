@@ -39,7 +39,7 @@ design)` is not a no-op comment — it creates an empty file named `CFG`. A
 produces no visible output, which makes the resulting file's existence and
 size (usually 0 bytes) the only clue it happened.
 
-**Typed input can silently not land, three different ways.** Caps Lock state
+**Typed input can silently not land, four different ways.** Caps Lock state
 on the target inverts the case of everything vcctrl types, with no error
 anywhere in the chain. Separately, OCR read off the captured screen cannot
 reliably read digits. Neither failure mode announces itself — after typing
@@ -159,3 +159,35 @@ BIOS INT 16h path that would toggle Caps Lock, so "no LED change" there
 isn't proof the input path is dead — cross-check with a visible on-screen
 response to a keypress (a title-screen dismiss, a sprite moving) before
 trusting the LED check's verdict while a game owns the keyboard.
+
+Fourth, measured 2026-08-27 after a CPU swap to a 486DX2-50: the daemon's
+own automated typing (`_prove_net()`'s `type_line()` inside `send_file`/
+`get_file`) dropped characters mid-line on a long (~40-char) command,
+producing garbage (`C:\MTCPp.` instead of the real command) and a clean but
+wrong `no-net` timeout — twice in a row, on a board where the identical
+code path had worked moments before on a faster CPU. Root cause:
+`capabilities.input.settings.pace_s` (12ms default) is tuned for the
+USB4VC bridge's own event-loop drain rate, not for how fast the target's
+BIOS keyboard ISR can service its hardware buffer between characters — a
+Pi-side constant standing in for a target-side, CPU-speed-dependent one.
+See `docs/FINDINGS.md` sec. 43 for the fix (a `pace_s` bump in the
+*deployed* daemon config, not this repo's tracked copy) and why it isn't
+automatically re-tuned per installed CPU. **After any CPU swap, budget for
+re-tuning `pace_s` by hand** — a pace that was safe on the old CPU is not
+guaranteed safe on the new one, in either direction.
+
+**A fetched debug log a DOS program opens in append mode can silently mix
+two different runs' data.** Measured 2026-08-27, running the same real-mode
+game with only its `.EXE` replaced between rounds (graphics/music/settings
+left untouched, matching a normal partial-transfer round trip): its own
+debug log opened in append mode, and because nothing on the target ever
+deletes it between rounds, a log fetched after the *second* round still
+contained the *first* round's lines followed by the second round's —
+15 total lines, the first 8 byte-identical to the previous round's full
+output. Nothing about the fetch (`vcctrl_get_file`, sha256/size-verified)
+signals this; the file is exactly the size and content it claims to be, and
+reads as one clean run's data unless you specifically check. Before trusting
+a freshly-fetched log's *contents* as belonging entirely to the run that
+just happened, diff it against (or otherwise account for) whatever the same
+filename held before that run, especially for a target whose `.EXE` gets
+replaced more often than its whole environment gets rebuilt.

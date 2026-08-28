@@ -2503,3 +2503,59 @@ assumed. `tests/test_core.py::test_audio_spectrum` covers the FFT's own
 math (Parseval, on a bin-exact tone) and the behavioral shape (single tone,
 three summed tones, broadband noise, digital silence) against the corrected
 implementation.
+
+## 43. A CPU-tier-independent typing pace corrupts long typed lines on a slow CPU  [measured 2026-08-27]
+
+`_prove_net()` (`daemon/vcctrld.py`) proves a `send_file`/`get_file` job's
+NET boot by typing one long command line — `type_line("C:\\MTCP\\VCCHK.BAT
+%s %s" % (...))`, ~40 characters — and waiting for the resulting file to
+arrive. On a Pentium OverDrive 83 this rig ran all day without a single
+corrupted command. After a CPU swap to a 486DX2-50, the identical code path
+failed twice in a row: the target's screen showed `C:\MTCPp.` and then
+`C:\MTCP\VCCHKCE` where the real command should have been — characters
+dropped mid-string, no error anywhere in the chain, `_prove_net()` timing
+out at 180s with `why: "no-net"` both times because the mistyped line never
+ran `VCCHK.BAT` at all.
+
+### Why: `pace_s` is tuned for the Pi's own event loop, not the target's
+
+`RegistryDriver.__init__` (`daemon/vcctrld.py`) threads a `pace` parameter
+through every input call, defaulting to `DEFAULT_PACE_S` —
+`capabilities.input.settings.pace_s`, 0.012s (12ms) — whose own comment
+explains what it's actually calibrated against: *"USB4VC drains one event
+per device per loop pass and sleeps 5 ms when idle; PS/2 wire time adds
+~1 ms per byte."* That's a Pi-side constraint: how fast the USB4VC bridge
+can drain its own event queue. It says nothing about how fast the DOS
+*target's* BIOS keyboard ISR can service its own hardware buffer between
+characters — and that half of the round trip is CPU-speed-dependent in a
+way the Pi-side pacing has no visibility into. A 486DX2-50 servicing
+IRQ1 has less headroom between keystrokes than a Pentium OverDrive at the
+same nominal pace, so the same 12ms gap that was safe on the faster board
+wasn't safe on the slower one — not deterministically (the very first
+`send_file` job on this same 486 completed cleanly with the same pace), but
+often enough to fail two file-transfer jobs in a row.
+
+### The fix
+
+Bumped `capabilities.input.settings.pace_s` from `0.012` to `0.04` in the
+**deployed** daemon config (`/opt/vcctrl/vcctrl.yaml` on the daemon host,
+not the git-tracked copy in this repo — see `vcctrl-repo-conventions` on
+why these stay separate, real, host-local files) and restarted `vcctrld`
+to pick it up. Every `send_file`/`get_file` job run against the same
+486DX2-50 afterward — several, including one moving an 11MB `SONG.WAV` —
+completed cleanly with no repeat of the corruption.
+
+### Not yet fixed properly
+
+The fix is a global, rig-wide pace bump, not a per-board one — it makes
+every keystroke on this rig slower, including on faster boards where the
+old pace was never a problem, and there is no code path that varies
+`pace_s` by which CPU is currently installed. `RegistryDriver`'s `pace`
+parameter already threads all the way from the daemon protocol layer
+(`req.get("pace")`) down to the input backend, so a per-call or per-job
+override is architecturally cheap — it just isn't wired to anything that
+knows the installed CPU's tier today. Whoever next swaps this rig's CPU
+should expect to re-tune `pace_s` by hand rather than have it happen
+automatically, and should consider lowering it back down if the rig
+returns to faster hardware, since a slower pace than necessary just makes
+every typed command take longer for no benefit.
