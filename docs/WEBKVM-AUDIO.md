@@ -130,7 +130,7 @@ notes played.
 
 ## 5. The blocker nobody will expect: AudioWorklet needs HTTPS
 
-**`AudioWorklet` is a secure-context API.** On `http://100.64.0.1:8080` it
+**`AudioWorklet` is a secure-context API.** On `http://<tailnet-ip>:8080` it
 does not exist, in either target browser. That is the modern, low-jitter way to
 play a PCM stream and it is simply unavailable on the URL this tool is served
 from today.

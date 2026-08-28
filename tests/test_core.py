@@ -6415,6 +6415,22 @@ def test_no_rig_identifiers_in_the_code():
         "the plug's alias": "Christmas" + " Tree",
         "a hostname as an ssh default":
             ":-" + "usb4vc" + r"\}|" + '"VCCTRL_HOST", "' + "usb4vc" + '"',
+        # A TAILNET IP, BY RANGE, NOT BY LITERAL -- found the hard way
+        # 2026-08-28: this rig's real address, one hundred-dot-something in
+        # Tailscale's own CGNAT block, sat in plain text in docs/WEBKVM.md
+        # (three places) and docs/WEBKVM-AUDIO.md for as long as those
+        # documents existed, and none of the patterns above would ever have
+        # caught it -- they match this rig's OTHER identifiers, not "a
+        # tailnet address" as a category. Written as the WHOLE hundred-slot
+        # CGNAT block (RFC 6598) rather than assembled from this rig's own
+        # octets, on purpose -- this comment cannot even spell the range out
+        # plainly, because the guard scans itself, the same self-reference
+        # the module comment above describes for the other four: a RANGE
+        # never contains the literal being scrubbed, so it needs no
+        # assembly trick to survive one, but it still must not be WRITTEN
+        # here the way a reader would naturally write it either.
+        "a tailnet IP (RFC 6598 CGNAT block)":
+            r"100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.",
     }
     # EVERY TRACKED FILE, not a directory list.
     #

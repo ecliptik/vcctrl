@@ -90,7 +90,7 @@ design:
 **Pi 3 Model B rev 1.2**, Raspbian 12 bookworm, **armv7l** (32-bit -- USB4VC
 requires it, PLAN sec. 7), 4 cores, **920 MB RAM**, `wlan0` only at a
 **130 Mbit/s** link rate, signal 59. `eth0` is down. Tailscale is up as
-`usb4vc` / `100.64.0.1`.
+`usb4vc` / `<tailnet-ip>`.
 
 **Capture stick** -- `0001:ff02` "Fry's Electronics", the MACROSILICON. Offers
 **MJPG and YUYV**, 640x480 among many sizes, at 60/50/30/20/10 fps. Its
@@ -356,7 +356,7 @@ measurements sit behind it.
 
 Bind to the tailnet only. Two ways, and the second is recommended:
 
-- `vcctrld` listens on `100.64.0.1:8080` directly. Simple, http only.
+- `vcctrld` listens on `<tailnet-ip>:8080` directly. Simple, http only.
 - **`tailscale serve https / http://127.0.0.1:8080`** -- `vcctrld` listens on
   loopback and Tailscale terminates HTTPS with a real cert for
   `usb4vc.<tailnet>.ts.net`. Recommended, for a reason that is not about
@@ -1936,7 +1936,7 @@ isolation.
 
 ## 14. Built and measured -- 2026-08-19
 
-v1 is running on the Pi. `http://100.64.0.1:8080/`, tailnet only.
+v1 is running on the Pi. `http://<tailnet-ip>:8080/`, tailnet only.
 
 | | |
 |---|---|
