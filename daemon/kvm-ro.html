@@ -863,11 +863,11 @@
     <span class="sep" aria-hidden="true">|</span>
     <span class="lamp" id="state" aria-live="polite"><i></i><span>—</span></span>
     <span class="sep" aria-hidden="true">|</span>
-    <span class="lamp" id="lamp-pwr" aria-label="Power"><i></i><span>PWR</span></span>
-    <span class="lamp" id="lamp-link" aria-label="Link"><i></i><span>LNK</span></span>
-    <span class="lamp" id="lamp-audio" aria-label="Audio"><i></i><span>AUD</span></span>
-    <span class="lamp lockable" id="lamp-kbd" aria-label="Keyboard"><i></i><span>KBD</span></span>
-    <span class="lamp lockable" id="lamp-mouse" aria-label="Mouse"><i></i><span>MOS</span></span>
+    <span class="lamp" id="lamp-pwr" role="img" aria-label="Power"><i></i><span>PWR</span></span>
+    <span class="lamp" id="lamp-link" role="button" tabindex="0" aria-label="Link"><i></i><span>LNK</span></span>
+    <span class="lamp" id="lamp-audio" role="img" aria-label="Audio"><i></i><span>AUD</span></span>
+    <span class="lamp lockable" id="lamp-kbd" role="img" aria-label="Keyboard"><i></i><span>KBD</span></span>
+    <span class="lamp lockable" id="lamp-mouse" role="img" aria-label="Mouse"><i></i><span>MOS</span></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
     <span class="sep" aria-hidden="true">|</span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs"
@@ -931,7 +931,7 @@
   </div>
 
 <div id="setback" hidden></div>
-<aside id="settings" role="dialog" aria-modal="false" aria-label="Settings" hidden>
+<div id="settings" role="dialog" aria-modal="false" aria-label="Settings" hidden>
   <div id="sethdr"><span>Settings</span></div>
   <div id="setbody">
       <h2>Theme</h2>
@@ -952,8 +952,9 @@
       <div id="btnstylesection">
         <h2 style="margin-top:14px">Buttons</h2>
         <div class="row" style="margin-bottom:4px">
-          <span style="flex:1 1 auto">Show</span>
-          <select id="btnstylesel" title="How toolbar buttons are labelled on a wide window">
+          <span id="btnstylelabel" style="flex:1 1 auto">Show</span>
+          <select id="btnstylesel" aria-labelledby="btnstylelabel"
+                  title="How toolbar buttons are labelled on a wide window">
             <option value="both">Icon + text</option>
             <option value="icon">Icon only</option>
             <option value="text">Text only</option>
@@ -992,7 +993,7 @@
         rather than the target, and noise next to everything else here.</div>
 
   </div>
-</aside>
+</div>
 
 <div id="pop-sound" class="pop" role="dialog" aria-label="Sound" hidden>
   <div id="wavehead">
@@ -1116,10 +1117,16 @@ function setLamp(id, cls, title) {
 }
 
 $('lamp-link').style.cursor = 'pointer';
-$('lamp-link').onclick = () => {
+function retryLink() {
   addLine(new Date(), 'transport', 'reconnecting the stream by hand', 'k-note');
   hint('reconnecting the video link…');
   restart();
+}
+$('lamp-link').onclick = retryLink;
+$('lamp-link').onkeydown = e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();
+  retryLink();
 };
 
 function setXport(x) {

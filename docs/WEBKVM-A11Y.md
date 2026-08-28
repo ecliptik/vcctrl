@@ -22,7 +22,8 @@ pages were audited in the "connecting.../No Signal" veil state -- no live
 stream was up during the scan. That means three things were **not** checked
 and still want a manual pass with a stream running: the video-present layout,
 focus-trapping inside the open Settings/other `role="dialog"` panels, and a
-real keyboard tab-order walk. Contrast (see Open, below) came back
+real keyboard tab-order walk. **All three closed out in the full re-run,
+below.** Contrast (see Open, below) came back
 `INCOMPLETE` from axe on both pages (4 nodes RO, 6 full -- the veil,
 `#dimbtn`, `#savebtn` over the black video area) and needs a manual per-theme
 check across the ~10 themes in `themes.css`; treat it as unverified, not
@@ -129,6 +130,98 @@ passed.
    OS, browser) would strengthen this note, but a real tap on a real phone
    already outranks another headless sweep for this specific question.
 
+## Full re-run with real video present -- [measured 2026-08-28, this session]
+
+The three gaps the original review named above -- video-present layout,
+focus-trapping in open dialogs, a real keyboard tab-order walk -- closed out
+together: axe-core against the live deployed pages with a real capture lock
+(state `ACTIVE`, not the veil), plus a genuine keyboard-only Tab walk, since
+axe does not test focus order or trap behavior at all.
+
+**Method:** chromium (puppeteer-core) + axe-core 4.x, same tags as the
+original review (`wcag2a`/`wcag2aa`/`wcag21a`/`wcag21aa`/`best-practice`),
+against both live pages at both viewports (desktop 1280x800, genuine mobile
+390x844 via device-metrics override, same distinction as the original
+review), scanned in four states each -- base, Settings open, Sound popover
+open, Zoom popover open -- 16 scan states total.
+`page.setBypassCSP(true)` was needed for axe's own injected script to run at
+all under the nonce'd CSP this session added; the pages' own CSP is not
+itself part of what axe evaluates here.
+
+**Found and fixed, four real issues, each confirmed by a before/after axe
+diff:**
+
+1. `aria-allowed-role` on `#settings`: `<aside role="dialog">` -- axe says
+   the dialog role "must be removed... not allowed for the element."
+   `<aside>`'s implicit role (complementary) doesn't permit an explicit
+   override per ARIA-in-HTML. Retagged to `<div>` in both files; nothing
+   selects on the tag itself, only `#settings` by ID, so no CSS or JS
+   needed to change.
+2. `aria-prohibited-attr` on four of the five header lamps (PWR/AUD/KBD/
+   MOS): "aria-label attribute is not well supported on a span with no
+   valid role attribute." A bare `<span>`'s implicit role is `generic`,
+   which WAI-ARIA excludes from author-supplied naming outright. Gave
+   each `role="img"` -- matches what they are (single labelled status
+   glyphs), doesn't imply interactivity they don't have.
+3. **The fifth lamp, `#lamp-link`, was a REAL WCAG 2.1.1 (Keyboard)
+   failure, not an ARIA technicality: it has a working `onclick` (retries
+   the WebSocket) with no keyboard path to trigger it at all.** Fixed with
+   `role="button" tabindex="0"` plus an `onkeydown` handler (Enter/Space)
+   beside the existing `onclick`, in both files. This is the one exception
+   to "every clickable control is a real `<button>`" below -- converting
+   the element itself would have meant unpicking the `.lamp` row's compact
+   inline styling from the base `button, select` reset; the ARIA-widget
+   pattern was the lower-risk fix for a control that already worked for a
+   mouse.
+4. `label-title-only` on `#btnstylesel` (both files) and `#bufsel`
+   (`kvm.html` only -- no equivalent control on the read-only page): two
+   `<select>`s relied solely on `title` for their accessible name, which
+   axe correctly does not count as one. Both already sit beside a visible
+   label span ("Show" / "Capture length") -- gave each span an `id` and
+   pointed the select at it with `aria-labelledby`, rather than a second
+   `aria-label` string that could drift from the visible text over time.
+
+**Investigated and left alone, confirmed as false leads, not skipped:**
+
+- `aria-valid-attr-value` [critical], `INCOMPLETE`, on `#filebtn`/
+  `#keysbtn`/`#bufbtn` (`kvm.html` only): "Unable to determine if
+  aria-controls referenced ID exists on the page." Checked by hand --
+  `#pop-file`, `#pop-keys` and `#scrub` all genuinely exist in the DOM.
+  Axe's own stated uncertainty, not a confirmed failure; most likely the
+  `hidden` attribute on the referenced popovers confusing the reference
+  check at scan time rather than anything wrong with the markup.
+- `color-contrast`: unchanged from the original review, still
+  `INCOMPLETE`, still the operator's own prior decision not to pursue
+  (below) -- not re-litigated by this re-run.
+
+**Result: zero confirmed violations across all 16 scan states** (2 pages x
+2 viewports x 4 states) after the four fixes above, verified by re-running
+axe against the live deployed pages a second time.
+
+**Keyboard walk (axe cannot test this -- done separately, live, video
+present):** opening Settings, Sound, Zoom, Keys or File left focus sitting
+on `<body>` -- a keyboard user had to tab from the top of the page to reach
+the panel they had just opened. None of this page's dialogs are modal
+(`aria-modal` false or absent throughout, deliberately, so the picture
+stays reachable while one is open), but a non-modal dialog still owes
+whoever opened it a landing place, and closing one must not leave focus
+stranded on a now-hidden element either. Fixed in both files: every
+`[role="dialog"]` gets `tabindex="-1"` (focusable without joining the
+normal Tab order); opening a dialog moves focus onto it; closing one
+returns focus to the button that opened it, but ONLY if focus was still
+actually inside it -- a panel closed programmatically while focus was
+elsewhere (e.g. a resize) must not steal focus from wherever it already
+was. Verified live, on the deployed pages: a 60-tab walk through the base
+`kvm.html` page (real video, not the veil) found 18 unique targets cycling
+cleanly with no trap and no hidden element ever focused; every dialog
+tested individually (Settings, Sound, Zoom, Keys, File) landed focus on
+open and returned it to the trigger on both Escape and backdrop-click.
+
+**Not done here, and still open if full re-certification matters before
+going public:** this re-run answers the three specific gaps the original
+review named, not a second full manual sweep of every control -- see Open,
+below, for what is still genuinely outstanding.
+
 ## Open
 
 - **Per-lamp state announcements** (the second half of #6 above): folding
@@ -158,8 +251,13 @@ the other session said so before either side found out the hard way.
 
 ## What's already right, worth not regressing
 
-- Every clickable control is a real `<button>` (59 in the full page, 29 in
-  RO; zero `div`/`span role="button"`), so keyboard operability comes free.
+- Nearly every clickable control is a real `<button>` (59 in the full page,
+  29 in RO), so keyboard operability comes free. One exception as of the
+  full re-run above: `#lamp-link`, a `span role="button" tabindex="0"` with
+  its own `onkeydown` -- converting it to a real `<button>` would have meant
+  unpicking the `.lamp` row's compact inline styling from the base
+  `button, select` CSS reset; ARIA-widget was the lower-risk fix for one
+  already-working control, not a pattern to reach for by default.
 - Global `:focus-visible { outline:2px solid var(--blue); outline-offset:2px }`.
   Only `#line` overrides its own outline, and `#linewrap:focus-within`
   changing the wrapper border compensates.

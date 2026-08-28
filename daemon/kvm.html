@@ -1940,11 +1940,23 @@
          colour means. They replace two chips that spent most of their width
          restating a label nobody needed twice. -->
     <span class="sep" aria-hidden="true">|</span>
-    <span class="lamp" id="lamp-pwr" aria-label="Power"><i></i><span>PWR</span></span>
-    <span class="lamp" id="lamp-link" aria-label="Link"><i></i><span>LNK</span></span>
-    <span class="lamp" id="lamp-audio" aria-label="Audio"><i></i><span>AUD</span></span>
-    <span class="lamp lockable" id="lamp-kbd" aria-label="Keyboard"><i></i><span>KBD</span></span>
-    <span class="lamp lockable" id="lamp-mouse" aria-label="Mouse"><i></i><span>MOS</span></span>
+    <!-- role="img" ON THE STATIC FOUR: axe-core (aria-prohibited-attr) --
+         aria-label is not reliably supported on a bare <span>, whose
+         implicit role is "generic" and explicitly excludes an
+         author-supplied name. img gives each one a role that both permits
+         aria-label and matches what it actually is: a single labelled
+         status glyph, not a real image but the closest role that does not
+         imply interactivity the other three don't have.
+         lamp-link is the one exception -- it has a real onclick (retries
+         the WebSocket) with no keyboard path to trigger it, which is a
+         genuine WCAG 2.1.1 gap, not just an ARIA technicality -- so it
+         gets role="button" and tabindex="0" instead, plus a keydown
+         handler beside its existing onclick (below). -->
+    <span class="lamp" id="lamp-pwr" role="img" aria-label="Power"><i></i><span>PWR</span></span>
+    <span class="lamp" id="lamp-link" role="button" tabindex="0" aria-label="Link"><i></i><span>LNK</span></span>
+    <span class="lamp" id="lamp-audio" role="img" aria-label="Audio"><i></i><span>AUD</span></span>
+    <span class="lamp lockable" id="lamp-kbd" role="img" aria-label="Keyboard"><i></i><span>KBD</span></span>
+    <span class="lamp lockable" id="lamp-mouse" role="img" aria-label="Mouse"><i></i><span>MOS</span></span>
     <span id="c-heat" class="chip" style="display:none"><span class="chiplabel">pi </span><b>—</b></span>
     <span class="sep" aria-hidden="true">|</span>
     <button id="lamps" aria-label="PS/2 keyboard LEDs"
@@ -2273,7 +2285,13 @@
   </div>
 
 <div id="setback" hidden></div>
-<aside id="settings" role="dialog" aria-modal="false" aria-label="Settings" hidden>
+<!-- DIV, NOT ASIDE. axe-core: "ARIA role dialog must be removed when the
+     element is made visible, as it is not allowed for the element" --
+     <aside>'s implicit role (complementary) doesn't permit an explicit
+     role="dialog" override per the ARIA-in-HTML spec. A <div> has no
+     implicit role, so any explicit one is valid; nothing here selects on
+     the tag itself, only #settings, so retagging touches no CSS or JS. -->
+<div id="settings" role="dialog" aria-modal="false" aria-label="Settings" hidden>
   <!-- No close button. The gear opens it and the gear closes it, which is
        how every other panel on this page works and is the shape people
        already learned from the tabs. A second control that does the same
@@ -2312,12 +2330,17 @@
       <div id="btnstylesection">
         <h2 style="margin-top:14px">Buttons</h2>
         <div class="row" style="margin-bottom:4px">
-          <span style="flex:1 1 auto">Show</span>
+          <span id="btnstylelabel" style="flex:1 1 auto">Show</span>
           <!-- ≥1100px only. Below that, the toolbar already forces icon-only to
                fit -- see the 641-1099px band and the ≤640px sheet UI -- so a
                manual choice there would just clip. Default is "both", which is
-               every existing layout unchanged until someone opens this menu. -->
-          <select id="btnstylesel" title="How toolbar buttons are labelled on a wide window">
+               every existing layout unchanged until someone opens this menu.
+               aria-labelledby, not a duplicate aria-label: axe-core flagged
+               `title` alone as not a visible/reliable accessible name
+               (label-title-only) -- pointing at the row's own "Show" span
+               keeps one string rather than two that could drift apart. -->
+          <select id="btnstylesel" aria-labelledby="btnstylelabel"
+                  title="How toolbar buttons are labelled on a wide window">
             <option value="both">Icon + text</option>
             <option value="icon">Icon only</option>
             <option value="text">Text only</option>
@@ -2327,14 +2350,17 @@
 
       <h2 style="margin-top:14px">Video</h2>
       <div class="row" style="margin-bottom:4px">
-        <span style="flex:1 1 auto">Capture length</span>
+        <span id="bufsellabel" style="flex:1 1 auto">Capture length</span>
         <!-- THE COST IS PART OF THE CHOICE. This is asked for in seconds and
              paid for in Pi memory at about 1.6 MB a second, so ten minutes is
              most of a gigabyte on a four-gigabyte box with no swap. The daemon
              clamps against free memory and says when it has, but a menu that
              lets you pick a number without showing what it spends is a menu
-             that has to be regretted before it teaches you anything. -->
-        <select id="bufsel" title="How much recent video the daemon keeps">
+             that has to be regretted before it teaches you anything.
+             aria-labelledby -- see #btnstylesel above for why not a second
+             aria-label string. -->
+        <select id="bufsel" aria-labelledby="bufsellabel"
+                title="How much recent video the daemon keeps">
           <option value="30">30 seconds · ~48 MB</option>
           <option value="60">1 minute · ~96 MB</option>
           <option value="120">2 minutes · ~190 MB</option>
@@ -2390,7 +2416,7 @@
       <div id="cfgtree" class="kvtree"></div>
 
   </div>
-</aside>
+</div>
 
 <div id="pop-sound" class="pop" role="dialog" aria-label="Sound" hidden>
   <div id="wavehead">
@@ -2649,10 +2675,12 @@ function setLamp(id, cls, title) {
   el.title = title;
 }
 
-// Click the lamp to try the fast path now. It is where the state is shown,
-// which is where someone who does not like the state will press.
+// Click OR keyboard-activate the lamp to try the fast path now. It is
+// where the state is shown, which is where someone who does not like the
+// state will press -- and role="button"/tabindex="0" (above) means that
+// now includes Enter/Space, not just a mouse.
 $('lamp-link').style.cursor = 'pointer';
-$('lamp-link').onclick = () => {
+function retryLink() {
   wsRetryDelay = 60000;
   addLine(new Date(), 'transport', 'retrying the websocket by hand', 'k-note');
   // SAY SO WHERE IT CAN BE SEEN. This was reported as "clickable but does
@@ -2663,6 +2691,12 @@ $('lamp-link').onclick = () => {
   // so the affordance looked broken every time it worked.
   hint('reconnecting the video link…');
   restart();
+}
+$('lamp-link').onclick = retryLink;
+$('lamp-link').onkeydown = e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();   // Space must not also scroll the page
+  retryLink();
 };
 
 function setXport(x) {
