@@ -98,3 +98,16 @@ workflow, that's the wrong server, not a missing feature to route around.
 **Nothing here is a side channel.** Every call shows up in `vcctrl_activity`
 / the power audit log as `mcp:...`, visible to a human watching the rig the
 same way any other caller is. Don't treat MCP access as unobserved.
+
+**Call `vcctrl_note` at the start of any sequence of MCP calls that drives
+the rig, and again whenever what you're doing changes.** The KVM page's
+status bar (`#worklabel` in `kvm.html`/`kvm-ro.html`, fed by `state.json`'s
+`note` field) shows nothing but "Idle" unless a driving session sets it --
+it is `NoteCapability` in `daemon/vcctrld.py`, in-memory only, not derived
+from the activity log, and nothing sets it automatically. It is the only
+field that tells a human watching the KVM (or the public read-only mirror)
+*why* the picture is doing what it's doing, not just that a command ran.
+One sentence, e.g. `vcctrl_note("running a dinspect hardware re-scan for a
+peer session, target rebooting")`. Not gated by the input lock and touches
+no hardware, so there's no reason to skip it even for a read-only or
+diagnostic sequence.
