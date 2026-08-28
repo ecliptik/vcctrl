@@ -1346,6 +1346,25 @@ setInterval(() => {
   if (document.visibilityState !== 'visible') return;
   if (xport === 'connecting') return;
   if (!frames) return;
+  // NOT FOR mjpeg. This mirror has no /ws (see connect()), so it is ALWAYS
+  // on mjpeg, never the websocket path this watchdog was written for --
+  // and `<img>` + multipart/x-mixed-replace only fires `onload` ONCE, for
+  // the first part, in Chromium and WebKit (confirmed live 2026-08-28:
+  // lastFrameAt climbed past 10s every cycle on straylight, in real Chrome,
+  // even while the server -- confirmed separately by direct byte-level
+  // capture over the same connection -- was sending a fresh, valid frame
+  // every ~0.67s the entire time). Firefox fires `load` per part and never
+  // tripped this. The result was a forced restart() roughly every 8-12s
+  // (this 4000ms poll plus the 8000ms threshold), each one blanking the
+  // picture for a moment as `restart()` swaps to the (undrawn, `alpha:false`
+  // -- solid black) canvas and back -- a real, visible, and entirely
+  // self-inflicted "flash" on a stream that was never actually stalled.
+  // img.onerror (set in useMjpeg()) still catches a GENUINE dropped
+  // connection, and sourceIsLive()'s video.state relay still drives the
+  // veil for a genuine signal loss -- neither of those depends on onload
+  // firing per part, so removing this watchdog for mjpeg loses no real
+  // stall detection, only the false one.
+  if (xport === 'mjpeg') return;
   if (Date.now() - lastFrameAt > 8000) {
     if (!sourceIsLive()) {
       lastFrameAt = Date.now();
