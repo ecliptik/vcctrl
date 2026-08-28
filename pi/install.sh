@@ -173,22 +173,38 @@ install_public() {
   sleep 1
   sudo systemctl --no-pager --lines=10 status vcctrl-web-public || true
 
-  # TAILNET-ONLY, ON ITS OWN PORT -- matching VCCTRL_PUBLIC_PORT in the
-  # service unit (8091), not a --set-path under the private KVM's own :443.
-  # A distinct port keeps it a single, separate `tailscale serve` rule: the
-  # later, manual, operator-approved `tailscale funnel` step (see
-  # vcweb_public.py's module docstring and the service file's own EXPOSURE
-  # note) then flips exactly this one mapping, not something entangled with
-  # the private page's path. Idempotent, like the :443 mapping above:
+  # TAILNET-ONLY, ON ITS OWN PORT -- distinct from the private KVM's own
+  # :443, so the later, manual, operator-approved `tailscale funnel` step
+  # (see vcweb_public.py's module docstring and the service file's own
+  # EXPOSURE note) flips exactly this one mapping, not something entangled
+  # with the private page's path. Idempotent, like the :443 mapping above:
   # re-running only re-asserts the same rule.
+  #
+  # PORT 10000, NOT VCCTRL_PUBLIC_PORT (8091) -- LEARNED THE HARD WAY.
+  # `tailscale serve`/`funnel` accept any local port as a PROXY TARGET, but
+  # actually reaching the public internet through `funnel` additionally
+  # needs the EXTERNAL port to be one the tailnet's own ACL grants this
+  # node via the `funnel-ports` node capability (check with `tailscale
+  # status --json`, under Self.CapMap, key
+  # "https://tailscale.com/cap/funnel-ports?ports=...") -- commonly
+  # 443,8443,10000 as Tailscale's own defaults. `tailscale funnel` on a
+  # port outside that list reports success locally (AllowFunnel: true in
+  # `tailscale funnel status --json`, HTTPS: true, no error at all) and is
+  # simply never reachable from outside the tailnet -- silent, no warning,
+  # discovered only by testing from a device that is genuinely off the
+  # tailnet. 10000 is the one of the three defaults not already spoken for
+  # by the private KVM (443, 8443), so the external port here is 10000
+  # while the service itself keeps listening on 8091 -- this proxies one
+  # to the other, nothing about VCCTRL_PUBLIC_PORT or the service unit
+  # changes.
   if command -v tailscale >/dev/null 2>&1; then
     TS_NAME="$(tailscale status --json 2>/dev/null \
       | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
     if [ -n "${TS_NAME:-}" ]; then
-      if sudo tailscale serve --bg --https=8091 "http://127.0.0.1:8091" >/dev/null 2>&1; then
-        echo "https://${TS_NAME}:8091/  -> vcctrl-web-public (tailnet only)"
+      if sudo tailscale serve --bg --https=10000 "http://127.0.0.1:8091" >/dev/null 2>&1; then
+        echo "https://${TS_NAME}:10000/  -> vcctrl-web-public (tailnet only until funneled)"
       else
-        echo "note: could not configure tailscale serve for :8091"
+        echo "note: could not configure tailscale serve for :10000"
       fi
     fi
   fi

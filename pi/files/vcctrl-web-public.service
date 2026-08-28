@@ -26,27 +26,30 @@ User=pi
 WantedBy=multi-user.target
 
 # --------------------------------------------------------------------------
-# EXPOSURE: TAILNET-ONLY FOR NOW, BY OPERATOR INSTRUCTION.
+# WIRED INTO pi/install.sh's install_public() (and pi/deploy.sh --public /
+# --public-only), which installs this unit, copies vcweb_public.py,
+# kvm-ro.html and themes.css into /opt/vcctrl, and sets up the tailnet-only
+# `tailscale serve` mapping below -- one code path, not copied here.
 #
-# Bound to 127.0.0.1 like vcctrld's own web.bind -- reach it today over the
-# tailnet the same way the control UI is reached, e.g.
-#   tailscale serve --bg --https=8443 --set-path=/public http://127.0.0.1:8091
-# (an additive path on the tailnet-only hostname, same idempotent pattern
-# pi/install.sh's install_mcp() already uses for /mcp) or simply
+# EXPOSURE: TAILNET-ONLY BY DEFAULT. install_public() maps
+#   https://<tailnet-host>:10000/ -> http://127.0.0.1:8091 (this service)
+# reachable to the tailnet the same way the control UI is (or, for a quick
+# look without touching `tailscale serve` config at all:
 #   ssh -L 8091:127.0.0.1:8091 pi@<tailnet-host>
-# for a quick look without touching `tailscale serve` config at all.
+# ).
 #
-# Making this reachable from the OPEN INTERNET is a separate, later, manual
-# `tailscale funnel` step the operator takes only after reviewing it over
-# the tailnet -- this unit does not run funnel, and nothing in
-# vcweb_public.py assumes it ever will be.
-#
-# NOT YET WIRED INTO pi/install.sh or pi/deploy.sh. vcctrld.service and
-# vcctrl-mcp.service are generated inline there (see install_mcp()), which
-# also copies the script into /opt/vcctrl and handles the tailscale serve
-# path -- doing the same for this unit (an install_public() alongside
-# install_mcp(), plus copying vcweb_public.py and daemon/kvm-ro.html into
-# /opt/vcctrl) is a natural follow-up, out of scope for this pass. Until
-# then, installing this unit means copying vcweb_public.py, kvm-ro.html and
-# themes.css into /opt/vcctrl by hand and `systemctl enable --now` this
-# file.
+# PORT 10000, NOT 8091 or 8443 -- LEARNED THE HARD WAY. The external port
+# above is 10000, not this service's own VCCTRL_PUBLIC_PORT (8091): making
+# this reachable from the OPEN INTERNET is a separate, later, manual
+# `tailscale funnel` step the operator takes after reviewing it over the
+# tailnet (this unit does not run funnel, and nothing in vcweb_public.py
+# assumes it ever will be) -- but `tailscale funnel` only actually reaches
+# the public internet on ports the tailnet's own ACL grants this node via
+# the `funnel-ports` node capability (check `tailscale status --json` ->
+# Self.CapMap; commonly 443, 8443, 10000 by Tailscale's own default).
+# Funnel on a port outside that grant reports success locally (AllowFunnel:
+# true, HTTPS: true, `tailscale funnel status` shows "Funnel on") with NO
+# warning at all, and is simply never reachable from outside the tailnet --
+# discovered only by testing from a device genuinely off the tailnet, which
+# is exactly how this was found. 10000 is the one of the three commonly-
+# granted defaults not already spoken for by the private KVM (443, 8443).

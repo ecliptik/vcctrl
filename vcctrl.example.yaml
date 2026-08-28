@@ -115,6 +115,19 @@ daemon:
   # Making it reachable from the public internet is a separate, later,
   # manual `tailscale funnel` step the operator takes after reviewing it
   # over the tailnet -- nothing here or in vcweb_public.py does that itself.
+  #
+  # THAT FUNNEL STEP USES PORT 10000 ON THE TAILSCALE SIDE, NOT 8091 --
+  # `port` below is only where the process itself listens (loopback only,
+  # proxied in by `tailscale serve`/`funnel`); the EXTERNAL port funnel
+  # answers on is a separate number, and not every port is eligible. A
+  # tailnet's ACL grants Funnel only on specific ports (node capability
+  # `funnel-ports`, check via `tailscale status --json` -> Self.CapMap;
+  # commonly 443, 8443, 10000 by Tailscale's own default). `tailscale
+  # funnel` on a port outside that grant reports success locally with no
+  # warning at all and is simply never reachable from outside the tailnet
+  # -- see pi/install.sh's install_public() for the long version of this,
+  # measured the hard way. 10000 is the default port not already used by
+  # the private KVM (443, 8443).
   web_public:
     bind: 127.0.0.1
     port: 8091
