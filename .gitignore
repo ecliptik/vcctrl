@@ -4,6 +4,10 @@ __pycache__/
 *.wav
 *.log
 
+# The ignore above is for captured frames/screenshots dropped during a
+# session, not tracked source assets -- this one ships with the repo.
+!daemon/kvm-ro-share.jpg
+
 # The operator's real configuration. The tracked example is vcctrl.example.yaml.
 /vcctrl.yaml
 
