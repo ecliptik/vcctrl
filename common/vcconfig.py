@@ -200,6 +200,18 @@ SCHEMA = {
                 "key": str,
             },
         },
+        # DOCUMENTATION ONLY -- daemon/vcweb_public.py is a standalone
+        # script and reads the equivalent of these three values from its own
+        # environment (VCCTRL_PUBLIC_BIND/PORT, VCCTRL_WEB_PORT), not from
+        # this file. Still schema-validated like every other key here: an
+        # unvalidated block is a second, silent way for this file to drift
+        # from what actually configures anything, which is exactly the
+        # failure this schema exists to catch everywhere else.
+        "web_public": {
+            "bind": str,
+            "port": int,
+            "upstream_port": int,
+        },
     },
 
     "capabilities": ("map", {

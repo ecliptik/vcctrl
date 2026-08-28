@@ -117,7 +117,8 @@ unit-tested only. PC/DOS only so far, by operator direction.
 ## The KVM (webkvm session's component)
 
 `WEBKVM.md` is the main one. `WEBKVM-DESIGN.md`, `WEBKVM-AUDIO.md`,
-`WEBKVM-BOARDS.md` and `WEBKVM-SCRUB.md` are its subsystems.
+`WEBKVM-BOARDS.md`, `WEBKVM-SCRUB.md` and `WEBKVM-A11Y.md` are its
+subsystems.
 
 **Sec. 5.1a — the on-screen keyboard — carries a live warning.** It is a whole
 keyboard now, drawn from a layout the daemon names per protocol board, and

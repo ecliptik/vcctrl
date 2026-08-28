@@ -8422,6 +8422,68 @@ SysinfoCapability.BACKENDS = {"dinspect-pulled": SysinfoCapability}
 SysinfoCapability.DEFAULT_BACKEND = SysinfoCapability
 SysinfoCapability.DEFAULT_BACKEND_NAME = 'dinspect-pulled'
 
+
+class NoteCapability(Capability):
+    """The one-sentence 'what is happening right now', set by whoever is
+    driving the rig -- typically a Claude Code session, not a person at a
+    keyboard.
+
+    Not a fact about any device, so it holds nothing that Rule 1 would
+    object to: it never touches input, power or video. It exists because the
+    activity log has command names, not narration, and the public read-only
+    page has no other way to tell a viewer WHY the screen is doing what it is
+    doing.
+
+    In-memory only, like `lastCmd`/`ledLog` on the page side -- a note that
+    survived a daemon restart would describe a session that may not still be
+    running, which is a worse failure than an honest "nothing reported yet".
+
+    DESCRIPTIVE, not measured (see the class docstring above): every key is
+    always present, null where unset.
+    """
+
+    name = "note"
+
+    def __init__(self, devs):
+        super(NoteCapability, self).__init__(devs)
+        self._text = None
+        self._at = None
+        self._by = None
+
+    def commands(self):
+        return {"note": self._note, "note_set": self._note_set}
+
+    def snapshot(self):
+        if self._text is None:
+            return {"text": None, "at": None, "by": None,
+                    "reason": "nothing reported yet"}
+        return {"text": self._text, "at": self._at, "by": self._by,
+                "reason": None}
+
+    def _note(self, req):
+        return dict({"ok": True}, **self.snapshot())
+
+    def _note_set(self, req):
+        text = req.get("text")
+        if not text:
+            return {"ok": False, "error": "note_set needs 'text'"}
+        text = str(text)
+        # One sentence, not a log dump -- long enough for the examples this
+        # was asked for ("rebooting into NET profile to copy log files for
+        # review"), short enough that a runaway caller cannot turn this into
+        # a second activity log.
+        if len(text) > 200:
+            text = text[:199] + "…"
+        self._text = text
+        self._at = time.time()
+        self._by = req.get("as")
+        return dict({"ok": True}, **self.snapshot())
+
+
+NoteCapability.BACKENDS = {"in-memory": NoteCapability}
+NoteCapability.DEFAULT_BACKEND = NoteCapability
+NoteCapability.DEFAULT_BACKEND_NAME = 'in-memory'
+
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 VideoCapability, AudioCapability, BoardCapability,
                 FilesCapability,
@@ -8430,7 +8492,8 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 # capability is fully constructed before any start()
                 # runs), only that it is the honest place to put a
                 # capability whose data depends on another's.
-                SysinfoCapability]
+                SysinfoCapability,
+                NoteCapability]
 
 # vcweb holds the TLS paths as class attributes; the resolved config lives
 # here. Pushed rather than pulled so there is exactly one loader in the

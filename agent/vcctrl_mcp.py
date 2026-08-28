@@ -392,6 +392,16 @@ def vcctrl_caps() -> dict:
 
 
 @mcp.tool()
+def vcctrl_note(text: str) -> dict:
+    """Set the one-sentence 'what's happening right now' shown on the public
+    read-only KVM page -- e.g. "rebooting into NET profile to copy log files
+    for review". Not gated by the input lock: it touches no hardware, so it
+    needs no --as arbitration beyond attribution. Has no expiry, so a stale
+    sentence reads as a live one until the next call replaces it."""
+    return _run_vcctrl(["note-set", "--text", text, "--as", OWNER])
+
+
+@mcp.tool()
 def vcctrl_config_show() -> dict:
     """What the RUNNING daemon actually resolved at start, with source and
     any VCCTRL_* overrides -- different from reading the file, and the one

@@ -1065,6 +1065,96 @@ def test_page_dom_references():
         print("  SKIP  no node: script not parsed")
 
 
+def test_public_mirror_write_path_isolation():
+    """The public read-only mirror's whole safety argument -- daemon/
+    vcweb_public.py cannot send a command to the target -- rests on three
+    facts held today only by discipline and comments: no do_POST, no /ws,
+    and nothing read from a listener ever gets forwarded upstream. A security
+    audit of this feature confirmed all three hold, and flagged that nothing
+    guards them against a future edit that "completes" one the wrong way
+    (CLAUDE.md phase-7; see also "a new driver inherits no guards" in
+    project memory). This is that guard: cheap, static, and it fails on the
+    edit before anyone has to notice the behavior.
+    """
+    print("\npublic mirror write-path isolation")
+    import re
+
+    path = os.path.join(HERE, os.pardir, "daemon", "vcweb_public.py")
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+
+    check("no do_POST/do_PUT/do_DELETE/do_PATCH defined",
+          not re.search(r"^\s*def do_(POST|PUT|DELETE|PATCH)\b", src,
+                        re.M))
+    check("imports nothing from the control-path modules",
+          not re.search(r"^\s*(import|from)\s+(vcctrld|vcweb)\b", src, re.M))
+    check("no evdev import", "evdev" not in src)
+
+    # _audio_upstream_loop is the one function that reads from a trusted
+    # upstream socket AND writes to public listener sockets. The invariant
+    # worth pinning: it may write to a LISTENER, never back to the upstream
+    # `sock` it read the audio from -- that second call is what a
+    # public-to-private forwarding path would look like.
+    m = re.search(r"^def _audio_upstream_loop\(.*?\n(?=^def |^class |\Z)",
+                  src, re.M | re.S)
+    check("_audio_upstream_loop is present to check", m is not None)
+    if m:
+        body = m.group(0)
+        check("upstream socket is never sent back to",
+              "sock.sendall(" not in body, body)
+        check("the only outbound send in it targets a listener",
+              "listener.sendall(" in body)
+
+    # Handler._audio_ws is the other half: it may read from a public
+    # listener only to notice a close, never to act on what was sent.
+    m = re.search(r"^    def _audio_ws\(self\):\n(?:.*?\n)*?"
+                  r"(?=^    def |^class |\Z)", src, re.M)
+    check("_audio_ws is present to check", m is not None)
+    if m:
+        body = m.group(0)
+        for banned in ("json.loads(", ".dispatch(", "registry."):
+            check("_audio_ws does not %s" % banned.rstrip("("),
+                  banned not in body)
+
+
+def test_public_events_redact_typed_text():
+    """Operator decision, 2026-08-28: the public mirror's activity log must
+    never narrate what was typed at the target -- a password, username or
+    path typed mid-session would otherwise reach the open internet the
+    moment it happened. The one-line "what's happening" note
+    (NoteCapability) is the public page's account of current activity;
+    `/events` is not allowed to also carry the literal keystrokes.
+
+    Every OTHER event kind stays untouched: key names and mouse deltas are
+    not free text, and `inflight` (a separate field, not exercised here)
+    carries command names only -- see the security audit that raised this,
+    which checked that this is the one and only place redaction is needed.
+    """
+    print("\npublic mirror redacts typed text")
+    import importlib.util
+    import json
+
+    path = os.path.join(HERE, os.pardir, "daemon", "vcweb_public.py")
+    spec = importlib.util.spec_from_file_location("vcweb_public", path)
+    vwp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vwp)
+
+    typed = {"seq": 1, "kind": "cmd", "cmd": "type", "by": "harness",
+             "ok": True, "ms": 4.2, "detail": "SET SECRET=hunter2"}
+    key = {"seq": 2, "kind": "cmd", "cmd": "key", "by": "harness",
+           "ok": True, "ms": 1.1, "detail": "ctrl alt delete"}
+    out = vwp._redact_public_events([typed, key])
+
+    check("typed text is redacted", out[0]["detail"] == "[redacted]",
+          out[0])
+    check("the secret itself does not survive anywhere in the output",
+          "hunter2" not in json.dumps(out))
+    check("a non-type command's detail is untouched",
+          out[1]["detail"] == "ctrl alt delete", out[1])
+    check("redaction does not mutate the caller's original list",
+          typed["detail"] == "SET SECRET=hunter2")
+
+
 def test_zoom_modes():
     """The zoom control must offer only modes the script implements, and the
     modes must do what their labels say.
@@ -2895,6 +2985,8 @@ if __name__ == "__main__":
     test_uniform_frame_is_not_picture()
     test_websocket_accept_vector()
     test_page_dom_references()
+    test_public_mirror_write_path_isolation()
+    test_public_events_redact_typed_text()
     test_buffer_span()
     test_avi_is_a_real_file_ffmpeg_can_decode()
     test_avi_preserves_stalls_rather_than_smoothing_them()

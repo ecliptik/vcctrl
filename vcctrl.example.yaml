@@ -92,6 +92,34 @@ daemon:
       cert: /var/lib/vcctrl/tls.crt
       key: /var/lib/vcctrl/tls.key
 
+  # A SEPARATE, ISOLATED PROCESS -- daemon/vcweb_public.py, not a mode flag
+  # on the block above. It shares no code with vcctrld's command dispatch,
+  # has no /cmd route at all, and never implements the input-carrying /ws
+  # (see vcweb_public.py's module docstring). It gets everything it shows by
+  # polling THIS daemon's read-only endpoints over loopback at a fixed low
+  # rate, so public viewer count never adds load here.
+  #
+  # DOCUMENTATION ONLY below -- vcweb_public.py is a standalone script and
+  # reads these three values from its environment, not from this file:
+  #   bind         -> VCCTRL_PUBLIC_BIND   (default 127.0.0.1)
+  #   port         -> VCCTRL_PUBLIC_PORT   (default 8091)
+  #   upstream_port -> VCCTRL_WEB_PORT      (default 8080, must match `port`
+  #                    above so the poller reaches the right listener)
+  # A second YAML loader for one small script is a second place for "what did
+  # the running process actually resolve" to disagree with a file on disk;
+  # env vars in its systemd unit are the one source of truth until this
+  # process grows enough settings to need more.
+  #
+  # EXPOSURE: for now this is reachable over the tailnet only (the same
+  # `tailscale serve` boundary as the block above, or the plain tailnet IP).
+  # Making it reachable from the public internet is a separate, later,
+  # manual `tailscale funnel` step the operator takes after reviewing it
+  # over the tailnet -- nothing here or in vcweb_public.py does that itself.
+  web_public:
+    bind: 127.0.0.1
+    port: 8091
+    upstream_port: 8080
+
 # ---------------------------------------------------------------------------
 # Capabilities. Each names a backend; `none` is always available and always
 # honest -- a `none` backend answers "not configured", never a zero, never a

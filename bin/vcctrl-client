@@ -46,6 +46,10 @@ USAGE = """usage: vcctrl <command> [args]
                             only on a lock-key change, so an idle machine
                             publishes nothing.
   power [state|on|off|cycle]  smart-plug mains control for the target
+  note                      the current one-sentence "what's happening now",
+                            shown on the public read-only KVM page
+  note-set --text S --as NAME   set that sentence. No expiry -- it reads as
+                            current until the next note-set replaces it
   caps                      capability health (input, leds, power, ...)
   config [show|check [F]]   show: what the RUNNING daemon resolved at start,
                             with its source and any VCCTRL_* overrides.
@@ -999,6 +1003,7 @@ def main(argv):
     who = None
     out = None
     out_dir = None
+    text = None
     # A recording's own start time, so the daemon can refuse a window that
     # opens before the run it claims to be of. `--since now` is the common
     # case: start the clock here, do the work, then record.
@@ -1030,6 +1035,10 @@ def main(argv):
             continue
         if argv[i] == "--out-dir":
             out_dir = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--text":
+            text = argv[i + 1]
             i += 2
             continue
         args.append(argv[i])
@@ -1357,6 +1366,13 @@ def main(argv):
     elif cmd == "ledwait":
         req = {"cmd": "ledwait",
                "timeout": float(rest[0]) if rest else 5.0}
+    elif cmd == "note":
+        req = {"cmd": "note"}
+    elif cmd in ("note-set", "note_set"):
+        if text is None:
+            sys.stderr.write("note-set needs --text \"one sentence\"\n")
+            return 3
+        req = {"cmd": "note_set", "text": text}
     else:
         sys.stderr.write(USAGE)
         return 2

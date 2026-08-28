@@ -1,0 +1,52 @@
+[Unit]
+Description=vcctrl read-only public KVM mirror (daemon/vcweb_public.py)
+# Ordering only, deliberately -- this must be able to run, restart or fail
+# independently of vcctrld. See the module docstring in vcweb_public.py:
+# it shares no code path with vcctrld's command dispatch, so there is
+# nothing here for a `Requires=`/`Wants=` to protect.
+After=vcctrld.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /opt/vcctrl/vcweb_public.py
+# See vcctrl.example.yaml's daemon.web_public block for what these mean and
+# why they are env vars here rather than a second YAML load. upstream_port
+# MUST match the private daemon's own daemon.web.port.
+Environment=VCCTRL_PUBLIC_BIND=127.0.0.1
+Environment=VCCTRL_PUBLIC_PORT=8091
+Environment=VCCTRL_WEB_PORT=8080
+Restart=always
+RestartSec=2
+# Unprivileged on purpose, unlike vcctrld: this process never touches
+# /dev/uinput or any device, it only ever makes loopback HTTP GET requests
+# to the private daemon's already-read-only endpoints.
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+
+# --------------------------------------------------------------------------
+# EXPOSURE: TAILNET-ONLY FOR NOW, BY OPERATOR INSTRUCTION.
+#
+# Bound to 127.0.0.1 like vcctrld's own web.bind -- reach it today over the
+# tailnet the same way the control UI is reached, e.g.
+#   tailscale serve --bg --https=8443 --set-path=/public http://127.0.0.1:8091
+# (an additive path on the tailnet-only hostname, same idempotent pattern
+# pi/install.sh's install_mcp() already uses for /mcp) or simply
+#   ssh -L 8091:127.0.0.1:8091 pi@<tailnet-host>
+# for a quick look without touching `tailscale serve` config at all.
+#
+# Making this reachable from the OPEN INTERNET is a separate, later, manual
+# `tailscale funnel` step the operator takes only after reviewing it over
+# the tailnet -- this unit does not run funnel, and nothing in
+# vcweb_public.py assumes it ever will be.
+#
+# NOT YET WIRED INTO pi/install.sh or pi/deploy.sh. vcctrld.service and
+# vcctrl-mcp.service are generated inline there (see install_mcp()), which
+# also copies the script into /opt/vcctrl and handles the tailscale serve
+# path -- doing the same for this unit (an install_public() alongside
+# install_mcp(), plus copying vcweb_public.py and daemon/kvm-ro.html into
+# /opt/vcctrl) is a natural follow-up, out of scope for this pass. Until
+# then, installing this unit means copying vcweb_public.py, kvm-ro.html and
+# themes.css into /opt/vcctrl by hand and `systemctl enable --now` this
+# file.
