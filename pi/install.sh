@@ -240,7 +240,28 @@ install_tailscaled_ro() {
   RO_NAME="$(sudo tailscale --socket=$RO_SOCK status --json 2>/dev/null \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
   if [ -n "${RO_NAME:-}" ]; then
-    if sudo tailscale --socket=$RO_SOCK serve --bg --https=443 "http://127.0.0.1:8091" >/dev/null 2>&1; then
+    # ONLY RUN `serve` IF THE MAPPING ISN'T ALREADY THERE -- found the hard
+    # way 2026-08-28: re-running `tailscale serve --bg --https=443 <target>`
+    # against a mapping that was already Funnel-enabled SILENTLY CLEARED
+    # AllowFunnel, with no error and no message -- exactly the class of
+    # surprise the 7473eb5 lesson is named for, just from `serve` this time
+    # instead of a bad `funnel` invocation. Every later `--public`/
+    # `--public-only` redeploy re-entered this function and re-ran that
+    # same `serve` call unconditionally, quietly un-funneling the mirror
+    # the operator had just confirmed reachable off-tailnet. `serve` itself
+    # is NEVER what turns Funnel on or off here (that stays the deliberate
+    # manual step, see the comment above this function) -- so once the
+    # mapping already matches, there is nothing for this script to assert
+    # and no reason to touch `serve` again at all.
+    ALREADY="$(sudo tailscale --socket=$RO_SOCK serve status --json 2>/dev/null \
+      | python3 -c "import json,sys
+d = json.load(sys.stdin)
+w = d.get('Web', {}).get('${RO_NAME}:443', {})
+p = w.get('Handlers', {}).get('/', {}).get('Proxy')
+print('yes' if p == 'http://127.0.0.1:8091' else 'no')" 2>/dev/null || echo no)"
+    if [ "$ALREADY" = "yes" ]; then
+      echo "https://${RO_NAME}/  -> vcctrl-web-public (mapping already present, left untouched)"
+    elif sudo tailscale --socket=$RO_SOCK serve --bg --https=443 "http://127.0.0.1:8091" >/dev/null 2>&1; then
       echo "https://${RO_NAME}/  -> vcctrl-web-public (tailnet only until funneled)"
     else
       echo "note: could not configure tailscale serve on the RO instance (:443)"
