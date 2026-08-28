@@ -2738,8 +2738,7 @@ function lamps(leds, videoState, verified) {
       : '';
   }
   $('lamps').title =
-    why ? 'Caps / Num / Scroll are a PS/2 return channel.\n\n'
-          + (leds.reason || why)
+    why ? (leds.reason || why)
     : LAMP_ATTESTS
       + (noVerify
          ? '\n\n' + (verified.reason || 'No round-trip verification.')

@@ -1806,11 +1806,9 @@ class LedsCapability(Capability):
             # branch is refusing. Without that there would be no way to prove
             # a channel this branch has closed.
             return {"available": False, "why": "unproven",
-                    "reason": ("nothing has been observed to move on this "
-                               "channel since the daemon started, so these "
-                               "nodes hold what they held at startup and have "
-                               "never been shown to be the target's state -- "
-                               "`verify_input` proves it by round trip")}
+                    "reason": ("not proven since the daemon started -- "
+                               "startup values, unconfirmed. "
+                               "`verify_input` proves it")}
 
         if LedsCapability._proven_epoch != epoch:
             # The sharpest case, and the one a power-off check alone misses:
@@ -1820,9 +1818,8 @@ class LedsCapability(Capability):
             # healthy boot sets, so a level check for "ready" reads TRUE
             # 2.5 s after power-on on a machine that has not begun to POST.
             return {"available": False, "why": "unproven",
-                    "reason": ("the target's power changed at %s and it has "
-                               "not published on this channel since, so these "
-                               "values belong to the previous epoch"
+                    "reason": ("power changed at %s, unconfirmed since -- "
+                               "values are from before that"
                                % (time.strftime("%H:%M:%S",
                                                 time.localtime(changed_at))
                                   if changed_at else "an unknown time"))}
