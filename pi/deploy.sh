@@ -191,7 +191,7 @@ if [ "${1:-}" = "--page" ]; then
   # kvm-ro.html included for the same reason kvm.html is: vcweb_public.py's
   # _serve_file() reads it fresh from disk on every request, same as
   # vcweb.py does for kvm.html, so shipping it needs no restart of anything.
-  for f in kvm.html kvm-ro.html themes.css; do
+  for f in kvm.html kvm-ro.html themes.css kvm-ro-share.jpg; do
     [ -f "$SRC/daemon/$f" ] || continue
     $SCP "$SRC/daemon/$f" "$HOST:/tmp/$f.new" || explain_hang
     $SSH "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
@@ -271,7 +271,7 @@ if [ "${1:-}" = "--public" ]; then
   rdir="/tmp/vcctrl-public-deploy.$$"
   $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files" || explain_hang
   $SCP "$SRC/daemon/vcweb_public.py" "$SRC/daemon/kvm-ro.html" "$SRC/daemon/themes.css" \
-    "$HOST:$rdir/daemon/" || explain_hang
+    "$SRC/daemon/kvm-ro-share.jpg" "$HOST:$rdir/daemon/" || explain_hang
   $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
   $SCP "$SRC/pi/files/vcctrl-web-public.service" "$SRC/pi/files/tailscaled-ro.service" \
     "$HOST:$rdir/pi/files/" || explain_hang

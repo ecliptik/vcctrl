@@ -319,6 +319,7 @@ install_public() {
   # has them the first time this function runs.
   sudo install -m 0644 "$SRC/daemon/kvm-ro.html" "$PREFIX/kvm-ro.html"
   sudo install -m 0644 "$SRC/daemon/themes.css"  "$PREFIX/themes.css"
+  sudo install -m 0644 "$SRC/daemon/kvm-ro-share.jpg" "$PREFIX/kvm-ro-share.jpg"
 
   if [ ! -f "$SRC/pi/files/vcctrl-web-public.service" ]; then
     echo "vcctrl-web-public: pi/files/vcctrl-web-public.service not in this checkout, skipping the unit" >&2

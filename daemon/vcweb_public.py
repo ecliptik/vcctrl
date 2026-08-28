@@ -816,6 +816,21 @@ class Handler(BaseHTTPRequestHandler):
         body = body.replace(b"<script>",
                              ('<script nonce="%s">' % nonce).encode("ascii"),
                              1)
+        # OG_PAGE_URL / OG_IMAGE_URL, THE SAME PER-REQUEST SUBSTITUTION AS
+        # THE NONCE ABOVE, for the same reason: a link-unfurler (Slack,
+        # Signal, iMessage) fetches this markup with no browser to resolve
+        # a relative URL against, and no tailnet hostname is ever a literal
+        # in the tracked file (kvm-ro.html's own comment explains why).
+        # `self.headers["Host"]` is THIS request's own Host header -- always
+        # whichever hostname the visitor actually used. Always "https": this
+        # process is only ever reached through `tailscale serve`/`funnel`,
+        # which terminate TLS before proxying here as plain HTTP, so the
+        # PUBLIC url is always https regardless of what this process itself
+        # was handed.
+        origin = "https://" + (self.headers.get("Host") or "")
+        body = body.replace(b"OG_PAGE_URL", (origin + "/").encode("ascii"))
+        body = body.replace(b"OG_IMAGE_URL",
+                             (origin + "/kvm-ro-share.jpg").encode("ascii"))
         # default-src 'none': every category below is opted in explicitly,
         # so a resource type nobody has thought to write a rule for is
         # refused rather than silently inheriting a permissive default.
@@ -879,6 +894,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._serve_html_with_csp()
             if path == "/themes.css":
                 return self._serve_file("themes.css", "text/css; charset=utf-8")
+            if path == "/kvm-ro-share.jpg":
+                return self._serve_file("kvm-ro-share.jpg", "image/jpeg")
             if path == "/state.json":
                 with _lock:
                     state, ts = dict(_state), _state_ts
