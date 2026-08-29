@@ -852,7 +852,16 @@ class Handler(BaseHTTPRequestHandler):
             for part in self.path.split("?", 1)[1].split("&"):
                 if part.startswith("fps="):
                     try:
-                        fps = max(1.0, min(30.0, float(part[4:])))
+                        # 60 is a sanity clamp, not a promise: _ws_pump only
+                        # sends when the ring has a NEW frame, so an ask
+                        # above the capture rate delivers the capture rate
+                        # (30 on the current stick -- its v4l2 mode list
+                        # tops out there at every size, checked 2026-08-28)
+                        # with zero duplicates. Clamping at the hardware's
+                        # number instead is the mistake kvm.html's own rate
+                        # comment documents: the constant outlives the
+                        # hardware it described.
+                        fps = max(1.0, min(60.0, float(part[4:])))
                     except ValueError:
                         pass
         if kind == "audio":

@@ -93,8 +93,13 @@ requires it, PLAN sec. 7), 4 cores, **920 MB RAM**, `wlan0` only at a
 `usb4vc` / `<tailnet-ip>`.
 
 **Capture stick** -- `0001:ff02` "Fry's Electronics", the MACROSILICON. Offers
-**MJPG and YUYV**, 640x480 among many sizes, at 60/50/30/20/10 fps. Its
-companion **USB audio capture** is ALSA card 1.
+**MJPG and YUYV**, 640x480 among many sizes -- and **30 fps is its maximum at
+every size in both formats**: `v4l2-ctl --list-formats-ext` re-read on the
+live device 2026-08-28 shows only 30.000 fps intervals. The "60/50/30/20/10"
+this paragraph used to claim does not exist on this hardware and had already
+cost one plan a "50 if possible" goal; if a faster capture is ever wanted,
+it is a different stick, not a setting. Its companion **USB audio capture**
+is ALSA card 1.
 
 **Hardware video encoders exist**: `/dev/video11` is `bcm2835-codec-encode`,
 and ffmpeg has `h264_v4l2m2m`, `h264_omx` and `vp8_v4l2m2m`. Relevant only to
@@ -1477,9 +1482,11 @@ Candidates, roughly in order of expected value:
 - **WebRTC over `h264_v4l2m2m`.** Lower latency and far better bandwidth on
   motion, at the cost of an encode on a Pi 3 and a signalling stack. The
   hardware encoder is present and unused.
-- **Adjustable framerate and resolution.** The stick offers 60/50/30/20/10 fps
-  and sizes up to 1920x1080. A "quality vs latency" slider is cheap once the
-  ffmpeg spawn is parameterised.
+- **Adjustable framerate and resolution.** The stick offers sizes up to
+  1920x1080 -- all at a hard 30 fps ceiling (see section 1's corrected
+  device paragraph; the "60/50" this bullet used to promise was never
+  real). A "quality vs latency" slider is cheap once the ffmpeg spawn is
+  parameterised.
 - **Direct V4L2 via ctypes**, dropping ffmpeg. Saves a copy and a process.
 - **Region-of-interest / change detection.** Expensive on a Pi 3 and the
   measurement in section 1 says bandwidth is not the problem, so this is a
