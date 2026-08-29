@@ -83,6 +83,19 @@ except ImportError:                                        # source checkout
     audio_bands = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(audio_bands)
 
+# Same two-layout reasoning once more. Page-level Ogg parsing for the Opus
+# audio side-stream (AudioCapability), shared with tests so they exercise the
+# implementation the daemon runs rather than a copy.
+try:
+    import ogg_pages
+except ImportError:                                        # source checkout
+    import importlib.util as _ilu
+    _op = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "common", "ogg_pages.py")
+    _spec = _ilu.spec_from_file_location("ogg_pages", _op)
+    ogg_pages = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(ogg_pages)
+
 # READ ONCE, AND NEVER FATAL.
 #
 # A malformed config must not stop the daemon: that is the same rule as Rule 2
@@ -3717,6 +3730,14 @@ class AudioCapability(Capability):
     # enough that the per-chunk overhead is irrelevant.
     CHUNK = 3840
     STALLED_AFTER_S = 2.0
+    # The Opus side-stream. 128k is transparent-with-margin for this source
+    # (FM/SB output through an analog path with a -30 dB noise floor) and
+    # still ~12x under raw PCM; the public mirror is the intended consumer.
+    # A string because it goes straight into ffmpeg's -b:a.
+    OPUS_BITRATE = str(CFG.default("capabilities.audio.settings.opus_bitrate",
+                                   "128k"))
+    # ~32 s at 128 kbit/s. Same bytes-not-count bounding as the PCM ring.
+    OPUS_RING_BYTES = 512 * 1024
     # The frequency-analysis constants and math now live in
     # common/audio_bands.py, shared with the control host (bin/, agent/) --
     # see that module's own comments for what each one means and how it was
@@ -3746,6 +3767,19 @@ class AudioCapability(Capability):
         self.fast_failures = 0
         self.last_error = None
         self.seq = 0
+        # The Opus side-stream, all under its own lock (never nested inside
+        # self.lock by any thread that also takes self.lock -- the feed
+        # thread takes only self.lock, the read thread only opus_lock).
+        self.opus_lock = threading.Lock()
+        self.opus_ring = collections.deque()
+        self.opus_ring_bytes = 0
+        self.opus_seq = 0
+        self.opus_headers = []       # OpusHead/OpusTags pages, current stream
+        self.opus_headers_done = False
+        self.opus_generation = 0     # bumped per encoder spawn
+        self.opus_proc = None
+        self.opus_listeners = 0
+        self.opus_last_error = None
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -3757,6 +3791,8 @@ class AudioCapability(Capability):
     def stop(self):
         self.running = False
         self._release()
+        with self.opus_lock:
+            self._opus_kill_locked()
 
     def _acquire(self):
         with self.lock:
@@ -3880,6 +3916,177 @@ class AudioCapability(Capability):
                 with self.lock:
                     self.state = new
                 self._publish("audio.%s" % new)
+
+    # -- the Opus side-stream -----------------------------------------------
+    #
+    # A second, opt-in encoding of the same capture, for consumers where raw
+    # PCM's 1.536 Mbit/s actually costs something -- in practice the public
+    # mirror, whose every listener pays that over the funnel. One encoder,
+    # spawned on the first Opus listener and killed on the last, feeding a
+    # page ring the same way the capture ffmpeg feeds the PCM ring. The
+    # capture device is NOT touched: input is the existing PCM ring, so
+    # `hw:1,0` stays single-open and `bin/vcctrl-audio`'s shim contract holds.
+    #
+    # One WHOLE Ogg page per ring entry, because the two things this stream
+    # needs beyond PCM only work at page granularity: replaying the
+    # OpusHead/OpusTags pages to a listener who joins a running stream, and
+    # skipping a listener who falls behind without corrupting the stream
+    # (a missing page is a resyncable discontinuity; verified against the
+    # browser-side decoder, docs/WEBKVM-AUDIO.md's Opus spike). -page_duration
+    # matters: the Ogg muxer's default is one full second of buffering per
+    # page, which would put a second of latency between the machine and every
+    # public listener.
+
+    def opus_attach(self):
+        """Register an Opus listener; the first one spawns the encoder.
+        Returns the encoder generation this listener must follow -- a
+        listener that sees the generation move on must drop, because pages
+        from a new encoder cannot follow another stream's headers."""
+        with self.opus_lock:
+            self.opus_listeners += 1
+            if self.opus_proc is None:
+                self._opus_spawn_locked()
+            return self.opus_generation
+
+    def opus_detach(self):
+        with self.opus_lock:
+            self.opus_listeners = max(0, self.opus_listeners - 1)
+            if self.opus_listeners == 0:
+                self._opus_kill_locked()
+
+    def _opus_spawn_locked(self):
+        """Caller holds opus_lock."""
+        try:
+            proc = subprocess.Popen(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                 "-f", "s16le", "-ar", str(self.RATE),
+                 "-ac", str(self.CHANNELS), "-i", "pipe:0",
+                 "-c:a", "libopus", "-b:a", self.OPUS_BITRATE,
+                 "-frame_duration", "20",
+                 "-f", "ogg", "-page_duration", "20000", "pipe:1"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, bufsize=0)
+        except Exception as exc:
+            self.opus_last_error = errstr(exc)
+            return
+        self.opus_proc = proc
+        self.opus_generation += 1
+        self.opus_headers = []
+        self.opus_headers_done = False
+        self.opus_ring.clear()
+        self.opus_ring_bytes = 0
+        gen = self.opus_generation
+        threading.Thread(target=self._opus_feed, args=(proc,),
+                         daemon=True, name="opus-feed").start()
+        threading.Thread(target=self._opus_read, args=(proc, gen),
+                         daemon=True, name="opus-read").start()
+        threading.Thread(target=self._opus_stderr, args=(proc,),
+                         daemon=True, name="opus-stderr").start()
+        self._publish("audio.opus_started", generation=gen,
+                      bitrate=self.OPUS_BITRATE)
+
+    def _opus_kill_locked(self):
+        """Caller holds opus_lock.
+
+        BUMPS THE GENERATION, same as a spawn does: the reader thread gates
+        every ring/header write on the generation it was born with, and
+        without the bump it kept flushing its buffered pages into a ring
+        this method had just cleared -- caught by the encoder test, as stale
+        pages sitting where the next attach expects nothing."""
+        self.opus_generation += 1
+        proc, self.opus_proc = self.opus_proc, None
+        self.opus_ring.clear()
+        self.opus_ring_bytes = 0
+        self.opus_headers = []
+        self.opus_headers_done = False
+        if proc is not None:
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+            self._publish("audio.opus_stopped")
+
+    def _opus_feed(self, proc):
+        """Follow the PCM ring from the live edge into the encoder's stdin.
+
+        Applies the same skip-ahead rule as serve_ws_audio (vcweb.py): an
+        encoder that fell badly behind is never allowed to catch up by
+        encoding a backlog, because late audio is worth nothing for
+        monitoring -- skip to near-now and let the discontinuity through.
+        """
+        with self.lock:
+            last = self.seq
+        while proc.poll() is None:
+            with self.lock:
+                pending = [(sq, c) for _t, sq, c in self.ring if sq > last]
+            if not pending:
+                time.sleep(0.005)
+                continue
+            if len(pending) > 40:          # ~0.8 s behind
+                pending = pending[-10:]
+            try:
+                for sq, chunk in pending:
+                    proc.stdin.write(chunk)
+                    last = sq
+            except Exception:
+                return
+
+    def _opus_read(self, proc, gen):
+        """Split the encoder's stdout into whole Ogg pages; cache the header
+        pages, ring the rest. On EOF with listeners still attached, respawn
+        -- that EOF was a crash, not the last-listener shutdown."""
+        splitter = ogg_pages.OggPageSplitter()
+        fd = proc.stdout.fileno()
+        while True:
+            try:
+                data = os.read(fd, 8192)
+            except Exception:
+                data = b""
+            if not data:
+                break
+            for page in splitter.feed(data):
+                now = time.time()
+                with self.opus_lock:
+                    if self.opus_generation != gen:
+                        return
+                    if not self.opus_headers_done:
+                        # Header pages carry granule 0 (OpusHead, OpusTags);
+                        # the first page with a real granule position is the
+                        # first audio page and closes the header set.
+                        if ogg_pages.page_granule(page) == 0:
+                            self.opus_headers.append(page)
+                            continue
+                        self.opus_headers_done = True
+                    self.opus_seq += 1
+                    self.opus_ring.append((now, self.opus_seq, page))
+                    self.opus_ring_bytes += len(page)
+                    while (self.opus_ring_bytes > self.OPUS_RING_BYTES
+                           and len(self.opus_ring) > 1):
+                        _t, _s, old = self.opus_ring.popleft()
+                        self.opus_ring_bytes -= len(old)
+        with self.opus_lock:
+            if self.opus_proc is proc:
+                self._opus_kill_locked()
+                if self.opus_listeners > 0 and self.running:
+                    self._opus_spawn_locked()
+
+    def _opus_stderr(self, proc):
+        """First lines, not last -- same reasoning as _keep_stderr, but into
+        its own field: this is the ENCODER's account, and it must not
+        overwrite last_error, which is the CAPTURE's."""
+        kept = []
+        try:
+            for raw in iter(proc.stderr.readline, b""):
+                line = raw.decode("utf-8", "replace").strip()
+                if line and line not in kept:
+                    kept.append(line)
+                    if len(kept) >= 4:
+                        break
+        except Exception:
+            pass
+        if kept:
+            self.opus_last_error = " | ".join(kept)[:240]
 
     # -- levels, computed on demand -----------------------------------------
 
@@ -4042,9 +4249,19 @@ class AudioCapability(Capability):
                 "spectrum": self._spectrum_cmd}
 
     def _state(self):
+        # opus_lock before self.lock, never nested: the two dicts describe
+        # two independent processes and a torn read between them is fine.
+        with self.opus_lock:
+            opus = {"running": self.opus_proc is not None,
+                    "listeners": self.opus_listeners,
+                    "generation": self.opus_generation,
+                    "bitrate": self.OPUS_BITRATE,
+                    "ring_pages": len(self.opus_ring),
+                    "last_error": self.opus_last_error}
         with self.lock:
             age = (time.time() - self.last_chunk_t) if self.last_chunk_t else None
             return {"state": self.state, "owned": self.owned,
+                    "opus": opus,
                     "rate": self.RATE, "channels": self.CHANNELS,
                     "bytes": self.bytes_total, "spawns": self.spawns,
                     "ring_chunks": len(self.ring), "ring_bytes": self.ring_bytes,

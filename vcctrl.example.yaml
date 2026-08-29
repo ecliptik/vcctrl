@@ -243,6 +243,11 @@ capabilities:
       device: hw:CARD=EXAMPLE,DEV=0
       channels: 2
       rate: 48000
+      # Bitrate for the Opus side-stream (`/wsaudio?codec=opus`), which the
+      # public mirror's page prefers over raw PCM -- ~12x less bandwidth per
+      # listener at the default. Passed straight to ffmpeg's -b:a; the
+      # encoder only runs while at least one Opus listener is connected.
+      opus_bitrate: 128k
 
   # Putting a file ONTO the target. The backend names the METHOD; `targets:`
   # says which attached machines it applies to, so a rig can have one of each.

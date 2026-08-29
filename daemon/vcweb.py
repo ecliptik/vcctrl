@@ -856,7 +856,12 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError:
                         pass
         if kind == "audio":
-            return self.cap.serve_ws_audio(self.connection)
+            codec = "pcm"
+            if "?" in self.path:
+                for part in self.path.split("?", 1)[1].split("&"):
+                    if part == "codec=opus":
+                        codec = "opus"
+            return self.cap.serve_ws_audio(self.connection, codec=codec)
         self.cap.serve_ws(self.connection,
                           agent=self.headers.get("User-Agent"), fps=fps)
 
@@ -1704,8 +1709,9 @@ class WebCapability(object):
             return True
         return True
 
-    def serve_ws_audio(self, sock):
-        """Raw PCM out, on its own socket.
+    def serve_ws_audio(self, sock, codec="pcm"):
+        """Audio out, on its own socket -- raw PCM by default, Ogg Opus pages
+        with `?codec=opus`.
 
         A separate socket rather than a channel on the video one: adding a type
         prefix to every video frame would touch the working path to add an
@@ -1713,7 +1719,8 @@ class WebCapability(object):
         falls out of the connection lifecycle instead of needing a flag.
 
         The stream sends nothing until a client connects, which is the point --
-        silence still costs 1.5 Mbit/s.
+        silence still costs 1.5 Mbit/s (raw PCM; the Opus encoder likewise
+        does not even run until its first listener attaches).
         """
         aud = self.audio()
         if aud is None:
@@ -1722,6 +1729,8 @@ class WebCapability(object):
             except Exception:
                 pass
             return
+        if codec == "opus":
+            return self._serve_ws_audio_opus(sock, aud)
         with self.lock:
             self.listeners += 1
         opened_t = time.time()
@@ -1758,6 +1767,75 @@ class WebCapability(object):
             with self.lock:
                 self.listeners -= 1
             self._log_ws("close", kind="audio",
+                         held_s=time.time() - opened_t)
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _serve_ws_audio_opus(self, sock, aud):
+        """Ogg Opus pages out, one whole page per WS frame.
+
+        Same skeleton as the PCM loop above with two additions the container
+        forces (see AudioCapability's own "-- the Opus side-stream --"
+        comment): the stream headers are replayed to every joining listener
+        before any audio page, and a generation change (the encoder was
+        respawned) DROPS the connection rather than continuing -- a new
+        encoder's pages cannot follow another stream's headers, and a client
+        that reconnects gets the new headers by the same replay.
+        """
+        gen = aud.opus_attach()
+        with self.lock:
+            self.listeners += 1
+        opened_t = time.time()
+        self._log_ws("open", kind="audio-opus")
+        try:
+            # Wait for the header pages. Unbounded on purpose, matching the
+            # PCM path's behavior when the capture is down: an open socket
+            # that sends nothing until there is something to send. If the
+            # encoder respawns while we wait, drop -- the client's reconnect
+            # lands on the new generation.
+            headers = None
+            while headers is None:
+                with aud.opus_lock:
+                    if aud.opus_generation != gen:
+                        return
+                    if aud.opus_headers_done:
+                        headers = list(aud.opus_headers)
+                        last_seq = aud.opus_seq      # join at the live edge
+                time.sleep(0.02)
+            try:
+                for page in headers:
+                    sock.sendall(ws_frame(page, opcode=0x2))
+            except Exception:
+                return
+            while True:
+                with aud.opus_lock:
+                    if aud.opus_generation != gen:
+                        return
+                    pending = [(sq, p) for _t, sq, p in aud.opus_ring
+                               if sq > last_seq]
+                if pending:
+                    # Same skip-ahead rule and numbers as the PCM loop: at
+                    # 20 ms pages, 40 behind is the same ~0.8 s. Skipping
+                    # whole pages is safe where skipping bytes would not be.
+                    if len(pending) > 40:
+                        pending = pending[-10:]
+                    try:
+                        if not select.select([], [sock], [], 0.2)[1]:
+                            continue
+                        for sq, page in pending:
+                            sock.sendall(ws_frame(page, opcode=0x2))
+                            last_seq = sq
+                    except Exception:
+                        return
+                else:
+                    time.sleep(0.005)
+        finally:
+            aud.opus_detach()
+            with self.lock:
+                self.listeners -= 1
+            self._log_ws("close", kind="audio-opus",
                          held_s=time.time() - opened_t)
             try:
                 sock.close()

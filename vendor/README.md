@@ -27,6 +27,38 @@ the copy that has been serving `~/doskutsu-netiter/` on the control host, so
 reason for copying it rather than fetching a newer release: a known-good pair
 of ends is worth more here than a version number.
 
+## `ogg-opus-decoder-1.7.5.min.js`
+
+The browser-side Opus decoder for the public mirror's audio stream
+(`daemon/vcweb_public.py` serves it; `daemon/kvm-ro.html` loads it). One
+self-contained UMD file, WASM embedded -- exposes
+`window["ogg-opus-decoder"].OggOpusDecoder`, which decodes an Ogg Opus byte
+stream fed to it in arbitrary pieces. WASM rather than WebCodecs because the
+operator's compatibility bar is Safari/Firefox/Chrome on desktop AND mobile,
+and as of 2026-08 WebCodecs audio is absent from Firefox for Android
+entirely and from Safari before 26.
+
+MIT. Provenance, exactly:
+
+- upstream: https://github.com/eshaz/wasm-audio-decoders (author Ethan
+  Halsall; MIT per the npm package metadata and the file's own header)
+- taken from the npm registry: `ogg-opus-decoder` **1.7.5**, tarball
+  shasum `aabc6f019da44acd9c127bf6f8ec298e50021602` (matched the registry's
+  own dist.shasum at download, 2026-08-29)
+- this file is `package/dist/ogg-opus-decoder.min.js` from that tarball,
+  byte-identical, renamed to carry the version -- sha256
+  `c5055d3410ca02728d10708e154b47219c38ceef52155f18702e34204150651f`
+
+The version is in the filename because the public mirror serves it with an
+immutable one-year cache: re-vendoring MUST change the name (and the script
+tag in kvm-ro.html, and `OPUS_DECODER_JS` in vcweb_public.py), or cached
+visitors keep the old build forever.
+
+**One documented deviation from its own type declarations**: the package's
+`types.d.ts` declares the main-thread `OggOpusDecoder.decode()` synchronous;
+in this dist build it returns a Promise. kvm-ro.html awaits it. Found the
+hard way -- an unawaited call "succeeds" with zero samples and no error.
+
 ## `asyncore.py`, `asynchat.py`
 
 **Stdlib modules, removed in Python 3.12**, which `pyftpdlib` 2.2.0 still

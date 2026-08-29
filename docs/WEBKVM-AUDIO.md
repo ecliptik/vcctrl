@@ -298,3 +298,55 @@ now compare against the exact RMS of the samples that were actually generated.
 **A test asserting an ideal is testing arithmetic, not code**, and when it
 disagrees with an independent implementation it is the more likely one to be
 wrong.
+
+---
+
+## 10. The Opus side-stream  **[built 2026-08-29, spike-verified]**
+
+Raw PCM costs every public listener 1.536 Mbit/s over the funnel (sec. 1).
+The mirror's page now asks for `/wsaudio?codec=opus` instead — Ogg Opus at
+128 kbit/s (`capabilities.audio.settings.opus_bitrate`), ~12× less — and
+falls back to the unchanged PCM stream if the decoder cannot start. One
+encoder in vcctrld, fed from the PCM ring (the ALSA device stays
+single-open, sec. 2), spawned on the first Opus listener and killed on the
+last; one whole Ogg page per WebSocket frame.
+
+**Decode is WASM in the page, not WebCodecs, and that is a compatibility
+decision**: as of 2026-08, WebCodecs audio is absent from Firefox for
+Android entirely and from Safari before 26, while the vendored
+`ogg-opus-decoder` (vendor/README.md) runs wherever the page itself does.
+
+**The spike that gates the design** (conditions: ogg-opus-decoder 1.7.5,
+headless Chromium on the control host, Debian 13, 2026-08-28; input a 10 s
+440 Hz stereo tone encoded by ffmpeg 7.1.5 with the exact production flags
+`-c:a libopus -b:a 128k -frame_duration 20 -f ogg -page_duration 20000`;
+stream split into its 503 pages and fed one page per `decode()` call):
+
+| scenario | pages fed | samples out | decode errors |
+|---|---|---|---|
+| full stream from its true start | 503 | 479,688 (10 s − 312 preskip) | 0 |
+| headers replayed + join at 50% | 253 | 239,688 (≈ the 5 s fed) | 0 |
+| headers + a 50-page (~1 s) hole | 453 | 431,688 (≈ the 9 s fed) | 0 |
+
+So the two behaviors the whole design leans on — **header replay for a
+late-joining listener, and page-granularity skip-ahead for a slow one** —
+hold in the real decoder with zero errors. Decode ran ~70× realtime in
+that environment; phones are slower, but a 20 ms page budget leaves two
+orders of magnitude of headroom. Not yet measured: the same matrix on
+real iOS Safari and Firefox-for-Android devices (the operator's device
+test), and the delivered bytes/s over the funnel before/after.
+
+Two facts found the hard way, so they are written where the next person
+will look:
+
+- **`decode()` returns a Promise in the 1.7.5 dist build** although the
+  package's own `types.d.ts` declares it synchronous. An unawaited call
+  "succeeds" with zero samples and no error — the first spike run reported
+  exactly that for a pristine stream, and the bug was in the caller.
+- **ffmpeg's Ogg muxer defaults to one-second pages.** Without
+  `-page_duration 20000` the stream is valid, decodes perfectly, and
+  carries a hidden second of latency that no error will ever point at.
+
+The page-size overhead of 20 ms pages is real but small: the 10 s / 128k
+test stream weighed 180,630 bytes ≈ 144 kbit/s on the wire, container
+included.
