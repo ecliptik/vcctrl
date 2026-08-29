@@ -2053,9 +2053,14 @@ function uniformFrame() {
 
 function poll_render_veil(state, uni) {
   const live = state === 'frozen' && !uni;
-  $('dimbtn').textContent = live ? 'Show live picture' : 'Show frame';
+  // "Show last frame", not "Show live picture" -- operator call,
+  // 2026-08-28: in the frozen branch the dismiss does reveal the live
+  // stream, but a frozen stream is the stick re-emitting one frame, so
+  // what a person SEES is the last frame -- and offering "live" under a
+  // No Signal notice reads as a contradiction.
+  $('dimbtn').textContent = live ? 'Show last frame' : 'Show frame';
   $('dimbtn').title = live
-    ? 'Show the live stream'
+    ? 'Show the last frame received'
     : 'Show the kept frame at full brightness';
 }
 
