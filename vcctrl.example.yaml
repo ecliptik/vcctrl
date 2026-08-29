@@ -249,6 +249,22 @@ capabilities:
       # encoder only runs while at least one Opus listener is connected.
       opus_bitrate: 128k
 
+  # A SECOND, independent camera pointed at the physical target rather than
+  # its captured video signal -- optional, unlike `video`/`audio` above which
+  # every rig has. Defaults to `none` here on purpose: an absent `backend:`
+  # key does NOT mean disabled in this schema (see Registry._resolve_backend
+  # in daemon/vcctrld.py) -- it falls back to the default backend below, so a
+  # rig with no second camera that left this block out entirely would still
+  # spin ffmpeg against /dev/video0 forever. Set `backend: v4l2-ffmpeg` and
+  # fill in the real by-id device only on a rig that actually has one.
+  camera:
+    backend: none                 # v4l2-ffmpeg | none
+    settings:
+      # Same by-id discipline as `video` above -- doubly so here, since a rig
+      # with this enabled has TWO UVC devices that can renumber independently
+      # of each other.
+      device: /dev/v4l/by-id/usb-EXAMPLE_CAMERA-video-index0
+
   # Putting a file ONTO the target. The backend names the METHOD; `targets:`
   # says which attached machines it applies to, so a rig can have one of each.
   #

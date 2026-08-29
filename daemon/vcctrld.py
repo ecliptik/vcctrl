@@ -2346,6 +2346,43 @@ def _keep_stderr(cap, proc):
         except Exception:
             pass
 
+
+def _split_mjpeg(buf):
+    """Split complete JPEGs out of an MJPEG byte stream.
+
+    Frames are delimited by SOI (FFD8) and EOI (FFD9). This is safe rather
+    than merely usual: inside entropy-coded data every 0xFF is byte-stuffed
+    as FF 00, and restart markers are FFD0-FFD7, so FFD9 appears only as a
+    genuine EOI.
+
+    Length is still validated, because partial writes happen on this path --
+    one of the existing shot files on the Pi is zero bytes.
+
+    Shared by every capability that owns a v4l2-ffmpeg MJPEG passthrough
+    (VideoCapability, CameraCapability) -- the parsing is identical for any
+    such device; only what each does with a finished frame differs.
+
+    Returns (frames, remaining_buf): frames is a list of complete JPEG byte
+    strings found in buf, in order; remaining_buf is what's left to prepend
+    to the next read.
+    """
+    frames = []
+    while True:
+        i = buf.find(b"\xff\xd8")
+        if i < 0:
+            # No SOI in hand: nothing here is the start of a frame. Keep one
+            # trailing byte in case FF and D8 straddle reads.
+            buf = buf[-1:]
+            break
+        j = buf.find(b"\xff\xd9", i + 2)
+        if j < 0:
+            buf = buf[i:]
+            break
+        frame, buf = buf[i:j + 2], buf[j + 2:]
+        if len(frame) >= 128:
+            frames.append(frame)
+    return frames, buf
+
 # ── MJPEG IN AVI ──────────────────────────────────────────────────────────
 # The ring already holds JPEGs. Muxing them into a container costs no encode
 # and loses no byte: what plays back is exactly what the daemon judged, which
@@ -2688,16 +2725,8 @@ class VideoCapability(Capability):
     # -- the per-frame path -------------------------------------------------
 
     def _read_frames(self, proc):
-        """Split JPEGs out of the mjpeg stream.
-
-        Frames are delimited by SOI (FFD8) and EOI (FFD9). This is safe rather
-        than merely usual: inside entropy-coded data every 0xFF is byte-stuffed
-        as FF 00, and restart markers are FFD0-FFD7, so FFD9 appears only as a
-        genuine EOI.
-
-        Length is still validated, because partial writes happen on this path
-        -- one of the existing shot files on the Pi is zero bytes.
-        """
+        """Split JPEGs out of the mjpeg stream. See _split_mjpeg for why the
+        SOI/EOI approach is safe."""
         buf = b""
         fd = proc.stdout.fileno()
         while self.running and proc.poll() is None:
@@ -2720,20 +2749,9 @@ class VideoCapability(Capability):
             if not chunk:
                 break
             buf += chunk
-            while True:
-                i = buf.find(b"\xff\xd8")
-                if i < 0:
-                    # No SOI in hand: nothing here is the start of a frame.
-                    # Keep one trailing byte in case FF and D8 straddle reads.
-                    buf = buf[-1:]
-                    break
-                j = buf.find(b"\xff\xd9", i + 2)
-                if j < 0:
-                    buf = buf[i:]
-                    break
-                frame, buf = buf[i:j + 2], buf[j + 2:]
-                if len(frame) >= 128:
-                    self._push(frame)
+            frames, buf = _split_mjpeg(buf)
+            for frame in frames:
+                self._push(frame)
 
     def _cap(self):
         """Effective byte cap, lowered if the Pi is short of memory."""
@@ -3663,6 +3681,17 @@ class VideoCapability(Capability):
                     "mem_limited": self.mem_limited,
                     "last_frame_age_s": round(age, 3) if age else None}
 
+    def _latest(self):
+        """(timestamp, jpeg_bytes) of the newest ring frame, or (None, None).
+
+        The uniform read `_mjpeg()` in vcweb.py uses for any capability that
+        can hand it a most-recent frame -- CameraCapability implements the
+        same method over its own, smaller state.
+        """
+        with self.lock:
+            return (self.ring[-1][0], self.ring[-1][2]) if self.ring \
+                else (None, None)
+
     def _burst(self, req):
         """RAW frames, labelled raw. Callers that want a judgement want shot.
 
@@ -4338,6 +4367,219 @@ class AudioCapability(Capability):
                     "reason": "no audio in the ring"}
         return dict({"ok": True, "state": self.state}, **sp)
 
+
+class CameraCapability(Capability):
+    """A second, independent UVC camera pointed at the physical target, not
+    its captured video signal -- a photographic "is the room really doing
+    what the emulated capture says" companion view, not a replacement for it.
+
+    Deliberately a slimmed-down sibling of VideoCapability, not a copy.
+    VideoCapability's ring buffer, frozen-frame detection, uniform-frame
+    rejection and pin/span/scrub machinery are all calibrated to the ANALOG
+    capture stick's specific failure modes -- a relock that produces a
+    no-lock constant-color frame, a text mode that legitimately never
+    changes. None of that applies here: a UVC webcam either delivers frames
+    or ffmpeg exits, closer to AudioCapability's "no data is a fault"
+    watchdog than to VideoCapability's "no data can be correct" one. So
+    there is no ring, no frozen-run detection, and no scrub/pin state --
+    only the latest frame, because nothing here needs to look backward.
+
+    Still a full Capability (config-driven, registered, always-on from
+    daemon startup) rather than a bypass process, so it gets the same
+    device-by-id discipline and liveness watchdog as every other capture
+    device in this file -- just without the machinery that exists only to
+    survive the analog stick's own hazards.
+    """
+
+    name = "camera"
+
+    # Same by-id discipline as VideoCapability.DEVICE, and doubly so here:
+    # this Pi can carry TWO UVC devices that renumber independently of each
+    # other, so /dev/videoN is not even a good guess.
+    DEVICE = CFG.default("capabilities.camera.settings.device", "/dev/video0")
+
+    # How long the process can go without a frame before it's reported as
+    # nosignal. Unlike VideoCapability's NOSIGNAL_AFTER_S, this never
+    # triggers a respawn -- see _watchdog.
+    NOSIGNAL_AFTER_S = 2.0
+
+    def __init__(self, devs, bus=None):
+        Capability.__init__(self, devs)
+        self.bus = bus
+        self.lock = threading.Lock()
+        self.proc = None
+        self.reader = None
+        self.running = False
+        self.owned = False
+        self.last_frame = None
+        self.last_frame_t = 0.0
+        self.frames_total = 0
+        self.state = "starting"
+        self.spawns = 0
+        self.last_error = None
+        self.spawn_t = 0.0
+        self.fast_failures = 0
+        self.seq = 0
+
+    # -- device lifecycle -----------------------------------------------
+
+    def start(self):
+        self.running = True
+        self._acquire()
+        threading.Thread(target=self._watchdog, daemon=True).start()
+
+    def stop(self):
+        self.running = False
+        self._release()
+
+    def _acquire(self):
+        with self.lock:
+            if self.owned:
+                return True
+            try:
+                self.proc = subprocess.Popen(
+                    ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                     "-f", "v4l2", "-input_format", "mjpeg",
+                     # 1920x1080, not 640x480 like the primary capture: that
+                     # size was picked when this only ever rendered as a
+                     # ~200px thumbnail, but the swap feature can make this
+                     # the full main view -- and -c:v copy means capturing at
+                     # the sensor's native detail costs nothing extra here
+                     # (no decode either way, Rule 3), only bytes on the wire,
+                     # which the thumbnail case already pays for by scaling
+                     # down in CSS rather than by asking for less source.
+                     # Confirmed MJPG 1920x1080@30fps via v4l2-ctl
+                     # --list-formats-ext on this device.
+                     "-video_size", "1920x1080", "-framerate", "30",
+                     "-i", self.DEVICE,
+                     "-c:v", "copy", "-f", "mjpeg", "-"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    bufsize=0)
+            except Exception as exc:
+                self.last_error = errstr(exc)
+                return False
+            self.owned = True
+            self.spawns += 1
+            self.spawn_t = time.time()
+            self.state = "starting"
+            self.last_error = None
+            threading.Thread(target=_keep_stderr, args=(self, self.proc),
+                             daemon=True).start()
+            self.reader = threading.Thread(target=self._read_frames,
+                                           args=(self.proc,), daemon=True)
+            self.reader.start()
+        self._publish("camera.acquired", spawns=self.spawns)
+        return True
+
+    def _release(self):
+        with self.lock:
+            proc, self.proc, self.owned = self.proc, None, False
+        if proc is not None:
+            try:
+                proc.kill()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
+        self._publish("camera.released")
+
+    def _publish(self, kind, **kw):
+        if self.bus is not None:
+            self.bus.publish(kind, **kw)
+
+    # -- the per-frame path -----------------------------------------------
+
+    def _read_frames(self, proc):
+        """Split JPEGs out of the mjpeg stream. See _split_mjpeg for why the
+        SOI/EOI approach is safe -- identical reasoning to VideoCapability's
+        own reader, just not re-derived a second time."""
+        buf = b""
+        fd = proc.stdout.fileno()
+        while self.running and proc.poll() is None:
+            try:
+                chunk = os.read(fd, 65536)
+            except Exception as exc:
+                self.last_error = errstr(exc, "reader: ")
+                self._publish("camera.reader_error", error=self.last_error)
+                break
+            if not chunk:
+                break
+            buf += chunk
+            frames, buf = _split_mjpeg(buf)
+            for frame in frames:
+                self._push(frame)
+
+    def _push(self, frame):
+        now = time.time()
+        with self.lock:
+            self.frames_total += 1
+            self.seq += 1
+            self.last_frame = frame
+            self.last_frame_t = now
+
+    def _latest(self):
+        """(timestamp, jpeg_bytes) of the newest frame, or (None, None) --
+        same shape as VideoCapability._latest, so vcweb.py's _mjpeg() can
+        read either capability uniformly."""
+        with self.lock:
+            return (self.last_frame_t, self.last_frame) if self.last_frame \
+                else (None, None)
+
+    def _watchdog(self):
+        """Liveness, not a clock -- same rule as video/audio (sec. 4.5).
+
+        Unlike VideoCapability, there is no legitimate steady state where
+        this process stays alive and produces nothing: a UVC webcam that is
+        open delivers frames whether or not anything interesting is in
+        frame, the same way AudioCapability's device delivers samples
+        whether or not anything is playing. So an alive-but-quiet stream is
+        reported (state "nosignal") but, deliberately, never forces a
+        respawn on its own -- only a process exit does, exactly as for video
+        and audio.
+        """
+        while self.running:
+            time.sleep(0.5)
+            with self.lock:
+                owned, proc = self.owned, self.proc
+                age = (time.time() - self.last_frame_t) if self.last_frame_t \
+                    else (time.time() - self.spawn_t if self.spawn_t else None)
+                state = self.state
+            if not owned:
+                continue
+            if proc is not None and proc.poll() is not None:
+                lifetime = time.time() - self.spawn_t
+                with self.lock:
+                    self.fast_failures = (self.fast_failures + 1
+                                          if lifetime < 5.0 else 0)
+                    fails = self.fast_failures
+                self._publish("camera.wedged", rc=proc.returncode,
+                              lifetime_s=round(lifetime, 2),
+                              fast_failures=fails)
+                self._release()
+                if fails:
+                    with self.lock:
+                        self.state = "unavailable"
+                    time.sleep(min(30.0, 2.0 ** min(fails, 5)))
+                if self.running:
+                    self._acquire()
+                continue
+            new = "nosignal" if (age is not None
+                                 and age > self.NOSIGNAL_AFTER_S) else "capturing"
+            if new != state:
+                with self.lock:
+                    self.state = new
+                self._publish("camera.%s" % new)
+
+    def _state(self):
+        with self.lock:
+            age = (time.time() - self.last_frame_t) if self.last_frame_t \
+                else None
+            return {"state": self.state, "owned": self.owned,
+                    "frames": self.frames_total, "spawns": self.spawns,
+                    "fast_failures": self.fast_failures,
+                    "last_error": self.last_error,
+                    "device_present": os.path.exists(self.DEVICE),
+                    "device": self.DEVICE,
+                    "last_frame_age_s": round(age, 3) if age else None}
 
 
 _UNSET = object()
@@ -8634,6 +8876,9 @@ VideoCapability.DEFAULT_BACKEND_NAME = 'v4l2-ffmpeg'
 AudioCapability.BACKENDS = {"alsa-ffmpeg": AudioCapability}
 AudioCapability.DEFAULT_BACKEND = AudioCapability
 AudioCapability.DEFAULT_BACKEND_NAME = 'alsa-ffmpeg'
+CameraCapability.BACKENDS = {"v4l2-ffmpeg": CameraCapability}
+CameraCapability.DEFAULT_BACKEND = CameraCapability
+CameraCapability.DEFAULT_BACKEND_NAME = 'v4l2-ffmpeg'
 
 FilesCapability.BACKENDS = {"mtcp-ftp": FilesCapability}
 FilesCapability.DEFAULT_BACKEND = FilesCapability
@@ -8760,7 +9005,8 @@ PublicTelemetryCapability.DEFAULT_BACKEND = PublicTelemetryCapability
 PublicTelemetryCapability.DEFAULT_BACKEND_NAME = 'file'
 
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
-                VideoCapability, AudioCapability, BoardCapability,
+                VideoCapability, AudioCapability, CameraCapability,
+                BoardCapability,
                 FilesCapability,
                 # Reads FilesCapability._pulled(), so it is registered
                 # after it -- not that load order enforces this (every

@@ -716,6 +716,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, WSPROBE, "text/html; charset=utf-8")
             if path == "/stream.mjpg":
                 return self._mjpeg()
+            if path == "/cam.mjpg":
+                # The second, discretionary camera overlay -- deliberately its
+                # own multipart route rather than a kind on /ws (see the
+                # comment on serve_ws_audio for why audio got a dedicated
+                # socket instead of a type-prefix on the video one; same
+                # reasoning applies here, and this feed doesn't need the
+                # socket's precision pacing at all). Private KVM only: this
+                # route has no equivalent in vcweb_public.py, by design -- a
+                # camera on the physical room is more sensitive than the
+                # emulated screen.
+                return self._mjpeg(capname="camera", default_fps=8.0)
             if path == "/ws":
                 return self._websocket()
             if path == "/wsaudio":
@@ -743,7 +754,7 @@ class Handler(BaseHTTPRequestHandler):
                                "error": "command not exposed: %r" % cmd}, 403)
         return self._json(self.cap.call(cmd, req))
 
-    def _mjpeg(self):
+    def _mjpeg(self, capname="video", default_fps=15.0):
         """multipart/x-mixed-replace -- the fallback that needs no JavaScript.
 
         An <img src="/stream.mjpg"> animates on its own: the browser does the
@@ -756,6 +767,14 @@ class Handler(BaseHTTPRequestHandler):
         Slower to first frame than the socket and it cannot carry input, so the
         page uses it only when the socket has not delivered.
 
+        Also serves the discretionary second-camera overlay (`capname=
+        "camera"`, /cam.mjpg) -- that feed has no WebSocket path at all (see
+        the /cam.mjpg route comment), so this is its ONLY transport, not a
+        fallback. Reads via `cap._latest()`, a (timestamp, jpeg_bytes) pair
+        that both VideoCapability and CameraCapability implement, rather than
+        reaching into `vid.ring` directly, so this loop does not need to know
+        which capability it was handed.
+
         RING EMPTY falls back to `_TEST_PATTERN`, throttled to ~1 fps rather
         than this loop's own `fps` -- operator decision, 2026-08-28, made
         after the public mirror's narrower version of this same fallback
@@ -764,17 +783,17 @@ class Handler(BaseHTTPRequestHandler):
         a browser's "waiting on <host>" status was describing a connection
         that could never deliver anything on its own. `frozen` (frames
         arriving, all duplicates) already had a real frame to send here --
-        `vid.ring[-1]` does no duplicate rejection, unlike `/shot.jpg` -- so
+        `_latest()` does no duplicate rejection, unlike `/shot.jpg` -- so
         this only fires when the device has never produced one at all.
         """
-        vid = self.cap.video()
-        if vid is None:
-            return self._json({"error": "no video capability"}, 503)
+        cap = self.cap.registry.caps.get(capname)
+        if cap is None:
+            return self._json({"error": "no %s capability" % capname}, 503)
         # Paced lower than the socket by default. A detailed screen is ~70 KB
         # a frame, so 30 fps is ~17 Mbit/s -- fine on the LAN, unkind to a
         # phone on cellular going through the tailnet. The socket path stays at
         # full rate; this one is the compatibility route, not the good one.
-        fps = 15.0
+        fps = default_fps
         if "?" in self.path:
             for part in self.path.split("?", 1)[1].split("&"):
                 if part.startswith("fps="):
@@ -789,25 +808,28 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
+        # A separate counter per capability -- self.cap.clients already feeds
+        # /state.json's "viewers" field for the PRIMARY feed specifically;
+        # folding camera viewers into it would silently change what that
+        # number means for existing consumers.
+        counter = "clients" if capname == "video" else "cam_clients"
         with self.cap.lock:
-            self.cap.clients += 1
+            setattr(self.cap, counter, getattr(self.cap, counter) + 1)
         last_t = 0.0
         last_test_pattern = 0.0
         try:
             while True:
-                with vid.lock:
-                    item = vid.ring[-1] if vid.ring else None
+                t, body = cap._latest()
                 now = time.time()
-                if item is not None and item[0] > last_t:
-                    last_t = item[0]
-                    body = item[2]
+                if t is not None and t > last_t:
+                    last_t = t
                     self.wfile.write(
                         ("--%s\r\nContent-Type: image/jpeg\r\n"
                          "Content-Length: %d\r\n\r\n"
                          % (boundary, len(body))).encode())
                     self.wfile.write(body)
                     self.wfile.write(b"\r\n")
-                elif item is None and now - last_test_pattern >= 1.0:
+                elif t is None and now - last_test_pattern >= 1.0:
                     # Static and synthetic -- no reason to resend it at the
                     # real stream's own rate.
                     last_test_pattern = now
@@ -822,7 +844,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             with self.cap.lock:
-                self.cap.clients -= 1
+                setattr(self.cap, counter, getattr(self.cap, counter) - 1)
 
     # -- websocket ----------------------------------------------------------
 
@@ -1079,6 +1101,8 @@ class WebCapability(object):
         self.httpd = None
         self.tlsd = None
         self.clients = 0
+        # Separate from self.clients on purpose -- see _mjpeg()'s comment.
+        self.cam_clients = 0
         self.ws_opened = 0
         self.ws_closed = 0
         self.ws_last_error = None
@@ -1153,6 +1177,9 @@ class WebCapability(object):
 
     def audio(self):
         return self.registry.caps.get("audio")
+
+    def camera(self):
+        return self.registry.caps.get("camera")
 
     def snapshot(self):
         """Everything the page needs to answer "is it stuck", in one request."""
@@ -1301,6 +1328,13 @@ class WebCapability(object):
                 "listeners": self.listeners,
                 "audio": (self.audio()._state() if self.audio()
                           else {"state": "unavailable"}),
+                # The discretionary second camera -- absent entirely on a rig
+                # that has `capabilities.camera.backend: none` (the tracked
+                # template's default), same "disabled is a third state, not a
+                # failure" distinction Registry itself draws.
+                "camera": (self.camera()._state() if self.camera()
+                           else {"state": "unavailable"}),
+                "cam_viewers": self.cam_clients,
                 "ws": {"opened": self.ws_opened, "closed": self.ws_closed,
                        "dropped": self.ws_dropped,
                        "sent_frames": self.ws_sent_frames,

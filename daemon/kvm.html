@@ -762,6 +762,135 @@
     display:flex; flex-direction:column; gap:7px;
   }
   #scrub[hidden] { display:none; }
+  /* The hardware camera overlay -- same corner-box idiom as #scrub (panel
+     background, rule border, radius, shadow) but a small fixed thumbnail
+     rather than a full-width bar, so it can sit in the lower-left corner
+     without needing to reflow or compete with the picture. z-index sits
+     above #veil/#zhint (4/3) and below #scrub (60): if review mode is ever
+     entered while this is showing, enterReview()/exitReview() hide and
+     restore it explicitly (see their own JS), but the z-index is a second,
+     structural line of defence against the two ever visually fighting. */
+  #camoverlay {
+    position:absolute; left:10px; bottom:10px; z-index:55;
+    width:200px; max-width:40%; aspect-ratio:4/3;
+    background:var(--panel); border:1px solid var(--rule); border-radius:9px;
+    box-shadow:0 12px 30px rgba(0,0,0,.36); overflow:hidden;
+  }
+  #camoverlay[hidden] { display:none; }
+  /* #camoverlay #camimg, not #camimg alone: "#stage img" above (ID + type,
+     specificity 1-0-1) outranks a bare "#camimg" (1-0-0) regardless of
+     source order, and was forcing this to the primary picture's fixed
+     640x480/max-width:none box -- clipped by this container's overflow:hidden
+     into an unreadable sliver of the frame instead of a scaled-down whole.
+     Two ID selectors (2-0-0) is enough to win outright. object-fit:contain,
+     not cover: this is a monitoring view, so the point is seeing the whole
+     frame, not filling the box at the cost of cropping the edges off it. */
+  #camoverlay #camimg {
+    display:block; width:100%; height:100%; object-fit:contain;
+    /* The camera is physically mounted upside down on the rig. A software
+       flip, not a remount -- cheap here (one composited transform) where a
+       flip on the capture side would cost ffmpeg an actual decode/re-encode
+       pass it otherwise never pays (see VideoCapability's own Rule 3 comment
+       on why nothing in a passthrough path decodes what it doesn't have to). */
+    transform:rotate(180deg);
+  }
+  /* A #stage-level SIBLING of #camoverlay/#scroll, not a child of either --
+     see the HTML comment where it's declared for why. Its own position is
+     fixed at the corner both boxes' "small" state already shares (10px inset
+     + 6px inner offset, matching where it sat inside #camoverlay before),
+     so it does not need to move when cam-swapped toggles; only its z-index
+     has to clear whichever of the two is currently small (56 swapped, 55
+     unswapped) so it stays clickable on top of that box's own content.
+     Position/size only otherwise -- background, border and text colour stay
+     the plain `button` rule's own theme-aware styling, which already solves
+     "read on both a dark and a light palette" with a --dark-scaled
+     background rather than opacity; this must NOT add its own opacity, see
+     test_no_text_is_dimmed_by_transparency. */
+  #camswap {
+    position:absolute; left:16px; bottom:16px; z-index:57;
+    min-height:26px; padding:2px 8px; font-size:12px; line-height:1.4;
+  }
+  #camswap[hidden] { display:none; }
+  @media (max-width:640px) {
+    /* --cam-bottom, not --panel-gap alone: on a phone #cmdbar is
+       position:fixed, floating OVER #stage rather than a separate grid row
+       below it like on desktop (see #cmdbar's own "runs edge to edge"
+       comment) -- so an open TYPE/CAPTURE/etc. tab can sit directly on top
+       of a corner box anchored to a flat gap. #scrub gets away with the flat
+       gap because entering review also force-closes the tab strip (see
+       setTab's 'buffer' case); nothing closes it for the camera, since the
+       whole point is seeing the camera WHILE using TYPE. --cam-bottom is
+       measureBars()'s own answer to how much #cmdbar's open state intrudes
+       on #stage SPECIFICALLY -- not #tabs, which #stage's own box already
+       excludes as a separate flex sibling -- recomputed on every tab switch
+       (see setTab's measureBars() call), reused here rather than a second
+       measurement. */
+    #camswap { left:6px;
+               bottom:var(--cam-bottom, 4px); }
+  }
+  /* SWAP SIZES, NOT ROLES: #scroll (the live, interactive VGA capture) and
+     #camoverlay (the read-only camera) simply trade CSS geometry -- neither
+     one's content, input wiring or connection is touched. The picture's OWN
+     pixel size still needs a fresh applyZoom() after this fires, though: that
+     function sets #screen/#mjpeg's inline width/height from #scroll's
+     clientWidth/Height at the moment it runs (see applyZoom's own comments),
+     and this class toggle is not a window resize, so nothing calls it on its
+     own. Skipping that the first time round left the picture at its old,
+     much larger fit size, hard-clipped by #scroll's overflow:hidden (fit
+     mode never scrolls) to whatever fraction of the top-left corner the new,
+     tiny box happened to show -- reported as "a strip on the left". The
+     swap button's own click handler calls applyZoom(true) for exactly this. */
+  body.cam-swapped #scroll {
+    inset:auto; top:auto; right:auto; left:10px; bottom:10px;
+    width:200px; max-width:40%; aspect-ratio:4/3;
+    z-index:56; border-radius:9px; border:1px solid var(--rule);
+    box-shadow:0 12px 30px rgba(0,0,0,.36);
+  }
+  body.cam-swapped #camoverlay {
+    left:10px; right:10px; top:10px; bottom:10px;
+    width:auto; max-width:none; aspect-ratio:auto;
+    /* NOT 2 -- that ties #ghost's own z-index:2 (the transparent phone
+       tap-catcher covering the whole stage, "#ghost {" above), and equal
+       z-index falls back to DOM order, where #ghost comes later and wins.
+       Swapped-big #camoverlay sat BEHIND the invisible input, so a tap meant
+       for the camera view landed on #ghost instead and raised the on-screen
+       keyboard. #veil solved the identical problem the identical way --
+       "above the transparent input on a phone" is its own z-index:4 comment
+       -- so match it rather than invent a second number for one collision. */
+    z-index:4;
+  }
+  @media (max-width:640px) {
+    /* Same --cam-bottom reasoning as #camswap's own mobile rule just above:
+       an open #cmdbar is a fixed overlay on a phone, not a layout row, so
+       the swapped-small VGA thumbnail needs to clear it the same way. */
+    body.cam-swapped #scroll {
+      /* left:0, not --panel-gap: lines up with the bottom strip's own left
+         edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
+      left:0;
+      bottom:var(--cam-bottom, 4px);
+    }
+  }
+  /* SWAPPED, THE BIG VIEW IS THE CAMERA -- and the VGA capture's own
+     no-signal state has nothing to do with it, so the full-stage veil (built
+     to replace the ENTIRE big view with an explanation) must not cover the
+     camera. It still needs to say SOMETHING, though: the small VGA box is
+     still the live input target and "it just looks frozen" is exactly the
+     failure this whole notice exists to prevent. So: hide the big modal,
+     replace it with a minimal label over the thumbnail's own last-good frame
+     -- which #scroll already shows there on its own (see showStale()), this
+     only adds the two words on top of it. Keyed on #veil's OWN data-want
+     attribute, not its dismissible .show class: the thumbnail indicator is
+     deliberately not dismissible, so it stays true to whether there really
+     is no signal rather than to whether the (now-hidden) big notice was
+     clicked away before the swap happened. */
+  body.cam-swapped #veil, body.cam-swapped #veilback { display:none; }
+  body.cam-swapped:has(#veil[data-want="1"]) #scroll::after {
+    content:'No Signal';
+    position:absolute; inset:0; z-index:1; pointer-events:none;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.55); color:#fff; font-size:12px; font-weight:600;
+    border-radius:9px;
+  }
   #scrubtrack {
     position:relative; height:26px; border:1px solid var(--rule);
     border-radius:5px; overflow:hidden; background:var(--bg); cursor:pointer;
@@ -846,6 +975,20 @@
   #scrubbar button { min-height:34px; padding:0 9px; }
   @media (max-width:640px) {
     #scrub { left:0; right:0; bottom:var(--panel-gap); }
+    /* NOT #scrub's own flat --panel-gap: entering review force-closes the
+       tab strip (setTab's 'buffer' case), so #scrub never has to clear an
+       open one. Nothing closes it for the camera -- the point is seeing it
+       WHILE using TYPE/CAPTURE/etc -- so this needs --cam-bottom,
+       measureBars()'s own answer to how much #cmdbar's fixed, floating
+       .open state intrudes on #stage specifically (see that property's own
+       comment for why NOT --bar-bottom: #stage's own box already excludes
+       #tabs, so adding tabs' height again on top of it double-counted it). */
+    #camoverlay {
+      /* left:0, not --panel-gap: lines up with the bottom strip's own left
+         edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
+      left:0;
+      bottom:var(--cam-bottom, 4px);
+    }
     /* PACKED, NOT STACKED. One group per row was right when the panel was
        inset and narrow; now that it runs edge to edge there is room for two
        groups on a line, and three rows of buttons plus a track plus a readout
@@ -2113,6 +2256,17 @@
         <span id="scrubpos">—</span>
       </div>
     </div>
+    <!-- A second, physical camera pointed at the actual hardware, not its
+         captured signal -- off by default, toggled from Settings. -->
+    <div id="camoverlay" hidden>
+      <img id="camimg" src="" alt="camera view of the hardware">
+    </div>
+    <!-- A SIBLING, NOT A CHILD OF #camoverlay. Swap trades which of
+         #camoverlay/#scroll is the small corner box -- a button living
+         inside #camoverlay travelled with it to the BIG position once
+         swapped, leaving nothing in the corner to swap back with. This one
+         stays put at the corner itself regardless of which box is there. -->
+    <button id="camswap" hidden title="Swap sizes with the main view">⇄ Swap</button>
     <div id="zhint" aria-hidden="true"></div>
     <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
            autocomplete="off" enterkeyhint="enter" aria-label="type at the target">
@@ -2369,6 +2523,11 @@
         </select>
       </div>
       <div class="hint" id="bufinfo" style="margin-left:0">—</div>
+
+      <label><input type="checkbox" id="opt-camera">
+        Show hardware camera</label>
+      <div class="hint" style="margin-left:0">A second camera pointed at the
+        actual machine, when one is connected.</div>
 
       <!-- "Use WebSocket when it works" lived here. Removed: the automatic
            fallback it appeared to control already existed and always did,
@@ -3250,14 +3409,30 @@ $('refresh').onclick = restart;
 // and neither comes back on its own. Returning to the tab must restore the
 // picture without a manual reload -- a KVM you have to reload is one you
 // cannot trust to be showing now.
-addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+function resumeAll() {
   restart();
+  restartCamera();
+  // A resumed tab's own layout is not trustworthy either -- reported after
+  // switching apps and back with the swapped camera view full-screen: a
+  // broken-image icon AND a page that had gone horizontally scrollable, the
+  // same "something changed size and nothing recomputed the fit" shape
+  // already found once for the swap button itself (see its own onclick
+  // comment). Cheap and idempotent, so calling it unconditionally on every
+  // resume costs nothing on the common case where nothing actually broke.
+  applyZoom(true);
   // The audio context suspends with the tab and does not resume itself.
   if (soundOn) { if (ac && ac.state === 'suspended') ac.resume(); if (!aws) startAudio(); }
+}
+// iOS suspends a backgrounded tab: sockets close, the multipart stream dies,
+// and neither comes back on its own. Returning to the tab must restore the
+// picture without a manual reload -- a KVM you have to reload is one you
+// cannot trust to be showing now.
+addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  resumeAll();
 });
-addEventListener('pageshow', e => { if (e.persisted) restart(); });
-addEventListener('online', restart);
+addEventListener('pageshow', e => { if (e.persisted) resumeAll(); });
+addEventListener('online', resumeAll);
 
 // Last resort: if the page is visible and no frame has arrived in 8s, whatever
 // transport is running has silently died. Judge on frames, not on the state of
@@ -4616,7 +4791,8 @@ function armFromStage(e) {
   // "tapping any element in Buffer captures the screen and brings up the
   // keyboard", which is exactly what it did.
   if (e && e.target && e.target.closest
-      && e.target.closest('#scrub, #veil, #stalebar, #veilback')) return;
+      && e.target.closest('#scrub, #veil, #stalebar, #veilback, '
+                          + '#camoverlay, #camswap')) return;
   if (armed) {
     // Already grabbed. Do not silently do nothing -- the previous build's
     // real bug was invisible state, so say what is true, over the picture
@@ -5266,6 +5442,27 @@ function measureBars() {
   st.setProperty('--bar-top', Math.max(0, Math.round(top)) + 'px');
   st.setProperty('--bar-bottom',
                  Math.max(0, Math.round(window.innerHeight - bot)) + 'px');
+  // FOR #camoverlay/#camswap/swapped-#scroll specifically -- NOT --bar-bottom,
+  // which measures against the VIEWPORT and is right for the popovers that
+  // use it (they are not children of #stage). These three ARE children of
+  // #stage, whose own bottom edge already sits flush above #tabs -- #stage
+  // and #tabs are separate flex-column siblings, never overlapping, so
+  // #tabs' height needs no accounting for here at all. Adding --bar-bottom
+  // anyway double-counted it on top of a box that had already excluded it,
+  // reported as "still a large gap" after a first attempt to close it.
+  // #cmdbar.open is the one bar that DOES overlap #stage -- position:fixed,
+  // floating over it rather than sharing a row -- so only ITS OWN height,
+  // when open, needs clearing, measured directly against #stage's own edge
+  // rather than re-derived through the viewport.
+  const cb = $('cmdbar');
+  let camBottom = 4;
+  if (cb && cb.classList.contains('open')
+      && getComputedStyle(cb).display !== 'none') {
+    const stageR = $('stage').getBoundingClientRect();
+    const cbR = cb.getBoundingClientRect();
+    camBottom = Math.max(4, Math.round(stageR.bottom - cbR.top) + 4);
+  }
+  st.setProperty('--cam-bottom', camBottom + 'px');
 }
 addEventListener('resize', measureBars);
 measureBars();
@@ -5593,6 +5790,15 @@ async function enterReview() {
   if (reviewing) return;
   reviewing = true;
   $('scrub').hidden = false;
+  // Both anchor lower-left/full-width at the same bottom offset -- reviewing
+  // a recorded frame isn't the moment a live photo of the room adds anything
+  // anyway, so it just steps aside rather than the two fighting for the corner.
+  $('camoverlay').hidden = true;
+  $('camswap').hidden = true;
+  // Reviewing needs the full-size interactive VGA view back -- swapped mode
+  // would otherwise leave #scroll shrunk into the corner with a hidden,
+  // empty #camoverlay where the big picture should be.
+  document.body.classList.remove('cam-swapped');
   setBufOpen(true);
   $('scrubpos').textContent = 'reading the capture…';
   let j;
@@ -5619,6 +5825,7 @@ function exitReview() {
   tl = null;
   bufFrom = bufTo = null;
   $('scrub').hidden = true;
+  if (showCamera) { $('camoverlay').hidden = false; $('camswap').hidden = false; }
   hideTip();
   $('markin').hidden = $('markout').hidden = true;
   setBufOpen(false);
@@ -7885,6 +8092,54 @@ $('opt-worklabel').onchange = () => {
   showWorklabel = $('opt-worklabel').checked;
   localStorage.setItem('vcctrl.worklabel', showWorklabel ? '1' : '0');
   applyWorklabelVisibility();
+};
+
+// OFF BY DEFAULT: a rig with no second camera configured (backend: none,
+// the tracked template's own default) shouldn't grow a corner box that does
+// nothing the day this ships. Clearing #camimg's src -- not just hiding the
+// element -- is what actually closes the /cam.mjpg connection when this is
+// off; an <img> with a hidden ancestor but a live src keeps the stream open.
+let showCamera = localStorage.getItem('vcctrl.camera') === '1';
+function applyCameraVisibility() {
+  $('camoverlay').hidden = $('camswap').hidden = !showCamera || reviewing;
+  $('camimg').src = showCamera ? '/cam.mjpg?fps=8' : '';
+  // Same reason enterReview() clears it: turning the camera off must not
+  // leave #scroll shrunk into the corner with nothing filling the big area.
+  if (!showCamera) document.body.classList.remove('cam-swapped');
+}
+applyCameraVisibility();
+// SAME FAILURE AS THE PRIMARY FEED, same fix: see restart()'s own comment --
+// "iOS suspends a backgrounded tab: sockets close, the multipart stream
+// dies, and neither comes back on its own." /cam.mjpg is exactly that kind
+// of stream and had none of restart()'s recovery, so it stayed dead (a
+// broken-image icon) until a full page reload. Hooked into the SAME
+// visibilitychange/pageshow/online listeners restart() already uses, rather
+// than adding a second set -- one trigger point for "the tab is back,
+// resume everything that streams". Cache-busted for the same reason other
+// no-store fetches in this file are: a reassigned img.src that exactly
+// matches the last (now-dead) one is not guaranteed to open a fresh
+// connection rather than replay the failure.
+function restartCamera() {
+  if (!showCamera) return;
+  $('camimg').src = '';
+  $('camimg').src = '/cam.mjpg?fps=8&_=' + Date.now();
+}
+$('opt-camera').checked = showCamera;
+$('opt-camera').onchange = () => {
+  showCamera = $('opt-camera').checked;
+  localStorage.setItem('vcctrl.camera', showCamera ? '1' : '0');
+  applyCameraVisibility();
+};
+
+// Swap sizes only -- neither view's content, input wiring or connection
+// changes, just which box is big. Not persisted: a glance toggle should
+// start each visit with the VGA capture as the main view.
+$('camswap').onclick = () => {
+  document.body.classList.toggle('cam-swapped');
+  // #scroll just changed size and applyZoom's fit math does not know that on
+  // its own -- it only runs off a real resize event or a deliberate call
+  // elsewhere (see its own comment on why this class toggle needs one too).
+  applyZoom(true);
 };
 
 // ══════════════════════════════════════════════════════════ the lamps
