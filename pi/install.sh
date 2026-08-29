@@ -411,8 +411,13 @@ sudo tee /etc/systemd/system/vcctrld.service >/dev/null <<'UNIT'
 [Unit]
 Description=vcctrl virtual PS/2 input server
 # USB4VC must be up first: it only discovers input devices on its 0.75s scan,
-# and we want it running when our uinput devices appear.
-After=multi-user.target
+# and we want it running when our uinput devices appear. That is an ordering
+# against usb4vc.service ITSELF -- this line used to say multi-user.target as
+# a proxy for "late in boot", and combined with WantedBy=multi-user.target
+# below that is an ordering cycle, which systemd broke on the 2026-08-28
+# boot by deleting THIS unit's start job: enabled, healthy, and simply never
+# started, with nothing in its own journal to say why.
+After=usb4vc.service
 
 [Service]
 Type=simple

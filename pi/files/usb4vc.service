@@ -2,8 +2,14 @@
 Description=USB4VC virtual PS/2 input board (rpi_app)
 Documentation=https://github.com/dekuNukem/USB4VC
 # The board is on SPI0 (STM32 on spidev0.0, ssd1306 OLED on spidev0.1) and
-# GPIO, so wait for devices to settle before claiming them.
-After=multi-user.target systemd-udev-settle.service
+# GPIO, so wait for devices to settle before claiming them. ONLY udev-settle:
+# this line also said multi-user.target, and After=multi-user.target on a
+# unit that is itself WantedBy=multi-user.target is a contradiction ("start
+# me as part of the target, after the target is finished") that systemd
+# resolves by DELETING a start job from the cycle -- on the 2026-08-28 boot
+# it deleted vcctrld's, and the daemon simply did not come up; on another
+# boot it could just as well pick this unit and cost the PS/2 bridge.
+After=systemd-udev-settle.service
 
 [Service]
 Type=simple
