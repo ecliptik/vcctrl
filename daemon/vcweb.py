@@ -1609,7 +1609,20 @@ class WebCapability(object):
             # -- HERE -> CLIENT.
             now = time.time()
             if vid is not None and now >= next_due:
-                next_due = now + 1.0 / max(1.0, rate[0])
+                # ABSOLUTE SCHEDULE, NOT now-RELATIVE. `now + 1/rate` starts
+                # each period from whenever this loop got around to waking,
+                # so wake latency and the milliseconds spent TLS-writing a
+                # 40 KB frame compound into the average: measured at a 30
+                # ask against the 29.9 fps source, 26.7 delivered -- 10% of
+                # frames lost to nothing but scheduling drift. Advancing
+                # the deadline by exactly one period keeps the long-run
+                # cadence honest however late any single tick ran; the
+                # clamp below stops a genuine stall (unwritable client,
+                # suspended laptop) from banking a backlog of due ticks
+                # and replaying them as a burst.
+                next_due += 1.0 / max(1.0, rate[0])
+                if next_due < now:
+                    next_due = now + 1.0 / max(1.0, rate[0])
                 with vid.lock:
                     state = vid.state
                     item = vid.ring[-1] if vid.ring else None
