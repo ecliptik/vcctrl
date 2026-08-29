@@ -107,6 +107,10 @@ implementation. **Read it before adding a measurement to anything here.**
 
 ## Driving the rig from an agent directly
 
+**`SKILLS.md`** — the `.agents/skills/` layout: portable rig/repo knowledge
+as skill files any coding agent can discover, and the multi-harness
+pointer scheme that keeps one canonical copy.
+
 **`MCP-SERVER.md`** — `agent/vcctrl_mcp.py`, 59 tools over MCP wrapping
 `bin/vcctrl` and the harness scripts, so Claude Code, Codex or any other
 MCP client can drive the rig without a person typing commands. Setup for
@@ -119,6 +123,11 @@ unit-tested only. PC/DOS only so far, by operator direction.
 `WEBKVM.md` is the main one. `WEBKVM-DESIGN.md`, `WEBKVM-AUDIO.md`,
 `WEBKVM-BOARDS.md`, `WEBKVM-SCRUB.md` and `WEBKVM-A11Y.md` are its
 subsystems.
+
+**`SECURITY-AUDIT-2026-08-28-webkvm.md`** — the pre-release audit of the
+public mirror: what held under live probing, and six findings (F1–F6), all
+implemented the same day. The findings' fixes are commented at their sites
+in `daemon/vcweb_public.py` with the F-numbers this doc defines.
 
 **Sec. 5.1a — the on-screen keyboard — carries a live warning.** It is a whole
 keyboard now, drawn from a layout the daemon names per protocol board, and
