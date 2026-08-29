@@ -11881,12 +11881,22 @@ def test_the_opus_side_stream_encodes_the_ring_and_replays_headers():
     try:
         gen = cap.opus_attach()
         check("attach reports a live generation", gen == 1, gen)
-        deadline = _time.time() + 10.0
+        t_attach = _time.time()
+        deadline = t_attach + 10.0
         while _time.time() < deadline:
             with cap.opus_lock:
                 if cap.opus_headers_done and len(cap.opus_ring) >= 5:
                     break
             _time.sleep(0.05)
+        # LATENCY IS PART OF THE CONTRACT, not a nicety: without
+        # -probesize/-analyzeduration on the spawn, ffmpeg silently sits
+        # on ~4.5 s of realtime-paced input analyzing a format the command
+        # already fully specifies, and every fresh-encoder unmute plays
+        # that as silence. This bound is what keeps those flags from being
+        # "simplified" away.
+        check("first pages arrive fast enough to be an unmute, not a wait",
+              _time.time() - t_attach < 3.0,
+              "%.2fs" % (_time.time() - t_attach))
         with cap.opus_lock:
             headers = list(cap.opus_headers)
             pages = [p for _t2, _s, p in cap.opus_ring]

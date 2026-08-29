@@ -3959,6 +3959,17 @@ class AudioCapability(Capability):
         try:
             proc = subprocess.Popen(
                 ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                 # WITHOUT THESE TWO, THE FIRST PAGE TAKES ~4.5 SECONDS:
+                 # ffmpeg runs stream analysis (analyzeduration, default
+                 # 5 s) on every input, even raw PCM whose format this
+                 # command fully specifies -- and because the feeder pipes
+                 # input at CAPTURE PACE, "analyze 5 s of input" means
+                 # "sit for ~5 real seconds before writing even the Ogg
+                 # header". Measured 2026-08-28, first page 4.5 s -> 0.09 s
+                 # with these flags; every fresh-encoder unmute paid that
+                 # wait as silence. There is nothing to analyze: rate,
+                 # channels and sample format are all given.
+                 "-probesize", "32", "-analyzeduration", "0",
                  "-f", "s16le", "-ar", str(self.RATE),
                  "-ac", str(self.CHANNELS), "-i", "pipe:0",
                  "-c:a", "libopus", "-b:a", self.OPUS_BITRATE,

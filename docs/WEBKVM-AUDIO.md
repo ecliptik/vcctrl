@@ -346,6 +346,17 @@ will look:
 - **ffmpeg's Ogg muxer defaults to one-second pages.** Without
   `-page_duration 20000` the stream is valid, decodes perfectly, and
   carries a hidden second of latency that no error will ever point at.
+- **ffmpeg analyzes even a fully-specified raw input for ~5 seconds.**
+  Found live 2026-08-28, operator-reported as "audio takes a few seconds
+  after unmute": a fresh encoder emitted its first Ogg page ~4.5 s after
+  spawn, because `analyzeduration` (default 5 s) buffers input before the
+  muxer initializes -- and input arrives at capture pace, so analysis time
+  is real time. `-probesize 32 -analyzeduration 0` took first-page latency
+  from 4.5 s to 0.09 s (measured on the control host, realtime-paced 20 ms
+  chunks into the exact production command; the encoder test now asserts
+  the bound so the flags cannot be quietly dropped). `-flush_packets` was
+  tested and is NOT the fix -- output already flows per-page once the
+  muxer is up.
 
 The page-size overhead of 20 ms pages is real but small: the 10 s / 128k
 test stream weighed 180,630 bytes ≈ 144 kbit/s on the wire, container
