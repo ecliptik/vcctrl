@@ -317,7 +317,27 @@ install_public() {
   # take effect -- pi/deploy.sh --page already ships both for exactly that
   # reason. Installed here too so a FRESH Pi (never having run --page) still
   # has them the first time this function runs.
-  sudo install -m 0644 "$SRC/daemon/kvm-ro.html" "$PREFIX/kvm-ro.html"
+  #
+  # kvm-ro.html IS NEVER INSTALLED RAW -- tools/strip_kvm_ro_comments.py runs
+  # first, always. This used to be a one-time manual step during the
+  # 2026-08-28 security audit (finding F4); every edit since then put this
+  # repo's own maintainer comments (architecture detail, past incidents, at
+  # least one commit hash) back into the file, served in the clear, because
+  # nothing re-ran the strip. See that script's own docstring for the fuller
+  # story. Refuses loudly (via `set -e`, no `|| true` here) rather than fall
+  # back to installing the raw file -- an install that silently ships
+  # unstripped comments because the stripper broke is a worse failure than
+  # an install that stops.
+  if [ -f "$SRC/tools/strip_kvm_ro_comments.py" ]; then
+    python3 "$SRC/tools/strip_kvm_ro_comments.py" \
+      "$SRC/daemon/kvm-ro.html" /tmp/kvm-ro.stripped.$$
+    sudo install -m 0644 /tmp/kvm-ro.stripped.$$ "$PREFIX/kvm-ro.html"
+    rm -f /tmp/kvm-ro.stripped.$$
+  else
+    echo "vcctrl-web-public: tools/strip_kvm_ro_comments.py not in this" >&2
+    echo "  checkout -- refusing to install kvm-ro.html unstripped" >&2
+    return 1
+  fi
   sudo install -m 0644 "$SRC/daemon/themes.css"  "$PREFIX/themes.css"
   sudo install -m 0644 "$SRC/daemon/kvm-ro-share.jpg" "$PREFIX/kvm-ro-share.jpg"
 

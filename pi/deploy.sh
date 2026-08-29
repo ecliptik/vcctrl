@@ -191,7 +191,26 @@ if [ "${1:-}" = "--page" ]; then
   # kvm-ro.html included for the same reason kvm.html is: vcweb_public.py's
   # _serve_file() reads it fresh from disk on every request, same as
   # vcweb.py does for kvm.html, so shipping it needs no restart of anything.
-  for f in kvm.html kvm-ro.html themes.css kvm-ro-share.jpg; do
+  #
+  # kvm-ro.html NEVER SHIPS RAW -- stripped on THIS host (the control
+  # machine, where the checkout and python3 both already are) before the
+  # scp below, same requirement and same reasoning as install_public()'s
+  # own copy of this step in pi/install.sh: this repo's own maintainer
+  # comments must not reach the public mirror, and a step that only runs
+  # when a human remembers to run it is the failure this fixes, not a
+  # description of one. Refuses (bash -e) rather than fall back to shipping
+  # the raw file.
+  if [ -f "$SRC/daemon/kvm-ro.html" ]; then
+    python3 "$SRC/tools/strip_kvm_ro_comments.py" \
+      "$SRC/daemon/kvm-ro.html" /tmp/kvm-ro.stripped.$$ || explain_hang
+    $SCP /tmp/kvm-ro.stripped.$$ "$HOST:/tmp/kvm-ro.html.new" || explain_hang
+    rm -f /tmp/kvm-ro.stripped.$$
+    $SSH "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/kvm-ro.html.new /opt/vcctrl/.kvm-ro.html.tmp \
+      && mv -f /opt/vcctrl/.kvm-ro.html.tmp /opt/vcctrl/kvm-ro.html' && rm -f /tmp/kvm-ro.html.new" \
+      || explain_hang
+    echo "installed kvm-ro.html, stripped (no restart)"
+  fi
+  for f in kvm.html themes.css kvm-ro-share.jpg; do
     [ -f "$SRC/daemon/$f" ] || continue
     $SCP "$SRC/daemon/$f" "$HOST:/tmp/$f.new" || explain_hang
     $SSH "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
@@ -269,9 +288,13 @@ if [ "${1:-}" = "--public" ]; then
   python3 -m py_compile "$SRC/daemon/vcweb_public.py" || \
     { echo "refusing: daemon/vcweb_public.py does not compile" >&2; exit 1; }
   rdir="/tmp/vcctrl-public-deploy.$$"
-  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files" || explain_hang
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files $rdir/tools" || explain_hang
   $SCP "$SRC/daemon/vcweb_public.py" "$SRC/daemon/kvm-ro.html" "$SRC/daemon/themes.css" \
     "$SRC/daemon/kvm-ro-share.jpg" "$HOST:$rdir/daemon/" || explain_hang
+  # install_public() (running remotely below) strips kvm-ro.html's comments
+  # before installing it -- needs its own copy of the stripper script over
+  # here too, since this throwaway layout is not a full checkout.
+  $SCP "$SRC/tools/strip_kvm_ro_comments.py" "$HOST:$rdir/tools/" || explain_hang
   $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
   $SCP "$SRC/pi/files/vcctrl-web-public.service" "$SRC/pi/files/tailscaled-ro.service" \
     "$HOST:$rdir/pi/files/" || explain_hang
