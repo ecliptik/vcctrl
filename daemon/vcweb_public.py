@@ -181,11 +181,16 @@ OPUS_DECODER_JS = "ogg-opus-decoder-1.7.5.min.js"
 # reasoned number; raise it once real traffic says it's too low.
 MAX_VIEWERS = 40
 
-# This is a "watch it work" feed, not a remote-desktop session -- the low end
-# of what a human eye needs to see the machine is alive. Every extra frame a
-# second here is bandwidth spent once per viewer, with no cap on how many
-# viewers there can be.
-POLL_HZ = 1.5
+# Raised from 1.5 -- operator decision, 2026-08-28, after comparing this
+# page against the private KVM side by side. The original number was the
+# "proof of life" floor from before audio went Opus; with each listener now
+# ~135 kbit/s instead of 1.5 Mbit/s, the budget moved to where the eyes
+# are. Per viewer this is 0.6-2.8 Mbit/s (15 KB text frames to 70 KB dense
+# ones) -- a handful of real viewers is light, and only the full
+# MAX_VIEWERS cap on dense content gets heavy. Every extra frame a second
+# is still bandwidth spent once per viewer; raise further only against
+# telemetry, not taste.
+POLL_HZ = 5.0
 
 # BELT-AND-SUSPENDERS against a stuck viewer slot, on top of the TCP
 # keepalive in _mjpeg() below -- see that method's own comment for the
@@ -740,7 +745,12 @@ def _poll_events():
 def _start_pollers():
     _telemetry_load()
     for name, interval, fn in (
-        ("shot", 0.6, _poll_shot),
+        # The shot poll bounds what POLL_HZ can deliver: viewers are fed
+        # from this cache, so it must refresh at least as fast as _mjpeg
+        # resends (0.6 s here once capped the "5 fps" page at an actual
+        # 1.7). One GET of /shot.jpg per tick against the loopback daemon,
+        # which serves it from the ring without decoding.
+        ("shot", 0.2, _poll_shot),
         ("stale", 5.0, _poll_stale),
         ("state", 1.75, _poll_state),
         ("events", 2.5, _poll_events),
@@ -794,6 +804,14 @@ class _AudioRelay:
         self.listeners = set()       # raw sockets currently attached
         self.headers = []            # header-page WS payloads, current epoch
         self.epoch = 0
+        # Set by _audio_ws the moment a listener attaches, so the upstream
+        # loop's idle and backoff waits end NOW instead of at their next
+        # tick. Without this, unmute paid for the lazy connect in real,
+        # audible seconds: up to 0.5 s of idle poll on a first listen and
+        # up to the full 3 s teardown backoff on an unmute-after-mute --
+        # the operator heard the difference against the private KVM before
+        # this event existed.
+        self.wake = threading.Event()
 
 
 _PCM_RELAY = _AudioRelay("pcm", "/wsaudio", replay_headers=False)
@@ -871,10 +889,14 @@ def _audio_upstream_loop(relay):
     audience, instead of the mirror itself counting as a permanent
     listener)."""
     while True:
+        # Clear BEFORE checking, so a listener that registers between the
+        # check and the wait leaves the event set and the wait returns at
+        # once -- the standard order that makes an Event race-free here.
+        relay.wake.clear()
         with relay.lock:
             wanted = bool(relay.listeners)
         if not wanted:
-            time.sleep(0.5)
+            relay.wake.wait(0.5)
             continue
         sock = None
         saw_audio = False
@@ -988,7 +1010,15 @@ def _audio_upstream_loop(relay):
                 d.shutdown(socket.SHUT_RDWR)
             except Exception:
                 pass
-        time.sleep(3.0)
+        # Backoff sized to who is waiting: 3 s idle keeps a dead upstream
+        # from being hammered for nobody; 0.5 s when listeners exist keeps
+        # a daemon restart from costing them more than a blink. Either way
+        # the wake event cuts it short the moment a NEW listener arrives --
+        # this wait is where an unmute-after-mute used to sit out the full
+        # idle backoff.
+        with relay.lock:
+            waiting = bool(relay.listeners)
+        relay.wake.wait(0.5 if waiting else 3.0)
 
 
 def _register_with_headers(relay, sock):
@@ -1389,7 +1419,7 @@ class Handler(BaseHTTPRequestHandler):
             # here reads from the client to notice it's gone, and a
             # `wfile.write()` to a vanished peer does not fail on its own
             # until the local send buffer actually fills -- which, at one
-            # ~69KB frame roughly every 0.67s, can take a long time against
+            # ~15-69KB frame per POLL_HZ tick, can take a long time against
             # a peer that torched the connection without a clean FIN/RST (a
             # killed process, a relay hop that ate the reset). Found the
             # hard way 2026-08-28: several diagnostic connections left
@@ -1490,6 +1520,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     with relay.lock:
                         relay.listeners.add(sock)
+                relay.wake.set()
             except Exception:
                 return
             try:
