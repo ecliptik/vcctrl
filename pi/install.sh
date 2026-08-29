@@ -340,6 +340,18 @@ install_public() {
   fi
   sudo install -m 0644 "$SRC/daemon/themes.css"  "$PREFIX/themes.css"
   sudo install -m 0644 "$SRC/daemon/kvm-ro-share.jpg" "$PREFIX/kvm-ro-share.jpg"
+  # The vendored browser-side Opus decoder kvm-ro.html loads for the
+  # ?codec=opus audio stream. Flat, beside vcweb_public.py, which is the
+  # first place its route looks. MISSING IS A WARNING, NOT A FAILURE: the
+  # page detects the absent global and falls back to raw PCM audio, so an
+  # older checkout still installs a working (just heavier) mirror.
+  if [ -f "$SRC/vendor/ogg-opus-decoder-1.7.5.min.js" ]; then
+    sudo install -m 0644 "$SRC/vendor/ogg-opus-decoder-1.7.5.min.js" \
+      "$PREFIX/ogg-opus-decoder-1.7.5.min.js"
+  else
+    echo "vcctrl-web-public: vendor/ogg-opus-decoder-1.7.5.min.js not in" >&2
+    echo "  this checkout -- public audio will fall back to raw PCM" >&2
+  fi
 
   if [ ! -f "$SRC/pi/files/vcctrl-web-public.service" ]; then
     echo "vcctrl-web-public: pi/files/vcctrl-web-public.service not in this checkout, skipping the unit" >&2
@@ -630,6 +642,8 @@ sudo install -m 0644 -T "$SRC/common/vcconfig.py" "$PREFIX/vcconfig.py"
 # frequency-analysis math lives in common/audio_bands.py now, shared with
 # the control host, so vcctrld.py needs its own copy beside it.
 sudo install -m 0644 -T "$SRC/common/audio_bands.py" "$PREFIX/audio_bands.py"
+# Same again: page-level Ogg parsing for the Opus audio side-stream.
+sudo install -m 0644 -T "$SRC/common/ogg_pages.py" "$PREFIX/ogg_pages.py"
 if [ -f "$SRC/vcctrl.yaml" ]; then
   sudo install -m 0644 -T "$SRC/vcctrl.yaml" "$PREFIX/vcctrl.yaml"
   echo "installed $PREFIX/vcctrl.yaml"

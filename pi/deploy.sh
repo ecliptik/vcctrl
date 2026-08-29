@@ -218,6 +218,18 @@ if [ "${1:-}" = "--page" ]; then
       || explain_hang
     echo "installed $f (no restart)"
   done
+  # Same no-restart ship for the vendored Opus decoder kvm-ro.html loads --
+  # vcweb_public.py reads it fresh from disk per request like the files
+  # above, and its name carries its version so the browser cache stays
+  # honest (see vendor/README.md).
+  f=ogg-opus-decoder-1.7.5.min.js
+  if [ -f "$SRC/vendor/$f" ]; then
+    $SCP "$SRC/vendor/$f" "$HOST:/tmp/$f.new" || explain_hang
+    $SSH "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
+      && mv -f /opt/vcctrl/.$f.tmp /opt/vcctrl/$f' && rm -f /tmp/$f.new" \
+      || explain_hang
+    echo "installed $f (no restart)"
+  fi
   exit 0
 fi
 
@@ -288,9 +300,14 @@ if [ "${1:-}" = "--public" ]; then
   python3 -m py_compile "$SRC/daemon/vcweb_public.py" || \
     { echo "refusing: daemon/vcweb_public.py does not compile" >&2; exit 1; }
   rdir="/tmp/vcctrl-public-deploy.$$"
-  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files $rdir/tools" || explain_hang
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files $rdir/tools $rdir/vendor" || explain_hang
   $SCP "$SRC/daemon/vcweb_public.py" "$SRC/daemon/kvm-ro.html" "$SRC/daemon/themes.css" \
     "$SRC/daemon/kvm-ro-share.jpg" "$HOST:$rdir/daemon/" || explain_hang
+  # The vendored Opus decoder install_public() flat-installs beside
+  # vcweb_public.py. Optional on purpose (install_public warns and the page
+  # falls back to PCM audio), so an older checkout can still --public.
+  [ -f "$SRC/vendor/ogg-opus-decoder-1.7.5.min.js" ] && \
+    { $SCP "$SRC/vendor/ogg-opus-decoder-1.7.5.min.js" "$HOST:$rdir/vendor/" || explain_hang; }
   # install_public() (running remotely below) strips kvm-ro.html's comments
   # before installing it -- needs its own copy of the stripper script over
   # here too, since this throwaway layout is not a full checkout.

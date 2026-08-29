@@ -34,14 +34,21 @@ whether zero or five hundred people are watching; MAX_VIEWERS/POLL_HZ below
 are the other half of that story, bounding what THIS process spends on
 public connections.
 
-Audio IS relayed, one-way, over a single upstream connection this process
-opens to itself: it is the WEBSOCKET CLIENT to the private daemon's
-`/wsaudio` (never the reverse), and every public listener on `/wsaudio` gets a
-copy of the same bytes. The public-facing half deliberately does not parse
+Audio IS relayed, one-way, over at most one upstream connection PER CODEC
+that this process opens to itself: it is the WEBSOCKET CLIENT to the private
+daemon's `/wsaudio` (raw PCM) and `/wsaudio?codec=opus` (Ogg Opus pages,
+~12x smaller -- the default the public page asks for), never the reverse,
+and every public listener of a codec gets a copy of the same bytes. Each
+upstream connection exists only while it has at least one public listener,
+so an idle mirror costs the private daemon nothing and the Opus encoder over
+there does not even run. The public-facing half deliberately does not parse
 anything a listener sends -- see `Handler._audio_ws` below -- because
 `_ws_handle_input` (daemon/vcweb.py:1253-1310) is exactly what a WebSocket
 that DOES act on client frames looks like, and this one must never grow into
-that by accident.
+that by accident. (The one thing the Opus relay reads out of UPSTREAM frames
+is each Ogg page's granule field, to know which pages are the stream headers
+it must replay to a late-joining listener -- upstream is the trusted private
+daemon, and even that read never branches on a public client's bytes.)
 """
 
 import base64
@@ -160,6 +167,11 @@ PREFIX = os.environ.get("VCCTRL_PUBLIC_PREFIX", "").rstrip("/")
 STATE_DIR = os.environ.get("VCCTRL_PUBLIC_STATE_DIR",
                            "/var/lib/vcctrl-web-public")
 TELEMETRY_PATH = os.path.join(STATE_DIR, "telemetry.json")
+
+# The vendored browser-side Opus decoder (vendor/README.md has the
+# provenance), installed beside this file like kvm-ro.html. The version is
+# part of the name on purpose -- see the route's own comment.
+OPUS_DECODER_JS = "ogg-opus-decoder-1.7.5.min.js"
 
 # The Pi this runs on has limited free memory and no swap (docs/WEBKVM.md
 # sec. 3). At the shared, low poll rate below, only outbound BANDWIDTH scales
@@ -751,13 +763,50 @@ def _start_pollers():
 
 MAX_AUDIO_LISTENERS = MAX_VIEWERS  # same headroom reasoning as video
 
-_audio_lock = threading.Lock()
-_audio_listeners = set()          # raw sockets currently on /wsaudio
-# A semaphore, not a `len(_audio_listeners) >= MAX` check: the latter is a
+# A semaphore, not a `len(listeners) >= MAX` check: the latter is a
 # check-then-act race between two connecting threads, same reason
 # `_viewer_sem` guards /stream.mjpg above rather than counting `_live`'s
-# readers by hand.
+# readers by hand. ONE semaphore across both codecs -- the cap is about
+# public connection slots, not about which encoding each slot carries.
 _audio_sem = threading.Semaphore(MAX_AUDIO_LISTENERS)
+
+
+class _AudioRelay:
+    """One upstream audio connection, fanned out to its public listeners --
+    one instance per codec, both running the same `_audio_upstream_loop`.
+
+    `replay_headers` is the whole difference between the two: an Ogg Opus
+    stream begins with OpusHead/OpusTags pages a decoder cannot start
+    without, so the Opus relay caches the header pages of the CURRENT
+    upstream stream and `_audio_ws` sends them to every listener before any
+    live page. `epoch` counts upstream (re)connects: a reconnect means a
+    fresh encoder stream over there whose pages cannot follow the old
+    stream's headers, so on every reconnect the Opus relay drops its
+    listeners (kvm-ro.html reconnects on close and gets the new headers by
+    the same replay) where the stateless PCM relay just keeps feeding.
+    """
+
+    def __init__(self, name, upstream_path, replay_headers):
+        self.name = name
+        self.upstream_path = upstream_path
+        self.replay_headers = replay_headers
+        self.lock = threading.Lock()
+        self.listeners = set()       # raw sockets currently attached
+        self.headers = []            # header-page WS payloads, current epoch
+        self.epoch = 0
+
+
+_PCM_RELAY = _AudioRelay("pcm", "/wsaudio", replay_headers=False)
+_OPUS_RELAY = _AudioRelay("opus", "/wsaudio?codec=opus", replay_headers=True)
+
+
+def _is_ogg_header_page(data):
+    """True for the header pages of an Ogg stream: a real Ogg page whose
+    granule position is 0 (OpusHead and OpusTags; every audio page carries
+    the running sample count instead). Callers only apply this before the
+    first audio page of a stream."""
+    return (len(data) >= 27 and data[:4] == b"OggS"
+            and int.from_bytes(data[6:14], "little", signed=True) == 0)
 
 
 def _ws_client_handshake(sock, host, path):
@@ -812,19 +861,28 @@ def _ws_client_handshake(sock, host, path):
         raise ConnectionError("Sec-WebSocket-Accept mismatch")
 
 
-def _audio_upstream_loop():
-    """Runs forever: connect to the private daemon's /wsaudio, relay every
-    binary frame to whichever public listeners are on /wsaudio, reconnect on
-    any failure. One thread, one upstream socket, regardless of how many
-    public listeners there are -- the audio equivalent of the video pollers
-    above."""
+def _audio_upstream_loop(relay):
+    """Runs forever, one thread per relay: while the relay has at least one
+    public listener, hold a client connection to the private daemon's
+    matching /wsaudio and copy every binary frame to every listener; with no
+    listeners, hold nothing (so the private daemon's "only stream when
+    someone is listening" -- and for Opus, "only ENCODE when someone is
+    listening" -- extends through this process to the actual public
+    audience, instead of the mirror itself counting as a permanent
+    listener)."""
     while True:
+        with relay.lock:
+            wanted = bool(relay.listeners)
+        if not wanted:
+            time.sleep(0.5)
+            continue
         sock = None
+        saw_audio = False
         try:
             sock = socket.create_connection(("127.0.0.1", UPSTREAM_PORT),
                                             timeout=5)
             _ws_client_handshake(sock, "127.0.0.1:%d" % UPSTREAM_PORT,
-                                "/wsaudio")
+                                relay.upstream_path)
             sock.settimeout(30)
             while True:
                 got = ws_read(sock)
@@ -833,19 +891,33 @@ def _audio_upstream_loop():
                 opcode, data = got
                 if opcode == 0x8:          # upstream closed
                     break
-                if opcode != 0x2:          # only relay binary PCM chunks
+                if opcode != 0x2:          # only relay binary frames
                     continue
                 frame = ws_frame(data, opcode=0x2)
                 # SNAPSHOT THE SET, SEND OUTSIDE THE LOCK. `sendall` blocks
                 # until the OS accepts the bytes, which a listener that has
                 # stopped draining its own socket can stall indefinitely --
-                # holding `_audio_lock` across that would freeze every other
+                # holding the relay lock across that would freeze every other
                 # listener's connect/disconnect for as long as one stuck
                 # listener takes. `_audio_ws` bounds each socket's own
                 # blocking calls to a few seconds (see its `settimeout`), so
                 # the worst case here is bounded too, not unbounded.
-                with _audio_lock:
-                    listeners = list(_audio_listeners)
+                #
+                # HEADER CACHING AND THE SNAPSHOT SHARE ONE LOCK HOLD, and
+                # that is load-bearing for the Opus relay: a listener joining
+                # via _register_with_headers atomically checks "no header I
+                # have not sent myself" before attaching, so as long as
+                # cache-append and listener-snapshot cannot interleave with
+                # that check, a header page reaches each listener exactly
+                # once -- from the cache if it attached after the append,
+                # live from this loop if it attached before.
+                with relay.lock:
+                    if (relay.replay_headers and not saw_audio
+                            and _is_ogg_header_page(data)):
+                        relay.headers.append(data)
+                    else:
+                        saw_audio = saw_audio or relay.replay_headers
+                    listeners = list(relay.listeners)
                 dead = []
                 for listener in listeners:
                     try:
@@ -853,21 +925,95 @@ def _audio_upstream_loop():
                     except Exception:
                         dead.append(listener)
                 if dead:
-                    with _audio_lock:
+                    with relay.lock:
                         for d in dead:
-                            _audio_listeners.discard(d)
+                            relay.listeners.discard(d)
+                    # shutdown(), not just discard: the listener's own
+                    # _audio_ws thread is blocked in recv() and holds a
+                    # MAX_AUDIO_LISTENERS slot; without this it kept
+                    # holding both until the 30-minute cap, fed by
+                    # nothing (same stuck-slot failure the 2026-08-28
+                    # keepalive work was about, reached by a different
+                    # door: a peer that stops READING fails sends here,
+                    # while one that vanishes entirely fails the recv).
+                    # close() would not wake that blocked recv;
+                    # shutdown() does, and the handler closes its own fd.
+                    for d in dead:
+                        try:
+                            d.shutdown(socket.SHUT_RDWR)
+                        except Exception:
+                            pass
+                # All listeners gone mid-stream: drop the upstream too,
+                # rather than streaming to nobody until it happens to close.
+                if not listeners and not dead:
+                    with relay.lock:
+                        wanted = bool(relay.listeners)
+                    if not wanted:
+                        break
         except Exception as exc:
-            print("vcweb_public: audio upstream: %s: %s"
-                  % (type(exc).__name__, exc))
+            print("vcweb_public: audio upstream (%s): %s: %s"
+                  % (relay.name, type(exc).__name__, exc))
         finally:
             if sock is not None:
                 try:
                     sock.close()
                 except Exception:
                     pass
-        # No listeners, no rush; a listener connecting mid-backoff just waits
-        # for the next attempt rather than forcing an immediate reconnect.
+        # This upstream stream is over. For the Opus relay that has a
+        # consequence PCM does not have: the next connection is a NEW Ogg
+        # stream (fresh serial, fresh headers, granule restarting), and its
+        # pages cannot follow the headers already sent to current listeners.
+        # Advance the epoch, forget the dead stream's headers, and close
+        # every attached listener -- kvm-ro.html reconnects on close and the
+        # replay hands it the new stream's headers. A dropped-and-reconnected
+        # listener hears a blip; a listener fed a second stream's pages
+        # behind the first stream's headers hears garbage or silence with no
+        # error, which is the confident-but-wrong failure this file never
+        # accepts.
+        with relay.lock:
+            relay.epoch += 1
+            relay.headers = []
+            dropped = list(relay.listeners) if relay.replay_headers else []
+        for d in dropped:
+            # shutdown(), NOT close(). Each of these sockets has an
+            # _audio_ws thread blocked in recv() on it, and close() from
+            # this thread neither wakes that recv nor reliably sends the
+            # FIN while the in-flight syscall still references the fd --
+            # the integration check caught exactly that: "dropped"
+            # listeners that never saw the connection end. shutdown()
+            # terminates the connection out from under the blocked read
+            # (it returns empty, the handler exits and closes its own fd),
+            # and the browser sees a clean close to reconnect from.
+            try:
+                d.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
         time.sleep(3.0)
+
+
+def _register_with_headers(relay, sock):
+    """Attach `sock` to a header-replaying relay: send every cached header
+    page of the current upstream stream, then attach atomically -- the
+    attach only happens in a lock hold that proves no header page exists
+    that this listener has not already been sent (see the fan-out loop's
+    own comment for the other half of the exactly-once argument). Returns
+    True when attached; False when the upstream stream changed underneath
+    (caller should just close -- the client's reconnect lands cleanly).
+    Socket errors propagate to the caller like any other send failure."""
+    sent = 0
+    with relay.lock:
+        epoch = relay.epoch
+    while True:
+        with relay.lock:
+            if relay.epoch != epoch:
+                return False
+            hdrs = relay.headers[sent:]
+            if not hdrs:
+                relay.listeners.add(sock)
+                return True
+        for page in hdrs:
+            sock.sendall(ws_frame(page, opcode=0x2))
+        sent += len(hdrs)
 
 
 # ------------------------------------------------------------------ handler
@@ -888,13 +1034,18 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ------------------------------------------------------------
 
-    def _send(self, code, body, ctype="application/json", extra=None, csp=None):
+    def _send(self, code, body, ctype="application/json", extra=None, csp=None,
+              cache=None):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        # no-store for everything except what explicitly opts out: live
+        # state must never be a stale cache hit, but the one big immutable
+        # asset (the versioned Opus decoder) would otherwise be re-sent to
+        # every visitor on every visit.
+        self.send_header("Cache-Control", cache or "no-store")
         # Hardening headers on every response from the public-facing process
         # (F3/F3-followup). frame-ancestors 'none' alone was the baseline --
         # a full default-src/script-src policy needed serve-time nonce
@@ -920,13 +1071,13 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200, extra=None):
         self._send(code, json.dumps(obj), "application/json", extra)
 
-    def _serve_file(self, name, ctype, csp=None):
+    def _serve_file(self, name, ctype, csp=None, cache=None):
         try:
             with open(os.path.join(HERE, name), "rb") as f:
                 body = f.read()
         except OSError as exc:
             return self._json({"error": str(exc)}, 500)
-        return self._send(200, body, ctype, csp=csp)
+        return self._send(200, body, ctype, csp=csp, cache=cache)
 
     # A FRESH NONCE PER RESPONSE, spent once. Reusing one across requests
     # would let a script injected via some OTHER hole (this file has none
@@ -976,9 +1127,18 @@ class Handler(BaseHTTPRequestHandler):
         # default-src 'none': every category below is opted in explicitly,
         # so a resource type nobody has thought to write a rule for is
         # refused rather than silently inheriting a permissive default.
-        #   script-src   the nonce, and nothing else -- no 'unsafe-inline',
-        #                no 'self' (this process serves no OTHER .js file
-        #                for a same-origin script tag to point at).
+        #   script-src   the nonce for the page's one inline script, 'self'
+        #                for exactly one same-origin file this process
+        #                chooses to route (the vendored Opus decoder,
+        #                OPUS_DECODER_JS -- this used to say "no 'self',
+        #                this process serves no OTHER .js file", and 'self'
+        #                was added in the same change that made that stop
+        #                being true), and 'wasm-unsafe-eval' because that
+        #                decoder instantiates WebAssembly, which a strict
+        #                CSP refuses without it. 'wasm-unsafe-eval' permits
+        #                WASM compilation and nothing else -- notably NOT
+        #                eval()/Function(), which stay refused. Still no
+        #                'unsafe-inline'.
         #   style-src    'self' for /themes.css, 'unsafe-inline' for the one
         #                inline <style> block and this page's dozen inline
         #                style="" attributes. CSS injection cannot execute
@@ -1002,7 +1162,7 @@ class Handler(BaseHTTPRequestHandler):
         #                either, so neither should ever silently start being
         #                usable by something injected.
         csp = ("default-src 'none'; "
-               "script-src 'nonce-%s'; "
+               "script-src 'nonce-%s' 'self' 'wasm-unsafe-eval'; "
                "style-src 'self' 'unsafe-inline'; "
                "img-src 'self' data: blob:; "
                "connect-src 'self'; "
@@ -1041,6 +1201,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._serve_html_with_csp()
             if path == "/themes.css":
                 return self._serve_file("themes.css", "text/css; charset=utf-8")
+            if path == "/" + OPUS_DECODER_JS:
+                # The VERSION IS IN THE FILENAME, and that is what makes the
+                # immutable cache honest: re-vendoring the decoder changes
+                # the name (vendor/README.md), kvm-ro.html's script tag moves
+                # with it, and no visitor can be pinned to a stale copy.
+                # charset must be explicit -- the decoder's own README
+                # requires UTF-8 reads, and a separate file does not inherit
+                # the page's <meta charset>. Three layouts, first hit wins:
+                # flat beside this file (pi/install.sh install_public()'s
+                # --public-only deploy), ./vendor/ (a full install copies
+                # the whole vendor tree under PREFIX), ../vendor/ (a source
+                # checkout) -- same multi-layout pick as vcctrld's own
+                # common/ imports.
+                name = OPUS_DECODER_JS
+                for rel in (name, os.path.join("vendor", name),
+                            os.path.join("..", "vendor", name)):
+                    if os.path.exists(os.path.join(HERE, rel)):
+                        name = rel
+                        break
+                return self._serve_file(
+                    name, "application/javascript; charset=utf-8",
+                    cache="public, max-age=31536000, immutable")
             if path == "/kvm-ro-share.jpg":
                 return self._serve_file("kvm-ro-share.jpg", "image/jpeg")
             if path == "/state.json":
@@ -1084,7 +1266,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/stream.mjpg":
                 return self._mjpeg()
             if path == "/wsaudio":
-                return self._audio_ws()
+                codec = "pcm"
+                if "?" in self.path:
+                    for part in self.path.split("?", 1)[1].split("&"):
+                        if part == "codec=opus":
+                            codec = "opus"
+                return self._audio_ws(_OPUS_RELAY if codec == "opus"
+                                      else _PCM_RELAY)
             return self._json({"error": "not found"}, 404)
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -1244,13 +1432,14 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             _viewer_sem.release()
 
-    def _audio_ws(self):
+    def _audio_ws(self, relay):
         """Server-side handshake, then register this socket to receive
-        whatever `_audio_upstream_loop` relays. This method's only job after
-        the handshake is noticing the connection died -- it never inspects
-        what a listener sends beyond the opcode needed to tell. Same
-        handshake arithmetic as vcweb.py's own `_websocket()`, independently
-        implemented here rather than imported (see module docstring)."""
+        whatever `_audio_upstream_loop` relays for this codec. This method's
+        only job after the handshake is noticing the connection died -- it
+        never inspects what a listener sends beyond the opcode needed to
+        tell. Same handshake arithmetic as vcweb.py's own `_websocket()`,
+        independently implemented here rather than imported (see module
+        docstring)."""
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
             return self._json({"error": "not a websocket request"}, 400)
@@ -1290,8 +1479,19 @@ class Handler(BaseHTTPRequestHandler):
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
             except (AttributeError, OSError):
                 pass
-            with _audio_lock:
-                _audio_listeners.add(sock)
+            try:
+                if relay.replay_headers:
+                    # Cached stream headers first, then attach -- see
+                    # _register_with_headers. False means the upstream
+                    # stream flipped mid-join: close, and the client's own
+                    # reconnect gets the new stream cleanly.
+                    if not _register_with_headers(relay, sock):
+                        return
+                else:
+                    with relay.lock:
+                        relay.listeners.add(sock)
+            except Exception:
+                return
             try:
                 started_at = time.monotonic()
                 while time.monotonic() - started_at < MJPEG_MAX_DURATION_S:
@@ -1310,8 +1510,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             finally:
-                with _audio_lock:
-                    _audio_listeners.discard(sock)
+                with relay.lock:
+                    relay.listeners.discard(sock)
         finally:
             _audio_sem.release()
 
@@ -1323,8 +1523,10 @@ class Server(ThreadingHTTPServer):
 
 def main():
     _start_pollers()
-    threading.Thread(target=_audio_upstream_loop, daemon=True,
-                     name="audio-upstream").start()
+    for relay in (_PCM_RELAY, _OPUS_RELAY):
+        threading.Thread(target=_audio_upstream_loop, args=(relay,),
+                         daemon=True,
+                         name="audio-upstream-%s" % relay.name).start()
     httpd = Server((BIND, PORT), Handler)
     print("vcweb_public: listening on %s:%d, mirroring %s"
           % (BIND, PORT, UPSTREAM))

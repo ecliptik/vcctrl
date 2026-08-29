@@ -1138,7 +1138,9 @@ def test_public_mirror_write_path_isolation():
 
     # Handler._audio_ws is the other half: it may read from a public
     # listener only to notice a close, never to act on what was sent.
-    m = re.search(r"^    def _audio_ws\(self\):\n(?:.*?\n)*?"
+    # (`relay` selects which codec's fan-out set the listener joins --
+    # chosen by which URL the client requested, never by frame contents.)
+    m = re.search(r"^    def _audio_ws\(self, relay\):\n(?:.*?\n)*?"
                   r"(?=^    def |^class |\Z)", src, re.M)
     check("_audio_ws is present to check", m is not None)
     if m:
@@ -11740,3 +11742,180 @@ def test_arm_leds_proves_an_unproven_channel_instead_of_refusing():
         m4.arm_leds()
         check("%s: no blind keystroke -- a press cannot fix it" % why,
               not any(a and a[0] == "key" for a in sent4), sent4)
+
+
+# ---------------------------------------------------------------------------
+# common/ogg_pages.py -- the page splitter under the Opus audio side-stream.
+
+
+def _load_ogg_pages():
+    path = os.path.join(HERE, os.pardir, "common", "ogg_pages.py")
+    loader = SourceFileLoader("ogg_pages", path)
+    spec = importlib.util.spec_from_loader("ogg_pages", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def _ogg_page(granule, seq, body, serial=0x1234, page_type=0):
+    """A structurally real Ogg page: correct lacing table, correct lengths.
+    CRC left zero -- the splitter documents that it never checks it."""
+    import struct
+    lacing = []
+    n = len(body)
+    while n >= 255:
+        lacing.append(255)
+        n -= 255
+    lacing.append(n)          # includes the terminating <255 lacing value
+    return (b"OggS" + bytes([0, page_type])
+            + struct.pack("<q", granule) + struct.pack("<I", serial)
+            + struct.pack("<I", seq) + b"\x00\x00\x00\x00"
+            + bytes([len(lacing)]) + bytes(lacing) + body)
+
+
+def test_ogg_pages_come_out_whole_under_any_chunking_of_the_input():
+    """The splitter's one job: whatever sized pieces the pipe hands it,
+    complete pages come out, byte-identical and in order -- including a page
+    whose BODY contains the literal 'OggS', which a find()-based scanner
+    would happily call a boundary and tear the stream at."""
+    ogg = _load_ogg_pages()
+    pages = [
+        _ogg_page(0, 0, b"OpusHead\x01\x02" + b"\x00" * 9, page_type=2),
+        _ogg_page(0, 1, b"OpusTags" + b"\x00" * 20),
+        # 'OggS' in the body, at an offset where a naive scan would split.
+        _ogg_page(960, 2, b"\xfcOggS" + b"\xab" * 300),
+        _ogg_page(1920, 3, b"\xfc" + b"\xcd" * 500),
+    ]
+    stream = b"".join(pages)
+    for step in (1, 3, 7, 26, 100, len(stream)):
+        sp = ogg.OggPageSplitter()
+        got = []
+        for i in range(0, len(stream), step):
+            got.extend(sp.feed(stream[i:i + step]))
+        check("chunk=%d: every page, whole, in order" % step,
+              got == pages, "%d pages out" % len(got))
+        check("chunk=%d: nothing invented, nothing dropped" % step,
+              b"".join(got) == stream)
+    sp = ogg.OggPageSplitter()
+    got = sp.feed(b"\x01\x02Ogg" + pages[0])  # garbage prefix, partial magic
+    check("resync discards a garbage prefix and keeps the page",
+          got == pages[:1], got and got[0][:4])
+
+
+def test_ogg_header_pages_are_the_granule_zero_prefix_and_nothing_after():
+    """The header-replay rule both vcctrld and vcweb_public apply: pages are
+    stream headers until the first page whose granule position moves, and a
+    later page that happens to carry granule 0 must NOT be reclassified --
+    the consumers only apply the rule before the first audio page, so the
+    helper they share has to report granule exactly as written."""
+    ogg = _load_ogg_pages()
+    head = _ogg_page(0, 0, b"OpusHead" + b"\x00" * 11, page_type=2)
+    tags = _ogg_page(0, 1, b"OpusTags" + b"\x00" * 4)
+    audio = _ogg_page(960, 2, b"\xfc" * 40)
+    cont = _ogg_page(-1, 3, b"\xfc" * 40, page_type=1)  # continued packet
+    check("OpusHead page reads granule 0", ogg.page_granule(head) == 0)
+    check("OpusTags page reads granule 0", ogg.page_granule(tags) == 0)
+    check("audio page reads its true granule",
+          ogg.page_granule(audio) == 960)
+    check("a continuation page's -1 granule survives the signed read",
+          ogg.page_granule(cont) == -1, ogg.page_granule(cont))
+
+
+def test_the_opus_side_stream_encodes_the_ring_and_replays_headers():
+    """The whole Opus pipeline against a real ffmpeg, no hardware: PCM chunks
+    pushed into the ring the way capture would, one listener attached, and
+    the encoder must produce (a) a cached OpusHead/OpusTags header set --
+    the thing every late-joining listener is replayed -- and (b) audio pages
+    in the opus ring, whole, granule advancing. Detaching the last listener
+    must take the encoder down with it: an encoder with no listeners is
+    bandwidth spent on nobody, which is the exact cost the side-stream
+    exists to remove."""
+    import collections, math, shutil, struct, threading, time as _time
+    if shutil.which("ffmpeg") is None:
+        print("  SKIP  no ffmpeg on this host")
+        return
+
+    class Fake(vcctrld.AudioCapability):
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.ring = collections.deque()
+            self.seq = 0
+            self.running = True
+            self.bus = None
+            self.opus_lock = threading.Lock()
+            self.opus_ring = collections.deque()
+            self.opus_ring_bytes = 0
+            self.opus_seq = 0
+            self.opus_headers = []
+            self.opus_headers_done = False
+            self.opus_generation = 0
+            self.opus_proc = None
+            self.opus_listeners = 0
+            self.opus_last_error = None
+
+    cap = Fake()
+    RATE, CHUNK = 48000, 3840          # 20 ms of 48k stereo S16, as capture
+
+    def push_pcm(stop):
+        i = 0
+        frames = CHUNK // 4
+        while not stop.is_set():
+            out = bytearray()
+            for _ in range(frames):
+                v = int(8000 * math.sin(2 * math.pi * 440 * i / RATE))
+                out += struct.pack("<hh", v, v)
+                i += 1
+            with cap.lock:
+                cap.seq += 1
+                cap.ring.append((_time.time(), cap.seq, bytes(out)))
+                while len(cap.ring) > 100:
+                    cap.ring.popleft()
+            # Paced like the real capture -- the feeder deliberately refuses
+            # to encode a big backlog (skip-ahead), so a test that dumps
+            # three seconds at once would test the skip, not the encode.
+            stop.wait(0.02)
+
+    stop = threading.Event()
+    t = threading.Thread(target=push_pcm, args=(stop,), daemon=True)
+    t.start()
+    try:
+        gen = cap.opus_attach()
+        check("attach reports a live generation", gen == 1, gen)
+        deadline = _time.time() + 10.0
+        while _time.time() < deadline:
+            with cap.opus_lock:
+                if cap.opus_headers_done and len(cap.opus_ring) >= 5:
+                    break
+            _time.sleep(0.05)
+        with cap.opus_lock:
+            headers = list(cap.opus_headers)
+            pages = [p for _t2, _s, p in cap.opus_ring]
+            err = cap.opus_last_error
+        check("the encoder produced audio pages", len(pages) >= 5,
+              "pages=%d err=%r" % (len(pages), err))
+        check("the header set was cached for replay", len(headers) >= 2,
+              headers and headers[0][:64])
+        check("first header page is OpusHead at granule 0",
+              headers and headers[0][:4] == b"OggS"
+              and b"OpusHead" in headers[0]
+              and vcctrld.ogg_pages.page_granule(headers[0]) == 0)
+        check("second header page carries OpusTags",
+              len(headers) >= 2 and b"OpusTags" in headers[1])
+        check("audio pages are whole Ogg pages with advancing granule",
+              all(p[:4] == b"OggS" for p in pages)
+              and vcctrld.ogg_pages.page_granule(pages[-1])
+                  > vcctrld.ogg_pages.page_granule(pages[0]) > 0)
+        proc = cap.opus_proc
+        cap.opus_detach()
+        deadline = _time.time() + 5.0
+        while _time.time() < deadline and proc.poll() is None:
+            _time.sleep(0.05)
+        check("the last detach kills the encoder", proc.poll() is not None)
+        with cap.opus_lock:
+            check("and clears the stream state so nothing stale is replayed",
+                  cap.opus_proc is None and not cap.opus_headers
+                  and not cap.opus_ring)
+    finally:
+        stop.set()
+        with cap.opus_lock:
+            cap._opus_kill_locked()

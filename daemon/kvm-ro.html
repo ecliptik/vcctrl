@@ -1070,7 +1070,19 @@
   </div>
 </div>
 
-
+<!-- The vendored Opus decoder for the ?codec=opus audio stream (see
+     vendor/README.md for provenance and the version-in-filename cache
+     rule). WRITTEN WITH ATTRIBUTES ON PURPOSE, and that is load-bearing
+     twice over: vcweb_public.py's nonce injection and
+     tools/strip_kvm_ro_comments.py both locate the page's ONE inline
+     script by searching for the literal attribute-less open tag, so this
+     tag (and this comment!) must never contain that exact literal -- the
+     stripper mis-carving its regions on a copy of the literal inside this
+     very comment is not hypothetical, it happened while writing it. If
+     this file fails to load (deploy skew, a blocked request), the page
+     detects the missing global and falls back to raw PCM audio; sound
+     still works. -->
+<script src="/ogg-opus-decoder-1.7.5.min.js" charset="UTF-8"></script>
 
 <script>
 addEventListener('error', e => {
@@ -1540,34 +1552,119 @@ function stopAudio() {
   if (w && h) { cv.width = w; cv.height = h; cv.getContext('2d').clearRect(0, 0, w, h); }
 }
 
+// One playback path for both codecs: interleaved 16-bit stereo in, exactly
+// what the PCM socket has always carried. The Opus path converts its decoded
+// floats to the same shape (the source was 16-bit PCM before encoding, so
+// the quantisation gives back nothing that was ever there), which keeps the
+// meter, the waveform and the scheduling below identical for both -- one
+// path to trust rather than two that drift.
+function feedPcm(pcm) {
+  meter(pcm);
+  if (waveMode === 'wave') drawWave(pcm);
+  if (!soundOn || !ac) return;
+  const frames = pcm.length >> 1;
+  if (!frames) return;
+  const buf = ac.createBuffer(2, frames, 48000);
+  const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  for (let i = 0; i < frames; i++) {
+    L[i] = pcm[2 * i] / 32768;
+    R[i] = pcm[2 * i + 1] / 32768;
+  }
+  const now = ac.currentTime;
+  if (cursor < now + 0.005) cursor = now + LEAD;
+  else if (cursor > now + MAX_AHEAD) return;
+  const src = ac.createBufferSource();
+  src.buffer = buf;
+  src.connect(gain);
+  src.start(cursor);
+  cursor += buf.duration;
+}
+
+// Once true, this session speaks PCM only. Set on any Opus failure that
+// THREW (decoder missing, init failed, decode raised) -- those are
+// structural, and retrying them every reconnect would loop; garbled DATA
+// never throws (the decoder rides through it and reports per-frame errors
+// it recovers from, so it is not a reason to abandon the codec).
+let opusFailed = false;
+
+function opusUsable() {
+  try {
+    return !opusFailed && typeof WebAssembly !== 'undefined'
+      && !!(window['ogg-opus-decoder'] && window['ogg-opus-decoder'].OggOpusDecoder);
+  } catch (e) { return false; }
+}
+
+function reportAudioError(msg) {
+  try {
+    const payload = JSON.stringify(
+      {kind: 'error', message: ('opus: ' + msg).slice(0, 160)});
+    if (navigator.sendBeacon) navigator.sendBeacon('/telemetry', payload);
+    else fetch('/telemetry', {method: 'POST', body: payload, keepalive: true}).catch(() => {});
+  } catch (e) {}
+}
+
 function startAudio() {
   if (aws) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  aws = new WebSocket(`${proto}://${location.host}/wsaudio`);
-  aws.binaryType = 'arraybuffer';
-  aws.onclose = () => { aws = null; if (soundOn) setTimeout(startAudio, 1200); };
-  aws.onerror = () => { try { aws.close(); } catch (e) {} };
-  aws.onmessage = ev => {
-    const pcm = new Int16Array(ev.data);
-    meter(pcm);
-    if (waveMode === 'wave') drawWave(pcm);
-    if (!soundOn || !ac) return;
-    const frames = pcm.length >> 1;
-    if (!frames) return;
-    const buf = ac.createBuffer(2, frames, 48000);
-    const L = buf.getChannelData(0), R = buf.getChannelData(1);
-    for (let i = 0; i < frames; i++) {
-      L[i] = pcm[2 * i] / 32768;
-      R[i] = pcm[2 * i + 1] / 32768;
-    }
-    const now = ac.currentTime;
-    if (cursor < now + 0.005) cursor = now + LEAD;
-    else if (cursor > now + MAX_AHEAD) return;
-    const src = ac.createBufferSource();
-    src.buffer = buf;
-    src.connect(gain);
-    src.start(cursor);
-    cursor += buf.duration;
+  const useOpus = opusUsable();
+  const ws = new WebSocket(
+    `${proto}://${location.host}/wsaudio${useOpus ? '?codec=opus' : ''}`);
+  aws = ws;
+  ws.binaryType = 'arraybuffer';
+  ws.onclose = () => { if (aws === ws) { aws = null; if (soundOn) setTimeout(startAudio, 1200); } };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  if (!useOpus) {
+    ws.onmessage = ev => feedPcm(new Int16Array(ev.data));
+    return;
+  }
+  // The Opus path. A FRESH DECODER PER CONNECTION, because each connection
+  // is a fresh Ogg stream whose OpusHead/OpusTags pages arrive first (the
+  // mirror replays them); a decoder that already consumed one stream's
+  // headers cannot follow another's. decode() RETURNS A PROMISE in this
+  // build -- the package's own types.d.ts says otherwise and is wrong, see
+  // vendor/README.md -- so every message chains onto `q`, which both awaits
+  // the WASM init and keeps decodes in arrival order.
+  let dec = null, dead = false, backlog = 0;
+  const fail = why => {
+    if (dead) return;
+    dead = true;
+    opusFailed = true;
+    reportAudioError(why);
+    try { ws.close(); } catch (e) {}   // onclose above reconnects -> PCM
+  };
+  try {
+    dec = new window['ogg-opus-decoder'].OggOpusDecoder();
+  } catch (e) { fail('create: ' + e); return; }
+  let q = dec.ready.catch(e => fail('init: ' + e));
+  // Cleanup via addEventListener, NOT .onclose: stopAudio() nulls .onclose
+  // before closing (to suppress the reconnect), and the decoder's WASM
+  // memory must be freed on that path too.
+  ws.addEventListener('close', () => {
+    q = q.then(() => { try { if (dec) dec.free(); } catch (e) {} dec = null; });
+  });
+  ws.onmessage = ev => {
+    if (dead) return;
+    // A device that cannot decode 20ms pages faster than they arrive has
+    // no business queueing them into ever-growing latency: drop, and the
+    // stream carries on across the hole (a page boundary is a resyncable
+    // discontinuity -- the same property the server's skip-ahead relies on).
+    if (backlog > 25) return;
+    backlog++;
+    const u8 = new Uint8Array(ev.data);
+    q = q.then(() => (dec && !dead) ? dec.decode(u8) : null).then(out => {
+      backlog--;
+      if (!out || dead) return;
+      const n = out.samplesDecoded;
+      if (!n) return;
+      const L = out.channelData[0], R = out.channelData[1] || L;
+      const pcm = new Int16Array(n * 2);
+      for (let i = 0; i < n; i++) {
+        const l = L[i], r = R[i];
+        pcm[2 * i] = l >= 1 ? 32767 : l <= -1 ? -32768 : (l * 32767) | 0;
+        pcm[2 * i + 1] = r >= 1 ? 32767 : r <= -1 ? -32768 : (r * 32767) | 0;
+      }
+      feedPcm(pcm);
+    }).catch(e => { backlog--; fail('decode: ' + e); });
   };
 }
 
