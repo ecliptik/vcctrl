@@ -356,7 +356,11 @@ will look:
   chunks into the exact production command; the encoder test now asserts
   the bound so the flags cannot be quietly dropped). `-flush_packets` was
   tested and is NOT the fix -- output already flows per-page once the
-  muxer is up.
+  muxer is up. End-to-end after deploying this plus the mirror's wake
+  event (conditions: WSS listener through the funnel from the control
+  host, tap-to-third-audio-frame): **0.21 s cold encoder, 0.18 s
+  immediate re-unmute, 0.23 s settled** -- against ~4.3 s for all warm
+  cases before.
 
 The page-size overhead of 20 ms pages is real but small: the 10 s / 128k
 test stream weighed 180,630 bytes ≈ 144 kbit/s on the wire, container
