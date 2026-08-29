@@ -350,3 +350,16 @@ will look:
 The page-size overhead of 20 ms pages is real but small: the 10 s / 128k
 test stream weighed 180,630 bytes ≈ 144 kbit/s on the wire, container
 included.
+
+**Deployed and measured live 2026-08-28** (conditions: the real rig
+capturing its idle input, one WSS listener opened through the Tailscale
+funnel from the control host, first 8 frames examined): OpusHead, then
+OpusTags, then audio pages with advancing granules, averaging **338 bytes
+per 20 ms page ≈ 135 kbit/s on the wire** against raw PCM's 1,536 —
+an 11× cut at this bitrate on this content. The daemon's encoder spawned
+on that listener's attach and was gone (`audio.opus.running: false`,
+zero listeners) within seconds of the disconnect, so idle still costs
+nothing. The same deploy confirmed, from the box itself, what the
+security audit could only infer from DNS: the mirror IS served over
+Tailscale Funnel. Still owed: the real-device matrix (iOS Safari,
+Firefox Android) — the operator's device test.
