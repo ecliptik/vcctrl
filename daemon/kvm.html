@@ -739,6 +739,12 @@
   #frame { margin:auto; position:relative; flex:none; }
   #frame.zoomed { cursor:grab; }
   #frame.dragging { cursor:grabbing; }
+  /* #camoverlay's OWN version of the two rules just above, for when IT is
+     the zoomed/oversized main view rather than #scroll/#frame -- see
+     applyZoom's camera branch and pan() below, both of which now pick
+     whichever of the two is actually main before touching these classes. */
+  #camoverlay.zoomed { cursor:grab; }
+  #camoverlay.dragging { cursor:grabbing; }
   /* A DEFINITE BOX, so object-fit has something to fit INTO. With width:auto
      and max-width:100% the element takes its intrinsic 640x480 and is only
      ever shrunk -- never enlarged -- so on any stage bigger than the capture
@@ -814,7 +820,18 @@
   #camswap {
     position:absolute; left:16px; bottom:16px; z-index:57;
     min-height:26px; padding:2px 8px; font-size:12px; line-height:1.4;
+    /* FIXED, NOT THEME-SCALED -- reported 2026-08-30: "the swap button is
+       transparent". The plain `button` rule's background is a translucent
+       black tuned to sit on var(--panel); on top of a live picture (a
+       bright DOS screen, a well-lit camera frame) that 6-22% tint reads as
+       no button at all. Same fixed treatment #scroll's own "No Signal"
+       label already uses just above, for the same reason: an overlay on
+       unpredictable video content needs a floor no theme token gives it.
+       This is background/color, not opacity, so it is not the thing
+       test_no_text_is_dimmed_by_transparency guards against. */
+    background:rgba(0,0,0,.62); color:#fff; border-color:rgba(255,255,255,.4);
   }
+  #camswap:hover { background:rgba(0,0,0,.78); border-color:rgba(255,255,255,.6); }
   #camswap[hidden] { display:none; }
   @media (max-width:640px) {
     /* --cam-bottom, not --panel-gap alone: on a phone #cmdbar is
@@ -7682,6 +7699,10 @@ function applyZoom(recentre) {
     if (!camMain) {
       ci.style.width = ''; ci.style.height = '';
       $('camoverlay').style.overflow = '';
+      // Stale from a previous swapped-main zoom -- otherwise the tiny
+      // thumbnail keeps a grab cursor for a drag that pan() would ignore
+      // anyway (it re-checks which view is main before doing anything).
+      $('camoverlay').classList.remove('zoomed');
     } else {
       const co = $('camoverlay');
       const cnw = ci.naturalWidth || 640, cnh = ci.naturalHeight || 480;
@@ -7702,6 +7723,10 @@ function applyZoom(recentre) {
       const cOver = zoomMode !== 'fit'
                  && (cpw > co.clientWidth + 1 || cph > co.clientHeight + 1);
       co.style.overflow = cOver ? 'auto' : 'hidden';
+      // #camoverlay's own equivalent of #frame.zoomed below -- what pan()
+      // and the cursor CSS both key on while the camera is the main,
+      // draggable view. See #camoverlay.zoomed's own comment.
+      co.classList.toggle('zoomed', cOver);
       if (recentre && cscale) {
         co.scrollLeft = cpw / 2 - co.clientWidth / 2;
         co.scrollTop = cph / 2 - co.clientHeight / 2;
@@ -7987,27 +8012,43 @@ setInterval(() => {
 // Drag to pan, which is the same thing as scrolling now that the picture
 // lives in a real scroller -- so it moves the scroller rather than keeping a
 // second copy of the position that the scrollbars would then disagree with.
+//
+// WHICH SCROLLER, DECIDED AT DRAG START, NOT CACHED -- same reason
+// applyZoom re-reads camMain on every call: swap trades which of
+// #scroll/#camoverlay is the big, draggable view, and a stale reference
+// would pan the thumbnail instead of the picture actually under the
+// pointer. Reported 2026-08-30, alongside the missing #camoverlay.zoomed
+// wiring above: dragging the camera view (swapped to main, zoomed past
+// fit) did nothing, because this used to hardcode #scroll/#frame and
+// #camoverlay never had a `.zoomed` class to check in the first place.
 (function pan() {
-  const sc = $('scroll'), fr = $('frame');
-  let down = false, sx = 0, sy = 0, l = 0, t = 0;
+  let down = false, sx = 0, sy = 0, l = 0, t = 0, el = null, cursorEl = null;
   const start = e => {
-    if (!fr.classList.contains('zoomed')) return;
+    const camMain = document.body.classList.contains('cam-swapped');
+    el = camMain ? $('camoverlay') : $('scroll');
+    cursorEl = camMain ? el : $('frame');
+    if (!cursorEl.classList.contains('zoomed')) return;
     down = true;
-    fr.classList.add('dragging');
+    cursorEl.classList.add('dragging');
     const p = e.touches ? e.touches[0] : e;
     sx = p.clientX; sy = p.clientY;
-    l = sc.scrollLeft; t = sc.scrollTop;
+    l = el.scrollLeft; t = el.scrollTop;
   };
   const move = e => {
     if (!down) return;
     const p = e.touches ? e.touches[0] : e;
-    sc.scrollLeft = l - (p.clientX - sx);
-    sc.scrollTop = t - (p.clientY - sy);
+    el.scrollLeft = l - (p.clientX - sx);
+    el.scrollTop = t - (p.clientY - sy);
     if (e.cancelable) e.preventDefault();
   };
-  const end = () => { down = false; fr.classList.remove('dragging'); };
+  const end = () => {
+    down = false;
+    if (cursorEl) cursorEl.classList.remove('dragging');
+  };
   // On the stage, not the scroller: on a phone the tap-target covers the
-  // picture, and these events bubble up through it.
+  // picture, and these events bubble up through it. #camoverlay is a
+  // #stage-level sibling of #scroll (see its own declaration comment), so
+  // a drag starting on either one is still caught here.
   $('stage').addEventListener('pointerdown', start);
   addEventListener('pointermove', move, {passive: false});
   addEventListener('pointerup', end);
