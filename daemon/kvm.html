@@ -777,7 +777,10 @@
      restore it explicitly (see their own JS), but the z-index is a second,
      structural line of defence against the two ever visually fighting. */
   #camoverlay {
-    position:absolute; left:10px; bottom:10px; z-index:55;
+    /* bottom:46px, not 10px -- 36px raised to leave #camswap its own strip
+       below the box instead of sitting on top of the picture. See that
+       button's own comment. */
+    position:absolute; left:10px; bottom:46px; z-index:55;
     width:200px; max-width:40%; aspect-ratio:4/3;
     background:var(--panel); border:1px solid var(--rule); border-radius:9px;
     box-shadow:0 12px 30px rgba(0,0,0,.36); overflow:hidden;
@@ -807,31 +810,38 @@
   }
   /* A #stage-level SIBLING of #camoverlay/#scroll, not a child of either --
      see the HTML comment where it's declared for why. Its own position is
-     fixed at the corner both boxes' "small" state already shares (10px inset
-     + 6px inner offset, matching where it sat inside #camoverlay before),
-     so it does not need to move when cam-swapped toggles; only its z-index
-     has to clear whichever of the two is currently small (56 swapped, 55
-     unswapped) so it stays clickable on top of that box's own content.
-     Position/size only otherwise -- background, border and text colour stay
-     the plain `button` rule's own theme-aware styling, which already solves
-     "read on both a dark and a light palette" with a --dark-scaled
-     background rather than opacity; this must NOT add its own opacity, see
-     test_no_text_is_dimmed_by_transparency. */
+     fixed at the corner both boxes' "small" state already shares, BELOW
+     the box rather than over it -- reported live, 2026-08-30, after two
+     rounds of chasing this with contrast alone: a control sitting on top
+     of an unpredictable picture is fighting the wrong battle, however
+     opaque it is made. Both small-state boxes below were pushed up 36px
+     (their own `bottom` raised from 10px/--cam-bottom to make room) to
+     open a dedicated strip for exactly this button, so it does not need
+     to move when cam-swapped toggles and no longer overlaps either box's
+     content at all; only its z-index has to clear whichever of the two
+     is currently small (56 swapped, 55 unswapped), now for stacking
+     order rather than click-through. Position/size only otherwise -- see
+     its own rule for why background, border and text colour do NOT stay
+     the plain `button` rule's theme styling here. */
   #camswap {
-    position:absolute; left:16px; bottom:16px; z-index:57;
+    position:absolute; left:16px; bottom:10px; z-index:57;
     min-height:26px; padding:2px 8px; font-size:12px; line-height:1.4;
-    /* FIXED, NOT THEME-SCALED -- reported 2026-08-30: "the swap button is
-       transparent". The plain `button` rule's background is a translucent
-       black tuned to sit on var(--panel); on top of a live picture (a
-       bright DOS screen, a well-lit camera frame) that 6-22% tint reads as
-       no button at all. Same fixed treatment #scroll's own "No Signal"
-       label already uses just above, for the same reason: an overlay on
-       unpredictable video content needs a floor no theme token gives it.
-       This is background/color, not opacity, so it is not the thing
-       test_no_text_is_dimmed_by_transparency guards against. */
-    background:rgba(0,0,0,.62); color:#fff; border-color:rgba(255,255,255,.4);
+    /* SOLID, NOT TRANSLUCENT -- reported live twice, 2026-08-30: first
+       "the swap button is transparent" (fixed with rgba(0,0,0,.62), the
+       plain `button` rule's own translucent-black background is tuned
+       for sitting on var(--panel) and all but vanished over a bright DOS
+       screen or a well-lit camera frame), then "still doesn't have
+       enough contrast, isn't solid" -- .62 still let enough of a BRIGHT
+       frame through to read as a smudge, not a control. This is a fully
+       opaque chip (no alpha at all) plus a shadow to lift it off the
+       picture, the same idea #scroll's own small-swapped box shadow
+       uses just below, not a stronger tint of the same translucent
+       approach that already failed once. Colour/background here, never
+       opacity -- see test_no_text_is_dimmed_by_transparency. */
+    background:#1c1c1c; color:#fff; border-color:rgba(255,255,255,.45);
+    box-shadow:0 3px 10px rgba(0,0,0,.5);
   }
-  #camswap:hover { background:rgba(0,0,0,.78); border-color:rgba(255,255,255,.6); }
+  #camswap:hover { background:#2c2c2c; border-color:rgba(255,255,255,.65); }
   #camswap[hidden] { display:none; }
   @media (max-width:640px) {
     /* --cam-bottom, not --panel-gap alone: on a phone #cmdbar is
@@ -863,7 +873,10 @@
      tiny box happened to show -- reported as "a strip on the left". The
      swap button's own click handler calls applyZoom(true) for exactly this. */
   body.cam-swapped #scroll {
-    inset:auto; top:auto; right:auto; left:10px; bottom:10px;
+    /* bottom:46px, not 10px -- same 36px raise as the small #camoverlay
+       rule above and for the same reason: leaves #camswap its own strip
+       below whichever box is currently small, instead of overlapping it. */
+    inset:auto; top:auto; right:auto; left:10px; bottom:46px;
     width:200px; max-width:40%; aspect-ratio:4/3;
     z-index:56; border-radius:9px; border:1px solid var(--rule);
     box-shadow:0 12px 30px rgba(0,0,0,.36);
@@ -894,7 +907,8 @@
       /* left:0, not --panel-gap: lines up with the bottom strip's own left
          edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
       left:0;
-      bottom:var(--cam-bottom, 4px);
+      /* +36px, same raise as the desktop rule -- see its own comment. */
+      bottom:calc(var(--cam-bottom, 4px) + 36px);
     }
   }
   /* SWAPPED, THE BIG VIEW IS THE CAMERA -- and the VGA capture's own
@@ -1014,7 +1028,10 @@
       /* left:0, not --panel-gap: lines up with the bottom strip's own left
          edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
       left:0;
-      bottom:var(--cam-bottom, 4px);
+      /* +36px, same raise as the desktop rule -- leaves #camswap its own
+         strip below the box on a phone too. See that button's own
+         comment for why. */
+      bottom:calc(var(--cam-bottom, 4px) + 36px);
     }
     /* PACKED, NOT STACKED. One group per row was right when the panel was
        inset and narrow; now that it runs edge to edge there is room for two
