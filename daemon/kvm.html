@@ -829,7 +829,11 @@
      text colour do NOT stay the plain `button` rule's theme styling
      here. */
   #camswap {
-    position:absolute; left:16px; bottom:166px; z-index:57;
+    /* left:10px, matching both boxes' own left:10px exactly -- was 16px
+       (a leftover inset from when this sat NESTED inside the box's
+       corner), reported live as "slightly to the right" now that it's
+       a standalone row above the box instead. */
+    position:absolute; left:10px; bottom:166px; z-index:57;
     min-height:26px; padding:2px 8px; font-size:12px; line-height:1.4;
     /* SOLID, NOT TRANSLUCENT -- reported live twice, 2026-08-30: first
        "the swap button is transparent" (fixed with rgba(0,0,0,.62), the
@@ -864,8 +868,10 @@
        measurement. */
     /* +156px, same 150px box height + 6px gap as the desktop rule, layered
        on --cam-bottom instead of a flat 10px -- see #camswap's own
-       comment for the box-height reasoning. */
-    #camswap { left:6px;
+       comment for the box-height reasoning. left:0, not 6px, for the
+       same reason the desktop rule dropped its own inset -- matches the
+       mobile box's own left:0 exactly (see #camoverlay's mobile rule). */
+    #camswap { left:0;
                bottom:calc(var(--cam-bottom, 4px) + 156px); }
   }
   /* SWAP SIZES, NOT ROLES: #scroll (the live, interactive VGA capture) and
@@ -889,15 +895,28 @@
   body.cam-swapped #camoverlay {
     left:10px; right:10px; top:10px; bottom:10px;
     width:auto; max-width:none; aspect-ratio:auto;
-    /* NEAR-BLACK, NOT var(--panel) -- reported live, 2026-08-30: the
-       letterbox around the camera when it's the main view should match
-       #scroll's own, and #scroll has none of its own background at all
-       (#stage's fixed background:#000 shows through, see #stage's own
-       "the well stays near-black in EVERY theme" comment). #camoverlay's
-       base rule sets background/border/radius for its PERMANENT small-
-       thumbnail-card role; none of that belongs on the full-bleed main
-       view, which #stage's own well already frames. */
-    background:transparent; border:none; border-radius:0;
+    /* NEAR-BLACK AND THEME-TINTED, NOT LITERAL #000 -- reported live,
+       2026-08-30, in two passes. First pass matched #scroll's own true
+       black exactly (#stage's fixed background:#000 showing through a
+       transparent #camoverlay -- see #stage's own "the well stays
+       near-black in EVERY theme" comment, which is right FOR #scroll:
+       it exists to judge the captured DOS picture's own brightness, so
+       it has to be a fixed, theme-blind reference). On reflection that
+       is the wrong reference for the camera: a real camera frame is
+       often itself very dark (this rig's own feed is near-black in low
+       light, see the swap screenshots from the earlier fix), and a
+       letterbox at the exact same literal black as the picture makes
+       the two indistinguishable. So: derive a near-black FROM the
+       theme's own --bg (page ground) instead of a fixed value, mixed
+       mostly toward black so it stays a well and not a panel, but
+       keeps enough of the theme's own hue/lightness to read as
+       "this theme's black," not the universal one -- and to still be
+       visibly different from a genuinely black patch of camera image.
+       #camoverlay's base rule sets background/border/radius for its
+       PERMANENT small-thumbnail-card role; border/radius still don't
+       belong on this full-bleed main view, only background changes. */
+    background:color-mix(in srgb, var(--bg) 30%, black 70%);
+    border:none; border-radius:0;
     /* Flex, so #camimg's margin:auto (added above) centres it on both axes
        once JS is sizing it explicitly for a zoom level -- overflow itself
        stays JS-toggled between hidden (fit) and auto (oversized), same
