@@ -815,11 +815,11 @@
     display:flex; flex-direction:column; gap:7px;
   }
   #scrub[hidden] { display:none; }
-  /* The hardware camera overlay -- same corner-box idiom as #scrub (panel
-     background, rule border, radius, shadow) but a small fixed thumbnail
-     rather than a full-width bar, so it can sit in the lower-left corner
-     without needing to reflow or compete with the picture. z-index sits
-     above #veil/#zhint (4/3) and below #scrub (60): if review mode is ever
+  /* The hardware camera overlay -- same corner-box idiom as #scrub (rule
+     border, radius, shadow) but a small fixed thumbnail rather than a
+     full-width bar, so it can sit in the lower-left corner without
+     needing to reflow or compete with the picture. z-index sits above
+     #veil/#zhint (4/3) and below #scrub (60): if review mode is ever
      entered while this is showing, enterReview()/exitReview() hide and
      restore it explicitly (see their own JS), but the z-index is a second,
      structural line of defence against the two ever visually fighting. */
@@ -830,7 +830,15 @@
     position:absolute; left:10px;
     bottom:calc(10px + var(--hscroll-raise, 0px)); z-index:55;
     width:200px; max-width:40%; aspect-ratio:4/3;
-    background:var(--panel); border:1px solid var(--rule); border-radius:9px;
+    /* --well, NOT var(--panel) -- reported live, 2026-08-30: "the
+       letterbox around the thumbnail doesn't match what it was in the
+       larger view". object-fit:contain (below) can letterbox inside
+       this box exactly the way it does when swapped to main, and
+       var(--panel) is a card colour, not the picture-well colour
+       body.cam-swapped #camoverlay already uses. Border/radius/shadow
+       stay -- this is still a floating card silhouette over the stage,
+       unlike the full-bleed swapped state, only the FILL had to match. */
+    background:var(--well); border:1px solid var(--rule); border-radius:9px;
     box-shadow:0 12px 30px rgba(0,0,0,.36); overflow:hidden;
   }
   #camoverlay[hidden] { display:none; }
