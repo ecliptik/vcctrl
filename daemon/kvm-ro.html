@@ -40,6 +40,16 @@
     --t-state: 20px;
     --safe-b: env(safe-area-inset-bottom, 0px);
     --tap: 44px;
+    /* THE PICTURE WELL -- ported from kvm.html's own --well (2026-08-30):
+       #stage and #app's mobile full-bleed background were a flat #000,
+       which on a dark theme is indistinguishable from a genuinely-black
+       captured frame. Mixing toward a FIXED #2a2a2a floor instead of pure
+       black guarantees roughly rgb(27,27,27) as a lower bound no matter how
+       dark --bg is, while --bg's own 35% share still carries the theme's
+       hue on top. Drops the old "well is a fixed, theme-blind reference"
+       invariant -- operator's explicit trade-off on the full page, visual
+       consistency over photometric neutrality, ported here unchanged. */
+    --well: color-mix(in srgb, var(--bg) 35%, #2a2a2a 65%);
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; }
@@ -292,7 +302,7 @@
   }
 
   #stage {
-    position:relative; flex:1 1 auto; min-height:0; background:#000;
+    position:relative; flex:1 1 auto; min-height:0; background:var(--well);
     overflow:hidden;
   }
   #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
@@ -866,7 +876,7 @@
     body.nopanel #body { display:none; }
     body.nopanel #app, body.fs #app { grid-template-columns:minmax(0,1fr) 0; }
     body.nopanel #app, body.fs #app { background:transparent; }
-    #app { background:#000; }
+    #app { background:var(--well); }
     #body   { grid-column:2; grid-row:2; height:auto; margin:8px; }
     #panels { max-height:none; flex:0 1 auto; }
   }
