@@ -83,6 +83,29 @@ pipeline can lag a fast-changing screen; a raw `burst()` is the fresher
 read when you need "what does the screen show right now," not merely "is
 there a picture at all."
 
+**`vcctrl_burst`'s default `n` was lowered from 5 to 3 on 2026-08-30, and
+it now logs every call (`n`, `context`, result) to `internal/burst-
+calls.jsonl`** -- diagnostic instrumentation for an Anthropic-side safety
+classifier that has intermittently interrupted turns during burst-heavy
+porting sessions, trigger pattern not yet established. Pass a short
+`context=` on each call (what the burst is for, e.g. "confirm MD command
+landed") so a later session can correlate. Keep `n` at the default for a
+routine post-type confirm; pass a larger `n` explicitly only when you
+actually need more frames (motion/animation diagnostics), not as a habit.
+`vcctrl_verify_input`'s LED round trip is cheaper than a burst and worth
+trying first when the question is "is the target even responsive at all"
+-- but it proves the link is alive, not that any particular text
+rendered, so it does not replace a burst when the thing in doubt is
+*what* landed on screen. Before a burst-heavy stretch (a porting session's
+type-a-command/confirm-it-landed loop is the main case), call `vcctrl_note`
+with what the sequence actually is -- e.g. `vcctrl_note("porting <game> to
+DOS: typing build steps, confirming each with a short burst")` -- rather
+than a generic note or none at all. That's the same call the rule below
+already asks for at the start of any driving sequence; naming the porting
+work specifically here costs nothing extra and is the one lever available
+if the classifier turns out to be reading session context rather than
+just call volume.
+
 **Board-scoped power is visibility, not enforcement** (see
 `vcctrl-rig-hazards`) -- check `vcctrl_board` before a `vcctrl_power` call if
 which physical machine you're powering matters to the task, since the tool

@@ -25,6 +25,7 @@ stands in for RegistryDriver elsewhere in this suite.
 import importlib.util
 import os
 import sys
+import tempfile
 import types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -256,6 +257,89 @@ def test_a_read_only_tool_does_not_touch_the_lock_at_all():
           "LOCK.release" not in calls, calls)
 
 
+def test_burst_default_n_is_3_not_5():
+    """Lowered 2026-08-30 to cut per-call size for the routine post-type
+    confirm case (vcctrl-mcp-workflows). A regression test, not just a
+    docstring claim -- pins the actual default against silent drift.
+    """
+    import inspect
+
+    print("\nvcctrl_burst defaults n to 3")
+    mod = _load_agent(role="control")
+    sig = inspect.signature(mod.vcctrl_burst)
+    check("default n is 3", sig.parameters["n"].default == 3,
+          sig.parameters["n"].default)
+    check("context still defaults to empty string",
+          sig.parameters["context"].default == "",
+          sig.parameters["context"].default)
+
+
+def test_burst_logs_call_metadata_for_guardrail_correlation():
+    """vcctrl_burst appends one JSON line per call to internal/burst-
+    calls.jsonl -- added 2026-08-30 so a later session can correlate call
+    volume/frequency/context against an Anthropic-side safety-classifier
+    interruption instead of guessing at the trigger pattern after the
+    fact. Redirects mod.BURST_LOG rather than touching the real
+    internal/ directory, the same isolation _RecordingLock/_RecordingJobs
+    give the other tests here.
+    """
+    import json
+
+    print("\nvcctrl_burst logs n/context/result to BURST_LOG")
+    mod = _load_agent(role="control")
+    log_dir = tempfile.mkdtemp(prefix="burst-log-test-")
+    mod.BURST_LOG = os.path.join(log_dir, "burst-calls.jsonl")
+    mod._run_vcctrl = _recording_run_vcctrl(
+        [], result={"ok": True, "exit_code": 0})
+
+    mod.vcctrl_burst(n=3, context="confirm MD command landed")
+
+    check("log file was created", os.path.isfile(mod.BURST_LOG),
+          mod.BURST_LOG)
+    with open(mod.BURST_LOG) as f:
+        lines = f.readlines()
+    check("exactly one line for one call", len(lines) == 1, lines)
+    entry = json.loads(lines[0])
+    check("n recorded", entry.get("n") == 3, entry)
+    check("context recorded", entry.get("context") == "confirm MD command landed",
+          entry)
+    check("ok recorded", entry.get("ok") is True, entry)
+    check("exit_code recorded", entry.get("exit_code") == 0, entry)
+    check("out_dir recorded", "out_dir" in entry, entry)
+    check("timestamp recorded", isinstance(entry.get("ts"), float), entry)
+
+    mod.vcctrl_burst(n=2)
+    with open(mod.BURST_LOG) as f:
+        lines = f.readlines()
+    check("a second call appends rather than overwrites", len(lines) == 2,
+          lines)
+    check("context defaults to empty string, not missing/None",
+          json.loads(lines[1]).get("context") == "", lines[1])
+
+
+def test_burst_logging_failure_does_not_break_the_call():
+    """A BURST_LOG that can't be written (e.g. a read-only deployment)
+    must not turn a working capture into a failed tool call -- the log
+    is diagnostic, not load-bearing for the capture it describes.
+    """
+    print("\na BURST_LOG write failure is swallowed, not raised")
+    mod = _load_agent(role="control")
+    # A path whose parent cannot exist as a directory (it's a file):
+    # os.makedirs on top of it raises OSError/FileExistsError, which
+    # _log_burst_call must catch.
+    blocker = tempfile.mktemp(prefix="burst-log-blocker-")
+    with open(blocker, "w") as f:
+        f.write("not a directory")
+    mod.BURST_LOG = os.path.join(blocker, "sub", "burst-calls.jsonl")
+    mod._run_vcctrl = _recording_run_vcctrl(
+        [], result={"ok": True, "exit_code": 0})
+
+    res = mod.vcctrl_burst(n=1)
+    check("the call still returns the real result despite the log failure",
+          res.get("ok") is True, res)
+    os.remove(blocker)
+
+
 def test_harness_workflow_tools_are_absent_in_daemon_mode():
     """docs/MCP-SERVER.md's own claim (59 control tools, 55 daemon) is a
     count in prose. This is the same claim checked against the live
@@ -276,6 +360,9 @@ if __name__ == "__main__":
     test_the_three_harness_launchers_release_the_lock_before_launching()
     test_confirm_gate_refuses_before_touching_the_lock_at_all()
     test_a_read_only_tool_does_not_touch_the_lock_at_all()
+    test_burst_default_n_is_3_not_5()
+    test_burst_logs_call_metadata_for_guardrail_correlation()
+    test_burst_logging_failure_does_not_break_the_call()
     test_harness_workflow_tools_are_absent_in_daemon_mode()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))

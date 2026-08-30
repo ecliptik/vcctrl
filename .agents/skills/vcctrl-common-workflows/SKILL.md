@@ -158,8 +158,11 @@ rather than retrying blind.
   explicit "no picture." Two-valued: file exists iff the daemon says
   picture.
 - `vcctrl_lastgood()` -- the last frame positively judged as picture, aged.
-- `vcctrl_burst(n)` -- n raw frames at once, all-or-nothing (no silent holes
-  that would look like a complete capture and aren't).
+- `vcctrl_burst(n=3, context="")` -- n raw frames at once, all-or-nothing (no
+  silent holes that would look like a complete capture and aren't). Pass
+  `context` (what this burst is for) -- it's logged for guardrail-trigger
+  correlation, see `vcctrl-mcp-workflows`. Raise `n` only when you actually
+  need more frames.
 - `vcctrl_timeline()` then `vcctrl_frame(seq)` -- index the scrub buffer
   cheaply, then pull one specific raw frame by sequence number.
 - `vcctrl_record(since, from_seq=None, to_seq=None, clip=False)` --

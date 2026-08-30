@@ -515,16 +515,60 @@ def vcctrl_frame(seq: int) -> dict:
     return res
 
 
+# Diagnostic log for correlating vcctrl_burst calls against Anthropic-side
+# safety-classifier interruptions seen during burst-heavy porting sessions
+# -- the trigger pattern is not established yet (2026-08-30), and tuning
+# burst usage against a guess risks fixing noise instead of the real
+# pattern. Gitignored as part of internal/ (CLAUDE.md), and a logging
+# failure here must never block the actual capture it's describing.
+BURST_LOG = os.path.join(REPO_ROOT, "internal", "burst-calls.jsonl")
+
+
+def _log_burst_call(n, context, res):
+    try:
+        os.makedirs(os.path.dirname(BURST_LOG), exist_ok=True)
+        entry = {
+            "ts": time.time(),
+            "ts_local": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "n": n,
+            "context": context,
+            "ok": res.get("ok"),
+            "exit_code": res.get("exit_code"),
+            "out_dir": res.get("out_dir"),
+        }
+        with open(BURST_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
 @mcp.tool()
-def vcctrl_burst(n: int = 5) -> dict:
+def vcctrl_burst(n: int = 3, context: str = "") -> dict:
     """n RAW frames at once, written to a local directory. All or
     nothing -- a burst with silent holes in it would look like a complete
-    capture and is not, so a failure leaves no partial directory behind."""
+    capture and is not, so a failure leaves no partial directory behind.
+
+    Default lowered from 5 to 3 on 2026-08-30 (see BURST_LOG above): the
+    common call -- confirming a just-typed command actually landed, per
+    vcctrl-mcp-workflows -- wants a couple of FRESH raw frames, not a
+    deep sample; settle frames only appear after a device open or mode
+    change (docs/WEBKVM.md sec. 4.4), not after an ordinary keystroke, so
+    3 is not chasing a known failure mode, just cutting per-call size.
+    Pass a larger n explicitly for motion/animation diagnostics, where
+    more frames genuinely buy more evidence.
+
+    `context` is a short free-text note of what this burst is for (e.g.
+    "confirm MD command landed") -- never sent to the daemon, only appended
+    to internal/burst-calls.jsonl alongside n and the result. Lets a later
+    session correlate call volume/frequency/timing against a guardrail
+    interruption instead of guessing at the trigger after the fact.
+    """
     out_dir = tempfile.mkdtemp(prefix="burst-", dir=SCRATCH_DIR)
     os.rmdir(out_dir)   # vcctrl creates it; an empty dir already existing
                         # would defeat the "not empty -> refuse" guard.
     res = _run_vcctrl(["burst", n, "--out-dir", out_dir])
     res["out_dir"] = out_dir if os.path.isdir(out_dir) else None
+    _log_burst_call(n, context, res)
     return res
 
 
