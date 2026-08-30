@@ -29,6 +29,30 @@
     --t-state: 20px;      /* the one prominent size */
     --safe-b: env(safe-area-inset-bottom, 0px);
     --tap: 44px;          /* iOS/Android minimum touch target */
+    /* THE PICTURE WELL -- #stage, #app's mobile full-bleed background and
+       the swapped-camera letterbox all share this one value rather than
+       three copies of the same formula. Was a literal #000 on #stage
+       (still is on light themes for all practical purposes -- see
+       below), changed 2026-08-30 on the operator's explicit direction:
+       "in dark mode letterbox is always black, should have some
+       contrast" was true of a straight mix toward var(--bg), because on
+       a dark theme --bg is ALREADY near black, so mixing 30% of it into
+       70% black barely moved anything -- the well and a genuinely black
+       patch of picture stayed indistinguishable exactly where it
+       mattered most. Mixing toward a FIXED #2a2a2a floor instead of
+       toward pure black guarantees roughly rgb(27,27,27) as a lower
+       bound no matter how dark --bg is (0% bg contribution still gives
+       65% * #2a2a2a), while the 35% var(--bg) share still carries each
+       theme's own hue on top of that floor -- so this reads as "this
+       theme's near-black, not the universal one" without ever losing
+       contrast against real black content, which is the property #stage
+       used to get from a fixed #000 and now gets from the floor instead.
+       This DROPS the previous invariant "the well is a fixed, theme-
+       blind reference for judging the captured DOS picture's actual
+       brightness" -- operator's explicit trade-off, visual consistency
+       over photometric neutrality; not an oversight if a future reader
+       finds the well no longer pure black. */
+    --well: color-mix(in srgb, var(--bg) 35%, #2a2a2a 65%);
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; }
@@ -698,13 +722,20 @@
   }
 
   /* ── stage ───────────────────────────────────────────────────────────────
-     The well stays near-black in EVERY theme, including the light ones.
-     Simultaneous contrast: a cream surround makes the captured screen look
-     darker than it is, and judging exactly that is a thing people do on this
-     rig. A theme may recolour every panel it likes; it may not change how the
-     evidence looks. */
+     THE WELL WAS A FIXED #000, changed 2026-08-30 to var(--well) on the
+     operator's explicit direction, matching the camera letterbox's own
+     treatment -- see --well's own comment for the formula and the
+     dark-mode-contrast reasoning. Worth restating what this trades away,
+     since it used to be the whole point of this rule: simultaneous
+     contrast means a cream surround makes the captured screen look
+     darker than it is, and judging exactly that is a thing people do on
+     this rig -- a fixed, theme-blind well was how "a theme may recolour
+     every panel it likes; it may not change how the evidence looks" held.
+     --well is still near-black on every theme (see its own guaranteed
+     floor), just no longer numerically identical across all of them, so
+     that guarantee is now approximate rather than exact. Deliberate. */
   #stage {
-    position:relative; flex:1 1 auto; min-height:0; background:#000;
+    position:relative; flex:1 1 auto; min-height:0; background:var(--well);
     overflow:hidden;
   }
   #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
@@ -714,7 +745,8 @@
      One inner element scrolls; everything else stays put over it. */
   #scroll {
     position:absolute; inset:0; overflow:auto; display:flex;
-    scrollbar-width:thin; scrollbar-color:var(--rule) transparent;
+    /* scrollbar-width/-color live in the shared #scroll, #camoverlay rule
+       just below, not here -- see its own comment. */
     /* A GAP FROM THE CHROME, on every mode. Flush against the top edge the
        picture had no border against the toolbar above it -- nothing said
        where the video ended and the menu began. #frame's margin:auto
@@ -724,14 +756,29 @@
     padding:10px;
   }
   body.fs #scroll { padding:0; }
-  #scroll::-webkit-scrollbar { width:10px; height:10px; }
-  #scroll::-webkit-scrollbar-track { background:transparent; }
-  #scroll::-webkit-scrollbar-thumb {
+  /* #camoverlay, not just #scroll -- it can scroll too now (the camera's
+     own drag-to-pan/zoom), and an unstyled native scrollbar next to
+     #scroll's styled thin one would read as two different controls doing
+     the same job. Also fixes the same 10px width both --hscroll-raise's
+     buffer and applyZoom's own drag-pan code assume; an unstyled
+     scrollbar on some platforms runs considerably wider than that. */
+  #scroll, #camoverlay {
+    scrollbar-width:thin; scrollbar-color:var(--rule) transparent;
+  }
+  #scroll::-webkit-scrollbar, #camoverlay::-webkit-scrollbar {
+    width:10px; height:10px;
+  }
+  #scroll::-webkit-scrollbar-track, #camoverlay::-webkit-scrollbar-track {
+    background:transparent;
+  }
+  #scroll::-webkit-scrollbar-thumb, #camoverlay::-webkit-scrollbar-thumb {
     background:var(--rule); border-radius:5px;
     border:2px solid transparent; background-clip:content-box;
   }
-  #scroll::-webkit-scrollbar-thumb:hover { background:var(--muted);
-                                           background-clip:content-box; }
+  #scroll::-webkit-scrollbar-thumb:hover,
+  #camoverlay::-webkit-scrollbar-thumb:hover {
+    background:var(--muted); background-clip:content-box;
+  }
   /* margin:auto, NOT justify/align-center: a flex item centred by the
      container's alignment cannot be scrolled back to when it overflows --
      the top and left of it become unreachable. auto margins centre the same
@@ -777,7 +824,11 @@
      restore it explicitly (see their own JS), but the z-index is a second,
      structural line of defence against the two ever visually fighting. */
   #camoverlay {
-    position:absolute; left:10px; bottom:10px; z-index:55;
+    /* +var(--hscroll-raise) -- see applyZoom's own comment: clears the
+       main view's horizontal scrollbar when one is showing, 0px
+       otherwise. */
+    position:absolute; left:10px;
+    bottom:calc(10px + var(--hscroll-raise, 0px)); z-index:55;
     width:200px; max-width:40%; aspect-ratio:4/3;
     background:var(--panel); border:1px solid var(--rule); border-radius:9px;
     box-shadow:0 12px 30px rgba(0,0,0,.36); overflow:hidden;
@@ -832,8 +883,12 @@
     /* left:10px, matching both boxes' own left:10px exactly -- was 16px
        (a leftover inset from when this sat NESTED inside the box's
        corner), reported live as "slightly to the right" now that it's
-       a standalone row above the box instead. */
-    position:absolute; left:10px; bottom:166px; z-index:57;
+       a standalone row above the box instead.
+       bottom: 166px plus the SAME +var(--hscroll-raise) the box below it
+       gets, so the two stay stacked with the same 6px gap between them
+       whether or not the main view's horizontal scrollbar is showing. */
+    position:absolute; left:10px;
+    bottom:calc(166px + var(--hscroll-raise, 0px)); z-index:57;
     min-height:26px; padding:2px 8px; font-size:12px; line-height:1.4;
     /* SOLID, NOT TRANSLUCENT -- reported live twice, 2026-08-30: first
        "the swap button is transparent" (fixed with rgba(0,0,0,.62), the
@@ -870,9 +925,12 @@
        on --cam-bottom instead of a flat 10px -- see #camswap's own
        comment for the box-height reasoning. left:0, not 6px, for the
        same reason the desktop rule dropped its own inset -- matches the
-       mobile box's own left:0 exactly (see #camoverlay's mobile rule). */
+       mobile box's own left:0 exactly (see #camoverlay's mobile rule).
+       +var(--hscroll-raise), same as the desktop rule -- see its own
+       comment. */
     #camswap { left:0;
-               bottom:calc(var(--cam-bottom, 4px) + 156px); }
+               bottom:calc(var(--cam-bottom, 4px) + 156px
+                            + var(--hscroll-raise, 0px)); }
   }
   /* SWAP SIZES, NOT ROLES: #scroll (the live, interactive VGA capture) and
      #camoverlay (the read-only camera) simply trade CSS geometry -- neither
@@ -887,7 +945,11 @@
      tiny box happened to show -- reported as "a strip on the left". The
      swap button's own click handler calls applyZoom(true) for exactly this. */
   body.cam-swapped #scroll {
-    inset:auto; top:auto; right:auto; left:10px; bottom:10px;
+    /* +var(--hscroll-raise) -- same as #camoverlay's own thumbnail rule,
+       clearing the CAMERA's (now main) horizontal scrollbar when one is
+       showing. See applyZoom's own comment. */
+    inset:auto; top:auto; right:auto; left:10px;
+    bottom:calc(10px + var(--hscroll-raise, 0px));
     width:200px; max-width:40%; aspect-ratio:4/3;
     z-index:56; border-radius:9px; border:1px solid var(--rule);
     box-shadow:0 12px 30px rgba(0,0,0,.36);
@@ -895,27 +957,14 @@
   body.cam-swapped #camoverlay {
     left:10px; right:10px; top:10px; bottom:10px;
     width:auto; max-width:none; aspect-ratio:auto;
-    /* NEAR-BLACK AND THEME-TINTED, NOT LITERAL #000 -- reported live,
-       2026-08-30, in two passes. First pass matched #scroll's own true
-       black exactly (#stage's fixed background:#000 showing through a
-       transparent #camoverlay -- see #stage's own "the well stays
-       near-black in EVERY theme" comment, which is right FOR #scroll:
-       it exists to judge the captured DOS picture's own brightness, so
-       it has to be a fixed, theme-blind reference). On reflection that
-       is the wrong reference for the camera: a real camera frame is
-       often itself very dark (this rig's own feed is near-black in low
-       light, see the swap screenshots from the earlier fix), and a
-       letterbox at the exact same literal black as the picture makes
-       the two indistinguishable. So: derive a near-black FROM the
-       theme's own --bg (page ground) instead of a fixed value, mixed
-       mostly toward black so it stays a well and not a panel, but
-       keeps enough of the theme's own hue/lightness to read as
-       "this theme's black," not the universal one -- and to still be
-       visibly different from a genuinely black patch of camera image.
+    /* --well, the same picture-well colour #stage uses -- see that
+       property's own comment. Was its own separate color-mix here
+       first, matched into the shared token 2026-08-30 once the operator
+       asked for #stage to match this rather than the other way round.
        #camoverlay's base rule sets background/border/radius for its
        PERMANENT small-thumbnail-card role; border/radius still don't
        belong on this full-bleed main view, only background changes. */
-    background:color-mix(in srgb, var(--bg) 30%, black 70%);
+    background:var(--well);
     border:none; border-radius:0;
     /* Flex, so #camimg's margin:auto (added above) centres it on both axes
        once JS is sizing it explicitly for a zoom level -- overflow itself
@@ -940,7 +989,7 @@
       /* left:0, not --panel-gap: lines up with the bottom strip's own left
          edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
       left:0;
-      bottom:var(--cam-bottom, 4px);
+      bottom:calc(var(--cam-bottom, 4px) + var(--hscroll-raise, 0px));
     }
   }
   /* SWAPPED, THE BIG VIEW IS THE CAMERA -- and the VGA capture's own
@@ -1060,7 +1109,7 @@
       /* left:0, not --panel-gap: lines up with the bottom strip's own left
          edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
       left:0;
-      bottom:var(--cam-bottom, 4px);
+      bottom:calc(var(--cam-bottom, 4px) + var(--hscroll-raise, 0px));
     }
     /* PACKED, NOT STACKED. One group per row was right when the panel was
        inset and narrow; now that it runs edge to edge there is room for two
@@ -2117,11 +2166,13 @@
        ground behind it is --bg and the card is --panel, and those are a step
        apart in most of the twenty-two themes -- so the margin existed and was
        invisible, which reads as a square panel with rounded corners drawn on.
-       Settings looks right because it floats over the STAGE, which is
-       deliberately near-black in every theme including the light ones. Same
-       well here, so the two float over the same ground and read as the same
-       kind of object. */
-    #app { background:#000; }
+       Settings looks right because it floats over the STAGE, which uses
+       --well (near-black on every theme -- see that property's own
+       comment). Same well here, so the two float over the same ground
+       and read as the same kind of object -- was a literal #000 to match
+       #stage's own old literal #000; kept in sync now that #stage uses
+       --well instead, 2026-08-30. */
+    #app { background:var(--well); }
     /* EIGHT ON EVERY SIDE. With margin-left:0 the card's own 1px border sat
        flush against the well, and a border with nothing on one side of it is
        not an outline -- it is a line. Measured at x=1240: black, then
@@ -7716,6 +7767,13 @@ function applyZoom(recentre) {
   }
 
   const over = canScroll && (pw > sc.clientWidth - pad * 2 + 1 || ph > sc.clientHeight - pad * 2 + 1);
+  // HORIZONTAL SPECIFICALLY, not `over` -- the small corner box (whichever
+  // of #camoverlay/#scroll is currently the thumbnail) sits at the same
+  // bottom edge as the MAIN view's own horizontal scrollbar, so a vertical-
+  // only overflow (a real scrollbar, just not this one) must not raise it.
+  // See hscrollRaise below, set once both this and the camera's own hOver
+  // equivalent (chOver) are known.
+  const hOver = canScroll && pw > sc.clientWidth - pad * 2 + 1;
   fr.classList.toggle('zoomed', over);
   // Only on a deliberate change. Re-centring on every re-measure would drag
   // the view back under the operator every five seconds. scale is only 0
@@ -7741,6 +7799,10 @@ function applyZoom(recentre) {
   // size a previous swapped-main zoom left behind has to be cleared, or it
   // would outlive the swap and freeze the thumbnail at that pixel size.
   const ci = $('camimg');
+  // Camera's own equivalent of hOver above -- declared out here so it's
+  // still readable (as false) once the `if (!camMain)` branch below runs
+  // instead of the else that would otherwise set it.
+  let chOver = false;
   if (showCamera) {
     if (!camMain) {
       ci.style.width = ''; ci.style.height = '';
@@ -7768,6 +7830,7 @@ function applyZoom(recentre) {
       }
       const cOver = zoomMode !== 'fit'
                  && (cpw > co.clientWidth + 1 || cph > co.clientHeight + 1);
+      chOver = zoomMode !== 'fit' && cpw > co.clientWidth + 1;
       co.style.overflow = cOver ? 'auto' : 'hidden';
       // #camoverlay's own equivalent of #frame.zoomed below -- what pan()
       // and the cursor CSS both key on while the camera is the main,
@@ -7784,6 +7847,31 @@ function applyZoom(recentre) {
       if (!cOver) lastHinted = null;
     }
   }
+
+  // THE CORNER THUMBNAIL SITS AT THE SAME BOTTOM EDGE AS THE MAIN VIEW'S
+  // OWN HORIZONTAL SCROLLBAR -- reported live, 2026-08-30: when the main
+  // view is zoomed wide enough to need one, it ran right under the
+  // thumbnail card. Whichever view is main is the one whose scrollbar
+  // matters (hOver for VGA main, chOver for camera main -- exactly one
+  // of the two is ever true, since the other's own overflow math is
+  // forced to 'fit'/never-scrolls while it's the thumbnail).
+  //
+  // NOT MEASURED. A first version read offsetHeight-clientHeight, on the
+  // idea that "measure it, don't guess" beats a constant -- checked live
+  // and it doesn't apply here: this browser reserves ZERO layout space
+  // for an overlay scrollbar (macOS/iOS Safari does this by default, and
+  // it's what this rig's own operator is on), so offsetHeight equalled
+  // clientHeight exactly even at 400% zoom with the scrollbar plainly
+  // needed and #camoverlay/#scroll both styled to a known 14px (10px bar
+  // + 2px border, see the shared #scroll, #camoverlay scrollbar rule)
+  // where a browser DOES reserve space. There is nothing to measure on
+  // an overlay platform -- the bar draws over the content, not beside
+  // it -- so a fixed constant sized to the one number this page actually
+  // controls (that 14px) is the correct answer on both kinds of
+  // platform, not a fallback for the kind that can't be measured.
+  const HSCROLL_BAR_PX = 14;
+  const raisePx = (camMain ? chOver : hOver) ? HSCROLL_BAR_PX : 0;
+  document.documentElement.style.setProperty('--hscroll-raise', raisePx + 'px');
 
   showCapture();
 }

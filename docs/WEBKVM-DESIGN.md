@@ -260,15 +260,25 @@ watched on.
 
 ### Three rules the themes must not break
 
-**1. The stage well stays constant.** The area immediately around the picture
-does not follow the theme; it stays near-black in every scheme, including the
-light ones.
+**1. The stage well stays near-black, not constant.** Changed 2026-08-30,
+operator's explicit direction: the area immediately around the picture used to
+be a literal `#000` in every scheme, including the light ones, so it never
+varied at all. On a dark theme that made the well and a genuinely black patch
+of real content (the hardware camera's own feed is often near-black in low
+light) indistinguishable from each other — no contrast between "empty
+letterbox" and "the picture is actually black here." It is now
+`color-mix(in srgb, var(--bg) 35%, #2a2a2a 65%)` (`--well` in kvm.html) — a
+guaranteed-dark floor from the fixed `#2a2a2a`, with the active theme's own
+`--bg` mixed in on top so the well reads as "this theme's near-black," not a
+universal one.
 
-This is not taste, it is simultaneous contrast. A cream surround makes the
-captured screen look darker and lower-contrast than it is — and judging whether
-a DOS screen is too dark is a thing people do on this rig. **A theme must not
-be able to change how the evidence looks.** Solarized Light may colour every
-panel it likes; it may not tint the frame around the picture.
+This was originally simultaneous contrast: a cream surround makes the captured
+screen look darker and lower-contrast than it is, and judging whether a DOS
+screen is too dark is a thing people do on this rig. That is now an
+approximate guarantee rather than an exact one — the well stays close to black
+on every theme, but is no longer numerically identical across all of them.
+Deliberate trade-off, not a regression if a future reader finds the well isn't
+literal `#000` any more.
 
 **2. State is never encoded in colour alone.** Green Monochrome has one hue, so
 `locked` and `fault` cannot differ by colour there. Every state already has a
