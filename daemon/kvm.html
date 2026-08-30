@@ -793,6 +793,11 @@
        pass it otherwise never pays (see VideoCapability's own Rule 3 comment
        on why nothing in a passthrough path decodes what it doesn't have to). */
     transform:rotate(180deg);
+    /* Inert here (block layout, 100%/100% leaves no free space to centre) --
+       lives only for when #camoverlay becomes the swapped-main view below,
+       where JS sets an explicit pixel width/height and this is what centres
+       it, the same #frame/margin:auto idiom #scroll already uses. */
+    flex:none; margin:auto;
   }
   /* A #stage-level SIBLING of #camoverlay/#scroll, not a child of either --
      see the HTML comment where it's declared for why. Its own position is
@@ -849,6 +854,11 @@
   body.cam-swapped #camoverlay {
     left:10px; right:10px; top:10px; bottom:10px;
     width:auto; max-width:none; aspect-ratio:auto;
+    /* Flex, so #camimg's margin:auto (added above) centres it on both axes
+       once JS is sizing it explicitly for a zoom level -- overflow itself
+       stays JS-toggled between hidden (fit) and auto (oversized), same
+       hidden/auto split #scroll's own canScroll already does. */
+    display:flex;
     /* NOT 2 -- that ties #ghost's own z-index:2 (the transparent phone
        tap-catcher covering the whole stage, "#ghost {" above), and equal
        z-index falls back to DOM order, where #ghost comes later and wins.
@@ -2469,6 +2479,11 @@
       <div class="hint" style="margin-left:0">One line for what the rig is
         doing right now, e.g. mid-reboot.</div>
 
+      <label><input type="checkbox" id="opt-camera">
+        Show hardware camera</label>
+      <div class="hint" style="margin-left:0">A second camera pointed at the
+        actual machine, when one is connected.</div>
+
       <h2 style="margin-top:14px">Input</h2>
       <div class="row" style="margin-bottom:6px">
         <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
@@ -2523,11 +2538,6 @@
         </select>
       </div>
       <div class="hint" id="bufinfo" style="margin-left:0">—</div>
-
-      <label><input type="checkbox" id="opt-camera">
-        Show hardware camera</label>
-      <div class="hint" style="margin-left:0">A second camera pointed at the
-        actual machine, when one is connected.</div>
 
       <!-- "Use WebSocket when it works" lived here. Removed: the automatic
            fallback it appeared to control already existed and always did,
@@ -2740,6 +2750,23 @@ const $ = id => document.getElementById(id);
 // that failed to deploy -- so the page checks whether it is stale rather than
 // leaving that to be guessed.
 const BUILD = '__BUILD__';
+
+// ANOTHER OF THE SAME TDZ CLASS THE COMMENT ABOVE WARNS ABOUT -- found live
+// (Safari) 2026-08-30: lamps() (state-update path) can run before a `const`
+// declared down by the lamp UI it feeds ever executes, which stopped the
+// page the same way every prior instance here did. Name what the signal
+// ATTESTS, not what it resembles: these lamps prove a keystroke reached the
+// target's KEYBOARD CONTROLLER, not that DOS read it -- Caps Lock is
+// serviced by the BIOS interrupt handler with DOS entirely uninvolved, so
+// the lamp toggles happily while FTP.EXE is running. That distinction cost
+// the vcctrl session an hour once -- at_prompt() reads exactly this channel
+// and was trusted as "DOS is at a prompt". Putting it on the control means
+// nobody else has to learn it the same way.
+const LAMP_ATTESTS =
+  'PS/2 keyboard LEDs.\n\n'
+  + 'Lit means the keystroke reached the keyboard controller -- NOT that DOS '
+  + 'read it.\n\n'
+  + 'Dashed: retained from before power-off, may not describe the target now.';
 
 // Declared FIRST because the transport code reads it during start-up. It used
 // to sit with the settings UI further down, which put it in the temporal dead
@@ -7447,6 +7474,18 @@ let zoomMode = localStorage.getItem('vcctrl.zoom2') || 'fit';
 // A stored mode that no longer exists would leave the select blank while
 // still applying the vanished factor.
 if (!ZOOMS.includes(zoomMode)) zoomMode = 'fit';
+// SAME TDZ CLASS AS BUILD/LAMP_ATTESTS ABOVE -- found live (Safari)
+// 2026-08-30: applyZoom()'s camera branch reads `showCamera`, and
+// setZoom(zoomMode) a few hundred lines down calls applyZoom() at top
+// level (sizes known now, so it fires at parse time, not on some later
+// event). That ran before the `let showCamera = ...` declared down by
+// applyCameraVisibility ever executed -- same failure shape as the other
+// two, everything after the throw simply never ran. Declared here,
+// beside zoomMode, because it's the other piece of applyZoom's own state
+// and belongs in the same "read before the function that needs it" spot,
+// not consolidated at the very top with BUILD/LAMP_ATTESTS, which start-up
+// code needs before applyZoom exists at all.
+let showCamera = localStorage.getItem('vcctrl.camera') === '1';
 let crop = null, lastHinted = null, hintTimer = null;
 // The running UNION of every letterbox sample since it was last cleared, how
 // many ticks it has gone without growing, and how many ticks in a row have
@@ -7525,6 +7564,11 @@ function hint(text) {
 
 function applyZoom(recentre) {
   const sc = $('scroll'), fr = $('frame');
+  // Which of #scroll/#camoverlay is CURRENTLY THE MAIN VIEW -- swap trades
+  // geometry, not roles, so this has to be re-read every call rather than
+  // cached. Fit/Original/200%/400% are a promise about "the big window",
+  // not about the VGA capture specifically -- see the camera branch below.
+  const camMain = document.body.classList.contains('cam-swapped');
   const el = mediaEl();
   const nw = el.naturalWidth || el.width || 640;
   const nh = el.naturalHeight || el.height || 480;
@@ -7534,7 +7578,7 @@ function applyZoom(recentre) {
   // and not assumed. Only trusted once a frame has arrived: the canvas
   // carries 640x480 as an attribute and would otherwise report it forever.
   if (frames > 0 && nw > 1 && nh > 1) {
-    if (nw !== capW || nh !== capH) { capW = nw; capH = nh; showCapture(); }
+    if (nw !== capW || nh !== capH) { capW = nw; capH = nh; }
   }
   // NO LAZY MEASURE HERE. This used to be `if (!crop) crop = measureCrop()`,
   // which adopted a one-frame sample on any call that happened to find crop
@@ -7567,7 +7611,15 @@ function applyZoom(recentre) {
   // the frame around it is clipped instead of offered as something to pan.
   // Explicit zoom (Original/200%/400%) is a different promise and keeps its
   // scrollbar exactly as before.
-  const canScroll = zoomMode !== 'fit';
+  // FORCED TO 'fit' WHILE #scroll IS THE THUMBNAIL. zoomMode is what the
+  // Zoom menu asked for, but that request means "the main window" -- while
+  // the camera is swapped to main, #scroll is a 200px corner box and an
+  // explicit Original/200%/400% here would blow it up and hand it a
+  // scrollbar instead of the camera getting the zoom (reported 2026-08-30).
+  // The camera branch below applies the real zoomMode once it, not the VGA
+  // capture, is the main view.
+  const vgaMode = camMain ? 'fit' : zoomMode;
+  const canScroll = vgaMode !== 'fit';
   sc.style.overflow = canScroll ? 'auto' : 'hidden';
   // #scroll's own CSS padding is the gap from the chrome (zero in full screen,
   // which has none to separate from) -- clientWidth/Height report the padded
@@ -7577,9 +7629,9 @@ function applyZoom(recentre) {
   let scale = 0, pw = 0, ph = 0;
   for (let pass = 0; pass < 2; pass++) {
     const W = sc.clientWidth - pad * 2, H = sc.clientHeight - pad * 2;
-    if (!W || !H) return;
-    const want = (zoomMode === 'fit') ? Math.min(W / r.bw, H / r.bh)
-                                      : Number(zoomMode);
+    if (!W || !H) break;  // BREAK, NOT RETURN -- the camera branch below still needs to run.
+    const want = (vgaMode === 'fit') ? Math.min(W / r.bw, H / r.bh)
+                                      : Number(vgaMode);
     if (want === scale) break;
     scale = want;
     // WHOLE PIXELS, AND NEVER LARGER THAN THE BOX. scale is a float, so a
@@ -7592,7 +7644,7 @@ function applyZoom(recentre) {
     // Only when nothing is cropped. A crop fits the DRAWN REGION to the box,
     // which means the full frame is deliberately larger and must be allowed
     // to overflow -- that overflow is the thing you scroll.
-    if (zoomMode === 'fit' && !crop) { pw = Math.min(pw, W); ph = Math.min(ph, H); }
+    if (vgaMode === 'fit' && !crop) { pw = Math.min(pw, W); ph = Math.min(ph, H); }
     for (const id of ['screen', 'mjpeg', 'stale', 'review']) {
       const e = $(id);
       e.style.width = pw + 'px';
@@ -7603,19 +7655,66 @@ function applyZoom(recentre) {
   const over = canScroll && (pw > sc.clientWidth - pad * 2 + 1 || ph > sc.clientHeight - pad * 2 + 1);
   fr.classList.toggle('zoomed', over);
   // Only on a deliberate change. Re-centring on every re-measure would drag
-  // the view back under the operator every five seconds.
-  if (recentre) {
+  // the view back under the operator every five seconds. scale is only 0
+  // when the pass loop above broke on a not-yet-laid-out #scroll (width or
+  // height still 0) -- skip, the same as the old unconditional `return`
+  // used to, rather than scroll to a meaningless negative offset.
+  if (recentre && scale) {
     sc.scrollLeft = (r.x0 + r.bw / 2) * scale - sc.clientWidth / 2;
     sc.scrollTop = (r.y0 + r.bh / 2) * scale - sc.clientHeight / 2;
   }
   // Scrollbars are the affordance on a desktop and are invisible on a
   // trackpad or a phone until something moves, so the first time a mode
   // spills, say it in words.
-  if (over && zoomMode !== lastHinted) {
-    lastHinted = zoomMode;
+  if (over && vgaMode !== lastHinted) {
+    lastHinted = vgaMode;
     hint('drag or scroll to move');
   }
   if (!over) lastHinted = null;
+
+  // THE CAMERA, MIRROR IMAGE OF THE ABOVE. While it is the thumbnail
+  // (!camMain) it stays exactly what it always was -- plain CSS
+  // 100%/100% + object-fit:contain, no JS sizing at all -- so any inline
+  // size a previous swapped-main zoom left behind has to be cleared, or it
+  // would outlive the swap and freeze the thumbnail at that pixel size.
+  const ci = $('camimg');
+  if (showCamera) {
+    if (!camMain) {
+      ci.style.width = ''; ci.style.height = '';
+      $('camoverlay').style.overflow = '';
+    } else {
+      const co = $('camoverlay');
+      const cnw = ci.naturalWidth || 640, cnh = ci.naturalHeight || 480;
+      let cscale = 0, cpw = 0, cph = 0;
+      for (let pass = 0; pass < 2; pass++) {
+        const CW = co.clientWidth, CH = co.clientHeight;
+        if (!CW || !CH) break;
+        const want = (zoomMode === 'fit') ? Math.min(CW / cnw, CH / cnh)
+                                          : Number(zoomMode);
+        if (want === cscale) break;
+        cscale = want;
+        cpw = Math.floor(cnw * cscale + 0.001);
+        cph = Math.floor(cnh * cscale + 0.001);
+        if (zoomMode === 'fit') { cpw = Math.min(cpw, CW); cph = Math.min(cph, CH); }
+        ci.style.width = cpw + 'px';
+        ci.style.height = cph + 'px';
+      }
+      const cOver = zoomMode !== 'fit'
+                 && (cpw > co.clientWidth + 1 || cph > co.clientHeight + 1);
+      co.style.overflow = cOver ? 'auto' : 'hidden';
+      if (recentre && cscale) {
+        co.scrollLeft = cpw / 2 - co.clientWidth / 2;
+        co.scrollTop = cph / 2 - co.clientHeight / 2;
+      }
+      if (cOver && zoomMode !== lastHinted) {
+        lastHinted = zoomMode;
+        hint('drag or scroll to move');
+      }
+      if (!cOver) lastHinted = null;
+    }
+  }
+
+  showCapture();
 }
 
 // The button wears the current mode, so the rail still reports it at a
@@ -7632,8 +7731,17 @@ const capSize = () => capW ? capW + '×' + capH : null;
 // Plus, Fit and Original differ by nearly two to one.
 function showCapture() {
   const b = document.querySelector('#pop-zoom [data-zoom="1"]');
-  if (b) b.textContent = capSize() ? 'Original: ' + capSize()
-                                   : 'Original: actual resolution';
+  if (b) {
+    // "Original" means "actual pixels of whichever feed the menu's zoom
+    // choice is about to apply to" -- the main view, not always the VGA
+    // capture; see applyZoom's camera branch.
+    let size = capSize();
+    if (document.body.classList.contains('cam-swapped')) {
+      const ci = $('camimg');
+      size = ci.naturalWidth ? ci.naturalWidth + '×' + ci.naturalHeight : null;
+    }
+    b.textContent = size ? 'Original: ' + size : 'Original: actual resolution';
+  }
   if ($('stats').clientHeight && lastState) $('stats').innerHTML = statsRows(lastState);
 }
 const ZOOMLABEL = {fit: 'Fit to Screen', '1': 'Original',
@@ -8099,13 +8207,20 @@ $('opt-worklabel').onchange = () => {
 // nothing the day this ships. Clearing #camimg's src -- not just hiding the
 // element -- is what actually closes the /cam.mjpg connection when this is
 // off; an <img> with a hidden ancestor but a live src keeps the stream open.
-let showCamera = localStorage.getItem('vcctrl.camera') === '1';
+// (`showCamera` itself is declared up by zoomMode, not here -- see that
+// declaration's comment for why.)
 function applyCameraVisibility() {
   $('camoverlay').hidden = $('camswap').hidden = !showCamera || reviewing;
   $('camimg').src = showCamera ? '/cam.mjpg?fps=8' : '';
   // Same reason enterReview() clears it: turning the camera off must not
   // leave #scroll shrunk into the corner with nothing filling the big area.
   if (!showCamera) document.body.classList.remove('cam-swapped');
+  // Re-sync sizing: turning the camera back ON with no swap in effect must
+  // not leave #camimg wearing an old swapped-zoom inline pixel size --
+  // clipped by #camoverlay's thumbnail-mode overflow:hidden, that reads as
+  // a stuck, over-zoomed thumbnail rather than the plain contain-fit it
+  // should be. applyZoom's own camera branch is what clears it.
+  applyZoom();
 }
 applyCameraVisibility();
 // SAME FAILURE AS THE PRIMARY FEED, same fix: see restart()'s own comment --
@@ -8240,20 +8355,6 @@ function lamps(leds, videoState, verified) {
          : '\n\nNot proven this session. Tap VERIFY.')
       + (stale ? '\n\nDashed: target not showing a picture.' : '');
 }
-
-// Name what the signal ATTESTS, not what it resembles. These lamps prove a
-// keystroke reached the target's KEYBOARD CONTROLLER. They do not prove DOS
-// read it: Caps Lock is serviced by the BIOS interrupt handler with DOS
-// entirely uninvolved, so the lamp toggles happily while FTP.EXE is running.
-//
-// That distinction cost the vcctrl session an hour today -- at_prompt() reads
-// exactly this channel and was trusted as "DOS is at a prompt". Putting it on
-// the control means nobody else has to learn it the same way.
-const LAMP_ATTESTS =
-  'PS/2 keyboard LEDs.\n\n'
-  + 'Lit means the keystroke reached the keyboard controller -- NOT that DOS '
-  + 'read it.\n\n'
-  + 'Dashed: retained from before power-off, may not describe the target now.';
 
 $('lamps').title = LAMP_ATTESTS;
 $('lamps').onclick = () => {
