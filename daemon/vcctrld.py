@@ -4581,6 +4581,37 @@ class CameraCapability(Capability):
                     "device": self.DEVICE,
                     "last_frame_age_s": round(age, 3) if age else None}
 
+    # -- commands -----------------------------------------------------------
+
+    def commands(self):
+        return {"camera": self._camera}
+
+    def _camera(self, req):
+        """action="state" (default) mirrors VideoCapability's own "video
+        state"; action="shot" hands back the single latest frame this
+        capability holds, base64-encoded, raw="True" -- there is no ring, no
+        picture judgement and no "considered/live" sampling here (see the
+        class docstring for why none of that applies to a UVC webcam), so
+        this is closer in shape to _frame's raw contract than to _shot's
+        judged one. Two-valued the same way: "jpeg" present iff a frame has
+        ever arrived, so bin/vcctrl-client's existing raw-frame write path
+        (write_frame, gated on resp["raw"]) handles it unchanged.
+        """
+        action = req.get("action", "state")
+        if action == "state":
+            return {"ok": True, **self._state()}
+        if action == "shot":
+            import base64
+            t, frame = self._latest()
+            if frame is None:
+                return {"ok": True, "raw": True,
+                        "reason": "no frame received yet from the camera"}
+            return {"ok": True, "raw": True, "t": t,
+                    "age_s": round(time.time() - t, 3),
+                    "bytes": len(frame),
+                    "jpeg": base64.b64encode(frame).decode()}
+        return {"ok": False, "error": "camera: unknown action %r" % action}
+
 
 _UNSET = object()
 

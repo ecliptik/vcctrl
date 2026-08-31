@@ -340,6 +340,130 @@ def test_burst_logging_failure_does_not_break_the_call():
     os.remove(blocker)
 
 
+def _fake_vcctrl_for_lock(calls, owner, file_running=False):
+    """A _run_vcctrl fake that understands enough of the lock/file-status
+    vocabulary for the tests below: acquire/release succeed as this owner,
+    file-status reports `file_running`, everything else is a generic ok."""
+    def fake(args, timeout=60.0):
+        calls.append(list(args))
+        if args[:2] == ["lock", "acquire"]:
+            return {"ok": True, "owner": owner}
+        if args[:2] == ["lock", "release"]:
+            return {"ok": True, "owner": None}
+        if args[:1] == ["file-status"]:
+            return {"ok": True, "job": {"running": file_running}}
+        return {"ok": True}
+    return fake
+
+
+def test_gated_run_releases_the_lock_after_one_action_by_default():
+    """THE FIX FOR THE 2026-08-31 BUG: a single vcctrl_key (or any other
+    _gated_run-routed tool) must not leave the lock held afterward -- that
+    is exactly what silently blocked an in-flight vcctrl_get_file job's own
+    later return-reboot from acquiring the same lock. Default footprint is
+    one action, not a standing hold.
+    """
+    print("\na single gated call releases the lock it took, by default")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER)
+
+    mod.vcctrl_key(keys=["enter"])
+    check("the lock was acquired for this call",
+          any(c[:2] == ["lock", "acquire"] for c in calls), calls)
+    check("and released again right after, as the LAST call made",
+          calls[-1][:2] == ["lock", "release"], calls)
+
+
+def test_sticky_lock_survives_across_gated_calls_until_released():
+    """vcctrl_lock_acquire's whole point: hold the lock across a sequence.
+    Confirms the opposite of the test above under an explicit sticky
+    acquire, and that vcctrl_lock_release both releases and clears sticky.
+    """
+    print("\nvcctrl_lock_acquire keeps the lock held across later gated calls")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER)
+
+    r = mod.vcctrl_lock_acquire()
+    check("lock_acquire succeeds when nothing else is running",
+          r.get("ok") is True, r)
+    check("lock_acquire reports the hold as sticky", r.get("sticky") is True, r)
+    calls.clear()
+
+    mod.vcctrl_key(keys=["enter"])
+    check("no re-acquire needed -- already held",
+          not any(c[:2] == ["lock", "acquire"] for c in calls), calls)
+    check("and no release either -- sticky",
+          not any(c[:2] == ["lock", "release"] for c in calls), calls)
+    calls.clear()
+
+    mod.vcctrl_type(text="hello")
+    check("still no release/re-acquire across a second gated call",
+          not any(c[:2] in (["lock", "acquire"], ["lock", "release"])
+                  for c in calls), calls)
+
+    mod.vcctrl_lock_release()
+    check("explicit release now sends the CLI release call",
+          calls and calls[-1][:2] == ["lock", "release"], calls)
+
+    calls.clear()
+    mod.vcctrl_key(keys=["enter"])
+    check("sticky is cleared -- the next gated call acquires and releases "
+          "again on its own",
+          any(c[:2] == ["lock", "acquire"] for c in calls)
+          and calls[-1][:2] == ["lock", "release"], calls)
+
+
+def test_lock_acquire_refuses_while_a_harness_job_is_running():
+    """A sticky hold taken while THIS SESSION's own run_cell/run_sweep/
+    collect job is still in flight is the dangerous pattern: that job's own
+    later typed step needs the same lock and would be silently refused,
+    not forced. Refuse the acquire itself, before ever touching the lock.
+    """
+    print("\nvcctrl_lock_acquire refuses while a harness job is still running")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER)
+    mod.JOBS._jobs["job-1"] = mod.Job("job-1", ["fake", "argv"])  # returncode
+    # stays None (the real Job default) -- exactly "still running".
+
+    r = mod.vcctrl_lock_acquire()
+    check("the acquire is refused", r.get("ok") is False, r)
+    check("the lock itself was never touched -- refused before LOCK.ensure()",
+          not any(c[:2] == ["lock", "acquire"] for c in calls), calls)
+
+
+def test_lock_acquire_refuses_while_a_file_transfer_job_is_running():
+    """Same guard, the other job type: file-status reporting a running
+    send/get/refresh/scan job also refuses a sticky acquire attempt."""
+    print("\nvcctrl_lock_acquire refuses while a file-transfer job is running")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER, file_running=True)
+
+    r = mod.vcctrl_lock_acquire()
+    check("the acquire is refused", r.get("ok") is False, r)
+    check("the lock itself was never touched -- refused before LOCK.ensure()",
+          not any(c[:2] == ["lock", "acquire"] for c in calls), calls)
+
+
+def test_lock_acquire_succeeds_when_nothing_is_running():
+    """CONTROL for the two refusal tests above: an idle rig (no harness job,
+    file-status not running) must still let vcctrl_lock_acquire succeed --
+    otherwise those tests would pass for the wrong reason (an acquire that
+    always refuses)."""
+    print("\nvcctrl_lock_acquire succeeds on an idle rig")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER, file_running=False)
+
+    r = mod.vcctrl_lock_acquire()
+    check("the acquire succeeds", r.get("ok") is True, r)
+    check("the CLI acquire call did happen this time",
+          any(c[:2] == ["lock", "acquire"] for c in calls), calls)
+
+
 def test_harness_workflow_tools_are_absent_in_daemon_mode():
     """docs/MCP-SERVER.md's own claim (59 control tools, 55 daemon) is a
     count in prose. This is the same claim checked against the live
@@ -363,6 +487,11 @@ if __name__ == "__main__":
     test_burst_default_n_is_3_not_5()
     test_burst_logs_call_metadata_for_guardrail_correlation()
     test_burst_logging_failure_does_not_break_the_call()
+    test_gated_run_releases_the_lock_after_one_action_by_default()
+    test_sticky_lock_survives_across_gated_calls_until_released()
+    test_lock_acquire_refuses_while_a_harness_job_is_running()
+    test_lock_acquire_refuses_while_a_file_transfer_job_is_running()
+    test_lock_acquire_succeeds_when_nothing_is_running()
     test_harness_workflow_tools_are_absent_in_daemon_mode()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))

@@ -67,7 +67,7 @@ the local filesystem, so the host-boundary machinery simply isn't needed.
 | group | examples | notes |
 |---|---|---|
 | status/read | `vcctrl_status`, `_board`, `_caps`, `_keymap`, `_activity`, `_power_state` | no lock needed |
-| capture | `_shot`, `_frame`, `_burst`, `_timeline`, `_record`, `_level` | files land on whichever machine runs the MCP server |
+| capture | `_shot`, `_frame`, `_burst`, `_timeline`, `_record`, `_level`, `_camera_shot`, `_camera_state` | files land on whichever machine runs the MCP server; camera is a separate, ringless device -- see `vcctrl-camera` |
 | input | `_key`, `_type`, `_hold`, `_combo`, `_mouse_move/_click`, `_verify_input` | takes the shared hardware lock |
 | power | `_power` (on/off/cycle) | board-scoped; refuses on a board the configured plug doesn't control |
 | file transfer | `_stage_file`, `_send_file`, `_file_status`, `_get_file`, `_pulled`, ... | reboots the target for send/refresh/get |
@@ -78,8 +78,18 @@ the local filesystem, so the host-boundary machinery simply isn't needed.
 - **A shared hardware lock, not a free-for-all.** Any tool that sends input
   acquires the daemon's own Arbiter lock first, under its own identity
   (`mcp:<host>:<pid>`). If a human or another session already holds it, the
-  tool **refuses outright** -- it never forces a break. Released
-  automatically after 300s idle, or explicitly via `vcctrl_lock_release`.
+  tool **refuses outright** -- it never forces a break. As of 2026-08-31, a
+  single gated call (`_key`, `_type`, `_combo`, `_verify_input`, `_mouse_*`,
+  `_hold`, `_keydown`/`_keyup`, `_release_all`) releases the lock again right
+  after that one action by default -- only `vcctrl_lock_acquire` creates a
+  *sticky* hold that survives across later gated calls, released explicitly
+  via `vcctrl_lock_release` or, failing that, automatically after 300s idle.
+  `vcctrl_lock_acquire` itself refuses while a file-transfer job
+  (`send_file`/`get_file`/`file_refresh`/`file_scan`) or a harness job
+  (`run_cell`/`run_sweep`/`collect`) is running, since a sticky hold taken
+  mid-job can block that job's own later attempt to acquire this same lock --
+  see `agent/vcctrl_mcp.py`'s `_active_job_conflict` for the live incident
+  (a `get_file` job's return-to-menu reboot silently refused) this closes.
 - **Named confirmation on anything consequential.** Power actions, a combo
   that matches the reboot chord, and anything that reboots the target
   (file send/refresh/get, `run_cell`, `run_sweep`, `collect`) all require a

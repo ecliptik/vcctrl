@@ -186,6 +186,25 @@ There is no single tool that gives you both together, and there is
 currently no way to get raw audio out of vcctrl at all -- know this before
 promising a peer a recording:
 
+**If a gameplay run's validity criteria mention audio at all (a
+pre-registered A/B benchmark that calls "audio absent" an INVALID datum,
+a peer asking to confirm sound is working, anything with an explicit
+audio precondition), call `vcctrl_audio_verdict` at least once WHILE the
+run is actually in progress -- not as an afterthought once you're already
+writing up results.** Found the hard way, 2026-08-31: a full pre-registered
+benchmark round (launch, health checks via `vcctrl_burst`, 90+s of
+gameplay, exit, fetch logs, write up fps numbers) went out the door with
+every visual check done and zero audio checks done, because the visual
+`vcctrl_burst` loop reads as "I checked on it" without actually covering
+audio at all -- the two capture pipelines are separate and a clean video
+frame says nothing about sound. The gap was only caught because the
+operator happened to be listening and said so after the fact; on a
+session where nobody was, an INVALID run would have been reported as a
+clean datum. Treat "did I check the video" and "did I check the audio"
+as two separate questions with two separate tool calls, not one
+"did I check on it" box -- fold one `vcctrl_audio_verdict` call into the
+same mid-run health-check moment you're already using for a `vcctrl_burst`.
+
 - **`vcctrl_audio_verdict(ms=3000)` -- start here for "is music/SFX playing
   right now".** One call, no thresholds to know: it combines `level` and
   `spectrum` into the same NO_SIGNAL / SILENT / AUDIO_PRESENT judgement

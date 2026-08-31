@@ -14,9 +14,18 @@ identity `mcp:<host>:<pid>`. If a human or another session already holds it,
 the call **refuses outright** -- there is no override. Do not retry the same
 call expecting a different result; check `vcctrl_lock_status`, and either
 wait or ask, the same as you would for `vcctrl_lock_acquire` returning held.
-Release with `vcctrl_lock_release` when you're done with a sequence of input
-calls rather than leaving it to the 300s idle timeout, if another session may
-be waiting.
+
+**As of 2026-08-31, a single gated call (`vcctrl_key`, `_type`, `_combo`,
+`_verify_input`, `_mouse_move`/`_click`, `_hold`, `_keydown`/`_keyup`,
+`_release_all`) releases the lock again right after that one action, by
+default.** You do not need to call `vcctrl_lock_release` after an isolated
+call. Only `vcctrl_lock_acquire` creates a *sticky* hold that survives across
+later gated calls until you explicitly `vcctrl_lock_release` (or the 300s
+idle timer) -- call it when you deliberately want a visible, continuous hold
+across a whole sequence, not as a default habit. `vcctrl_lock_acquire` itself
+refuses if a file-transfer job (`send_file`/`get_file`/`file_refresh`/
+`file_scan`) or a harness job (`run_cell`/`run_sweep`/`collect`) is currently
+running -- see the next point for why.
 
 **The 300s idle timeout lives in the MCP client process, not the daemon --
 a crashed client leaves the lock stuck forever.** Measured 2026-08-26: a
@@ -55,6 +64,34 @@ now call the daemon-side equivalent of `vcctrl_lock_release` first, so a lock
 you forgot to release will not break them. It does mean the lock reads
 unheld immediately after calling one of these, even if you held it the
 moment before -- expected, not a sign something else is wrong.
+
+**That fix only covers a lock held BEFORE one of the six starts -- a lock
+taken WHILE it is already running is the other half, found live 2026-08-31.**
+A `vcctrl_get_file` job was mid-flight (several files in, one file's FTP
+transfer running unusually long); a `vcctrl_verify_input` call to check the
+target was still alive, followed by a `vcctrl_key(["enter"])` to test whether
+a command line had failed to submit, both acquired the lock and -- before
+this date -- left it held afterward (the 300s idle timer was the only thing
+that would ever have freed it, and an explicit `vcctrl_lock_acquire` for "hold
+the lock for this whole session" made it immediate rather than 300s-delayed).
+When the `get_file` job's own watchdog then detected the stalled file and
+tried to abort and reboot back to the menu default, its Ctrl-Alt-Del under
+the `transfer` identity was silently refused by this session's still-held
+lock -- refused, not forced, so it produced no error, just a job that sat at
+`"returning to the menu default"` with `running: true` and never got there.
+The target was left sitting in the NET profile (`left_in_net: true`, "no
+measured run may start from there") until a human watching the KVM noticed it
+looked stuck. Fixed by the auto-release-by-default behavior above (so an
+isolated diagnostic call like `verify_input` no longer has a lingering
+footprint at all) plus a job-conflict check inside `vcctrl_lock_acquire`
+itself (so the one action that DOES create a lasting hold refuses outright if
+a file/harness job is already in flight, rather than setting up the same
+collision for later). If you hit a similarly "stuck at a bare prompt, nothing
+progressing" symptom on a `vcctrl_file_status`/`vcctrl_job_status` job:
+check `vcctrl_lock_status` for who holds it before assuming a target-side
+hang -- `verify_input` succeeding (PS/2 link alive) while a job sits
+`running: true` with no new log line is the same shape as this incident, not
+proof the target itself is wedged.
 
 **Consequential actions require a named `confirm`, not a boolean.** Power
 actions, any `vcctrl_combo` matching the Ctrl-Alt-Delete chord, and anything
@@ -105,6 +142,42 @@ already asks for at the start of any driving sequence; naming the porting
 work specifically here costs nothing extra and is the one lever available
 if the classifier turns out to be reading session context rather than
 just call volume.
+
+**The trip repeated on 2026-08-30 ~20:47, and `internal/burst-calls.jsonl`
+caught the shape of the session leading into it.** Two back-to-back
+~3.5-4min stretches of `vcctrl_burst` calls -- contexts like "checking
+corruption state at ~35s/70s/110s/150s/190s into dummy-audio run" --
+polled a DOS game's video RAM every 30-40s while it progressively
+corrupted into color noise/static, immediately followed by a switch back
+to real audio and a relaunch; the log simply stops there, one call short
+of what the next step needed. That is a call-VOLUME correlation (a
+dozen-plus bursts of increasingly staticky frames inside four minutes,
+twice in a row) as much as it is a content one, and a single log can't
+separate the two. **For this specific pattern -- watching a
+corruption/glitch bug progress over minutes, not confirming one
+keystroke -- don't re-burst every 30-40s just to see the current state.**
+The ring already records continuously whether or not you poll it (see
+`vcctrl_record`/`vcctrl_timeline` above), so let it run and pull
+`vcctrl_timeline()` plus a couple of `vcctrl_frame(seq)` samples once,
+*after* the stretch, to characterize how far it got -- rather than
+showing the model a fresh corrupted frame every half-minute. Save a live
+`vcctrl_burst` mid-run for an actual decision point (e.g. whether to
+abort early), not routine progress-watching. Still not a confirmed
+mechanism -- this is a second correlation, not a diagnosis.
+
+**A mid-run health-check loop of `vcctrl_burst` calls checks video and only
+video -- it does not check audio, even when a run's validity criteria
+depend on audio being present.** Found live 2026-08-31: a full
+pre-registered gameplay A/B benchmark (launch, several `vcctrl_burst`
+health checks, 90+s of play, exit, fetch logs) went out the door with
+every visual check done and zero audio checks done -- caught only because
+the operator happened to be listening and said so afterward. Video and
+audio are separate capture pipelines with separate rings (`vcctrl-caps`);
+a clean frame proves nothing about sound. If a run's pass/fail criteria
+mention audio at all, fold one `vcctrl_audio_verdict` call into the same
+mid-run moment you're already reaching for `vcctrl_burst` -- see
+`vcctrl-common-workflows`' "Checking audio" section for the full tool
+rundown. Two separate questions, two separate tool calls.
 
 **Board-scoped power is visibility, not enforcement** (see
 `vcctrl-rig-hazards`) -- check `vcctrl_board` before a `vcctrl_power` call if

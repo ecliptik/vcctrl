@@ -64,6 +64,12 @@ USAGE = """usage: vcctrl <command> [args]
                             capture device. The daemon owns /dev/video0 for its
                             lifetime; `release` frees it for a tool that opens
                             the device directly.
+  camera [state|shot]       the second, discretionary UVC webcam pointed at
+                            the physical target (not its captured video
+                            signal) -- absent/unconfigured on a rig with
+                            capabilities.camera.backend: none. `shot` is a
+                            RAW latest frame, no ring or picture judgement
+                            (see CameraCapability); use --out to write it.
   framestats [n]            duplicate-hash stats over the last n frames
   audio [state|acquire|release]
                             ALSA capture. The daemon owns hw:1,0 for its
@@ -1054,9 +1060,9 @@ def main(argv):
     # reading. Keeping them apart matters more than matching the old number,
     # which nothing branches on.
     if out is not None and cmd not in ("shot", "lastgood", "frame", "record",
-                                      "pulled"):
-        sys.stderr.write("--out applies to shot, lastgood, frame, record and "
-                         "pulled, not %r\n" % cmd)
+                                      "pulled", "camera"):
+        sys.stderr.write("--out applies to shot, lastgood, frame, record, "
+                         "pulled and camera, not %r\n" % cmd)
         return 3
     if out_dir is not None and cmd != "burst":
         sys.stderr.write("--out-dir applies to burst, not %r\n" % cmd)
@@ -1181,6 +1187,8 @@ def main(argv):
         req = {"cmd": "activity"}
     elif cmd == "video":
         req = {"cmd": "video", "action": rest[0] if rest else "state"}
+    elif cmd == "camera":
+        req = {"cmd": "camera", "action": rest[0] if rest else "state"}
     elif cmd == "framestats":
         req = {"cmd": "framestats", "n": int(rest[0]) if rest else 90}
     elif cmd == "shot":

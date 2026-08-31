@@ -169,6 +169,23 @@ Steps 1-2 are the operator's. Everything from 3 is the harness's.
    wrong key here does not crash -- UniVBE's config pages include mode tables,
    so it boots fine and drives the monitor slightly wrong, which is the kind
    of wrong that gets measured.
+
+   **If the VGA capture stick loses lock (`state: "frozen"`, flat black)
+   partway through, that is NOT the same thing as "a screen is showing that
+   nobody can read."** Pull a frame from the hardware camera
+   (`vcctrl_camera_shot`, or the `/cam.mjpg` curl+ffmpeg fallback if that
+   tool isn't deployed yet -- see the `vcctrl-camera` skill) before concluding
+   it's stuck on an interactive menu. Live case, 2026-08-31, the Cirrus
+   Logic GD-5434 swap below: the capture stick lost lock for 20+ seconds
+   mid-configuration -- indistinguishable from the analog feed alone between
+   "invisible interactive menu" (the six-hour-incident failure mode this
+   procedure exists to avoid) and "changed to a mode the stick can't lock,
+   monitor's fine." A camera frame resolved it instantly: UniVBE's own
+   completion banner, already back at a clean prompt -- non-interactive, same
+   as the ViRGE and Mach64 cases below. The camera is a genuinely independent
+   witness (different device, not subject to the analog stick's lock/refresh
+   constraints at all) -- reach for it before assuming a lost VGA lock means
+   a stuck menu.
 7. **Reboot if required** (pending the answer above), then confirm the prompt
    via RDYPULSE.
 8. **Run RB as the anchor**, with `--collect`. Not because it should match --
@@ -268,6 +285,50 @@ campaign rather than after.
 **27.7 is one cell, not a pair.** It sits inside the spread of the four RB
 cells, so 3% is an estimate rather than a measurement. A paired run would
 settle it and costs one sweep.
+
+---
+
+## Cirrus result: GD-5434 (discrete PCI card, not the motherboard's onboard chip), UVCONFIG silent again
+
+Measured 2026-08-31, dossage project (a separate SDL3-DOS port, same physical
+rig as doskutsu). Card swapped in from the S3 ViRGE -- **not** "the onboard
+Cirrus" this doc's "Per-card unknowns" section originally flagged as unknown
+access; this is a distinct discrete GD-5434 PCI card, so the onboard-access
+question below remains genuinely open.
+
+**Identity, from UniVBE's own detection (not asked of the shimmed VBE
+identity -- see step 5's warning above):**
+
+    Graphics Chip: Cirrus Logic CL-GD5434 PCI with 1 MB
+    RAM DAC:       Cirrus Logic 24 bit DAC
+    Clock Chip:    Cirrus 5434/36 Internal Clock
+
+**UVCONFIG ran fully non-interactively** -- third data point (ViRGE
+unchanged, ViRGE->Mach64 swap, now ViRGE->Cirrus swap) all silent, none
+showing the remembered "press space, press space again" screen. The
+"conditional on detected-card-differs-from-stored-config" theory from the
+2026-08-19 rehearsal section above has now failed to reproduce on an actual
+swap twice. Configured VBE 2.0 and 3.0 extensions plus a linear framebuffer;
+dinspect confirms the result:
+
+    Video: Cirrus Logic GD-54xx VGA (VBE 1.2)         <- before (bare card ROM)
+    Video: Universal VESA VBE 6.70 (VBE 3.0)          <- after uvconfig + reboot
+
+No `UNIVBE.DRV` existed on the card before this run (only `UVCONFIG.DAT`,
+stale from 2026-08-28) -- worth checking for on any swap, since "no driver
+file at all" and "a driver file for the wrong card" both need the same fix
+but read differently in a `DIR`.
+
+**The VGA capture stick lost lock mid-run** (`state: "frozen"`, ~20s) --
+see the camera-assisted note on step 6 above. Resolved via a hardware-camera
+frame (`/cam.mjpg`), not by guessing a keystroke.
+
+**Provenance-hole files found on the card, left untouched:** `C:\UNIVBE\`
+carries `UNIVBE.BAK`/`UVCONFIG.BAK` (08-19-26 2:27p) and `UNIVBE.NEW`/
+`UVCONFIG.NEW`/`HANG.OLD` (08-19-26 2:47p, `HANG.OLD` is 0 bytes) -- almost
+certainly forensic evidence from the six-hour incident `bin/vcctrl-uvconfig`'s
+own refusal is built around. Not touched or cleaned up; flag before deleting
+if a future swap wants that directory tidy.
 
 ### The in-code comment this refutes
 

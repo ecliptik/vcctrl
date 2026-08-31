@@ -116,3 +116,37 @@ there is for an MCP server (`claude mcp remove`).
 Point it at `.agents/skills/` if it implements the Agent Skills standard;
 otherwise the files are still plain Markdown any agent can be told to read
 directly.
+
+## 8. Adopting a skill into another repo
+
+Two ways for a *different* repo -- a port repo, or any other project -- to
+pull one of these skills in, without copying files that can drift out from
+under it unnoticed.
+
+1. **The same symlink convention this hub uses for `.claude/skills` ->
+   `.agents/skills` (sec. 2).** From the target repo:
+
+   ```
+   ln -s /path/to/vcctrl/.agents/skills/<name> .claude/skills/<name>
+   ```
+
+   No new tooling, and the skill stays in sync with this repo's copy the
+   same way `.claude/skills` here stays in sync with `.agents/skills` --
+   there is still only one copy, just referenced from a second place.
+   Requires a local checkout of this repo reachable from the target repo's
+   filesystem; a port repo on a different machine needs its own clone to
+   point at.
+
+2. **`npx skills add <git-url> --skill <name> --agent claude`**
+   ([vercel-labs/skills](https://github.com/vercel-labs/skills), the
+   `skills` npm package). Confirmed it accepts arbitrary git URLs --
+   including this repo's own self-hosted remote over HTTPS or SSH, not
+   just github.com -- and installs per-agent (Claude Code, Codex, Cursor,
+   etc., picked by `--agent`) into that agent's own skills directory.
+   Copies the skill in rather than symlinking, so the copy can drift from
+   this repo's until re-run; touches only the target agent's skills
+   directory, not MCP config.
+
+Either way, verify the load in the target repo's own session the same way
+sec. 5 describes here -- `Skill({skill: "<name>"})`, restarting first if
+it's a brand-new directory there too.

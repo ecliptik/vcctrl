@@ -265,6 +265,7 @@ class LockManager(object):
     def __init__(self, owner):
         self.owner = owner
         self._held = False
+        self._sticky = False
         self._last_touch = 0.0
         self._state_lock = threading.Lock()
         self._stop = threading.Event()
@@ -295,8 +296,22 @@ class LockManager(object):
             if self._held:
                 self._last_touch = time.time()
 
+    @property
+    def sticky(self):
+        with self._state_lock:
+            return self._sticky
+
+    def mark_sticky(self):
+        """Called only by vcctrl_lock_acquire: the caller asked, explicitly,
+        to keep the lock held across a sequence of calls rather than the
+        default single-action footprint. See _gated_run's release-unless-
+        sticky for the other half of this."""
+        with self._state_lock:
+            self._sticky = True
+
     def release(self):
         with self._state_lock:
+            self._sticky = False
             if not self._held:
                 return
             self._held = False
@@ -317,6 +332,48 @@ class LockManager(object):
 LOCK = LockManager(OWNER)
 
 
+def _active_job_conflict(action_desc):
+    """Is a file-transfer job (send/get/refresh/scan) or a harness job
+    (run_cell/run_sweep/collect) currently mid-flight? If so, taking or
+    holding the input lock right now risks the exact collision found live
+    2026-08-31: this session's own vcctrl_verify_input + vcctrl_key calls
+    acquired the lock between two phases of an in-flight vcctrl_get_file
+    job and left it held, so when that job's own automation next tried to
+    acquire the SAME lock (for its abort-detection reboot back to the menu
+    default) it was silently refused -- refuse rather than force is correct
+    behavior for the Arbiter, but it meant the job's return-reboot never
+    sent its Ctrl-Alt-Del at all, and the target was left sitting in NET
+    ("no measured run may start from there") until a human noticed the KVM
+    looked stuck and asked about it. vcctrl_send_file/_get_file/_file_refresh/
+    _file_scan already guard the OTHER half of this (a lock held BEFORE they
+    launch, LOCK.release()'d proactively -- see vcctrl_send_file's own
+    comment on bug b8bdcc2); this is the half where the lock gets taken
+    AFTER the job has already started. Checked fresh every call, not cached,
+    because a job that finished since the last check must not go on
+    blocking forever."""
+    for job_id, job in list(JOBS._jobs.items()):
+        with job.lock:
+            running = job.returncode is None
+        if running:
+            return {"ok": False,
+                    "error": ("%s refused: harness job %s is still running "
+                              "(vcctrl_job_status) -- its own typed steps "
+                              "need this same lock. Wait for it to finish, "
+                              "or vcctrl_job_cancel it first, rather than "
+                              "holding the lock into its next phase."
+                              % (action_desc, job_id))}
+    fstat = _run_vcctrl(["file-status"], timeout=10.0)
+    if bool((fstat.get("job") or {}).get("running")):
+        return {"ok": False,
+                "error": ("%s refused: a file-transfer job is still running "
+                          "(vcctrl_file_status) -- its own typed steps need "
+                          "this same lock, and a held lock is refused rather "
+                          "than forced. Wait for it to finish, or "
+                          "vcctrl_file_cancel it first, rather than holding "
+                          "the lock into its next phase." % action_desc)}
+    return None
+
+
 def _gated_run(args, timeout=60.0):
     """Acquire the lock (refusing rather than forcing on conflict), run a
     lock-requiring vcctrl command with --as attached, touch the idle clock.
@@ -327,12 +384,25 @@ def _gated_run(args, timeout=60.0):
     checked as `who=None`, which is a stranger to any held lock -- including
     one we hold ourselves. bin/vcctrl_common.py's _INPUT_CMDS carries the
     same rule for the harness scripts; this is the MCP side of that pairing.
+
+    RELEASES THE LOCK AFTER THIS ONE ACTION UNLESS vcctrl_lock_acquire made
+    it sticky. Before 2026-08-31 this never released on its own, relying on
+    the 300s idle timer -- harmless for a single call in isolation, but it
+    meant ANY gated call (not just an explicit vcctrl_lock_acquire) could be
+    the one left holding the lock when an in-flight file/harness job next
+    needed it. Default to the minimal footprint; vcctrl_lock_acquire is the
+    explicit opt-in for a caller that actually wants the lock held across a
+    sequence.
     """
     refusal = LOCK.ensure()
     if refusal is not None:
         return refusal
     LOCK.touch()
-    return _run_vcctrl(list(args) + ["--as", OWNER], timeout=timeout)
+    try:
+        return _run_vcctrl(list(args) + ["--as", OWNER], timeout=timeout)
+    finally:
+        if not LOCK.sticky:
+            LOCK.release()
 
 
 # ------------------------------------------------------------------ server
@@ -495,6 +565,37 @@ def vcctrl_shot(n: "int | None" = None) -> dict:
 
 
 @mcp.tool()
+def vcctrl_camera_state() -> dict:
+    """State of the second, discretionary UVC webcam pointed at the
+    physical target itself (the room/hardware), not its captured video
+    signal -- a photographic companion view, independent of the analog
+    capture stick's own ring/lock/frozen-frame machinery, so it can still
+    answer when vcctrl_video_state cannot. Absent/unconfigured on a rig
+    with capabilities.camera.backend: none (`device_present: false`,
+    `state: "starting"` forever). Not gated by the input lock."""
+    return _run_vcctrl(["camera", "state"])
+
+
+@mcp.tool()
+def vcctrl_camera_shot() -> dict:
+    """The single latest frame from the second camera, written to a local
+    file, or an explicit no-frame-yet. RAW, like vcctrl_frame/vcctrl_burst,
+    not judged like vcctrl_shot -- CameraCapability keeps no ring and makes
+    no picture/no-lock judgement (a UVC webcam either delivers frames or
+    the process exits, unlike the analog stick's "no data can be correct"
+    text-mode case), so there is no picture/considered/live/state field to
+    read, only whether a frame exists yet. Right-side up as of 2026-08-30
+    (was physically mounted upside down before, with kvm.html correcting it
+    client-side only via CSS -- see vcctrl-camera skill); nothing here has
+    ever rotated the bytes either way, so a frame's orientation always
+    follows the physical mount directly."""
+    out_path = _scratch_path("camshot", ".jpg")
+    res = _run_vcctrl(["camera", "shot", "--out", out_path])
+    res["out"] = out_path if os.path.exists(out_path) else None
+    return res
+
+
+@mcp.tool()
 def vcctrl_lastgood() -> dict:
     """The last frame that was positively picture, aged. Same two-valued
     --out contract as vcctrl_shot."""
@@ -521,6 +622,15 @@ def vcctrl_frame(seq: int) -> dict:
 # burst usage against a guess risks fixing noise instead of the real
 # pattern. Gitignored as part of internal/ (CLAUDE.md), and a logging
 # failure here must never block the actual capture it's describing.
+#
+# The trip repeated 2026-08-30 ~20:47 and this log caught the run leading
+# into it: two ~3.5-4min stretches of bursts polling a DOS game's video RAM
+# every 30-40s while it progressively corrupted into color noise/static,
+# then a switch back to real audio -- the log stops one call short of that.
+# Volume and image content are both plausible and not separable from one
+# log; see vcctrl-mcp-workflows' own note on this for the guidance that
+# follows from it (don't poll a progressing corruption bug via repeated
+# bursts -- let the ring record it and review with vcctrl_timeline after).
 BURST_LOG = os.path.join(REPO_ROOT, "internal", "burst-calls.jsonl")
 
 
@@ -853,20 +963,37 @@ def vcctrl_verify_input() -> dict:
 
 @mcp.tool()
 def vcctrl_lock_acquire() -> dict:
-    """Explicitly take the input lock without sending any input. Most
-    tools acquire it automatically on first need; call this only when you
-    want the lock held before doing anything else observable."""
+    """Explicitly take the input lock AND KEEP IT HELD across every
+    subsequent gated call, until vcctrl_lock_release or the 300s idle
+    timer. Most tools acquire the lock automatically on first need and
+    release it again as soon as that one action finishes (see _gated_run);
+    call this only when you deliberately want a longer, visible hold across
+    a whole sequence.
+
+    Refuses if a file-transfer job (send/get/refresh/scan) or a harness job
+    (run_cell/run_sweep/collect) is currently running. A sticky hold taken
+    while your own background job is still in flight is exactly what
+    silently stalled a DOSSAGE fetch's return-reboot on 2026-08-31 -- the
+    job's own next typed step needed this lock and was refused, not
+    forced, so it sat stuck rather than failing loudly. Wait for the job to
+    finish (poll vcctrl_file_status / vcctrl_job_status) before asking for
+    a sticky hold, or vcctrl_file_cancel / vcctrl_job_cancel it first."""
+    conflict = _active_job_conflict("vcctrl_lock_acquire")
+    if conflict is not None:
+        return conflict
     refusal = LOCK.ensure()
     if refusal is not None:
         return refusal
-    return {"ok": True, "owner": OWNER}
+    LOCK.mark_sticky()
+    return {"ok": True, "owner": OWNER, "sticky": True}
 
 
 @mcp.tool()
 def vcctrl_lock_release() -> dict:
-    """Release the input lock now, without waiting for the idle timeout --
-    use this when you know you're done with input for a while and want to
-    let a human or peer back in."""
+    """Release the input lock now (and clear any sticky hold from
+    vcctrl_lock_acquire), without waiting for the idle timeout -- use this
+    when you know you're done with input for a while and want to let a
+    human, peer, or one of your own in-flight jobs back in."""
     LOCK.release()
     return {"ok": True, "owner": None}
 
