@@ -55,7 +55,21 @@
     --well: color-mix(in srgb, var(--bg) 35%, #2a2a2a 65%);
   }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { margin:0; height:100%; }
+  /* height:100dvh AFTER height:100%, not instead of it -- 100% is the
+     fallback for a browser that doesn't know `dvh` (that declaration is
+     simply invalid and ignored, leaving 100% in effect), and 100dvh is the
+     fix for iOS Safari specifically: reported live, 2026-08-30, on an
+     iPhone -- the camera thumbnail sat with its bottom half under the tab
+     strip, even after a reload, even though #tabs is a genuine flex
+     sibling of #stage (not position:fixed) and #stage itself has no raw
+     100vh anywhere in its own ancestry at this breakpoint. `height:100%`
+     on iOS Safari can still resolve against the LAYOUT viewport (the
+     toolbar-collapsed, larger one) rather than the visual one, the same
+     family of bug 100vh is known for, just one level removed -- the
+     symptom is content sized to fill "the page" running under Safari's
+     own bottom toolbar. `100dvh` (iOS 15.4+) is the unit built to track
+     the ACTUAL visible area as that toolbar shows/hides, no JS required. */
+  html,body { margin:0; height:100%; height:100dvh; }
   body {
     background:var(--bg); color:var(--text); overflow:hidden;
     font:var(--t-read)/1.45 var(--sans); -webkit-text-size-adjust:100%;
@@ -745,6 +759,23 @@
      One inner element scrolls; everything else stays put over it. */
   #scroll {
     position:absolute; inset:0; overflow:auto; display:flex;
+    /* touch-action:none -- reported live, 2026-08-30: dragging the camera
+       corner made "the screen grab" every time. Every mouse-driven test of
+       the drag feature passed because a synthetic mouse drag never engages
+       a touchscreen's OWN gesture recognizer at all -- only a real (or
+       touch-simulated) drag does. Without this, the browser is free to
+       start its own native pan/scroll on the first touch move, racing
+       pan()'s and dragCorner()'s identical e.preventDefault()-in-move()
+       approach: both already assumed they had exclusive control of the
+       gesture once movement started, which is only true once the browser
+       is told up front not to touch it. Applies to BOTH of #scroll's roles
+       (the big, pannable main view AND the swapped-small thumbnail, see
+       body.cam-swapped #scroll below) -- pan()'s own custom scrollLeft/Top
+       dragging needs this exactly as much as dragCorner() does, so one
+       declaration on the shared base rule covers both without asking which
+       role is active. Not "manipulation" -- that still permits native
+       pan-x/pan-y, which is the exact behaviour being raced out here. */
+    touch-action:none;
     /* scrollbar-width/-color live in the shared #scroll, #camoverlay rule
        just below, not here -- see its own comment. */
     /* A GAP FROM THE CHROME, on every mode. Flush against the top edge the
@@ -826,9 +857,18 @@
   #camoverlay {
     /* +var(--hscroll-raise) -- see applyZoom's own comment: clears the
        main view's horizontal scrollbar when one is showing, 0px
-       otherwise. */
-    position:absolute; left:10px;
-    bottom:calc(10px + var(--hscroll-raise, 0px)); z-index:55;
+       otherwise. +var(--cam-x)/--cam-y -- the corner is draggable (see
+       dragCorner()); both default to 0px so an untouched page still
+       lands exactly at the 10px this rule always used. */
+    position:absolute; left:calc(10px + var(--cam-x, 0px));
+    bottom:calc(10px + var(--hscroll-raise, 0px) + var(--cam-y, 0px));
+    z-index:55;
+    /* touch-action:none -- same reasoning as #scroll's own rule (see its
+       comment): this element is ALSO both a custom-panned big view
+       (pan()) and a draggable small thumbnail (dragCorner()) depending on
+       cam-swapped, and both need the browser out of the way of touch
+       gestures they already handle themselves via preventDefault(). */
+    touch-action:none;
     width:200px; max-width:40%; aspect-ratio:4/3;
     /* --well, NOT var(--panel) -- reported live, 2026-08-30: "the
        letterbox around the thumbnail doesn't match what it was in the
@@ -852,12 +892,16 @@
      frame, not filling the box at the cost of cropping the edges off it. */
   #camoverlay #camimg {
     display:block; width:100%; height:100%; object-fit:contain;
-    /* The camera is physically mounted upside down on the rig. A software
-       flip, not a remount -- cheap here (one composited transform) where a
-       flip on the capture side would cost ffmpeg an actual decode/re-encode
-       pass it otherwise never pays (see VideoCapability's own Rule 3 comment
-       on why nothing in a passthrough path decodes what it doesn't have to). */
-    transform:rotate(180deg);
+    /* NO transform:rotate(180deg) here -- the camera was physically mounted
+       upside down and this rule used to correct that with a software flip
+       (cheap here, one composited transform, versus a flip on the capture
+       side costing ffmpeg an actual decode/re-encode pass it otherwise
+       never pays -- see VideoCapability's own Rule 3 comment on why nothing
+       in a passthrough path decodes what it doesn't have to). The operator
+       re-mounted the camera right-side up on 2026-08-30; the compensating
+       flip would now turn a correct feed upside down, so it's gone, not
+       just doubled. If the mount ever goes back to upside down, the fix is
+       here again, not in the capture pipeline -- see the reasoning above. */
     /* Inert here (block layout, 100%/100% leaves no free space to centre) --
        lives only for when #camoverlay becomes the swapped-main view below,
        where JS sets an explicit pixel width/height and this is what centres
@@ -865,39 +909,53 @@
     flex:none; margin:auto;
   }
   /* A #stage-level SIBLING of #camoverlay/#scroll, not a child of either --
-     see the HTML comment where it's declared for why. Its own position is
-     fixed at the corner both boxes' "small" state already shares, ABOVE
-     the box rather than over it -- reported live, 2026-08-30, after two
-     rounds of chasing this with contrast alone: a control sitting on top
-     of an unpredictable picture is fighting the wrong battle, however
-     opaque it is made. Both boxes stayed at their original bottom:10px/
-     --cam-bottom (a first attempt raised them 36px and put the button in
-     a strip BELOW instead -- moved above on the next round of feedback,
-     so the boxes went back to their original position rather than
-     carrying two competing offsets). bottom:166px is 10px (box's own
-     bottom) + 150px (box height: 200px width * 3/4 from its own
-     aspect-ratio:4/3, the common case -- see #camoverlay's rule) + 6px
-     gap. Not JS-measured: the box only ever shrinks below 200px wide via
-     its own max-width:40% on a stage under 500px, in which case this
-     leaves extra gap rather than lets the button overlap, which is the
-     safe direction to be wrong in. Same reasoning both boxes' "small"
-     state share, so it does not need to move when cam-swapped toggles;
-     only its z-index has to clear whichever of the two is currently
-     small (56 swapped, 55 unswapped) for stacking order. Position/size
-     only otherwise -- see its own rule for why background, border and
-     text colour do NOT stay the plain `button` rule's theme styling
-     here. */
+     see the HTML comment where it's declared for why. NESTED INSIDE THE
+     BOX'S OWN CORNER, on the operator's explicit direction 2026-08-30 --
+     this is the SECOND time this control has lived here: it started
+     nested, moved to a standalone row above the box the same day (see
+     git history) because "a control sitting on top of an unpredictable
+     picture is fighting the wrong battle, however opaque it is made,"
+     then moved BACK here on a later, separate request specifically to
+     take less space -- both complaints are real, and this is the
+     operator choosing the space savings over the picture-obscuring
+     tradeoff, not a reversal of the earlier finding. The opaque
+     background below is what makes it legible either way; that part of
+     the earlier fix still applies unchanged.
+     left/bottom REUSE the box's own formula (see #camoverlay's rule)
+     plus a flat 6px inset on each axis -- not a separate gap constant
+     the way the standalone-row design needed one: because this sits
+     WITHIN the box rather than in space above it, it never has to know
+     the box's height, which is what made the old design need a
+     mobile-specific min(150px,30vw) fix in the first place. Same
+     +var(--cam-x)/--cam-y as the box, for the same reason: dragging the
+     box carries this along with it, and swap size stays constant either
+     way (see body.cam-swapped #scroll's own padding:0 for that half of
+     the guarantee). */
   #camswap {
-    /* left:10px, matching both boxes' own left:10px exactly -- was 16px
-       (a leftover inset from when this sat NESTED inside the box's
-       corner), reported live as "slightly to the right" now that it's
-       a standalone row above the box instead.
-       bottom: 166px plus the SAME +var(--hscroll-raise) the box below it
-       gets, so the two stay stacked with the same 6px gap between them
-       whether or not the main view's horizontal scrollbar is showing. */
-    position:absolute; left:10px;
-    bottom:calc(166px + var(--hscroll-raise, 0px)); z-index:57;
-    min-height:26px; padding:2px 8px; font-size:12px; line-height:1.4;
+    position:absolute; left:calc(16px + var(--cam-x, 0px));
+    bottom:calc(16px + var(--hscroll-raise, 0px) + var(--cam-y, 0px));
+    z-index:57;
+    /* touch-action:none, overriding the plain `button` rule's own
+       touch-action:manipulation -- "manipulation" still permits native
+       pan-x/pan-y, and this button is now a drag target in its own right
+       (see dragCorner()'s own onSwap handling), nested inside the box it
+       can also be dragged FROM. Same "screen grabs" bug #scroll's own
+       rule fixes, just reachable through this element too. */
+    touch-action:none;
+    /* width:var(--tap), not a smaller fixed number -- the plain `button`
+       rule already forces min-height:var(--tap) (44px, "iOS/Android
+       minimum touch target", see --tap's own comment), so a smaller
+       height here would be silently overridden anyway (min-height always
+       wins over height when it's larger) while width stayed unconstrained
+       -- caught by testing this against a real page: it rendered 30x44,
+       not the requested 30x30. Matching width to the height the page was
+       always going to give it keeps the tap target square and at the
+       same accessible minimum this repo's own axe-core pass already
+       requires elsewhere, rather than reopening that finding for one
+       control. */
+    width:var(--tap); height:var(--tap); padding:0; font-size:16px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    border-radius:8px;
     /* SOLID, NOT TRANSLUCENT -- reported live twice, 2026-08-30: first
        "the swap button is transparent" (fixed with rgba(0,0,0,.62), the
        plain `button` rule's own translucent-black background is tuned
@@ -916,29 +974,19 @@
   #camswap:hover { background:#2c2c2c; border-color:rgba(255,255,255,.65); }
   #camswap[hidden] { display:none; }
   @media (max-width:640px) {
-    /* --cam-bottom, not --panel-gap alone: on a phone #cmdbar is
-       position:fixed, floating OVER #stage rather than a separate grid row
-       below it like on desktop (see #cmdbar's own "runs edge to edge"
-       comment) -- so an open TYPE/CAPTURE/etc. tab can sit directly on top
-       of a corner box anchored to a flat gap. #scrub gets away with the flat
-       gap because entering review also force-closes the tab strip (see
-       setTab's 'buffer' case); nothing closes it for the camera, since the
-       whole point is seeing the camera WHILE using TYPE. --cam-bottom is
-       measureBars()'s own answer to how much #cmdbar's open state intrudes
-       on #stage SPECIFICALLY -- not #tabs, which #stage's own box already
-       excludes as a separate flex sibling -- recomputed on every tab switch
-       (see setTab's measureBars() call), reused here rather than a second
-       measurement. */
-    /* +156px, same 150px box height + 6px gap as the desktop rule, layered
-       on --cam-bottom instead of a flat 10px -- see #camswap's own
-       comment for the box-height reasoning. left:0, not 6px, for the
-       same reason the desktop rule dropped its own inset -- matches the
-       mobile box's own left:0 exactly (see #camoverlay's mobile rule).
-       +var(--hscroll-raise), same as the desktop rule -- see its own
-       comment. */
-    #camswap { left:0;
-               bottom:calc(var(--cam-bottom, 4px) + 156px
-                            + var(--hscroll-raise, 0px)); }
+    /* The desktop rule's 16px inset is 10px (the box's own desktop
+       left/bottom) + 6px -- but the mobile box's base is different
+       (0/var(--cam-bottom,4px), not a flat 10px; see #camoverlay's own
+       mobile rule), so reusing 16px here would be a 16px inset on the
+       left (box base 0) and anywhere from 12px down to negative on the
+       bottom (box base var(--cam-bottom), which grows when #cmdbar is
+       open) rather than the intended 6px on both. Rebuilt from the same
+       mobile box formula instead of guessing a second constant. */
+    #camswap {
+      left:calc(6px + var(--cam-x, 0px));
+      bottom:calc(var(--cam-bottom, 4px) + 6px
+                   + var(--hscroll-raise, 0px) + var(--cam-y, 0px));
+    }
   }
   /* SWAP SIZES, NOT ROLES: #scroll (the live, interactive VGA capture) and
      #camoverlay (the read-only camera) simply trade CSS geometry -- neither
@@ -955,10 +1003,23 @@
   body.cam-swapped #scroll {
     /* +var(--hscroll-raise) -- same as #camoverlay's own thumbnail rule,
        clearing the CAMERA's (now main) horizontal scrollbar when one is
-       showing. See applyZoom's own comment. */
-    inset:auto; top:auto; right:auto; left:10px;
-    bottom:calc(10px + var(--hscroll-raise, 0px));
+       showing. See applyZoom's own comment. +var(--cam-x)/--cam-y -- same
+       drag offset as #camoverlay's own small-state rule (see its
+       comment), so the box lands in the same dragged-to spot regardless
+       of which of the two is currently small. */
+    inset:auto; top:auto; right:auto; left:calc(10px + var(--cam-x, 0px));
+    bottom:calc(10px + var(--hscroll-raise, 0px) + var(--cam-y, 0px));
     width:200px; max-width:40%; aspect-ratio:4/3;
+    /* padding:0, overriding the base #scroll rule's own 10px -- #scroll
+       is the big view there, so that padding is a gap from the chrome
+       (see its own comment); as the small thumbnail it must match
+       #camoverlay's chrome instead, which has no padding at all, or the
+       "same size" card reads as two different sizes depending on which
+       of the two is small: 200x150 of solid card one way, a 180x130
+       picture inset inside a 200x150 card the other. Reported live,
+       2026-08-30: "the thumbnail box should always remain the same size
+       when swapping." */
+    padding:0;
     z-index:56; border-radius:9px; border:1px solid var(--rule);
     box-shadow:0 12px 30px rgba(0,0,0,.36);
   }
@@ -996,8 +1057,8 @@
     body.cam-swapped #scroll {
       /* left:0, not --panel-gap: lines up with the bottom strip's own left
          edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
-      left:0;
-      bottom:calc(var(--cam-bottom, 4px) + var(--hscroll-raise, 0px));
+      left:var(--cam-x, 0px);
+      bottom:calc(var(--cam-bottom, 4px) + var(--hscroll-raise, 0px) + var(--cam-y, 0px));
     }
   }
   /* SWAPPED, THE BIG VIEW IS THE CAMERA -- and the VGA capture's own
@@ -1116,8 +1177,8 @@
     #camoverlay {
       /* left:0, not --panel-gap: lines up with the bottom strip's own left
          edge (#cmdbar.open and #tabs are both edge-to-edge on a phone). */
-      left:0;
-      bottom:calc(var(--cam-bottom, 4px) + var(--hscroll-raise, 0px));
+      left:var(--cam-x, 0px);
+      bottom:calc(var(--cam-bottom, 4px) + var(--hscroll-raise, 0px) + var(--cam-y, 0px));
     }
     /* PACKED, NOT STACKED. One group per row was right when the panel was
        inset and narrow; now that it runs edge to edge there is room for two
@@ -1417,6 +1478,44 @@
     border-bottom:1px solid var(--rule); color:var(--dim);
     font:var(--t-micro)/1.4 var(--sans); white-space:nowrap;
     overflow:hidden; text-overflow:ellipsis;
+  }
+  /* display:inline-block, not the bare inline span it was -- a marquee
+     translates THIS element, and an inline box has no width of its own to
+     translate by (100% of nothing). The bar's own overflow:hidden (above)
+     is what clips it; text-overflow:ellipsis on the bar stays as the
+     fallback for whenever .marquee isn't applied (desktop, short notes,
+     reduced motion -- see updateWorklabelMarquee's own comment for when
+     that is). */
+  #worklabel { display:inline-block; white-space:nowrap; }
+  @media (max-width:640px) {
+    /* Phone only -- reported live, 2026-08-30: a long note (a full
+       sentence naming what's being driven, per vcctrl-mcp-workflows'
+       own "call vcctrl_note with what the sequence actually is") just
+       gets truncated with an ellipsis on the narrow bar, unlike desktop
+       where the bar usually has room. .marquee is added by JS only when
+       the text actually overflows (see updateWorklabelMarquee) -- most
+       notes fit and never animate at all.
+       15% pause, not 0%: gives a moment to read the start before it
+       starts moving, the same reason a real ticker doesn't launch
+       instantly. Snaps back at 100% rather than pausing there too --
+       pausing on the INVISIBLE (fully-scrolled-off) frame reads as a
+       stall, not a loop. -100% is relative to the element's OWN width,
+       so this needs no JS-measured distance, only a JS-computed
+       DURATION (see updateWorklabelMarquee) so a barely-overflowing note
+       and a much longer one don't scroll at the same speed. */
+    #worklabel.marquee {
+      animation:worklabel-marquee var(--marquee-s, 8s) linear infinite;
+    }
+    @keyframes worklabel-marquee {
+      0%, 15% { transform:translateX(0); }
+      100% { transform:translateX(-100%); }
+    }
+    /* Motion is the whole mechanism here, not a decoration on top of a
+       still control -- "reduce" means off, back to the plain ellipsis
+       truncation the bar already falls back to. */
+    @media (prefers-reduced-motion:reduce) {
+      #worklabel.marquee { animation:none; }
+    }
   }
   #cmdbar {
     flex:none; display:flex; gap:7px; padding:7px 9px; background:var(--panel);
@@ -2311,8 +2410,16 @@
    <div id="scroll">
     <div id="frame">
      <canvas id="screen" width="640" height="480" aria-label="target screen"></canvas>
-     <img id="mjpeg" style="display:none" alt="">
-     <img id="stale" style="display:none" alt="">
+     <!-- draggable="false" on #mjpeg/#stale, not #screen: a <canvas> is not
+          natively draggable, but an <img> is, and #scroll (holding
+          whichever of these is actually showing) is draggable-as-a-corner
+          in its own right while swapped small -- see #camimg's own comment
+          for the mechanism this avoids. #review is left alone: review mode
+          force-hides the corner drag targets and un-swaps first (see
+          enterReview()), so it can never be the content of a small,
+          draggable #scroll. -->
+     <img id="mjpeg" style="display:none" alt="" draggable="false">
+     <img id="stale" style="display:none" alt="" draggable="false">
      <img id="review" style="display:none" alt="a frame from the capture">
     </div>
    </div>
@@ -2391,14 +2498,24 @@
     <!-- A second, physical camera pointed at the actual hardware, not its
          captured signal -- off by default, toggled from Settings. -->
     <div id="camoverlay" hidden>
-      <img id="camimg" src="" alt="camera view of the hardware">
+      <!-- draggable="false" -- an <img> is natively draggable by default, and
+           that hijacks the gesture out from under dragCorner()'s own pointer
+           handling: reported live, 2026-08-30, after the corner-drag feature
+           shipped -- the first pointermove after mousedown landed (moving the
+           corner a few px), then the browser's own native image-drag took
+           over and no further pointermove ever reached the page's JS, which
+           reads as "I can't drag the thumbnail" even though the code is
+           running. Confirmed live against the deployed page: setting this to
+           false is what let a full drag gesture reach dragCorner() at all. -->
+      <img id="camimg" src="" alt="camera view of the hardware" draggable="false">
     </div>
     <!-- A SIBLING, NOT A CHILD OF #camoverlay. Swap trades which of
          #camoverlay/#scroll is the small corner box -- a button living
          inside #camoverlay travelled with it to the BIG position once
          swapped, leaving nothing in the corner to swap back with. This one
          stays put at the corner itself regardless of which box is there. -->
-    <button id="camswap" hidden title="Swap sizes with the main view">⇄ Swap</button>
+    <button id="camswap" hidden title="Swap sizes with the main view"
+            aria-label="Swap sizes with the main view">⇄</button>
     <div id="zhint" aria-hidden="true"></div>
     <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
            autocomplete="off" enterkeyhint="enter" aria-label="type at the target">
@@ -6601,11 +6718,41 @@ function showWorkNote(note) {
   const el = $('worklabel');
   if (!el) return;
   note = note || {};
-  if (!note.text) { el.textContent = 'Idle'; return; }
-  el.textContent = note.text
-    + (note.at != null
-       ? ' · ' + fmtAge((Date.now() / 1000) - note.at) + ' ago' : '');
+  el.textContent = !note.text ? 'Idle'
+    : note.text + (note.at != null
+        ? ' · ' + fmtAge((Date.now() / 1000) - note.at) + ' ago' : '');
+  updateWorklabelMarquee();
 }
+
+// Re-checked on every showWorkNote() call (roughly every status poll, per
+// its own caller) rather than once: the age suffix alone ("· 3m ago" ->
+// "· 14m ago") grows over time and can push a borderline note past the
+// edge minutes after it first fit, not just when the text itself changes.
+// Phone only (see #worklabel.marquee's own media query) -- checking
+// matchMedia here too, not just relying on the animation being inert at
+// desktop widths, is what lets this skip the scrollWidth reflow read
+// entirely on desktop instead of paying for it on every poll for nothing.
+function updateWorklabelMarquee() {
+  const el = $('worklabel'), bar = $('worklabelbar');
+  if (!el || !bar || !matchMedia('(max-width:640px)').matches) return;
+  // Against the BAR's width, not the label's own: #worklabel is
+  // display:inline-block with no fixed width of its own, so it always
+  // grows to fit its content -- its scrollWidth and clientWidth are the
+  // same number regardless of overflow, and the actual clipping happens
+  // one level up, at #worklabelbar's overflow:hidden. Caught by testing
+  // this against a real page rather than trusting the read.
+  const overflow = el.scrollWidth - bar.clientWidth;
+  if (overflow > 2) {
+    // 40px/s reading speed, floored at 4s -- a note that barely overflows
+    // still gets a readable pass rather than a blink-and-you-missed-it lap.
+    el.style.setProperty('--marquee-s', Math.max(4, el.scrollWidth / 40) + 's');
+    el.classList.add('marquee');
+  } else {
+    el.classList.remove('marquee');
+    el.style.removeProperty('--marquee-s');
+  }
+}
+addEventListener('resize', updateWorklabelMarquee);
 
 // ------------------------------------------------------------------ status
 const fmtAge = s => s == null ? '–' : s < 90 ? s.toFixed(0)+'s'
@@ -8192,6 +8339,179 @@ setInterval(() => {
   // #stage-level sibling of #scroll (see its own declaration comment), so
   // a drag starting on either one is still caught here.
   $('stage').addEventListener('pointerdown', start);
+  addEventListener('pointermove', move, {passive: false});
+  addEventListener('pointerup', end);
+  addEventListener('pointercancel', end);
+})();
+
+// ── DRAG THE CORNER (thumbnail card + swap button) ──────────────────────
+// Reported live, 2026-08-30: the corner card sits in a fixed spot and on
+// some captures that's right over the part of the picture actually under
+// test. --cam-x/--cam-y are read by #camoverlay's small-state rule,
+// body.cam-swapped #scroll's small-state rule, and #camswap (see their own
+// rules) -- SWAP SIZES, NOT ROLES still holds: whichever of the two is
+// currently small reads the same two variables, so a drag moves "the
+// corner", not one specific element, and swapping mid-drag neither jumps
+// the box nor changes its size (see body.cam-swapped #scroll's own
+// padding:0 for the size half of that guarantee).
+//
+// Registered here, BEFORE #camswap's own onclick further down the file --
+// not just earlier in execution order, earlier in the FILE. A capturing
+// listener added to the same element the click actually targets does not
+// run before a bubble-phase one added earlier; at the target itself every
+// listener runs in registration order regardless of its capture flag. So
+// this only gets first refusal on the swap button's click if it registers
+// before that onclick assignment does.
+(function dragCorner() {
+  const THRESH = 4;   // px of movement before a press counts as a drag, not a click
+  const MARGIN = 4;   // px kept between the corner and the stage edge
+  let down = false, dragging = false, justDragged = false, startedOnSwap = false;
+  let sx = 0, sy = 0, x0 = 0, y0 = 0;
+  let sRect = null, boxH = 0, baseLeft = 0, baseBottomDist = 0;
+
+  // Whichever of #camoverlay/#scroll is CURRENTLY the thumbnail -- decided
+  // fresh each time, same reason pan() above re-checks camMain instead of
+  // caching it: swap can happen between drags.
+  const smallEl = () => document.body.classList.contains('cam-swapped')
+                       ? $('scroll') : $('camoverlay');
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+  // `left`/`bottomDist` (distance up from the stage's OWN bottom edge --
+  // grows as the box moves up, matching how the CSS `bottom` property
+  // behaves) are measured in viewport px, not stage-relative ones: MARGIN
+  // is applied against the stage's actual edges either way, so there is no
+  // need to also subtract sRect.left/top, only to clamp against
+  // sRect.left+MARGIN / sRect.right-bw-MARGIN directly. bh/bw are the
+  // box's own height/width, pinned at drag start -- #camswap no longer
+  // needs its own height accounted for here: it is nested INSIDE the box's
+  // corner now (see its own CSS rule), not stacked in a row above it, so
+  // it never extends past the box's own edges.
+  function clampLeft(left, stageRect, bw) {
+    return clamp(left, stageRect.left + MARGIN, stageRect.right - bw - MARGIN);
+  }
+  function clampBottomDist(bottomDist, stageRect, bh) {
+    const hi = Math.max(MARGIN, stageRect.height - bh - MARGIN);
+    return clamp(bottomDist, MARGIN, hi);
+  }
+  function setPos(x, y) {
+    document.documentElement.style.setProperty('--cam-x', x + 'px');
+    document.documentElement.style.setProperty('--cam-y', y + 'px');
+  }
+
+  // Clamp whatever --cam-x/--cam-y CURRENTLY is against the CURRENT stage
+  // rect -- not just once at load. A no-op when the position is already
+  // in bounds, so it is safe to call on every resize as well.
+  function clampCurrentToStage() {
+    const stageR = $('stage').getBoundingClientRect();
+    const beR = smallEl().getBoundingClientRect();
+    if (!stageR.width || !beR.width) return;   // not laid out yet
+    const cs = getComputedStyle(document.documentElement);
+    const cx0 = parseFloat(cs.getPropertyValue('--cam-x')) || 0;
+    const cy0 = parseFloat(cs.getPropertyValue('--cam-y')) || 0;
+    const curBD = stageR.bottom - beR.bottom;
+    const nx = clampLeft(beR.left, stageR, beR.width) - (beR.left - cx0);
+    const ny = clampBottomDist(curBD, stageR, beR.height) - (curBD - cy0);
+    setPos(nx, ny);
+  }
+  // Restore the last dragged-to spot from localStorage, once, at load --
+  // the raw saved value; clampCurrentToStage() below is what makes sure
+  // it (or the 0/0 default, if there was nothing saved) is actually safe
+  // for the stage that exists right now.
+  try {
+    const saved = JSON.parse(localStorage.getItem('vcctrl.camPos') || 'null');
+    if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
+      setPos(saved.x, saved.y);
+    }
+  } catch (e) {}
+  // Re-validated on resize/orientationchange too, not only once here --
+  // reported live, 2026-08-30 (a phone, after the tab-strip overlap fix
+  // just above had already shipped): the thumbnail was STILL sitting too
+  // low, cut off by #worklabelbar. iOS Safari's own bottom toolbar can
+  // change the ACTUALLY-visible stage size after this script's first
+  // pass already ran and read it -- the same timing gap html,body's own
+  // 100dvh comment describes for CSS, here for the JS that reads
+  // #stage's rect directly. A number correct for the layout available at
+  // load time is not the same claim as a number correct now.
+  clampCurrentToStage();
+  addEventListener('resize', clampCurrentToStage);
+  addEventListener('orientationchange', clampCurrentToStage);
+
+  const start = (e, onSwap) => {
+    down = true; dragging = false; startedOnSwap = !!onSwap;
+    sx = e.clientX; sy = e.clientY;
+    const cs = getComputedStyle(document.documentElement);
+    x0 = parseFloat(cs.getPropertyValue('--cam-x')) || 0;
+    y0 = parseFloat(cs.getPropertyValue('--cam-y')) || 0;
+    sRect = $('stage').getBoundingClientRect();
+    const bRect = smallEl().getBoundingClientRect();
+    boxH = bRect.height;
+    // The box's OWN rect right now already has x0/y0 baked in (that's what
+    // put it there) -- subtracting them back out gives the position the
+    // surrounding calc() alone would produce at delta 0, i.e. exactly what
+    // the desktop (10px) or mobile (0px/--cam-bottom) base rule contributes
+    // on its own. Deriving it by measurement, rather than assuming which
+    // constant applies, is what keeps the clamp correct on both.
+    baseLeft = bRect.left - x0;
+    baseBottomDist = (sRect.bottom - bRect.bottom) - y0;
+  };
+  const move = e => {
+    if (!down) return;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (!dragging) {
+      if (Math.hypot(dx, dy) < THRESH) return;
+      dragging = true;
+      document.body.style.cursor = 'grabbing';
+    }
+    const bw = smallEl().getBoundingClientRect().width;
+    // Bottom grows UPWARD (away from the stage's bottom edge), so a
+    // downward pointer move (+dy) has to SUBTRACT from it.
+    const wantLeft = baseLeft + x0 + dx;
+    const wantBD = baseBottomDist + y0 - dy;
+    const nx = clampLeft(wantLeft, sRect, bw) - baseLeft;
+    const ny = clampBottomDist(wantBD, sRect, boxH) - baseBottomDist;
+    setPos(nx, ny);
+    if (e.cancelable) e.preventDefault();
+  };
+  const end = () => {
+    if (dragging) {
+      // Only a drag that STARTED on the button itself should swallow the
+      // button's own next click -- reported live, 2026-08-30: dragging the
+      // BOX to reposition it, then a genuine separate tap on the swap
+      // button nested inside it, silently did nothing, because this flag
+      // used to be set on ANY drag regardless of which element started it.
+      // The button now sits inside the box's own footprint (see its CSS
+      // rule), so "drag the box, then tap the button" is a normal
+      // sequence, not a rare edge case, and needs the two told apart.
+      if (startedOnSwap) justDragged = true;
+      document.body.style.cursor = '';
+      const cs = getComputedStyle(document.documentElement);
+      localStorage.setItem('vcctrl.camPos', JSON.stringify({
+        x: parseFloat(cs.getPropertyValue('--cam-x')) || 0,
+        y: parseFloat(cs.getPropertyValue('--cam-y')) || 0,
+      }));
+    }
+    down = false; dragging = false;
+  };
+  // Swallow the click #camswap would otherwise still fire on pointerup
+  // after a real drag -- see this function's own opening comment for why
+  // registering here, ahead of the onclick assignment below, is what
+  // makes stopImmediatePropagation actually pre-empt it.
+  $('camswap').addEventListener('click', e => {
+    if (justDragged) { justDragged = false; e.stopImmediatePropagation(); e.preventDefault(); }
+  }, true);
+  // Only the THUMBNAIL role starts a reposition drag here -- stopPropagation
+  // keeps it from also reaching #stage's own pointerdown (pan(), above):
+  // without it, dragging the corner while the OTHER view happens to be
+  // zoomed would pan that view at the same time, since pan() resolves
+  // which element is "main" from body.cam-swapped alone, not from where
+  // the pointer actually is.
+  $('camoverlay').addEventListener('pointerdown', e => {
+    if (!document.body.classList.contains('cam-swapped')) { e.stopPropagation(); start(e); }
+  });
+  $('scroll').addEventListener('pointerdown', e => {
+    if (document.body.classList.contains('cam-swapped')) { e.stopPropagation(); start(e); }
+  });
+  $('camswap').addEventListener('pointerdown', e => { e.stopPropagation(); start(e, true); });
   addEventListener('pointermove', move, {passive: false});
   addEventListener('pointerup', end);
   addEventListener('pointercancel', end);
