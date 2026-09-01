@@ -283,6 +283,68 @@ if [ "${1:-}" = "--tailscaled-ro-only" ]; then
   exit 0
 fi
 
+# install_hid_gadget(): the Pi's own USB-C port acting as a USB HID
+# keyboard+mouse gadget (dwc2 peripheral mode + configfs), for driving a
+# second, always-present target that has no PS/2 port for USB4VC to reach --
+# see docs/FINDINGS.md #44-45 for how this was validated. OPT-IN, not part
+# of the unconditional full-install tail: unlike vcctrld itself, this needs
+# specific physical wiring (a powered hub feeding the Pi's USB-C both power
+# and data) that most deployments of this rig won't have, so a fresh install
+# must not start rewriting /boot/firmware/config.txt or building a gadget
+# nobody asked for.
+CONFIG_TXT=/boot/firmware/config.txt
+DWC2_OVERLAY_LINE="dtoverlay=dwc2,dr_mode=peripheral"
+install_hid_gadget() {
+  if [ ! -f "$SRC/pi/files/vcctrl-hid-gadget-setup.sh" ] || [ ! -f "$SRC/pi/files/vcctrl-hid-gadget.service" ]; then
+    echo "hid-gadget: pi/files/vcctrl-hid-gadget-* not in this checkout, skipping" >&2
+    return 0
+  fi
+
+  # Idempotent: only touch config.txt if the exact line isn't already there.
+  # Scoped under [pi5] (not [all]) so this overlay only ever applies to a
+  # Pi 5 -- the file's existing [cm5] section is a different, unrelated
+  # filter (Compute Module 5, not Model B) and dr_mode=peripheral has no
+  # business applying to boards this repo doesn't run this feature on.
+  REBOOT_OWED=0
+  if ! grep -qxF "$DWC2_OVERLAY_LINE" "$CONFIG_TXT" 2>/dev/null; then
+    sudo cp "$CONFIG_TXT" "$CONFIG_TXT.bak-$(date +%Y%m%d-%H%M%S)"
+    if grep -qx '\[pi5\]' "$CONFIG_TXT"; then
+      sudo sed -i "/^\[pi5\]\$/a $DWC2_OVERLAY_LINE" "$CONFIG_TXT"
+    else
+      printf '\n[pi5]\n%s\n' "$DWC2_OVERLAY_LINE" | sudo tee -a "$CONFIG_TXT" >/dev/null
+    fi
+    echo "hid-gadget: added '$DWC2_OVERLAY_LINE' under [pi5] in $CONFIG_TXT (backup saved alongside it)"
+    REBOOT_OWED=1
+  fi
+
+  sudo install -m 0755 "$SRC/pi/files/vcctrl-hid-gadget-setup.sh" \
+    "$PREFIX/vcctrl-hid-gadget-setup.sh"
+  sudo install -m 0644 "$SRC/pi/files/vcctrl-hid-gadget.service" \
+    /etc/systemd/system/vcctrl-hid-gadget.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable vcctrl-hid-gadget
+
+  # The overlay only takes effect on the NEXT boot -- if it was just added
+  # above, or was already in config.txt but this Pi hasn't been rebooted
+  # since, /sys/class/udc is empty and starting the gadget now can only
+  # fail. Enable it (so it runs on the reboot the operator still owes) and
+  # say so plainly, rather than let a oneshot unit fail loudly for a reason
+  # that has nothing to do with the unit itself.
+  if [ "$REBOOT_OWED" = "1" ] || [ -z "$(ls /sys/class/udc 2>/dev/null)" ]; then
+    echo "hid-gadget: enabled, but no UDC yet -- reboot this Pi for dtoverlay=dwc2,dr_mode=peripheral to take effect, then vcctrl-hid-gadget.service will build the gadget on boot"
+    return 0
+  fi
+
+  sudo systemctl restart vcctrl-hid-gadget
+  sleep 1
+  sudo systemctl --no-pager --lines=10 status vcctrl-hid-gadget || true
+}
+
+if [ "${1:-}" = "--hid-gadget-only" ]; then
+  install_hid_gadget
+  exit 0
+fi
+
 # ---------------------------------------------------------------------------
 # THE PUBLIC READ-ONLY MIRROR -- daemon/vcweb_public.py, a separate process
 # from vcctrld (see that module's own docstring for why: it is auditable, by

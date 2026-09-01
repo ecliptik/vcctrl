@@ -2559,3 +2559,93 @@ should expect to re-tune `pace_s` by hand rather than have it happen
 automatically, and should consider lowering it back down if the rig
 returns to faster hardware, since a slower pace than necessary just makes
 every typed command take longer for no benefit.
+
+## 44. Pi 5's USB-C port drives a real USB HID keyboard+mouse gadget  [measured 2026-09-01]
+
+This rig's own Pi 5 (`usb4vc`, kernel `6.18.39+rpt-rpi-2712`, plain Model B,
+not a CM5) was tested as a second, independent keyboard/mouse source for a
+Linux server target (`modernpc`), using the SoC's own `dwc2` USB-C
+controller in peripheral/device mode -- a path that public reports as of
+late 2024 described as unreliable on Pi 5 (`dwc2` probe failing with
+`error -16`). On this kernel it did not reproduce.
+
+`dtoverlay=dwc2,dr_mode=peripheral` was added under the existing `[pi5]`
+section of `/boot/firmware/config.txt` (not `[all]`, and not the file's
+existing `[cm5]` section, which is inert for a Model B). After a reboot,
+`dwc2` probed cleanly every time (`EPs: 8, dedicated fifos, 4080 entries in
+SPRAM`, no `-16`) and `/sys/class/udc/1000480000.usb` appeared. A composite
+gadget was built by hand via configfs (`libcomposite`, one boot-protocol
+keyboard function and one 4-byte relative-report mouse function), bound to
+that UDC, and driven by writing raw HID reports directly to `/dev/hidg0`
+and `/dev/hidg1`. A typed sentence and a 10-second mouse square both landed
+correctly on a real host across the wire.
+
+This was tested with a laptop as the USB host, not `modernpc` itself, over
+the wiring the operator built for it: an externally-powered USB hub with
+its upstream USB-A port plugged into the host machine, and a downstream
+USB-A-to-USB-C cable back to the Pi -- meaning the Pi's own power now comes
+from the hub backfeeding VBUS on that same cable, not from a direct PD
+supply into the Pi's USB-C port. The two roles (power sink, gadget device)
+can't coexist on one physical connector, so this wiring choice is load-
+bearing for the whole rig, not just the new feature: if the hub can't
+sustain the Pi 5's current draw under full load, the harness Pi loses
+power, not just the gadget. `vcgencmd get_throttled` read `0x0` (no
+undervoltage) through this testing, but that was idle/light-load testing,
+not the rig's full working load (SPI to the STM32 board, VGA capture, the
+room camera, and the HID gadget all running at once).
+
+Reboot persistence was also checked, not assumed: after a clean reboot,
+`dwc2` re-probed cleanly and the UDC reappeared, but the gadget itself did
+not -- `libcomposite` and the configfs tree are not currently persisted by
+anything, so `/dev/hidg0`/`/dev/hidg1` only exist after the setup script is
+re-run by hand. That is expected at this stage (no boot-time service exists
+yet) and is not itself a finding about `dwc2`'s reliability, but it means
+the gadget cannot be relied on to survive a reboot unattended until that
+service is built.
+
+### Not yet fixed properly
+
+No `vcctrld` integration exists yet -- this was a standalone configfs
+spike, independent of the daemon, to de-risk the hardware question before
+writing any capability code. No boot-time systemd unit exists either, so
+the gadget does not currently survive a reboot without manual
+intervention. And the power-path risk above has not been load-tested: it
+has only been observed idle, not under the rig's full concurrent load.
+
+## 45. A capture chip's first frame after opening the device can be a stale "no signal" placeholder, even with a real signal present  [measured 2026-09-01]
+
+While validating a new HDMI capture dongle (MacroSilicon-chipset UVC
+device, same family as this rig's existing VGA capture stick) for the
+`modernpc` profile, a single `ffmpeg -frames:v 1` grab produced a solid
+black frame. A second grab taken exactly one minute later, from a fresh
+process, produced a byte-identical file (matching MD5). Two genuinely
+different digitizations of even a static black desktop would not hash
+identically -- a deterministic match across independent opens is the
+signature of the chip's own synthetic "locked, no source" frame, not
+absence of a picture.
+
+The actual cause here was mundane (the laptop being used as the test
+source had not been set to mirror/extend its display to the HDMI output,
+confirmed and fixed by the operator) -- but the same signature reappeared
+in a different shape after a reboot with the display genuinely mirrored:
+the *first* frame grabbed immediately after opening the v4l2 device was
+still the stale black placeholder, and a second grab taken 2 seconds later
+from the same device returned a correct, real capture. The chip needs a
+brief resync window after a fresh open before it reflects the actual
+input, and a single-frame probe taken immediately on open cannot tell
+"no signal" apart from "hasn't resynced yet."
+
+This is the same hazard already named for this rig's VGA capture path (see
+`black-frames-are-not-black-screens` in the operator's own notes) --
+recorded here specifically because it reproduced on a *different* capture
+chip being brought up for a *different* target, which means any future
+video capability (this one included) needs to discard or retry the first
+read after opening the device rather than trust it, not just the existing
+one.
+
+### Not yet fixed properly
+
+No code exists yet for the `modernpc` profile's video capability, so
+there is nothing to fix -- this is a design constraint to carry into that
+capability when it is written (matching how the existing `VideoCapability`
+already has to handle this for the VGA path).

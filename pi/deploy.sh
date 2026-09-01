@@ -321,6 +321,29 @@ if [ "${1:-}" = "--public" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# HID GADGET ONLY. Never touches vcctrld -- vcctrl-hid-gadget.service is a
+# separate unit (pi/install.sh's install_hid_gadget(), see its own comment
+# for why), same reasoning as --mcp/--public above: no guard_busy check,
+# nothing here can interrupt a running cell or sweep. May still require a
+# reboot the operator has to do by hand (dtoverlay only takes effect on the
+# next boot) -- install_hid_gadget() prints that plainly rather than this
+# script guessing at it.
+if [ "${1:-}" = "--hid-gadget" ]; then
+  bash -n "$SRC/pi/install.sh" || { echo "refusing: pi/install.sh does not parse" >&2; exit 1; }
+  bash -n "$SRC/pi/files/vcctrl-hid-gadget-setup.sh" || \
+    { echo "refusing: pi/files/vcctrl-hid-gadget-setup.sh does not parse" >&2; exit 1; }
+  rdir="/tmp/vcctrl-hid-gadget-deploy.$$"
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/pi/files" || explain_hang
+  $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
+  $SCP "$SRC/pi/files/vcctrl-hid-gadget-setup.sh" "$SRC/pi/files/vcctrl-hid-gadget.service" \
+    "$HOST:$rdir/pi/files/" || explain_hang
+  $SSH "$HOST" "bash $rdir/pi/install.sh --hid-gadget-only; rc=\$?; rm -rf $rdir; exit \$rc" \
+    || explain_hang
+  echo "installed vcctrl-hid-gadget (vcctrld untouched)"
+  exit 0
+fi
+
 if [ "${VCCTRL_FORCE:-0}" != "1" ]; then
   guard_busy || exit 1
 else

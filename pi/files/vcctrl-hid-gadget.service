@@ -1,0 +1,24 @@
+[Unit]
+Description=vcctrl USB HID keyboard+mouse gadget (Pi USB-C, dwc2 peripheral mode)
+Documentation=https://docs.kernel.org/usb/gadget_configfs.html
+# No After= on multi-user.target or any specific service: the gadget only
+# needs configfs (a kernel filesystem, mounted before userspace units run)
+# and dwc2's own UDC (probed at kernel/device-tree init, not by a systemd
+# unit). Inventing an ordering dependency this script doesn't actually need
+# is exactly the shape of bug usb4vc.service's own comment describes --
+# WantedBy=multi-user.target plus an unnecessary After= on it deleted that
+# unit's start job outright on one 2026-08-28 boot. This unit's own retry
+# loop (see vcctrl-hid-gadget-setup.sh) is the real defense against the UDC
+# not being ready yet, not unit ordering.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/vcctrl/vcctrl-hid-gadget-setup.sh
+# Idempotent and safe to re-run -- lets `systemctl restart` rebuild the
+# gadget by hand (e.g. after editing the report descriptors) without a
+# reboot.
+ExecReload=/opt/vcctrl/vcctrl-hid-gadget-setup.sh
+
+[Install]
+WantedBy=multi-user.target
