@@ -2649,3 +2649,57 @@ No code exists yet for the `modernpc` profile's video capability, so
 there is nothing to fix -- this is a design constraint to carry into that
 capability when it is written (matching how the existing `VideoCapability`
 already has to handle this for the VGA path).
+
+## 46. Sharing vcctrld's process/GIL with modernpc-shaped I/O costs the primary target under a millisecond  [measured 2026-09-01]
+
+Before designing a single-process, multi-profile `vcctrld` (which would put
+`modernpc`'s video-capture and HID-gadget I/O in the same process/GIL as the
+primary target's timing-sensitive PS/2 keystroke emission), measured
+whether that sharing actually degrades timing, rather than assuming Python's
+GIL-releasing I/O makes it a non-issue. Conditions: DOS target CPU is an
+Intel 486DX2 ~66MHz (`vcctrl_sysinfo`), `capabilities.input.settings.pace_s`
+is `0.04` (the value finding #43 tuned it to, not the original `0.012`).
+
+Method: imported the real `vcctrld.py`/`Devices` (unmodified) into a
+throwaway harness standing in for `vcctrld.service` for the duration of the
+test only (both `vcctrld.service` and `vcctrld-modernpc.service` stopped
+first, confirmed idle via `vcctrl_activity`/`vcctrl_lock_status` on both
+profiles, restarted and verified active afterward). Instrumented
+`Devices._tap` to time each keystroke's real wall-clock duration. Measured
+880 keystrokes (10 trials x 88 chars) with nothing else running, then 880
+more with two threads running IN THE SAME PROCESS: one continuously reading
+real MJPEG frames from modernpc's actual HDMI capture dongle via a real
+ffmpeg subprocess (the same pattern `VideoCapability` uses), one writing
+HID-gadget-shaped reports to `/dev/hidg0`/`/dev/hidg1` at a light idle rate
+plus periodic 20-report typing-shaped bursts -- deliberately including
+concurrent "someone is using modernpc too" load, not just idle background
+noise, since that is the actually risky moment for shared timing.
+
+Baseline: mean 80.153ms, p95 80.190ms, p99 80.206ms, max 80.228ms per
+keystroke (expected value is exactly `2 x pace_s` = 80ms; the near-zero
+spread shows this Pi 5 paces almost perfectly with nothing competing for
+it). Loaded: mean 80.205ms, p95 80.246ms, p99 80.308ms, max 80.669ms. The
+worst measured degradation is +0.441ms (+0.55%) on the single slowest
+keystroke, and the mean shift is +0.052ms -- two orders of magnitude
+smaller than the ~28ms margin finding #43 needed to add to fix a real
+corruption. A separate, real, visible check (a genuinely typed sentence,
+recovered from the DOS screen after restarting the real service) showed no
+dropped or garbled characters in either condition.
+
+### Not yet fixed properly, and a real methodological gap to flag
+
+N=10 trials/880 keystrokes per condition is enough to characterize the
+*typical* jitter shape but not enough to rule out a rare, `#43`-style
+probabilistic tail event -- that finding's own first repro attempt
+succeeded before the fault started reproducing twice in a row. This result
+supports proceeding to the single-process design; it does not prove the
+tail risk is zero at any N. Separately: the intended behavioral check
+(typing one long, distinctive marker string and reading it back
+character-for-character) did not produce usable evidence -- the harness's
+own jitter-measurement trials never sent Enter between them, so ~1800
+characters accumulated on one COMMAND.COM input line before the marker was
+even sent, past DOS's own input-buffer limit, which silently discards
+excess keystrokes regardless of any daemon timing question. That is a
+DOS-side buffer-length artifact in the test's own design, not a timing
+finding, and a repeat of this measurement should clear the line (Enter or
+Escape) between trials.
