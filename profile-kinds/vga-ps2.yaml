@@ -1,0 +1,112 @@
+# PROFILE KIND: vga-ps2
+#
+# A retro-PC target reached over its own real VGA output and PS/2-protocol
+# input, translated by the USB4VC/STM32 protocol board this rig was built
+# around. This is what the existing `gateway2000` profile already runs --
+# this file documents the SHAPE of that setup as a reusable starting point
+# for the NEXT board of the same kind, not a new mechanism.
+#
+# CREATION-TIME SCAFFOLDING ONLY. Nothing in vcconfig.py or vcctrld.py reads
+# this file at daemon startup, ever -- see tools/new-profile.py, which reads
+# it once, at authoring time, to WRITE a complete, self-contained
+# vcctrl-<name>.yaml (a real config file vcctrld actually loads, no
+# reference back here). A deployed profile's config must stay fully
+# self-evident on its own, the same discipline vcctrl-modernpc.example.yaml
+# already follows for its own device paths -- a config whose real settings
+# partly live in a file it points at is a config that lies about itself the
+# moment this file changes.
+#
+# EXCLUSIVE HARDWARE: usb4vc-uinput assumes exactly ONE physical USB4VC/SPI
+# bridge exists on the Pi. vcctrld's own startup refuses to build a second
+# profile also declaring this backend while one is already running (see
+# main()'s "EXCLUSIVE HARDWARE GUARD" in daemon/vcctrld.py) -- this kind is
+# NOT meant to run as an always-simultaneous sibling profile the way
+# hdmi-usb ones (modernpc) do. It describes what to swap the PRIMARY/root
+# vcctrl.yaml TO when the physical protocol board changes, or a genuinely
+# second, separately-wired USB4VC bridge exists (this rig has never had
+# one). Deploying it as a sibling vcctrl-<name>.yaml alongside a
+# usb4vc-uinput primary will be refused at startup, correctly, until board-
+# swap detection grows a real "which board is physically seated right now"
+# check that decides which profile is even allowed to build.
+
+capabilities:
+  input:
+    backend: usb4vc-uinput
+    settings:
+      vendor: 0x1209
+      keyboard_product: 0xDEA1
+      mouse_product: 0xDEA2
+      pace_s: 0.012
+
+  video:
+    backend: v4l2-ffmpeg
+    settings:
+      # PLACEHOLDER -- by-id, never /dev/videoN (see docs/FINDINGS.md #44's
+      # port-topology note: index drift on any of several UVC devices on
+      # one Pi silently points a profile at somebody else's signal). Fill
+      # in with the real VGA capture stick's own by-id path for this
+      # board, e.g. via `ls -la /dev/v4l/by-id/`.
+      device: /dev/v4l/by-id/REPLACE_ME-video-index0
+
+  audio:
+    backend: alsa-ffmpeg
+    settings:
+      # PLACEHOLDER -- the capture stick's own line-in, if this board's
+      # stick carries audio (gateway2000's does; not every VGA capture
+      # dongle does). `none` is the honest answer if it does not, not a
+      # guess at a card index that happens to exist.
+      device: hw:REPLACE_ME
+      channels: 2
+      rate: 48000
+
+  leds:
+    backend: ps2-sysfs
+    settings:
+      # Which board_id(s) in this profile's own targets: list actually
+      # have a PS/2 LED return channel. A board not listed reports
+      # `unsupported` -- working hardware, not a fault.
+      boards_with_channel: [1]
+
+  power:
+    backend: kasa-legacy        # or `none` if this board has no plug of its own
+    settings:
+      host: REPLACE_ME
+      port: 9999
+      alias: REPLACE_ME
+      cycle_off_s: 15.0
+      # THE SAFETY FACT, NOT A PREFERENCE: which board_id(s) this plug is
+      # actually wired to. `power` refuses on any other installed board
+      # rather than assume this one -- see docs/BOARD-IDENTITY.md sec. 5,
+      # "a default here would be a power cycle of the wrong computer."
+      boards: [1]
+
+  board:
+    backend: usb4vc-runfile
+    settings:
+      file: /run/usb4vc/board.json
+
+  files:
+    backend: mtcp-ftp            # or `none` if this board has no packet driver/FTP client
+    settings:
+      target_host: REPLACE_ME
+      target_port: 2121
+      dest: "C:\\XFER\\IN"
+      root_dir: /var/lib/vcctrl/fileserver
+
+  # camera/sysinfo: leave as `none` unless this specific board also has its
+  # own dedicated room camera / dinspect pull path distinct from whatever
+  # profile already owns the shared one (see the "hardware only active on
+  # one profile" invariant this whole kind-template mechanism exists to
+  # make easy to get right by default).
+  camera:
+    backend: none
+  sysinfo:
+    backend: none
+
+targets:
+  - board_id: 1
+    name: REPLACE_ME
+    native: {width: 640, height: 480}
+    leds: supported
+    transfer: supported
+    keyboard: pc-at-101

@@ -40,15 +40,62 @@ def profile_socket_path(name):
     return "/run/vcctrl-%s.sock" % name
 
 
+def _query_profile_name(sock_path):
+    """The declared daemon.profile_name behind `sock_path`, or None if
+    unreachable/unset. Used only by list_profiles() below to recognise
+    when /run/vcctrl.sock and /run/vcctrl-<name>.sock are the SAME running
+    instance (Phase D gave the primary a real name alongside its legacy
+    alias so every existing --profile-less call keeps working) rather
+    than listing one daemon twice under two names. Best-effort: a slow or
+    down daemon here just means the alias stays unresolved, not a crash
+    or a hang -- a short timeout, not `call()`'s own (which has none,
+    correctly, for a command the operator explicitly asked for)."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(2.0)
+    try:
+        s.connect(sock_path)
+        s.sendall(b'{"cmd": "config"}\n')
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        resp = json.loads(buf.decode("utf-8"))
+    except Exception:
+        return None
+    finally:
+        s.close()
+    return ((resp.get("config") or {}).get("resolved") or {}) \
+        .get("daemon", {}).get("profile_name")
+
+
 def list_profiles():
-    """Every vcctrld socket actually present, primary included. Live
-    discovery (see PROFILE_SOCKET_GLOB above), not a maintained list."""
-    out = [{"profile": "default", "socket": "/run/vcctrl.sock",
-           "present": os.path.exists("/run/vcctrl.sock")}]
+    """Every vcctrld INSTANCE actually running on this host, discovered by
+    socket presence (see PROFILE_SOCKET_GLOB above) -- not a maintained
+    list. `sockets` is a list, not a single path: the primary binds BOTH
+    its legacy /run/vcctrl.sock alias and (once named) its own
+    /run/vcctrl-<name>.sock, and this collapses them into ONE entry with
+    both paths rather than listing the same running daemon twice under
+    two different names -- see _query_profile_name()'s own comment."""
+    named = {}
     for path in sorted(glob.glob(PROFILE_SOCKET_GLOB)):
         name = os.path.basename(path)[len("vcctrl-"):-len(".sock")]
-        out.append({"profile": name, "socket": path, "present": True})
-    return out
+        named[name] = {"profile": name, "sockets": [path], "present": True}
+
+    default_present = os.path.exists("/run/vcctrl.sock")
+    default_name = _query_profile_name("/run/vcctrl.sock") \
+        if default_present else None
+    if default_name and default_name in named:
+        named[default_name]["sockets"].insert(0, "/run/vcctrl.sock")
+    else:
+        # Unnamed primary (no daemon.profile_name set), or unreachable --
+        # "default" is the same fallback label Instance.label() uses
+        # daemon-side for the same reason.
+        key = default_name or "default"
+        named[key] = {"profile": key, "sockets": ["/run/vcctrl.sock"],
+                     "present": default_present}
+    return sorted(named.values(), key=lambda p: p["profile"])
 
 USAGE = """usage: vcctrl <command> [args]
 
@@ -321,9 +368,10 @@ USAGE = """usage: vcctrl <command> [args]
   profiles                  every vcctrld instance actually running on this
                             host, discovered by socket presence -- not a list
                             that can drift out of sync with what is real.
-                            Always includes `default`, the unnamed primary
-                            instance every other command targets absent
-                            --profile.
+                            Always includes the profile every other command
+                            targets absent --profile, by its real name once
+                            one is configured (daemon.profile_name), else
+                            `default`.
 
 options:
   --pace <seconds>          inter-event gap (default 0.012)

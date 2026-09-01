@@ -9827,25 +9827,38 @@ def _serve_one(conn, devs, registry):
 
 class Instance(object):
     """One profile's fully-constructed runtime state: its own Config,
-    Devices, Registry, and the socket path clients reach it on. Built once
-    per discovered profile at startup (see discover_profiles()/
+    Devices, Registry, and the socket path(s) clients reach it on. Built
+    once per discovered profile at startup (see discover_profiles()/
     _build_instance()) and kept for the life of the process.
 
-    `name` is None for the primary/default profile -- matching
-    bin/vcctrl-client's own convention (the unnamed default talks to
-    /run/vcctrl.sock, a named one to /run/vcctrl-<name>.sock).
+    `name` is None ONLY for a root config that has never set
+    daemon.profile_name -- Phase D's whole point is that a profile is
+    "gateway2000" or "modernpc", not "the primary" and "a named one" as two
+    structurally different kinds of thing. None means "not yet named",
+    a backward-compatible degraded state, not a permanent second class of
+    profile.
+
+    `is_primary` is True for exactly the ONE instance built from the root
+    config file (discover_profiles() always puts it first) -- this is
+    what decides whether the legacy daemon.socket alias gets bound
+    alongside the name-derived path, not `name is None`. A primary WITH a
+    declared name still binds both, so bin/vcctrl-client with no
+    --profile flag keeps reaching it (see _build_instance()'s own
+    comment on socket_paths).
     """
 
-    def __init__(self, name, cfg, error=None):
+    def __init__(self, name, cfg, error=None, is_primary=False):
         self.name = name
         self.cfg = cfg
         self.error = error
+        self.is_primary = is_primary
         self.devs = None
         self.registry = None
-        self.socket_path = None
+        self.socket_paths = []
 
     def label(self):
-        return self.name or "(default)"
+        return self.name or ("(unnamed default)" if self.is_primary
+                             else "(unnamed)")
 
 
 def discover_profiles():
@@ -9878,8 +9891,20 @@ def discover_profiles():
     running on built-in defaults, if its own file was missing or broken --
     exactly today's single-profile behavior, unconditionally, for a rig
     with no sibling files at all).
+
+    THE PRIMARY'S OWN NAME COMES FROM daemon.profile_name IN ITS OWN FILE,
+    never a literal baked into this function -- "gateway2000" is a fact
+    about one rig's config, not a fact about this codebase. Absent (no
+    such key, or the root config missing/broken entirely) leaves
+    Instance.name at None, the same backward-compatible degraded state
+    this function has always returned for the primary.
     """
-    profiles = [Instance(None, _PRIMARY_CFG, CFG_ERROR)]
+    primary_name = None
+    _n = _PRIMARY_CFG.optional("daemon.profile_name")
+    if _n not in (vcconfig.ABSENT, vcconfig.NONE):
+        primary_name = _n
+    profiles = [Instance(primary_name, _PRIMARY_CFG, CFG_ERROR,
+                         is_primary=True)]
     if not _PRIMARY_CFG.source:
         return profiles
     if os.path.basename(_PRIMARY_CFG.source) != "vcctrl.yaml":
@@ -9955,7 +9980,53 @@ def _build_instance(inst):
         # prefix instead. That needs every instance built first (see
         # _start_web(), called once from main() after this loop finishes),
         # not one per instance as it is constructed.
-        inst.socket_path = CFG.default("daemon.socket", "/run/vcctrl.sock")
+        #
+        # SOCKET PATHS -- Phase D. A named profile's socket is ALWAYS
+        # /run/vcctrl-<name>.sock, derived from the name, never from its
+        # own daemon.socket -- the same "the naming convention IS the
+        # registry" reasoning bin/vcctrl-client's own profile_socket_path()
+        # already uses, now applied inside the daemon that has to answer to
+        # it. daemon.socket in a NAMED profile's config is vestigial (same
+        # treatment as daemon.web.* in _start_web()) and warned about below
+        # rather than silently honoured, which would let two differently-
+        # configured sockets both claim to be "this profile's socket".
+        #
+        # THE PRIMARY IS DIFFERENT, ON PURPOSE: it ALWAYS binds
+        # daemon.socket (default /run/vcctrl.sock) as a standing alias,
+        # named or not -- every existing bin/vcctrl-client call with no
+        # --profile flag, and agent/vcctrl_mcp.py's default (unset)
+        # `profile` parameter, was built assuming that path reaches "the
+        # main target" and must keep doing so with ZERO behavior change.
+        # A NAMED primary binds BOTH that alias and its own
+        # /run/vcctrl-<name>.sock -- same instance, same Devices, same
+        # Registry, same Arbiter, reachable by either path, not two
+        # independent things that could drift.
+        paths = []
+        if inst.is_primary:
+            paths.append(CFG.default("daemon.socket", "/run/vcctrl.sock"))
+        if inst.name:
+            paths.append("/run/vcctrl-%s.sock" % inst.name)
+        elif not inst.is_primary:
+            # discover_profiles() only ever builds a nameless non-primary
+            # Instance if something upstream changes; today it cannot
+            # happen (siblings are always named from their own filename),
+            # but a socket-less instance would hang forever in
+            # _serve_instance() with no diagnostic at all, so this is
+            # checked here rather than assumed away.
+            sys.stderr.write(
+                "vcctrld: a non-primary profile has no name -- refusing to "
+                "start it rather than guess a socket path\n")
+            return False
+        if not inst.is_primary:
+            _sock_setting = CFG.optional("daemon.socket")
+            if _sock_setting not in (vcconfig.ABSENT, vcconfig.NONE):
+                sys.stderr.write(
+                    "vcctrld: profile %s sets daemon.socket (%r), but a "
+                    "named profile's socket is always /run/vcctrl-%s.sock, "
+                    "derived from its name -- remove daemon.socket from "
+                    "this profile's config.\n"
+                    % (inst.label(), _sock_setting, inst.name))
+        inst.socket_paths = paths
     return True
 
 
@@ -10026,22 +10097,45 @@ def _serve_one_for(conn, inst):
         _serve_one(conn, inst.devs, inst.registry)
 
 
-def _serve_instance(inst):
-    """One profile's accept loop: one thread per connection, exactly as
-    serve() always worked, just now one of possibly several such loops
-    running in this process instead of the only one. See serve()'s own
+def _accept_loop(sock_path, inst):
+    """Bind one socket path and accept connections for it forever, one
+    thread per connection -- exactly as serve() always worked, just now
+    one of possibly several such loops (one per PATH, not per instance --
+    see _serve_instance()) running in this process. See serve()'s own
     former docstring (still true, unchanged) for why one-thread-per-
     connection is safe: every multi-event Devices operation holds
     self.lock for the whole operation, not per event, so concurrent
     `type` calls serialise into intact strings rather than interleaving.
+
+    Every path bound for the SAME inst shares its devs/registry/arbiter --
+    there is exactly one of each per Instance regardless of how many
+    socket paths reach it (see _build_instance()'s own comment on
+    socket_paths), so a lock acquired via one path is the identical
+    Arbiter state seen via the other, not two independent things that
+    could drift.
     """
-    sock_path = inst.socket_path
     if os.path.exists(sock_path):
         os.unlink(sock_path)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(sock_path)
     os.chmod(sock_path, 0o666)
     srv.listen(8)
+    while True:
+        conn, _ = srv.accept()
+        t = threading.Thread(target=_serve_one_for, args=(conn, inst),
+                             daemon=True)
+        t.start()
+
+
+def _serve_instance(inst):
+    """Bind every socket path this instance answers on (see
+    _build_instance()'s socket_paths comment -- a named primary binds
+    both its legacy alias and its own name-derived path) and accept
+    connections on all of them. All but the last path get their own
+    background thread; the last runs its accept loop in THIS thread/
+    call, matching main()'s own contract that _serve_instance(built[0])
+    blocks the process.
+    """
     with _profile_scope(inst.cfg, inst.error):
         if inst.devs.hid_mode:
             kbd_desc = inst.devs.hid_kbd_device
@@ -10050,18 +10144,18 @@ def _serve_instance(inst):
             kbd_desc = inst.devs.kbd.device.path
             mouse_desc = inst.devs.mouse.device.path
     sys.stderr.write(
-        "vcctrld ready: profile=%s socket=%s kbd=%s mouse=%s leds=%s caps=%s\n"
-        % (inst.label(), sock_path, kbd_desc, mouse_desc,
+        "vcctrld ready: profile=%s sockets=%s kbd=%s mouse=%s leds=%s "
+        "caps=%s\n"
+        % (inst.label(), inst.socket_paths, kbd_desc, mouse_desc,
            sorted(inst.devs.led_paths), sorted(inst.registry.caps)))
     if inst.registry.failed:
         sys.stderr.write("vcctrld degraded (profile %s): %s\n"
                          % (inst.label(), sorted(inst.registry.failed)))
     sys.stderr.flush()
-    while True:
-        conn, _ = srv.accept()
-        t = threading.Thread(target=_serve_one_for, args=(conn, inst),
-                             daemon=True)
-        t.start()
+    for path in inst.socket_paths[1:]:
+        threading.Thread(target=_accept_loop, args=(path, inst),
+                         daemon=True).start()
+    _accept_loop(inst.socket_paths[0], inst)
 
 
 def main():
@@ -10104,7 +10198,39 @@ def main():
                 sys.stderr.write("config (profile %s): override %s\n"
                                  % (inst.label(), w))
 
-    built = [inst for inst in profiles if _build_instance(inst)]
+    # EXCLUSIVE HARDWARE GUARD. usb4vc-uinput assumes exactly ONE physical
+    # USB4VC/SPI bridge on this Pi -- true for the primary today, and true
+    # for any future board-swap profile (see profile-kinds/
+    # rgb2hdmi-usb4vc.yaml) sharing the same input mechanism. Two profiles
+    # both building usb4vc-uinput Devices() would each create their own
+    # "vcctrl virtual keyboard"/"vcctrl virtual mouse" uinput pair, and
+    # USB4VC has no concept of which one to trust -- exactly the "hardware
+    # active on more than one profile at once" case the operator ruled out
+    # by policy. Enforced here rather than left as an operator mistake
+    # waiting to happen: the FIRST such profile (discover_profiles() always
+    # puts the primary first) wins the bridge; any other is refused with a
+    # clear reason, same shape as a hid-gadget profile refusing on a
+    # missing device.
+    conflict_free = []
+    claimed_uinput = False
+    for inst in profiles:
+        with _profile_scope(inst.cfg, inst.error):
+            backend = CFG.default("capabilities.input.backend",
+                                  "usb4vc-uinput")
+        if backend == "usb4vc-uinput":
+            if claimed_uinput:
+                sys.stderr.write(
+                    "vcctrld: profile %s also uses "
+                    "capabilities.input.backend: usb4vc-uinput, but another "
+                    "profile already claimed the one physical USB4VC bridge "
+                    "-- refusing to start it rather than create a second "
+                    "uinput keyboard/mouse pair USB4VC cannot arbitrate "
+                    "between.\n" % inst.label())
+                continue
+            claimed_uinput = True
+        conflict_free.append(inst)
+
+    built = [inst for inst in conflict_free if _build_instance(inst)]
     if not built:
         sys.stderr.write("vcctrld: no profile could be started\n")
         return 1

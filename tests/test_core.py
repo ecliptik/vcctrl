@@ -8878,6 +8878,14 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
         "dos": "DOS sources; built elsewhere and delivered on the CF card",
         "internal": "gitignored planning work, not part of any deployment",
         "tests": "run against a checkout, never on the daemon host",
+        # CREATION-TIME SCAFFOLDING ONLY (tools/new-profile.py, itself
+        # shipped since it lives under tools/, reads these) -- nothing in
+        # vcconfig.py/vcctrld.py reads a profile-kinds/*.yaml file at
+        # daemon startup, ever. Deploying it would suggest the running
+        # daemon consults it, which it never does -- see
+        # profile-kinds/vga-ps2.yaml's own comment.
+        "profile-kinds": "read once by tools/new-profile.py to scaffold a "
+                         "new vcctrl-<name>.yaml; vcctrld never reads it",
         # agent/ USED TO be listed here ("runs on the control host, nothing
         # about it belongs on the Pi") until the Pi-hosted MCP server
         # (2026-08-25) made half of that false -- it now ships and installs

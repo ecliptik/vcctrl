@@ -185,6 +185,19 @@ SCHEMA = {
         "prefix": str,
         "state_dir": str,
         "socket": str,
+        # THIS PROFILE'S OWN NAME, e.g. "gateway2000" -- NOT rig.name (a
+        # display label for the whole physical rig, read in exactly one
+        # place: vcconfig's own `config show` print) and NOT harness.profile
+        # (a target-SOFTWARE harness selection, see profiles/doskutsu.yaml --
+        # unrelated, and already using the word "profile" for a different
+        # thing before this key existed). Absent on the root config is a
+        # legitimate, fully-supported answer -- a rig with no declared name
+        # runs exactly as it always has, reachable only at the unnamed
+        # daemon.socket path (see discover_profiles()/_build_instance() in
+        # vcctrld.py). A SIBLING vcctrl-<name>.yaml's own name always comes
+        # from its filename, never from this key -- see discover_profiles()'s
+        # own comment on why the directory listing is the registry.
+        "profile_name": str,
         "usb4vc": {
             "app_dir": str,
             "debug_log": str,

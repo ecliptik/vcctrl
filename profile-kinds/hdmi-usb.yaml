@@ -1,0 +1,69 @@
+# PROFILE KIND: hdmi-usb
+#
+# A target reached over its own real HDMI output and driven by the Pi's own
+# USB-C port acting as a USB HID keyboard+mouse gadget (dwc2 peripheral
+# mode) -- no USB4VC, no SPI, no protocol board, because this kind of
+# target has a real USB port and needs none of that translation. This is
+# what the existing `modernpc` profile already runs; this file documents
+# the SHAPE of that setup for the next target of the same kind.
+#
+# CREATION-TIME SCAFFOLDING ONLY -- see profile-kinds/vga-ps2.yaml's own
+# comment on why nothing reads this file at daemon startup, ever.
+#
+# UNLIKE vga-ps2, this kind IS meant to run as an always-simultaneous
+# sibling profile: the HID gadget and the HDMI capture device are their
+# own dedicated hardware (see docs/FINDINGS.md #44's port-topology note --
+# each hdmi-usb target needs its own dedicated Pi USB port for its capture
+# device, not shared with any other profile's). Requires
+# pi/files/vcctrl-hid-gadget.service to already be running on this Pi
+# (dtoverlay=dwc2,dr_mode=peripheral in /boot/firmware/config.txt, one
+# reboot after it is first added) -- one gadget currently drives ONE
+# hdmi-usb target's keyboard/mouse; a SECOND simultaneous hdmi-usb profile
+# would need its own separate USB-C-capable gadget hardware, which this
+# rig does not have today (the operator's invariant that hardware is only
+# ever active on a single profile applies here too).
+
+capabilities:
+  input:
+    backend: hid-gadget
+    settings:
+      hid_keyboard_device: /dev/hidg0
+      hid_mouse_device: /dev/hidg1
+      pace_s: 0.012
+
+  video:
+    backend: v4l2-ffmpeg
+    settings:
+      # PLACEHOLDER -- by-id, never /dev/videoN, same reasoning as
+      # vga-ps2.yaml's own video device comment. Fill in with this
+      # target's own HDMI capture dongle's by-id path.
+      device: /dev/v4l/by-id/REPLACE_ME-video-index0
+
+  # Everything below is EXPLICITLY `none`, not omitted -- Registry.
+  # _resolve_backend falls back to a capability's OWN class default on an
+  # absent key, not to `none` (see vcctrl-modernpc.example.yaml's own
+  # comment on the live mistake this caught: an early draft that omitted
+  # `camera` entirely started it against /dev/video0, the primary
+  # instance's own room camera). Flip any of these to a real backend only
+  # if this specific target genuinely has its own dedicated hardware for
+  # it, distinct from whatever profile already owns the shared one.
+  leds:
+    backend: none        # no PS/2 return channel over a generic HID gadget
+  power:
+    backend: none         # no smart plug wired to this target
+  audio:
+    backend: none
+  camera:
+    backend: none
+  files:
+    backend: none         # a real Linux box has its own networking, not FTP-from-floppy
+  sysinfo:
+    backend: none
+  board:
+    backend: none          # no swappable protocol board -- this target's identity IS the config
+
+# No targets: list -- board_id is a USB4VC protocol-board concept this kind
+# has none of. keymap()'s board_id/coverage/chords fields report None/null
+# for a profile of this kind, correctly: nothing has measured per-key
+# coverage against a HID gadget target, and there is no protocol board
+# here for a measurement to be about.

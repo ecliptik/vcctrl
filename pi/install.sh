@@ -345,17 +345,45 @@ if [ "${1:-}" = "--hid-gadget-only" ]; then
   exit 0
 fi
 
-# install_modernpc_profile(): the SECOND vcctrld instance, driving the
-# modernpc Linux-server target over the hid-gadget input backend instead of
-# USB4VC/PS2. Runs the SAME /opt/vcctrl/vcctrld.py this function installs
-# (or re-installs, idempotently -- both instances share one $PREFIX, since
-# what differs between them is VCCTRL_CONFIG, not the code); only the
-# config and the systemd unit are instance-specific. See
-# vcctrl-modernpc.example.yaml's own comment for why this is a second
-# process rather than a second target inside one.
-install_modernpc_profile() {
-  if [ ! -f "$SRC/pi/files/vcctrld-modernpc.service" ]; then
-    echo "modernpc: pi/files/vcctrld-modernpc.service not in this checkout, skipping" >&2
+# install_profile(name): a SECOND vcctrld instance driving a named profile
+# (gateway2000, modernpc, or any other -- see profile-kinds/*.yaml and
+# tools/new-profile.py for scaffolding a new one). Runs the SAME
+# /opt/vcctrl/vcctrld.py this function installs (or re-installs,
+# idempotently -- every named profile shares one $PREFIX, since what
+# differs between them is VCCTRL_CONFIG, not the code); only the config
+# and the systemd unit are instance-specific. Replaces the earlier
+# modernpc-specific install_modernpc_profile()/--modernpc-only -- one
+# function, one code path, for any profile name, not a new near-identical
+# function per profile the way that would have kept accreting.
+#
+# THIS IS A TRANSITIONAL SHAPE, DOCUMENTED AS SUCH: it installs a
+# SEPARATE systemd unit per named profile, matching today's still-one-
+# process-per-profile deployment. Once the single-process rewrite
+# (commits 7bdede9/3a973c6 -- discover_profiles()/Instance/_serve_instance
+# in daemon/vcctrld.py) is actually CUT OVER to on the live rig, the
+# primary's own vcctrld.service will auto-discover every sibling
+# vcctrl-<name>.yaml and serve it from the SAME process -- at that point
+# a new profile needs only a new config file, and this function's
+# systemd-unit-per-profile step becomes unnecessary (installing a second
+# unit alongside the auto-discovering primary would just collide trying
+# to bind the same socket). That cutover is Phase E, still to come; this
+# function is what makes the gap between now and then usable for more
+# than one named profile without hand-writing a new install_<name>_
+# profile() every time one is added.
+install_profile() {
+  local name="$1"
+  if [ -z "$name" ]; then
+    echo "install_profile: usage: install_profile <name>" >&2
+    return 1
+  fi
+
+  local cfg_src=""
+  if [ -f "$SRC/vcctrl-${name}.yaml" ]; then
+    cfg_src="$SRC/vcctrl-${name}.yaml"
+  elif [ -f "$SRC/vcctrl-${name}.example.yaml" ]; then
+    cfg_src="$SRC/vcctrl-${name}.example.yaml"
+  else
+    echo "profile ${name}: no vcctrl-${name}.yaml or vcctrl-${name}.example.yaml in this checkout, skipping" >&2
     return 0
   fi
 
@@ -369,47 +397,80 @@ install_modernpc_profile() {
 
   # THE OPERATOR'S REAL CONFIG, NEVER OVERWRITTEN -- same discipline as
   # vcctrl.yaml itself (see vcctrl-repo-conventions): a redeploy that
-  # clobbered an already-tuned modernpc config back to the tracked example
+  # clobbered an already-tuned profile config back to a tracked example
   # would be the same mistake as scrubbing a live config into a template,
   # just aimed at a file this script writes instead of one a person edits
   # by hand off-repo.
-  if [ -f "$PREFIX/vcctrl-modernpc.yaml" ]; then
-    echo "modernpc: $PREFIX/vcctrl-modernpc.yaml already exists, leaving it untouched"
-  elif [ -f "$SRC/vcctrl-modernpc.example.yaml" ]; then
-    sudo install -m 0644 "$SRC/vcctrl-modernpc.example.yaml" \
-      "$PREFIX/vcctrl-modernpc.yaml"
-    echo "modernpc: installed the example config to $PREFIX/vcctrl-modernpc.yaml -- edit it for this rig's real device paths before relying on it"
+  if [ -f "$PREFIX/vcctrl-${name}.yaml" ]; then
+    echo "profile ${name}: $PREFIX/vcctrl-${name}.yaml already exists, leaving it untouched"
+  else
+    sudo install -m 0644 "$cfg_src" "$PREFIX/vcctrl-${name}.yaml"
+    echo "profile ${name}: installed $(basename "$cfg_src") to $PREFIX/vcctrl-${name}.yaml -- edit it for this rig's real device paths before relying on it"
   fi
 
-  sudo install -m 0644 "$SRC/pi/files/vcctrld-modernpc.service" \
-    /etc/systemd/system/vcctrld-modernpc.service
+  # ONE PARAMETERIZED UNIT-WRITER (heredoc, matching install_mcp()'s/
+  # install_hid_gadget()'s own pattern), not a static per-profile .service
+  # file -- this replaces the earlier, modernpc-only
+  # pi/files/vcctrld-modernpc.service outright, so there is exactly one
+  # code path for "install a named profile's systemd unit" rather than a
+  # static file AND a heredoc that could drift apart.
+  sudo tee "/etc/systemd/system/vcctrld-${name}.service" >/dev/null <<UNIT
+[Unit]
+Description=vcctrld -- profile ${name}
+# Ordering only, not a hard dependency: an hid-gadget profile needs
+# /dev/hidg0/1 to exist before Devices() tries to open them, but
+# vcctrld.py's own main() checks explicitly and refuses with a clear
+# message rather than a raw traceback if they are missing -- see its
+# "hid-gadget but ... does not exist" pre-flight check. Harmless for a
+# profile that is not hid-gadget-based (vga-ps2/rgb2hdmi-usb4vc kinds),
+# since vcctrl-hid-gadget.service starting first costs nothing for them.
+After=vcctrl-hid-gadget.service
+
+[Service]
+Type=simple
+# SAME BINARY as the primary vcctrld.service and every other profile's
+# unit -- one implementation, not a forked copy per profile that can
+# drift. VCCTRL_CONFIG is the entire difference between instances.
+ExecStart=/usr/bin/python3 -u ${PREFIX}/vcctrld.py
+Environment=PYTHONPATH=${PREFIX}
+Environment=VCCTRL_CONFIG=${PREFIX}/vcctrl-${name}.yaml
+Restart=always
+RestartSec=2
+# Needs root for whatever this profile's own input backend needs
+# (/dev/hidg0/1 for hid-gadget, /dev/uinput for usb4vc-uinput) -- same
+# as the primary vcctrld.service.
+User=root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
   sudo systemctl daemon-reload
-  sudo systemctl enable vcctrld-modernpc
+  sudo systemctl enable "vcctrld-${name}"
 
-  if [ -z "$(ls /dev/hidg0 /dev/hidg1 2>/dev/null)" ]; then
-    echo "modernpc: /dev/hidg0 or /dev/hidg1 not present yet -- enabled, and Restart=always will bring it up once vcctrl-hid-gadget.service has run (see --hid-gadget-only)"
+  if grep -q 'backend: *hid-gadget' "$PREFIX/vcctrl-${name}.yaml" 2>/dev/null \
+      && [ -z "$(ls /dev/hidg0 /dev/hidg1 2>/dev/null)" ]; then
+    echo "profile ${name}: /dev/hidg0 or /dev/hidg1 not present yet -- enabled, and Restart=always will bring it up once vcctrl-hid-gadget.service has run (see --hid-gadget-only)"
   fi
-  sudo systemctl restart vcctrld-modernpc
+  sudo systemctl restart "vcctrld-${name}"
   sleep 3
-  sudo systemctl --no-pager --lines=15 status vcctrld-modernpc || true
+  sudo systemctl --no-pager --lines=15 status "vcctrld-${name}" || true
 
-  # NO `tailscale serve --set-path=/p/modernpc ...` HERE ANY MORE. Phase 4
-  # added it (this function used to end with it) to reach modernpc's own,
-  # separate WebCapability on :8180 by stripping that prefix at the proxy.
-  # Phase C moved the routing INSIDE vcctrld's single-process web layer
-  # instead (daemon/vcweb.py's Handler._route_profile()) -- a `/p/modernpc/`
-  # request now reaches the primary's own web port and is routed to
-  # modernpc's registry from there, so a second `tailscale serve` mapping
-  # to a second port would be pointing at a WebCapability that no longer
-  # exists once vcctrld-modernpc.service itself is retired (Phase D/E).
-  # This function still installs and starts vcctrld-modernpc.service as its
-  # own process for now -- that retirement is Phase D/E's job, not this
-  # one's -- but it no longer asserts a serve mapping for a web port this
-  # phase's own code will stop being the one that matters.
+  # NO `tailscale serve --set-path=/p/<name> ...` HERE. Phase 4 added one
+  # for modernpc specifically to reach its own, separate WebCapability by
+  # stripping that prefix at the proxy; Phase C moved routing INSIDE
+  # vcctrld's single-process web layer instead (daemon/vcweb.py's
+  # Handler._route_profile()), so a `/p/<name>/` request reaches the
+  # primary's own web port and is routed from there -- once the
+  # single-process cutover (Phase E) has happened. Until then, this named
+  # profile's OWN web capability (started by its own separate process,
+  # per its config's now-vestigial daemon.web.* settings -- see Phase C's
+  # commit message) is reachable only directly on the Pi, not through the
+  # primary's tailnet hostname; that gap closes at the Phase E cutover,
+  # not before.
 }
 
-if [ "${1:-}" = "--modernpc-only" ]; then
-  install_modernpc_profile
+if [ "${1:-}" = "--profile-only" ]; then
+  install_profile "${2:-}"
   exit 0
 fi
 

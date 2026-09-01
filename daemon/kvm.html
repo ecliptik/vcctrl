@@ -3061,14 +3061,21 @@ const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
 const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 
 // ------------------------------------------------------------------ profile
-// Which vcctrld instance this page talks to. '' is the primary DOS/Mac
-// instance at this page's own origin -- every URL below has always meant
-// that instance, unchanged. A non-empty id is a `tailscale serve
-// --set-path` prefix (see pi/install.sh's install_modernpc_profile) that the
-// PROXY strips before the request reaches that instance's own vcweb.py --
-// verified live, including a real WebSocket upgrade through the prefix
-// reaching vcctrld's own handler unmodified, not a 404 from the wrong
-// route table.
+// Which vcctrld instance this page talks to. '' is the primary instance at
+// this page's own origin -- every URL below has always meant that
+// instance, unchanged. A non-empty id is a /p/<name> prefix that vcweb.py
+// ITSELF strips before dispatching to that profile's registry (Phase C --
+// this used to be a `tailscale serve --set-path` proxy mapping; the
+// routing moved inside the daemon, and this page's URLs did not need to
+// change when that happened, which is the point of routing on a stable
+// path shape either way).
+//
+// LABELS ARE HARDCODED, not read from live state: each profile's clearest,
+// most consistent label is its own configured name (daemon.profile_name),
+// and there is no single existing live endpoint that reports it without
+// selecting a profile first -- the same chicken-and-egg this switcher
+// exists to solve. Two profiles is little enough to hand-maintain; revisit
+// if a `vcctrl profiles`-shaped endpoint gets added to vcweb.py itself.
 //
 // NOT wired through this yet: /timeline.json, /keymap.json, /shot.jpg,
 // /lastgood.jpg, /frame.jpg, /buffer.avi, /pulled and the second camera's
@@ -3078,7 +3085,7 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // needs to do to be useful, and are what this covers; the rest is a later
 // pass, not an oversight.
 const PROFILES = [
-  {id: '', label: 'DOS/RetroPC'},
+  {id: '', label: 'gateway2000'},
   {id: '/p/modernpc', label: 'modernpc'},
 ];
 let PROFILE_BASE = localStorage.getItem('vcctrl.profile') || '';

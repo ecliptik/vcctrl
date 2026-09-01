@@ -345,29 +345,39 @@ if [ "${1:-}" = "--hid-gadget" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# MODERNPC PROFILE ONLY. Installs/restarts the SECOND vcctrld instance
-# (vcctrld-modernpc.service) -- the PRIMARY instance's own vcctrld.service is
-# never touched by this path, so this needs no guard_busy check either, same
-# reasoning as --mcp/--public/--hid-gadget above.
-if [ "${1:-}" = "--modernpc" ]; then
+# A NAMED PROFILE ONLY (--profile <name>, e.g. --profile modernpc). Installs/
+# restarts that SECOND vcctrld instance (vcctrld-<name>.service) -- the
+# PRIMARY instance's own vcctrld.service is never touched by this path, so
+# this needs no guard_busy check either, same reasoning as
+# --mcp/--public/--hid-gadget above. Replaces the earlier modernpc-specific
+# --modernpc mode -- one code path for any profile name, matching
+# pi/install.sh's own install_profile() generalization.
+if [ "${1:-}" = "--profile" ]; then
+  name="${2:-}"
+  if [ -z "$name" ]; then
+    echo "usage: pi/deploy.sh --profile <name>" >&2
+    exit 1
+  fi
   bash -n "$SRC/pi/install.sh" || { echo "refusing: pi/install.sh does not parse" >&2; exit 1; }
   python3 -m py_compile "$SRC/daemon/vcctrld.py" || \
     { echo "refusing: daemon/vcctrld.py does not compile" >&2; exit 1; }
-  rdir="/tmp/vcctrl-modernpc-deploy.$$"
-  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files" || explain_hang
+  rdir="/tmp/vcctrl-profile-${name}-deploy.$$"
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi" || explain_hang
   $SCP "$SRC/daemon/vcctrld.py" "$SRC/daemon/vcweb.py" "$SRC/daemon/vcsysinfo.py" \
     "$SRC/daemon/kvm.html" "$SRC/daemon/themes.css" "$SRC/daemon/keycoverage.json" \
     "$HOST:$rdir/daemon/" || explain_hang
   $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
-  $SCP "$SRC/pi/files/vcctrld-modernpc.service" "$HOST:$rdir/pi/files/" || explain_hang
-  # The example config too, but ONLY if a real one is not already deployed --
-  # install_modernpc_profile() (running remotely below) makes that same check
-  # itself; shipping it here regardless is harmless since it never overwrites.
-  [ -f "$SRC/vcctrl-modernpc.example.yaml" ] && \
-    { $SCP "$SRC/vcctrl-modernpc.example.yaml" "$HOST:$rdir/" || explain_hang; }
-  $SSH "$HOST" "bash $rdir/pi/install.sh --modernpc-only; rc=\$?; rm -rf $rdir; exit \$rc" \
+  # Ship whichever of the real or example config exists -- install_profile()
+  # (running remotely below) makes the same "real one already deployed?"
+  # check itself before ever touching what is on the Pi; shipping both when
+  # both exist locally is harmless since only the missing one is ever used.
+  [ -f "$SRC/vcctrl-${name}.yaml" ] && \
+    { $SCP "$SRC/vcctrl-${name}.yaml" "$HOST:$rdir/" || explain_hang; }
+  [ -f "$SRC/vcctrl-${name}.example.yaml" ] && \
+    { $SCP "$SRC/vcctrl-${name}.example.yaml" "$HOST:$rdir/" || explain_hang; }
+  $SSH "$HOST" "bash $rdir/pi/install.sh --profile-only $name; rc=\$?; rm -rf $rdir; exit \$rc" \
     || explain_hang
-  echo "installed vcctrld-modernpc (primary vcctrld untouched)"
+  echo "installed vcctrld-${name} (primary vcctrld untouched)"
   exit 0
 fi
 
