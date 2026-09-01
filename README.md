@@ -10,6 +10,46 @@ hooks an agent (Claude Code, Codex, ...) up to vcctrl directly over MCP.
 **[docs/SKILLS.md](./docs/SKILLS.md)** carries rig/repo domain knowledge to
 any of those same agents as portable `SKILL.md` files.
 
+## Connect an agent: skills vs. MCP
+
+Two different things, on purpose. **Skills** are portable knowledge --
+copying them into another repo costs nothing and grants nothing. **MCP**
+is real ability to drive physical hardware -- treat registering it as a
+hardware-access decision, not a documentation one, and never bake a rig's
+real hostname into a tracked/committed file (see `CLAUDE.md`).
+
+**Skills** (Claude Code, Codex, Cursor, ...), no vcctrl checkout needed:
+
+```sh
+npx skills add https://forgejo.example.com/ecliptik/vcctrl.git \
+  --full-depth --all -a claude-code -y   # --agent codex for Codex
+```
+
+Installs all 7 skills into `.agents/skills/` (symlinked into
+`.claude/skills/` for Claude Code). `--full-depth` is required -- there's no
+`SKILL.md` at the repo root. See [docs/SKILLS.md](./docs/SKILLS.md) sec. 8
+for the same-machine symlink alternative and sec. 5 for verifying a skill
+actually loaded (Claude Code needs a session restart for a brand-new
+directory; Codex picks it up live).
+
+**MCP** (drives the real rig):
+
+```sh
+# daemon mode -- once deployed (docs/MCP-SERVER.md sec. 4), no local checkout
+claude mcp add --transport http vcctrl-mcp-daemon https://<rig>.ts.net/mcp
+codex mcp add vcctrl-mcp-daemon --url https://<rig>.ts.net/mcp
+
+# control mode -- needs a local clone + venv
+cd vcctrl
+python3 -m venv agent/.venv && agent/.venv/bin/pip install -r agent/requirements.txt
+claude mcp add vcctrl-mcp -- "$(pwd)/agent/.venv/bin/python3" "$(pwd)/agent/vcctrl_mcp.py"
+```
+
+Restart the session afterward -- `/mcp` doesn't pick up a freshly
+registered server live. Full reasoning, the safety model (shared input
+lock, named `confirm=` arguments, board-scoped power), and Codex config-file
+syntax: [docs/MCP-SERVER.md](./docs/MCP-SERVER.md).
+
 ## Layout
 
 ```

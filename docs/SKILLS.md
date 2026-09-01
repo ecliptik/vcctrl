@@ -15,9 +15,13 @@ that can drift.
 
 | skill | triggers on | carries |
 |---|---|---|
-| `vcctrl-rig-hazards` | interpreting a capture/status read, writing or editing DOS batch files this rig runs, trusting a single frame/keystroke/config file as ground truth | black-frame-vs-black-screen, fps surviving a dead source, config-file-vs-running-state, DOS 6.22's non-escaping caret, `REM` lines still redirecting, Caps Lock/OCR input hazards, cell-inherits-boot-profile, board-vs-machine identity |
+| `vcctrl-camera` | the primary VGA capture is frozen/no-signal and an independent witness of physical machine state is needed, or anything about the "second camera"/hardware camera/room camera | reading the second, discretionary UVC webcam via `vcctrl_camera_state`/`_shot`, why it keeps no ring/judgement, its mount-orientation history, why it's out-of-band from the primary capture stick |
+| `vcctrl-common-workflows` | about to ACCOMPLISH a common task (file upload/download, power action, typing text, individual keys, chords, capturing frames, harness workflows) -- not just one isolated `vcctrl_*` call | recipe-level call sequences per task; pairs with `vcctrl-mcp-workflows` for the locking/confirmation discipline that applies across all of them |
+| `vcctrl-dinspect-sysinfo` | asked to refresh, check, or explain the KVM's "DOS System (dinspect)" panel, or after any physical swap of the target's board, card, or peripherals | updating the vendored `dinspect.exe`, staging it on the card, re-scanning after a hardware change |
 | `vcctrl-mcp-workflows` | calling any `vcctrl_*` MCP tool that sends input, changes power state, reboots the target, or runs a harness workflow | the shared hardware lock and its refuse-don't-force behavior, named `confirm=` arguments, verify-after-input discipline, control-vs-daemon-mode tool availability, everything being audit-visible |
 | `vcctrl-repo-conventions` | creating a file in this repo, running a broad `git add`, writing a commit message | `internal/` vs `docs/`, a measurement is never planning work, `vcctrl.yaml` stays real and untracked, commit messages must state what a fix does *not* fix |
+| `vcctrl-rig-hazards` | interpreting a capture/status read, writing or editing DOS batch files this rig runs, trusting a single frame/keystroke/config file as ground truth | black-frame-vs-black-screen, fps surviving a dead source, config-file-vs-running-state, DOS 6.22's non-escaping caret, `REM` lines still redirecting, Caps Lock/OCR input hazards, cell-inherits-boot-profile, board-vs-machine identity |
+| `vcctrl-webkvm-copy` | writing or editing any `title=`, `hint()`, `confirm()`, or visible label/text in `kvm.html` | voice/wording rules for user-facing copy -- tooltip length, which internal harness words must not leak into it, naming the system instead of "the target" |
 
 Each file is short enough to read directly -- open
 `.agents/skills/<name>/SKILL.md` for the full text; the table above is a
