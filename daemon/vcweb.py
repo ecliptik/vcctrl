@@ -518,7 +518,49 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routes -------------------------------------------------------------
 
+    def _route_profile(self):
+        """Strip a leading /p/<name>/ path prefix, if this request has one,
+        and bind which profile's registry the rest of THIS request
+        resolves to (see WebCapability.registry). No prefix means the
+        primary -- byte-for-byte the same as every route's behavior before
+        multiple profiles existed, since self.path is left untouched in
+        that case.
+
+        Kept as a prefix-strip on self.path itself, rather than a parallel
+        "effective path" threaded through do_GET/do_POST/_websocket/_mjpeg,
+        so every EXISTING literal comparison and query-string parse in this
+        class (there are over a dozen) keeps reading self.path and needs no
+        change at all.
+
+        AN UNRECOGNIZED PROFILE NAME 404s OUTRIGHT rather than silently
+        falling back to the primary. That silent-fallback shape is exactly
+        the "an unqualified request reaches the wrong thing" mistake this
+        repo has already been bitten by once (see pi/files/
+        tailscaled-ro.service's own comment on commit 7473eb5) -- a typo'd
+        or stale profile name in a bookmarked URL must be visibly wrong,
+        not quietly reroute to whatever the primary happens to be.
+
+        Returns True if the request should continue being handled (by the
+        caller, do_GET/do_POST), False if a response was already sent (the
+        unrecognized-profile 404) and the caller must return immediately.
+        """
+        path, _, query = self.path.partition("?")
+        profile = None
+        if path == "/p" or path.startswith("/p/"):
+            name, _, tail = path[len("/p/"):].partition("/") \
+                if path.startswith("/p/") else ("", "", "")
+            if name not in self.cap._registries:
+                self._json({"error": "unknown profile: %r" % name}, 404)
+                return False
+            profile = name
+            path = "/" + tail
+        self.cap._route_ctx.profile = profile
+        self.path = path + (("?" + query) if query else "")
+        return True
+
     def do_GET(self):
+        if not self._route_profile():
+            return
         path = self.path.split("?", 1)[0]
         try:
             if path == "/":
@@ -741,6 +783,8 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def do_POST(self):
+        if not self._route_profile():
+            return
         try:
             n = int(self.headers.get("Content-Length") or 0)
             req = json.loads(self.rfile.read(n) or b"{}")
@@ -1092,8 +1136,25 @@ class WebCapability(object):
         "note", "note_set",
     ])
 
-    def __init__(self, registry, bind, port, tls_port=0, cert=None, key=None):
-        self.registry = registry
+    def __init__(self, registries, bind, port, tls_port=0, cert=None, key=None):
+        # DICT, keyed by profile name (None = the primary/default profile,
+        # matching vcctrld.py's own Instance.name convention) -- Phase C.
+        # A caller passing a single Registry-like object (not a dict) gets
+        # it wrapped as {None: registries}, so a single-profile process
+        # (or a test constructing one WebCapability for one fake registry,
+        # e.g. tests/test_core.py's `Reg()`) needs no change at all.
+        self._registries = (registries if isinstance(registries, dict)
+                            else {None: registries})
+        # Which profile's registry `self.registry` (below) resolves to,
+        # for the CALLING THREAD -- ThreadingHTTPServer gives each
+        # connection its own thread, and Handler._route_profile() binds
+        # this once per request from the /p/<name>/ path prefix, exactly
+        # the same pattern vcctrld.py's own _profile_scope uses for CFG,
+        # and for the same reason: rewriting every self.registry.xxx call
+        # site below (call/video/audio/camera/snapshot/...) to take an
+        # explicit registry parameter would touch most of this class for
+        # no behavioral gain.
+        self._route_ctx = threading.local()
         self.bind = bind
         self.port = port
         self.tls_port = tls_port
@@ -1178,6 +1239,17 @@ class WebCapability(object):
     def stop(self):
         if self.httpd:
             self.httpd.shutdown()
+
+    @property
+    def registry(self):
+        """The registry the CALLING THREAD is currently routed to -- see
+        _route_ctx's own comment in __init__. Defaults to the primary
+        (key None) on a thread that never bound one, same
+        backward-compatibility floor _profile_scope's default gives CFG in
+        vcctrld.py: a single-profile process (nothing ever calls
+        _route_profile with a /p/ prefix) behaves exactly as it always
+        has."""
+        return self._registries.get(getattr(self._route_ctx, "profile", None))
 
     # -- bridge into the rest of the daemon ---------------------------------
 

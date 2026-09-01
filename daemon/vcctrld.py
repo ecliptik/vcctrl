@@ -9611,40 +9611,15 @@ class Registry(object):
         """
         return handle(self.devs, self, req)
 
-    def start_web(self):
-        """Started after the registry, because it is a view onto the others.
-
-        Failure here is reported and survivable: no browser, everything else
-        untouched. That is rule 2 with the one capability most likely to break.
-
-        bind/port/tls_port/cert/key are resolved FRESH from CFG here, not
-        read from the WEB_BIND/WEB_PORT/WEB_TLS_PORT module constants --
-        those are frozen at import time from whichever profile was bound to
-        CFG then (the primary's), so a second profile with its own
-        daemon.web.port (modernpc: 8180, not the primary's 8080) would
-        otherwise silently get the primary's port and the two WebCapability
-        instances would collide trying to bind the same one. This method is
-        always called inside _profile_scope(that profile's cfg) (see
-        _build_instance), so these resolve correctly per profile.
-        """
-        try:
-            import vcweb
-            bind = CFG.default("daemon.web.bind", "127.0.0.1")
-            port = int(CFG.default("daemon.web.port", 8080))
-            tls_port = int(CFG.default("daemon.web.tls_port", 8443))
-            cert, key = _tls_paths()
-            web = vcweb.WebCapability(self, bind, port, tls_port=tls_port,
-                                      cert=cert, key=key)
-            web.start()
-        except Exception as exc:
-            self.failed["web"] = "%s: %s" % (type(exc).__name__, exc)
-            sys.stderr.write("capability web failed to start: %s\n"
-                             % self.failed["web"])
-            return None
-        self.caps["web"] = web
-        sys.stderr.write("web ui on http://%s:%d/  tls=%s\n"
-                         % (bind, port, tls_port if web.tls_up else "unavailable"))
-        return web
+    # start_web() used to live here: one call per Registry, one
+    # WebCapability, one port -- correct back when at most one Registry
+    # existed per process. Phase C moved it to module-level _start_web(),
+    # called once from main() after EVERY profile's Registry is built, so
+    # one WebCapability can be handed all of them (see _start_web's own
+    # docstring). A lone Registry built outside main() (a test, most
+    # likely) has no equivalent one-liner anymore; construct
+    # vcweb.WebCapability({None: registry}, ...) directly -- that dict
+    # form is exactly what a single-profile process builds internally.
 
     def configured_targets(self):
         """The `targets:` list as the page needs it, or [] when unconfigured.
@@ -9974,9 +9949,72 @@ def _build_instance(inst):
                     "warning: USB4VC has not opened %s (profile %s)\n"
                     % ([k for k, v in held.items() if not v], inst.label()))
         inst.registry = Registry(inst.devs)
-        inst.registry.start_web()
+        # NOT inst.registry.start_web() here (Phase B still did, one call
+        # per profile, one port per profile) -- Phase C's whole point is
+        # ONE web port for every profile, reached via a /p/<name>/ path
+        # prefix instead. That needs every instance built first (see
+        # _start_web(), called once from main() after this loop finishes),
+        # not one per instance as it is constructed.
         inst.socket_path = CFG.default("daemon.socket", "/run/vcctrl.sock")
     return True
+
+
+def _start_web(built):
+    """ONE vcweb.WebCapability shared by every built instance -- Phase C.
+
+    Bound to the FIRST built instance's own daemon.web.* settings, not
+    hard-coded to "the primary": discover_profiles() always puts the
+    primary first, but if its own _build_instance() failed (today, only
+    the hid-gadget missing-device check can do that) while a named
+    profile succeeded, that profile is the only sensible thing left to
+    own the one shared port -- there is nothing else running to share it
+    with. In the normal case this is simply the primary.
+
+    A NAMED PROFILE'S OWN daemon.web.* SETTINGS ARE NOW VESTIGIAL. Before
+    this phase each profile had its own WebCapability on its own port
+    (modernpc: 8180); now there is one port total, reached at
+    /p/<name>/... instead. Warn rather than silently ignore -- a leftover
+    daemon.web.port in an old per-profile config should not look like it
+    is still doing something when it no longer is.
+    """
+    primary = built[0]
+    for inst in built[1:]:
+        with _profile_scope(inst.cfg, inst.error):
+            for key in ("bind", "port", "tls_port"):
+                if CFG.optional("daemon.web.%s" % key) is not vcconfig.ABSENT:
+                    sys.stderr.write(
+                        "vcctrld: profile %s sets daemon.web.%s, but only "
+                        "the first-built instance's web settings are used "
+                        "now -- reachable at /p/%s/... on that one shared "
+                        "port instead. Remove it from this profile's "
+                        "config.\n" % (inst.label(), key, inst.label()))
+
+    registries = {inst.name: inst.registry for inst in built}
+    with _profile_scope(primary.cfg, primary.error):
+        bind = CFG.default("daemon.web.bind", "127.0.0.1")
+        port = int(CFG.default("daemon.web.port", 8080))
+        tls_port = int(CFG.default("daemon.web.tls_port", 8443))
+        cert, key = _tls_paths()
+    try:
+        import vcweb
+        web = vcweb.WebCapability(registries, bind, port, tls_port=tls_port,
+                                  cert=cert, key=key)
+        web.start()
+    except Exception as exc:
+        sys.stderr.write("capability web failed to start: %s: %s\n"
+                         % (type(exc).__name__, exc))
+        return None
+    # Every instance's OWN `caps` report should still list "web" as
+    # present, same as when start_web() set this on its own registry --
+    # a client checking any one profile's socket still sees it has a web
+    # UI, even though the process behind it is now shared.
+    for inst in built:
+        inst.registry.caps["web"] = web
+    sys.stderr.write(
+        "web ui on http://%s:%d/  tls=%s  profiles=%s\n"
+        % (bind, port, tls_port if web.tls_up else "unavailable",
+           sorted(inst.label() for inst in built)))
+    return web
 
 
 def _serve_one_for(conn, inst):
@@ -10070,6 +10108,8 @@ def main():
     if not built:
         sys.stderr.write("vcctrld: no profile could be started\n")
         return 1
+
+    _start_web(built)
 
     # Every profile but the first gets its own background accept-loop
     # thread. The FIRST ONE (always the primary/default profile, unless it
