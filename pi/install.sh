@@ -392,6 +392,41 @@ install_modernpc_profile() {
   sudo systemctl restart vcctrld-modernpc
   sleep 3
   sudo systemctl --no-pager --lines=15 status vcctrld-modernpc || true
+
+  # SAME HOSTNAME, PATH-BASED -- verified live before writing this: `tailscale
+  # serve --set-path` strips the prefix before proxying, so modernpc's own
+  # vcweb.py sees "/state.json"/"/ws"/etc. exactly as it does when hit
+  # directly on :8180, unmodified. Confirmed for both plain HTTP routes and a
+  # real WebSocket upgrade (curl and a raw wrapped-socket HTTP/1.1 Upgrade
+  # request against /p/modernpc/ws both reached vcctrld's own WS handler,
+  # "Server: vcctrld Python/3.13.5", not a 404 from the wrong route table).
+  # A NEW TAILSCALE-ISSUED PORT (the other candidate design) was rejected
+  # without needing a running test: it would work too, but a path under the
+  # SAME hostname/cert the primary instance and /mcp already use is one
+  # fewer thing to explain to kvm.html's switcher and one fewer port to
+  # remember -- and this repo already has precedent for exactly this shape
+  # (install_mcp()'s own --set-path=/mcp, right above in this file).
+  #
+  # UNCONDITIONAL re-assert, no "already mapped" check first -- unlike
+  # install_tailscaled_ro()'s own mapping (see its comment on the 7473eb5
+  # Funnel lesson): that guard exists because re-running `serve` against an
+  # ALREADY FUNNELED path silently clears AllowFunnel. This mapping is
+  # tailnet-only, like the primary's own `/` and `/mcp` (both of which
+  # ALSO re-assert unconditionally on every install, right below in this
+  # file) -- there is no Funnel flag here for a redundant call to disturb.
+  JZ_TS_NAME="$(tailscale status --json 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)"
+  if [ -n "$JZ_TS_NAME" ]; then
+    if sudo tailscale serve --bg --https=443 --set-path=/p/modernpc \
+         "http://127.0.0.1:8180" >/dev/null 2>&1; then
+      echo "https://${JZ_TS_NAME}/p/modernpc  -> vcctrld-modernpc"
+    else
+      echo "note: could not add the /p/modernpc tailscale serve path -- vcctrld-modernpc is still reachable at 127.0.0.1:8180 on the Pi itself"
+    fi
+    # Read back rather than trust the exit code alone -- same discipline as
+    # every other tailscale serve call in this file, for the same reason.
+    sudo tailscale serve status || true
+  fi
 }
 
 if [ "${1:-}" = "--modernpc-only" ]; then

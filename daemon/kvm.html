@@ -2367,6 +2367,28 @@
     <!-- Fit to Screen acts on the PICTURE; the three to its right open panels
          about the rig. The rule is where that changes. -->
     <span class="sep" aria-hidden="true">|</span>
+    <!-- A DELIBERATELY SEPARATE, SELF-CONTAINED CONTROL -- not built on
+         openPop()/closePop()/the shared #pop-* popmenu system those use.
+         That system keys per-menu CSS positioning by name and wires up
+         `#pop-zoom button` (and similarly for the others) with ONE loop
+         per menu that assumes every button inside means the same kind of
+         thing (e.g. setZoom's own `for (const b of
+         document.querySelectorAll('#pop-zoom button'))`). Reusing an
+         EXISTING menu for this risked exactly that: a profile button with
+         no `data-zoom` swept into a handler meant for one, or vice versa.
+         A second, independent dropdown costs a few more lines and cannot
+         collide with a system that has no idea it exists.
+    -->
+    <button id="profilebtn" aria-haspopup="true" aria-expanded="false"
+            title="Which target this page controls">
+      <span class="bi">🎯</span><span id="profilelabel">DOS/RetroPC</span><span class="caret dn" aria-hidden="true"></span>
+    </button>
+    <div id="profilemenu" role="menu" hidden
+         style="position:absolute;z-index:50;min-width:9em;
+                background:var(--panel,#222);color:var(--fg,#eee);
+                border:1px solid var(--border,#555);border-radius:6px;
+                padding:4px;box-shadow:0 4px 12px rgba(0,0,0,.4);"></div>
+    <span class="sep" aria-hidden="true">|</span>
     <!-- The two column panels, and they behave like the tabs on a phone:
          each opens its own thing, and pressing the lit one puts the column
          away. The drawn pane icon that used to collapse the column is gone --
@@ -3038,6 +3060,59 @@ localStorage.setItem('vcctrl.opts', JSON.stringify(OPTS));
 const cv = $('screen'), ctx = cv.getContext('2d', {alpha:false});
 const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 
+// ------------------------------------------------------------------ profile
+// Which vcctrld instance this page talks to. '' is the primary DOS/Mac
+// instance at this page's own origin -- every URL below has always meant
+// that instance, unchanged. A non-empty id is a `tailscale serve
+// --set-path` prefix (see pi/install.sh's install_modernpc_profile) that the
+// PROXY strips before the request reaches that instance's own vcweb.py --
+// verified live, including a real WebSocket upgrade through the prefix
+// reaching vcctrld's own handler unmodified, not a 404 from the wrong
+// route table.
+//
+// NOT wired through this yet: /timeline.json, /keymap.json, /shot.jpg,
+// /lastgood.jpg, /frame.jpg, /buffer.avi, /pulled and the second camera's
+// own endpoints -- those keep addressing the PRIMARY instance regardless of
+// which profile is selected. Video (ws/mjpeg/wsaudio) and the live command
+// loop (/cmd, /state.json, /events) are what a profile switch actually
+// needs to do to be useful, and are what this covers; the rest is a later
+// pass, not an oversight.
+const PROFILES = [
+  {id: '', label: 'DOS/RetroPC'},
+  {id: '/p/modernpc', label: 'modernpc'},
+];
+let PROFILE_BASE = localStorage.getItem('vcctrl.profile') || '';
+if (!PROFILES.some(p => p.id === PROFILE_BASE)) PROFILE_BASE = '';
+function apiPath(p) { return PROFILE_BASE + p; }
+
+// Tears down and rebuilds every live connection against the new profile's
+// origin. restart() already does the right thing for video (drop the
+// socket, reset the mjpeg <img>, reconnect) as long as wsURL()/img.src read
+// PROFILE_BASE at call time, which they do below -- so switching profile is
+// "change the prefix, then call the same recovery paths a dropped
+// connection already uses", not a second code path to keep in sync with
+// the first.
+function switchProfile(id) {
+  if (id === PROFILE_BASE) return;
+  if (!PROFILES.some(p => p.id === id)) return;
+  PROFILE_BASE = id;
+  localStorage.setItem('vcctrl.profile', id);
+  addLine(new Date(), 'transport',
+          'switched profile -> ' + (PROFILES.find(p => p.id === id) || {}).label,
+          'k-note');
+  tlsPort = 0;               // belongs to whichever instance last set it
+  // seq is a per-DAEMON event sequence counter (pollEvents' `?since=`) --
+  // carrying the old instance's high-water mark over would make the new
+  // instance's own, independently-numbered log look permanently empty
+  // rather than erroring, since `since=<a number modernpc's own counter has
+  // not reached yet>` is a valid, silently-empty request.
+  if (typeof seq !== 'undefined') seq = 0;
+  restart();
+  if (typeof stopAudio === 'function') stopAudio();
+  if (typeof soundOn !== 'undefined' && soundOn
+      && typeof startAudio === 'function') startAudio();
+}
+
 // ------------------------------------------------------------------ transport
 // Two paths, because the WebSocket came up blank on an iPhone while the
 // server-side handshake was provably fine, and a KVM that shows nothing is
@@ -3475,7 +3550,7 @@ function useMjpeg(why) {
   cv.style.display = 'none';
   img.style.display = '';
   // Cache-buster: without it Safari may reuse a dead stream on reconnect.
-  img.src = '/stream.mjpg?fps=' + MJPEG_FPS + '&t=' + Date.now();
+  img.src = apiPath('/stream.mjpg') + '?fps=' + MJPEG_FPS + '&t=' + Date.now();
   img.onload = gotFrame;
   // A dead multipart stream renders as a broken-image icon and stays that way
   // forever. That is what a suspended iOS tab produces on return, and it is
@@ -3509,10 +3584,18 @@ function wsURL() {
   // frames written and the connection errored. This port advertises http/1.1
   // only, which is the configuration that carried 2 MB intact.
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  // The direct-TLS-port path bypasses `tailscale serve` entirely -- it opens
+  // a socket straight to the daemon's own in-process listener, not through
+  // the path-prefixed proxy mapping -- so it must NOT carry PROFILE_BASE:
+  // there is no proxy on that path to strip the prefix, and the backend's
+  // own flat route table has no route for a prefixed path at all. In
+  // practice this only ever fires for the primary instance today (modernpc's
+  // own in-process TLS listener has no certificate yet, so its /state.json
+  // reports no usable tlsPort and this branch never triggers for it).
   if (tlsPort && location.protocol === 'https:'
       && String(location.port || 443) !== String(tlsPort))
     return `wss://${location.hostname}:${tlsPort}/ws`;
-  return `${proto}://${location.host}/ws`;
+  return `${proto}://${location.host}${apiPath('/ws')}`;
 }
 
 let lastWsURL = '(none)';
@@ -3629,7 +3712,7 @@ setXport('connecting');
 // first socket always went to :443, which cannot carry it -- one guaranteed
 // failure and one alarming log line on every single page load, before the
 // real attempt had even been made.
-fetch('/state.json', {cache:'no-store'})
+fetch(apiPath('/state.json'), {cache:'no-store'})
   .then(r => r.json())
   .then(j => { if (j && j.tls_port) tlsPort = j.tls_port; })
   .catch(() => {})
@@ -3736,7 +3819,7 @@ const INPUT_CMDS = new Set(['key', 'type', 'hold', 'combo', 'keydown',
                             'mouse_click']);
 async function post(cmd, body) {
   try {
-    const r = await fetch('/cmd', {method:'POST',
+    const r = await fetch(apiPath('/cmd'), {method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(Object.assign({cmd}, body))});
     flashForCmd(cmd);      // ours, immediately -- the poll is 1.5 s behind
@@ -5305,7 +5388,7 @@ function stopAudio() {
 function startAudio() {
   if (aws) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  aws = new WebSocket(`${proto}://${location.host}/wsaudio`);
+  aws = new WebSocket(`${proto}://${location.host}${apiPath('/wsaudio')}`);
   aws.binaryType = 'arraybuffer';
   aws.onclose = () => { aws = null; if (soundOn) setTimeout(startAudio, 1200); };
   aws.onerror = () => { try { aws.close(); } catch (e) {} };
@@ -5884,7 +5967,7 @@ function renderLog() {
 }
 async function pollEvents() {
   try {
-    const j = await (await fetch('/events?since=' + seq)).json();
+    const j = await (await fetch(apiPath('/events?since=' + seq))).json();
     if (j.missed) note('— gap in log, some events were not seen —');
     for (const e of (j.events||[])) {
       seq = Math.max(seq, e.seq);
@@ -6831,7 +6914,7 @@ let lastState = null;
 async function pollState() {
   let j;
   const t0 = performance.now();
-  try { j = await (await fetch('/state.json')).json(); }
+  try { j = await (await fetch(apiPath('/state.json'))).json(); }
   catch (e) { pill('p-video','off','daemon unreachable'); return; }
   // Smoothed round trip on a request that was happening anyway. It answers
   // "is this feeling slow because of the link" without anyone running
@@ -8077,6 +8160,50 @@ for (const b of document.querySelectorAll('#pop-zoom button'))
   b.onclick = () => { setZoom(b.dataset.zoom); closePop(); };
 setZoom(zoomMode);
 addEventListener('resize', () => applyZoom());
+
+// The profile switcher (see PROFILES/switchProfile, declared with the rest
+// of the profile-base machinery above transport start-up). Independent of
+// openPop()/closePop() -- see the HTML comment above #profilebtn for why.
+(function () {
+  const btn = $('profilebtn'), menu = $('profilemenu'), label = $('profilelabel');
+  function render() {
+    menu.innerHTML = '';
+    for (const p of PROFILES) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.textContent = p.label;
+      item.style.cssText = 'display:block;width:100%;text-align:left;'
+        + 'padding:6px 10px;border:0;background:transparent;cursor:pointer;'
+        + 'color:inherit;font:inherit;';
+      if (p.id === PROFILE_BASE) item.style.fontWeight = 'bold';
+      item.onclick = () => {
+        switchProfile(p.id);
+        label.textContent = p.label;
+        hide();
+      };
+      menu.appendChild(item);
+    }
+  }
+  function show() {
+    render();
+    const r = btn.getBoundingClientRect();
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.left = r.left + 'px';
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+  }
+  function hide() {
+    menu.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  btn.onclick = () => { menu.hidden ? show() : hide(); };
+  document.addEventListener('click', (e) => {
+    if (!menu.hidden && e.target !== btn && !menu.contains(e.target)
+        && !btn.contains(e.target)) hide();
+  });
+  const cur = PROFILES.find(p => p.id === PROFILE_BASE);
+  if (cur) label.textContent = cur.label;
+})();
 
 // The key rail, on desktop. Hiding it hands its row back to the picture, so
 // the toggle has to re-run the zoom: the stage changed size and nothing else
