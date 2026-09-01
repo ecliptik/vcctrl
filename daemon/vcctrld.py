@@ -19,6 +19,7 @@ Constraints read out of the USB4VC source, all load-bearing:
 """
 
 import collections
+import contextlib
 import errno
 import faulthandler
 import glob
@@ -109,12 +110,77 @@ except ImportError:                                        # source checkout
 # PRODUCE IDENTICAL OUTPUT on a rig whose values happen to match the defaults.
 CFG_ERROR = None
 try:
-    CFG = vcconfig.load()
+    _PRIMARY_CFG = vcconfig.load()
 except vcconfig.ConfigError as _exc:
     CFG_ERROR = str(_exc)
-    CFG = vcconfig.Config(vcconfig.DEFAULTS, source=None)
+    _PRIMARY_CFG = vcconfig.Config(vcconfig.DEFAULTS, source=None)
     sys.stderr.write("config: %s\n  -- continuing on built-in defaults\n"
                      % CFG_ERROR)
+
+
+class _ProfileConfigContext(threading.local):
+    """Which profile's Config (and load error) the CFG name below resolves
+    to, for the CALLING THREAD.
+
+    Phase B (one vcctrld process serving multiple profiles, e.g. the
+    primary DOS/Mac target plus modernpc) is what makes this exist. Every
+    one of this file's `CFG.xxx` call sites -- from module/class scope
+    down through a capability's start()/dispatch methods to handle() -- was
+    written assuming exactly one Config exists for the process's whole
+    life, before more than one profile was a possibility. Rewriting every
+    one of those call sites to take an explicit `cfg` parameter would touch
+    most of this file for no behavioral gain; instead, CFG stays the exact
+    same name and object every call site already reads, and THIS decides
+    which profile's Config it actually resolves to right now. Bind it with
+    _profile_scope() once where a profile's Devices/Registry are built, and
+    again at the top of that profile's own per-connection thread (a
+    threading.local does not inherit across a `threading.Thread(...)`
+    boundary) -- every existing call site downstream needs no other change.
+
+    Defaults, on every new thread including the main one at import, to the
+    PRIMARY profile -- so a thread that never explicitly bound a profile
+    (a stray background thread, a test importing this file directly)
+    behaves exactly as every profile-unaware line here always has. This is
+    also the hard backward-compatibility floor for a rig with no second
+    profile at all: nothing ever calls _profile_scope() for one, so CFG
+    always resolves to _PRIMARY_CFG, unconditionally, exactly as before
+    this class existed.
+    """
+    def __init__(self):
+        self.cfg = _PRIMARY_CFG
+        self.error = CFG_ERROR
+
+
+_CFG_CTX = _ProfileConfigContext()
+
+
+class _CFGProxy(object):
+    """Stands in for a single global vcconfig.Config. See
+    _ProfileConfigContext's docstring for why this indirection exists
+    instead of threading a `cfg` parameter through the whole file."""
+
+    def __getattr__(self, name):
+        return getattr(_CFG_CTX.cfg, name)
+
+
+CFG = _CFGProxy()
+
+
+@contextlib.contextmanager
+def _profile_scope(cfg, error=None):
+    """Bind `cfg` (and its load error, if any) to CFG for the life of this
+    `with` block on the calling thread, restoring whatever was bound
+    before on exit -- so profile construction and connection handling can
+    nest, or reuse a thread (e.g. an idle-timer callback), without one
+    profile's config leaking into another's for the rest of that thread's
+    life."""
+    prev_cfg, prev_err = _CFG_CTX.cfg, _CFG_CTX.error
+    _CFG_CTX.cfg, _CFG_CTX.error = cfg, error
+    try:
+        yield
+    finally:
+        _CFG_CTX.cfg, _CFG_CTX.error = prev_cfg, prev_err
+
 
 SOCKET_PATH = CFG.default("daemon.socket", "/run/vcctrl.sock")
 USB4VC_LOG = CFG.default("daemon.usb4vc.debug_log",
@@ -837,8 +903,27 @@ class Devices(object):
         if self.hid_mode:
             self.kbd = None
             self.mouse = None
-            self._hid_kbd_fd = open(HID_KBD_DEVICE, "wb", buffering=0)
-            self._hid_mouse_fd = open(HID_MOUSE_DEVICE, "wb", buffering=0)
+            # Resolved FRESH from CFG here, not read from the HID_KBD_DEVICE/
+            # HID_MOUSE_DEVICE module constants directly -- those are computed
+            # once at import time from whichever profile's config happened to
+            # be bound to CFG at that moment (the primary's), so a SECOND
+            # profile with its own hid_keyboard_device/hid_mouse_device
+            # setting would otherwise silently get the primary's paths
+            # instead of its own. Devices() is always constructed inside
+            # _profile_scope(that profile's cfg) (see _build_instance), so
+            # this CFG.default() call resolves correctly per profile. Stored
+            # on self rather than re-read later: every other place that needs
+            # these paths (status/serve's log line) reads devs.hid_kbd_device/
+            # devs.hid_mouse_device instead of a module global, so they stay
+            # correct regardless of which thread asks.
+            self.hid_kbd_device = CFG.default(
+                "capabilities.input.settings.hid_keyboard_device",
+                HID_KBD_DEVICE)
+            self.hid_mouse_device = CFG.default(
+                "capabilities.input.settings.hid_mouse_device",
+                HID_MOUSE_DEVICE)
+            self._hid_kbd_fd = open(self.hid_kbd_device, "wb", buffering=0)
+            self._hid_mouse_fd = open(self.hid_mouse_device, "wb", buffering=0)
             self._hid_mods = 0
             self._hid_keys = []            # up to 6 pressed HID usage IDs
             self._hid_mouse_buttons = 0
@@ -1731,6 +1816,20 @@ def installed_board_id():
     _board_backend = CFG.optional("capabilities.board.backend")
     if _board_backend is vcconfig.NONE or _board_backend == "none":
         return None
+    # BoardCapability.FILE, the class attribute -- NOT CFG.default(
+    # "daemon.usb4vc.board_file", ...), which was tried and reverted: that
+    # key has a built-in DEFAULT ("/run/usb4vc/board.json" in vcconfig.py's
+    # own DEFAULTS), so it is never actually ABSENT and CFG.default() would
+    # always return the SAME value regardless of the fallback argument --
+    # silently ignoring per-profile overrides, and breaking every test that
+    # monkeypatches BoardCapability.FILE directly to point at a temp file
+    # (tests/test_core.py: test_installed_board_id_never_guesses and
+    # others). Left as a known limitation instead: a future board-aware
+    # profile with its own board_file would share this class attribute with
+    # the primary's, exactly like LED_BOARDS/POWER_BOARDS below already do
+    # for the same reason -- not exercised by any profile that exists
+    # today, since modernpc's board: none already returns above before this
+    # line is ever reached.
     try:
         with open(BoardCapability.FILE) as f:
             bid = json.load(f).get("id")
@@ -2896,6 +2995,19 @@ class VideoCapability(Capability):
     # -- device lifecycle ---------------------------------------------------
 
     def start(self):
+        # Resolved fresh HERE, shadowing the class attribute above -- not
+        # because the class attribute is wrong for the primary profile (it
+        # is, by construction: it's what gets baked in at import time from
+        # whichever profile is bound to CFG then), but because a SECOND
+        # profile's VideoCapability instance would otherwise share that same
+        # class attribute and silently read the PRIMARY's video device.
+        # Registry.__init__ constructs this inside _profile_scope(that
+        # profile's cfg) (see _build_instance), so this resolves correctly
+        # per profile; self.DEVICE (an instance attribute) then shadows
+        # VideoCapability.DEVICE (the class attribute) for every other
+        # method on THIS instance, which all already read `self.DEVICE`.
+        self.DEVICE = CFG.default("capabilities.video.settings.device",
+                                  "/dev/video0")
         self.running = True
         self._acquire()
         threading.Thread(target=self._watchdog, daemon=True).start()
@@ -9277,24 +9389,30 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 NoteCapability,
                 PublicTelemetryCapability]
 
-# vcweb holds the TLS paths as class attributes; the resolved config lives
-# here. Pushed rather than pulled so there is exactly one loader in the
-# process and therefore exactly one answer to "which cert is being served".
-def _push_tls_paths():
-    try:
-        import vcweb as _w
-        _w.TLSServer.CERT = os.path.join(STATE_DIR, "tls.crt")
-        _w.TLSServer.KEY = os.path.join(STATE_DIR, "tls.key")
-        cert = CFG.optional("daemon.web.tls.cert")
-        key = CFG.optional("daemon.web.tls.key")
-        if cert not in (vcconfig.ABSENT, vcconfig.NONE):
-            _w.TLSServer.CERT = cert
-        if key not in (vcconfig.ABSENT, vcconfig.NONE):
-            _w.TLSServer.KEY = key
-    except Exception as exc:
-        # Not fatal: the daemon's plain-http listener is the recovery path,
-        # and losing TLS must not lose the whole KVM.
-        sys.stderr.write("config: could not set TLS paths: %s\n" % exc)
+# THIS PROFILE'S TLS cert/key paths -- state_dir-derived default, or an
+# explicit daemon.web.tls.cert/key override. Returned rather than pushed
+# onto vcweb.TLSServer's CLASS attributes the way the single-profile
+# _push_tls_paths() used to: a second profile's start_web() call would then
+# silently repoint the FIRST profile's already-running TLSServer at the
+# wrong certificate the moment its own _context() next checked the file's
+# mtime, since a class attribute is shared by every instance of that class
+# in the process. Registry.start_web() instead passes these to
+# vcweb.WebCapability, which applies them to its OWN TLSServer instance only
+# (see vcweb.py's WebCapability.__init__/start -- the one deliberate
+# exception to this phase not touching vcweb.py's routing, because this
+# specific bug has nothing to do with routing and everything to do with a
+# second profile's HTTPS listener presenting the wrong certificate).
+def _tls_paths():
+    state_dir = CFG.default("daemon.state_dir", "/var/lib/vcctrl")
+    cert = os.path.join(state_dir, "tls.crt")
+    key = os.path.join(state_dir, "tls.key")
+    c = CFG.optional("daemon.web.tls.cert")
+    k = CFG.optional("daemon.web.tls.key")
+    if c not in (vcconfig.ABSENT, vcconfig.NONE):
+        cert = c
+    if k not in (vcconfig.ABSENT, vcconfig.NONE):
+        key = k
+    return cert, key
 
 # Bind address for the web UI: LOOPBACK ONLY.
 #
@@ -9498,11 +9616,25 @@ class Registry(object):
 
         Failure here is reported and survivable: no browser, everything else
         untouched. That is rule 2 with the one capability most likely to break.
+
+        bind/port/tls_port/cert/key are resolved FRESH from CFG here, not
+        read from the WEB_BIND/WEB_PORT/WEB_TLS_PORT module constants --
+        those are frozen at import time from whichever profile was bound to
+        CFG then (the primary's), so a second profile with its own
+        daemon.web.port (modernpc: 8180, not the primary's 8080) would
+        otherwise silently get the primary's port and the two WebCapability
+        instances would collide trying to bind the same one. This method is
+        always called inside _profile_scope(that profile's cfg) (see
+        _build_instance), so these resolve correctly per profile.
         """
         try:
             import vcweb
-            web = vcweb.WebCapability(self, WEB_BIND, WEB_PORT,
-                                      tls_port=WEB_TLS_PORT)
+            bind = CFG.default("daemon.web.bind", "127.0.0.1")
+            port = int(CFG.default("daemon.web.port", 8080))
+            tls_port = int(CFG.default("daemon.web.tls_port", 8443))
+            cert, key = _tls_paths()
+            web = vcweb.WebCapability(self, bind, port, tls_port=tls_port,
+                                      cert=cert, key=key)
             web.start()
         except Exception as exc:
             self.failed["web"] = "%s: %s" % (type(exc).__name__, exc)
@@ -9511,8 +9643,7 @@ class Registry(object):
             return None
         self.caps["web"] = web
         sys.stderr.write("web ui on http://%s:%d/  tls=%s\n"
-                         % (WEB_BIND, WEB_PORT,
-                            WEB_TLS_PORT if web.tls_up else "unavailable"))
+                         % (bind, port, tls_port if web.tls_up else "unavailable"))
         return web
 
     def configured_targets(self):
@@ -9602,7 +9733,7 @@ def handle(devs, registry, req):
         # node, and usb4vc_holds_us() answers a question that presupposes
         # USB4VC exists, which it does not for this backend either.
         if devs.hid_mode:
-            kbd_path, mouse_path = HID_KBD_DEVICE, HID_MOUSE_DEVICE
+            kbd_path, mouse_path = devs.hid_kbd_device, devs.hid_mouse_device
             usb4vc_status = {}
         else:
             kbd_path, mouse_path = devs.kbd.device.path, devs.mouse.device.path
@@ -9631,11 +9762,21 @@ def handle(devs, registry, req):
         # missing key would let a reader conclude "no error" from a payload
         # that never carried the field, which is the same shape as a plausible
         # set of retained zeroes.
+        #
+        # _CFG_CTX.error, NOT the bare CFG_ERROR module global: this handler
+        # runs inside the calling connection's own _profile_scope (see
+        # _serve_one_for), so on a multi-profile daemon this reports THIS
+        # profile's own load error, not always the primary's -- a modernpc
+        # whose own vcctrl-modernpc.yaml failed to parse would otherwise never
+        # be running at all (discover_profiles() skips it), so in practice
+        # this is only ever non-None for the primary today, but the read is
+        # correct regardless of how many profiles exist.
+        cfg_error = _CFG_CTX.error
         return {"ok": True,
                 "config": {
                     "source": CFG.source,
-                    "error": CFG_ERROR,
-                    "on_defaults": CFG_ERROR is not None or CFG.source is None,
+                    "error": cfg_error,
+                    "on_defaults": cfg_error is not None or CFG.source is None,
                     "overrides": list(CFG.warnings),
                     "resolved": CFG.as_dict(),
                 }}
@@ -9709,43 +9850,178 @@ def _serve_one(conn, devs, registry):
         conn.close()
 
 
-def serve(devs, registry):
-    """One thread per connection.
+class Instance(object):
+    """One profile's fully-constructed runtime state: its own Config,
+    Devices, Registry, and the socket path clients reach it on. Built once
+    per discovered profile at startup (see discover_profiles()/
+    _build_instance()) and kept for the life of the process.
 
-    Why: the daemon used to handle one request at a time, to completion. A
-    `power cycle` blocked it for 15 s and `ledwait 5` for 5 s, so the keyboard
-    froze whenever anything slow ran -- including the operator's own click on
-    the power button. Unusable behind a browser.
-
-    What threading does NOT break, and the reason it is safe: every multi-event
-    operation in Devices already takes `self.lock` for the WHOLE operation, not
-    per event. `type_text` holds it across the entire string. So two concurrent
-    `type` calls serialise into two intact strings rather than interleaving
-    into one corrupt one. That property is now load-bearing and is an
-    acceptance test (docs/WEBKVM.md sec. 13.2) -- if anyone ever narrows one of
-    those locks to per-event, `CD \\DOSKUTSU` and `QA 1` start arriving as
-    `CQDA  \\1DOSKUTSU`, which corrupts a sweep launch silently and looks like
-    a DOS quirk rather than a bug here.
+    `name` is None for the primary/default profile -- matching
+    bin/vcctrl-client's own convention (the unnamed default talks to
+    /run/vcctrl.sock, a named one to /run/vcctrl-<name>.sock).
     """
-    if os.path.exists(SOCKET_PATH):
-        os.unlink(SOCKET_PATH)
+
+    def __init__(self, name, cfg, error=None):
+        self.name = name
+        self.cfg = cfg
+        self.error = error
+        self.devs = None
+        self.registry = None
+        self.socket_path = None
+
+    def label(self):
+        return self.name or "(default)"
+
+
+def discover_profiles():
+    """The primary profile, plus any sibling vcctrl-<name>.yaml files found
+    next to wherever the primary's own config file was loaded from.
+
+    NO SEPARATE REGISTRY FILE: the directory listing IS the registry, so it
+    cannot drift from which profiles actually have a config on disk -- the
+    same reasoning bin/vcctrl-client's own `profiles` command already
+    documents for socket discovery, and pi/install.sh's
+    install_modernpc_profile()'s naming (vcctrl-modernpc.yaml,
+    /run/vcctrl-modernpc.sock) already commits to. A profile named `modernpc`
+    means the same file/socket names everywhere in this codebase; this
+    function does not get to invent a different convention just because it
+    lives in a different file.
+
+    A SIBLING THAT FAILS TO PARSE IS SKIPPED, with a clear message, rather
+    than run on built-in defaults the way a MISSING primary config does --
+    those are different situations. A rig with no vcctrl.yaml at all is a
+    fresh clone nobody has configured yet, and running it on defaults is
+    what makes that clone usable out of the box (see the "READ ONCE, AND
+    NEVER FATAL" comment above CFG_ERROR). A vcctrl-modernpc.yaml that
+    exists and fails to parse is a SPECIFIC, additional profile somebody
+    deliberately configured, and starting it on defaults would silently
+    hand it usb4vc-uinput and /dev/video0 -- neither of which a hid-gadget
+    target has any business touching. Absent is the honest answer for a
+    profile whose own file is broken, not a guess at what it meant.
+
+    Returns [Instance, ...], primary always first and always present (even
+    running on built-in defaults, if its own file was missing or broken --
+    exactly today's single-profile behavior, unconditionally, for a rig
+    with no sibling files at all).
+    """
+    profiles = [Instance(None, _PRIMARY_CFG, CFG_ERROR)]
+    if not _PRIMARY_CFG.source:
+        return profiles
+    if os.path.basename(_PRIMARY_CFG.source) != "vcctrl.yaml":
+        # An explicit VCCTRL_CONFIG/--config pointed somewhere unconventional
+        # (a test harness, most likely). Sibling discovery only applies to
+        # the normal deployed layout -- an unconventional primary path has
+        # no established sibling-naming convention to reuse.
+        return profiles
+    d = os.path.dirname(os.path.abspath(_PRIMARY_CFG.source))
+    for path in sorted(glob.glob(os.path.join(d, "vcctrl-*.yaml"))):
+        fname = os.path.basename(path)
+        if fname.endswith(".example.yaml"):
+            continue
+        name = fname[len("vcctrl-"):-len(".yaml")]
+        try:
+            cfg = vcconfig.load(path)
+        except vcconfig.ConfigError as exc:
+            sys.stderr.write(
+                "config: profile %r (%s) failed to load, skipping this "
+                "profile entirely: %s\n" % (name, path, exc))
+            continue
+        profiles.append(Instance(name, cfg))
+    return profiles
+
+
+def _build_instance(inst):
+    """Construct one profile's Devices/Registry, with CFG bound to ITS OWN
+    config for the whole call -- every _resolve_backend/_cap_settings/
+    Devices.__init__/start_web() read of CFG.xxx along the way happens
+    inside this scope, so each one resolves against THIS profile's file,
+    not whichever profile happened to build last (see _profile_scope's own
+    docstring). Returns False (and builds nothing) if this profile cannot
+    start at all -- today, only the hid-gadget device-existence check can
+    cause that; a bad capability backend inside a successfully-loaded
+    config degrades that ONE capability instead (Rule 2), same as always.
+    """
+    with _profile_scope(inst.cfg, inst.error):
+        if CFG.default("capabilities.input.backend",
+                       "usb4vc-uinput") == "hid-gadget":
+            kbd = CFG.default("capabilities.input.settings.hid_keyboard_device",
+                              HID_KBD_DEVICE)
+            mouse = CFG.default("capabilities.input.settings.hid_mouse_device",
+                                HID_MOUSE_DEVICE)
+            missing = [p for p in (kbd, mouse) if not os.path.exists(p)]
+            if missing:
+                sys.stderr.write(
+                    "vcctrld: profile %s's capabilities.input.backend is "
+                    "hid-gadget but %s do(es) not exist -- has "
+                    "vcctrl-hid-gadget.service run on this boot? "
+                    "(pi/files/vcctrl-hid-gadget-setup.sh builds them; it "
+                    "needs dtoverlay=dwc2,dr_mode=peripheral active, which "
+                    "needs a reboot after it is first added)\n"
+                    % (inst.label(), ", ".join(missing)))
+                return False
+        inst.devs = Devices()
+        if not inst.devs.hid_mode:
+            # Give USB4VC's 0.75 s scan time to find us before accepting
+            # work, so the first command a client sends is not silently
+            # dropped. Skipped entirely under hid-gadget: there is no
+            # USB4VC for this instance to be found by, and waiting 1.5s for
+            # a scan that will never happen and then warning about it is
+            # pure noise, not a diagnostic.
+            time.sleep(1.5)
+            held = usb4vc_holds_us()
+            if not all(held.values()):
+                sys.stderr.write(
+                    "warning: USB4VC has not opened %s (profile %s)\n"
+                    % ([k for k, v in held.items() if not v], inst.label()))
+        inst.registry = Registry(inst.devs)
+        inst.registry.start_web()
+        inst.socket_path = CFG.default("daemon.socket", "/run/vcctrl.sock")
+    return True
+
+
+def _serve_one_for(conn, inst):
+    """_serve_one, with CFG bound to THIS connection's profile for its
+    whole life -- a threading.local does not inherit across a
+    `threading.Thread(...)` boundary, so each freshly-spawned connection
+    thread has to rebind it itself; see _profile_scope's own docstring."""
+    with _profile_scope(inst.cfg, inst.error):
+        _serve_one(conn, inst.devs, inst.registry)
+
+
+def _serve_instance(inst):
+    """One profile's accept loop: one thread per connection, exactly as
+    serve() always worked, just now one of possibly several such loops
+    running in this process instead of the only one. See serve()'s own
+    former docstring (still true, unchanged) for why one-thread-per-
+    connection is safe: every multi-event Devices operation holds
+    self.lock for the whole operation, not per event, so concurrent
+    `type` calls serialise into intact strings rather than interleaving.
+    """
+    sock_path = inst.socket_path
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(SOCKET_PATH)
-    os.chmod(SOCKET_PATH, 0o666)
+    srv.bind(sock_path)
+    os.chmod(sock_path, 0o666)
     srv.listen(8)
-    if devs.hid_mode:
-        kbd_desc, mouse_desc = HID_KBD_DEVICE, HID_MOUSE_DEVICE
-    else:
-        kbd_desc, mouse_desc = devs.kbd.device.path, devs.mouse.device.path
-    sys.stderr.write("vcctrld ready: kbd=%s mouse=%s leds=%s caps=%s\n" % (
-        kbd_desc, mouse_desc,
-        sorted(devs.led_paths), sorted(registry.caps)))
-    if registry.failed:
-        sys.stderr.write("vcctrld degraded: %s\n" % (sorted(registry.failed),))
+    with _profile_scope(inst.cfg, inst.error):
+        if inst.devs.hid_mode:
+            kbd_desc = inst.devs.hid_kbd_device
+            mouse_desc = inst.devs.hid_mouse_device
+        else:
+            kbd_desc = inst.devs.kbd.device.path
+            mouse_desc = inst.devs.mouse.device.path
+    sys.stderr.write(
+        "vcctrld ready: profile=%s socket=%s kbd=%s mouse=%s leds=%s caps=%s\n"
+        % (inst.label(), sock_path, kbd_desc, mouse_desc,
+           sorted(inst.devs.led_paths), sorted(inst.registry.caps)))
+    if inst.registry.failed:
+        sys.stderr.write("vcctrld degraded (profile %s): %s\n"
+                         % (inst.label(), sorted(inst.registry.failed)))
     sys.stderr.flush()
     while True:
         conn, _ = srv.accept()
-        t = threading.Thread(target=_serve_one, args=(conn, devs, registry),
+        t = threading.Thread(target=_serve_one_for, args=(conn, inst),
                              daemon=True)
         t.start()
 
@@ -9772,45 +10048,40 @@ def main():
     # each thread when it happened, and with a capture thread, a watchdog and
     # several web threads all touching Pillow that is most of the answer.
     faulthandler.enable(file=sys.stderr, all_threads=True)
-    _push_tls_paths()
-    if CFG_ERROR:
-        sys.stderr.write("config: RUNNING ON BUILT-IN DEFAULTS -- %s\n"
-                         % CFG_ERROR)
-    else:
-        sys.stderr.write("config: %s\n" % (CFG.source or
-                                            "none found, built-in defaults"))
-        for w in CFG.warnings:
-            sys.stderr.write("config: override %s\n" % w)
     if os.geteuid() != 0:
         sys.stderr.write("vcctrld must run as root (needs /dev/uinput)\n")
         return 1
-    if CFG.default("capabilities.input.backend", "usb4vc-uinput") == "hid-gadget":
-        missing = [p for p in (HID_KBD_DEVICE, HID_MOUSE_DEVICE)
-                   if not os.path.exists(p)]
-        if missing:
+
+    profiles = discover_profiles()
+    for inst in profiles:
+        if inst.error:
             sys.stderr.write(
-                "vcctrld: capabilities.input.backend is hid-gadget but %s "
-                "do(es) not exist -- has vcctrl-hid-gadget.service run on "
-                "this boot? (pi/files/vcctrl-hid-gadget-setup.sh builds "
-                "them; it needs dtoverlay=dwc2,dr_mode=peripheral active, "
-                "which needs a reboot after it is first added)\n"
-                % ", ".join(missing))
-            return 1
-    devs = Devices()
-    if not devs.hid_mode:
-        # Give USB4VC's 0.75 s scan time to find us before accepting work, so
-        # the first command a client sends is not silently dropped. Skipped
-        # entirely under hid-gadget: there is no USB4VC for this instance to
-        # be found by, and waiting 1.5s for a scan that will never happen and
-        # then warning about it is pure noise, not a diagnostic.
-        time.sleep(1.5)
-        held = usb4vc_holds_us()
-        if not all(held.values()):
-            sys.stderr.write("warning: USB4VC has not opened %s\n" % (
-                [k for k, v in held.items() if not v],))
-    registry = Registry(devs)
-    registry.start_web()
-    serve(devs, registry)
+                "config (profile %s): RUNNING ON BUILT-IN DEFAULTS -- %s\n"
+                % (inst.label(), inst.error))
+        else:
+            sys.stderr.write("config (profile %s): %s\n" % (
+                inst.label(),
+                inst.cfg.source or "none found, built-in defaults"))
+            for w in inst.cfg.warnings:
+                sys.stderr.write("config (profile %s): override %s\n"
+                                 % (inst.label(), w))
+
+    built = [inst for inst in profiles if _build_instance(inst)]
+    if not built:
+        sys.stderr.write("vcctrld: no profile could be started\n")
+        return 1
+
+    # Every profile but the first gets its own background accept-loop
+    # thread. The FIRST ONE (always the primary/default profile, unless it
+    # alone failed to build -- see discover_profiles()) runs its accept
+    # loop on THIS, the main thread, exactly as serve() always did: a
+    # daemon thread does not keep the process alive on its own, so
+    # something has to block here, and it might as well be the same
+    # instance that always did.
+    for inst in built[1:]:
+        threading.Thread(target=_serve_instance, args=(inst,),
+                         daemon=True).start()
+    _serve_instance(built[0])
     return 0
 
 

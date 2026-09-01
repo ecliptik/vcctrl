@@ -1092,11 +1092,18 @@ class WebCapability(object):
         "note", "note_set",
     ])
 
-    def __init__(self, registry, bind, port, tls_port=0):
+    def __init__(self, registry, bind, port, tls_port=0, cert=None, key=None):
         self.registry = registry
         self.bind = bind
         self.port = port
         self.tls_port = tls_port
+        # None (the default) means "use TLSServer's own built-in paths,
+        # exactly as before these existed" -- see start()'s use of these.
+        # A caller running more than one WebCapability in one process (a
+        # second vcctrld profile) passes its OWN cert/key so its TLSServer
+        # instance doesn't share the first profile's certificate.
+        self.cert = cert
+        self.key = key
         self.tls_up = False
         self.httpd = None
         self.tlsd = None
@@ -1145,9 +1152,20 @@ class WebCapability(object):
             try:
                 self.tlsd = TLSServer((self.bind, self.tls_port), Handler)
                 self.tlsd.web = self
+                # INSTANCE overrides, not TLSServer.CERT/.KEY (the class
+                # attributes) -- a second WebCapability in the same process
+                # setting the class attribute would silently repoint every
+                # OTHER already-running TLSServer's certificate too, since a
+                # class attribute is shared by every instance. self.cert/key
+                # being None (unset) leaves TLSServer's own built-in
+                # defaults in place, unchanged from before this existed.
+                if self.cert:
+                    self.tlsd.CERT = self.cert
+                if self.key:
+                    self.tlsd.KEY = self.key
                 if self.tlsd._context() is None:
                     raise OSError("certificate not present at %s"
-                                  % TLSServer.CERT)
+                                  % self.tlsd.CERT)
                 threading.Thread(target=self.tlsd.serve_forever,
                                  daemon=True).start()
                 self.tls_up = True
