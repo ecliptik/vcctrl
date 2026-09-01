@@ -259,11 +259,29 @@ KEYMAP = Keymap()
 # paraphrased, never broken.
 
 class LockManager(object):
+    """One instance per vcctrld INSTANCE, not one for the whole MCP server.
+
+    Phase 3 (making the CLI/MCP profile-aware) is what makes this matter:
+    there are now two independent daemon-side Arbiters (one per vcctrld
+    process, see vcctrl-modernpc.example.yaml's own comment on why it's a
+    second process rather than a second target inside one), and a single
+    shared LockManager would either acquire/release the WRONG daemon's lock
+    for a profile-targeted call, or -- worse -- report a profile's commands
+    as lock-free when the primary's lock happens to be held by someone else,
+    since `ensure()`/`release()` would always be talking to whichever socket
+    the LAST call happened to resolve to. Keyed by profile name in LOCKS
+    below, `_get_lock()` is the only thing that constructs one.
+    """
     IDLE_TIMEOUT_S = 300.0      # operator's figure, MCP-PLAN.md sec. 3/10
     POLL_S = 15.0
 
-    def __init__(self, owner):
+    def __init__(self, owner, profile_args=None):
         self.owner = owner
+        # Baked in at construction, not passed to every ensure()/release()
+        # call -- one LockManager always speaks to the same socket for its
+        # whole life, so there is nowhere for this to drift out of sync with
+        # which daemon it is actually locking.
+        self.profile_args = list(profile_args or [])
         self._held = False
         self._sticky = False
         self._last_touch = 0.0
@@ -279,7 +297,8 @@ class LockManager(object):
             if self._held:
                 self._last_touch = time.time()
                 return None
-        res = _run_vcctrl(["lock", "acquire", "--as", self.owner])
+        res = _run_vcctrl(["lock", "acquire", "--as", self.owner]
+                          + self.profile_args)
         if res.get("ok") is True and res.get("owner") == self.owner:
             with self._state_lock:
                 self._held = True
@@ -315,7 +334,7 @@ class LockManager(object):
             if not self._held:
                 return
             self._held = False
-        _run_vcctrl(["lock", "release", "--as", self.owner])
+        _run_vcctrl(["lock", "release", "--as", self.owner] + self.profile_args)
 
     def _idle_watch(self):
         while not self._stop.wait(self.POLL_S):
@@ -329,10 +348,78 @@ class LockManager(object):
         self._stop.set()
 
 
-LOCK = LockManager(OWNER)
+# One LockManager per profile, created lazily on first use so a profile that
+# is never addressed never spins up an idle-watch thread for it. Keyed by
+# the SAME string a tool's own `profile` parameter carries (None/"default"
+# both mean the primary instance and share one entry) -- see
+# _resolve_profile below for where that string actually comes from.
+_LOCKS = {}
+_LOCKS_STATE_LOCK = threading.Lock()
 
 
-def _active_job_conflict(action_desc):
+def _get_lock(profile):
+    key = profile or "default"
+    with _LOCKS_STATE_LOCK:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            profile_args = ["--profile", profile] if profile else []
+            lock = LockManager(OWNER, profile_args)
+            _LOCKS[key] = lock
+        return lock
+
+
+# THE PRIMARY INSTANCE'S OWN LOCK, kept as a module-level name because most
+# of Phase 4/5 below (file transfer, harness workflows) is deliberately
+# primary-only -- see their own comments -- and addresses it directly rather
+# than through a `profile` parameter that would never be anything but None
+# for them.
+LOCK = _get_lock(None)
+
+# The profile a caller's OMITTED `profile` argument resolves to. None until
+# vcctrl_profile_set changes it -- so a fresh MCP server, or one nobody has
+# ever called vcctrl_profile_set on, behaves EXACTLY as it did before Phase
+# 3 existed: every profile-aware tool call with no explicit `profile`
+# targets the primary instance, unconditionally. This is a hard requirement,
+# not a preference -- existing callers (including this very session's own
+# tool use) must see zero behavior change from adding this feature.
+_CURRENT_PROFILE = None
+_CURRENT_PROFILE_LOCK = threading.Lock()
+
+
+def _resolve_profile(explicit):
+    """None/"default" always mean "the primary instance", explicitly passed
+    or resolved from the session default -- never confused with "whatever
+    profile happens to be current", which is exactly the ambiguity that
+    caused the Funnel incident this repo's own tailscaled-ro.service
+    comments describe (an unqualified call silently hitting the wrong
+    target). An explicit profile= on a call ALWAYS wins over the session
+    default, so a caller who wants to be certain never has to touch
+    vcctrl_profile_set at all.
+    """
+    if explicit is not None and explicit != "default":
+        return explicit
+    if explicit == "default":
+        return None
+    with _CURRENT_PROFILE_LOCK:
+        return _CURRENT_PROFILE
+
+
+def _profile_flag(profile):
+    return ["--profile", profile] if profile else []
+
+
+def _run_vcctrl_p(args, profile=None, timeout=60.0):
+    """_run_vcctrl for a READ-ONLY, profile-aware tool: resolves `profile`
+    through the session default and appends --profile if one applies.
+    _gated_run (below) is the equivalent for lock-gated ones -- kept
+    separate rather than one function branching on gating, because a
+    read-only call must never touch a LockManager at all (MCP-PLAN.md sec.
+    3: "a read-only session never touches the lock")."""
+    resolved = _resolve_profile(profile)
+    return _run_vcctrl(list(args) + _profile_flag(resolved), timeout=timeout)
+
+
+def _active_job_conflict(action_desc, profile=None):
     """Is a file-transfer job (send/get/refresh/scan) or a harness job
     (run_cell/run_sweep/collect) currently mid-flight? If so, taking or
     holding the input lock right now risks the exact collision found live
@@ -350,7 +437,18 @@ def _active_job_conflict(action_desc):
     comment on bug b8bdcc2); this is the half where the lock gets taken
     AFTER the job has already started. Checked fresh every call, not cached,
     because a job that finished since the last check must not go on
-    blocking forever."""
+    blocking forever.
+
+    PRIMARY-ONLY, REGARDLESS OF `profile`: harness jobs (run_cell/run_sweep/
+    collect) and file-transfer jobs only ever run against the primary
+    vcctrld instance -- vcctrl-modernpc.example.yaml's own capabilities.files
+    block says why (a real Linux box has its own networking; there is no
+    packet-driver FTP path to modernpc at all). A sticky lock request against
+    a NON-primary profile cannot collide with either, so this check is
+    skipped rather than answered with a conflict that could never be real.
+    """
+    if profile is not None and profile != "default":
+        return None
     for job_id, job in list(JOBS._jobs.items()):
         with job.lock:
             running = job.returncode is None
@@ -374,9 +472,19 @@ def _active_job_conflict(action_desc):
     return None
 
 
-def _gated_run(args, timeout=60.0):
-    """Acquire the lock (refusing rather than forcing on conflict), run a
-    lock-requiring vcctrl command with --as attached, touch the idle clock.
+def _gated_run(args, profile=None, timeout=60.0):
+    """Acquire the RIGHT profile's lock (refusing rather than forcing on
+    conflict), run a lock-requiring vcctrl command against that SAME
+    profile's socket with --as attached, touch its idle clock.
+
+    `profile` is resolved through _resolve_profile before anything else --
+    every subsequent step (which LockManager, which --profile flag on the
+    actual command) uses the resolved value, so the lock taken and the
+    command sent are GUARANTEED to be about the same daemon. Getting this
+    wrong -- locking one instance while acting on another -- would either
+    block a profile's input on an unrelated daemon's lock, or worse, send
+    input to a profile with NO arbitration at all while believing the
+    primary's lock covers it.
 
     --as MUST be on every gated call, not only on `lock acquire`: the
     Arbiter compares the CALLER'S OWN name against who holds the lock
@@ -394,15 +502,18 @@ def _gated_run(args, timeout=60.0):
     explicit opt-in for a caller that actually wants the lock held across a
     sequence.
     """
-    refusal = LOCK.ensure()
+    resolved = _resolve_profile(profile)
+    lock = _get_lock(resolved)
+    refusal = lock.ensure()
     if refusal is not None:
         return refusal
-    LOCK.touch()
+    lock.touch()
     try:
-        return _run_vcctrl(list(args) + ["--as", OWNER], timeout=timeout)
+        return _run_vcctrl(list(args) + ["--as", OWNER]
+                           + _profile_flag(resolved), timeout=timeout)
     finally:
-        if not LOCK.sticky:
-            LOCK.release()
+        if not lock.sticky:
+            lock.release()
 
 
 # ------------------------------------------------------------------ server
@@ -419,27 +530,72 @@ mcp = MCPServer(
         "not both as failure. Input tools take a shared hardware lock and "
         "refuse outright (never force) if a human or another session holds "
         "it. `vcctrl_combo` requires confirm=\"reboot\" when the chord "
-        "matches Ctrl-Alt-Delete."
+        "matches Ctrl-Alt-Delete. Many tools accept an optional `profile` "
+        "argument to address a SECOND vcctrld instance on the same host "
+        "(e.g. profile=\"modernpc\") instead of the primary DOS/Mac target -- "
+        "call vcctrl_profiles to see what is actually running, and "
+        "vcctrl_profile_set to change which profile an omitted `profile` "
+        "argument resolves to for the rest of the session. File-transfer "
+        "and harness-workflow tools are primary-only and have no `profile` "
+        "argument at all -- a second profile has no FTP path or harness "
+        "profile of its own."
     ),
 )
+
+
+# ---- profile management -------------------------------------------------
+# See _resolve_profile's own comment for the backward-compatibility
+# guarantee this rests on: omitting `profile` everywhere below behaves
+# EXACTLY as it did before these two tools existed, until vcctrl_profile_set
+# is actually called.
+
+@mcp.tool()
+def vcctrl_profiles() -> dict:
+    """Every vcctrld instance actually running on this host, discovered by
+    socket presence (bin/vcctrl-client's own `profiles` command) -- not a
+    maintained list that can drift out of sync with what is real. Always
+    includes "default", the primary instance every tool targets unless told
+    otherwise."""
+    return _run_vcctrl(["profiles"])
+
+
+@mcp.tool()
+def vcctrl_profile_set(profile: "str | None" = None) -> dict:
+    """Change which profile a tool call's OMITTED `profile` argument
+    resolves to, for the rest of this MCP server's session -- so a sequence
+    of calls can target modernpc (say) without passing profile="modernpc" on
+    every single one. An explicit `profile` argument on any individual call
+    always overrides this, regardless of what was last set here.
+
+    Pass profile=None (or "default") to reset to the primary instance --
+    the same state a fresh server starts in. This tool touches no lock and
+    no hardware; it only changes how THIS process resolves the argument on
+    later calls."""
+    global _CURRENT_PROFILE
+    resolved = None if profile in (None, "default", "") else profile
+    with _CURRENT_PROFILE_LOCK:
+        _CURRENT_PROFILE = resolved
+    return {"ok": True, "current_profile": resolved or "default"}
 
 
 # ---- Phase 1: read-only tools, no lock -------------------------------
 
 @mcp.tool()
-def vcctrl_status() -> dict:
+def vcctrl_status(profile: "str | None" = None) -> dict:
     """Device paths, USB4VC hold state, LED state -- the Pi's own end of
     the wire. Does not prove anything reached the target; see
     vcctrl_verify_input for that."""
-    return _run_vcctrl(["status"])
+    return _run_vcctrl_p(["status"], profile)
 
 
 @mcp.tool()
-def vcctrl_board() -> dict:
+def vcctrl_board(profile: "str | None" = None) -> dict:
     """Which USB4VC protocol board is installed, and therefore which
     machine input reaches. `unknown` is a real, honest answer -- never
-    guessed as the IBM PC."""
-    return _run_vcctrl(["board"])
+    guessed as the IBM PC. Always `id: null` on a profile with no
+    swappable protocol board (e.g. modernpc) -- that is the correct answer
+    for a target that was never on a board-swap bridge to begin with."""
+    return _run_vcctrl_p(["board"], profile)
 
 
 @mcp.tool()
@@ -470,59 +626,65 @@ def vcctrl_public_telemetry() -> dict:
 
 
 @mcp.tool()
-def vcctrl_caps() -> dict:
+def vcctrl_caps(profile: "str | None" = None) -> dict:
     """Capability health across input, leds, power, video, audio, files."""
-    return _run_vcctrl(["caps"])
+    return _run_vcctrl_p(["caps"], profile)
 
 
 @mcp.tool()
-def vcctrl_note(text: str) -> dict:
+def vcctrl_note(text: str, profile: "str | None" = None) -> dict:
     """Set the one-sentence 'what's happening right now' shown on the public
     read-only KVM page -- e.g. "rebooting into NET profile to copy log files
     for review". Not gated by the input lock: it touches no hardware, so it
     needs no --as arbitration beyond attribution. Has no expiry, so a stale
-    sentence reads as a live one until the next call replaces it."""
-    return _run_vcctrl(["note-set", "--text", text, "--as", OWNER])
+    sentence reads as a live one until the next call replaces it. The public
+    mirror currently shows the primary/DOS profile only regardless of what a
+    non-primary profile's own note is set to (operator's call, revisit if
+    that changes)."""
+    resolved = _resolve_profile(profile)
+    return _run_vcctrl(["note-set", "--text", text, "--as", OWNER]
+                       + _profile_flag(resolved))
 
 
 @mcp.tool()
-def vcctrl_config_show() -> dict:
+def vcctrl_config_show(profile: "str | None" = None) -> dict:
     """What the RUNNING daemon actually resolved at start, with source and
     any VCCTRL_* overrides -- different from reading the file, and the one
     worth asking when something behaves oddly."""
-    return _run_vcctrl(["config", "show"])
+    return _run_vcctrl_p(["config", "show"], profile)
 
 
 @mcp.tool()
-def vcctrl_keymap() -> dict:
+def vcctrl_keymap(profile: "str | None" = None) -> dict:
     """Key names this daemon accepts, chord modifier order, and the alias
     table -- read this before building a combo. Does NOT say which keys
     reach the target; only a measured sweep at the machine can."""
-    return _run_vcctrl(["keymap"])
+    return _run_vcctrl_p(["keymap"], profile)
 
 
 @mcp.tool()
-def vcctrl_leds() -> dict:
+def vcctrl_leds(profile: "str | None" = None) -> dict:
     """PS/2 LED return channel snapshot. `available: false` with
     `why: "unsupported"` on ADB (the Mac Plus) is working hardware, not a
     fault -- see `why` for which of the (open-ended) set of reasons this
-    is."""
-    return _run_vcctrl(["leds"])
+    is. Always empty on a hid-gadget profile (e.g. modernpc) -- there is no
+    PS/2 return channel over a generic USB HID gadget at all."""
+    return _run_vcctrl_p(["leds"], profile)
 
 
 @mcp.tool()
-def vcctrl_ledwait(timeout_s: float = 5.0) -> dict:
+def vcctrl_ledwait(timeout_s: float = 5.0, profile: "str | None" = None) -> dict:
     """Block until LED state changes, or timeout_s elapses."""
-    return _run_vcctrl(["ledwait", timeout_s], timeout=timeout_s + 10)
+    return _run_vcctrl_p(["ledwait", timeout_s], profile, timeout=timeout_s + 10)
 
 
 @mcp.tool()
-def vcctrl_led_changes(n: int = 20) -> dict:
+def vcctrl_led_changes(n: int = 20, profile: "str | None" = None) -> dict:
     """The last n LED transitions, newest first. Shows that an intermittent
     left a trace -- does NOT establish a reading is current, since the byte
     only arrives on a lock-key change and an idle machine publishes
     nothing."""
-    return _run_vcctrl(["led-changes", n])
+    return _run_vcctrl_p(["led-changes", n], profile)
 
 
 @mcp.tool()
@@ -544,13 +706,13 @@ def vcctrl_powerlog(n: int = 50) -> dict:
 
 
 @mcp.tool()
-def vcctrl_video_state() -> dict:
+def vcctrl_video_state(profile: "str | None" = None) -> dict:
     """Capture device state."""
-    return _run_vcctrl(["video", "state"])
+    return _run_vcctrl_p(["video", "state"], profile)
 
 
 @mcp.tool()
-def vcctrl_shot(n: "int | None" = None) -> dict:
+def vcctrl_shot(n: "int | None" = None, profile: "str | None" = None) -> dict:
     """One selected (judged) frame, written to a local file on THIS
     machine, or an explicit 'no picture'. Two-valued: the file exists iff
     the daemon says picture; a failed shot removes any stale file at that
@@ -559,7 +721,8 @@ def vcctrl_shot(n: "int | None" = None) -> dict:
     args = ["shot", "--out", out_path]
     if n is not None:
         args.append(n)
-    res = _run_vcctrl(args)
+    resolved = _resolve_profile(profile)
+    res = _run_vcctrl(args + _profile_flag(resolved))
     res["out"] = out_path if os.path.exists(out_path) else None
     return res
 
@@ -596,22 +759,24 @@ def vcctrl_camera_shot() -> dict:
 
 
 @mcp.tool()
-def vcctrl_lastgood() -> dict:
+def vcctrl_lastgood(profile: "str | None" = None) -> dict:
     """The last frame that was positively picture, aged. Same two-valued
     --out contract as vcctrl_shot."""
     out_path = _scratch_path("lastgood", ".jpg")
-    res = _run_vcctrl(["lastgood", "--out", out_path])
+    resolved = _resolve_profile(profile)
+    res = _run_vcctrl(["lastgood", "--out", out_path] + _profile_flag(resolved))
     res["out"] = out_path if os.path.exists(out_path) else None
     return res
 
 
 @mcp.tool()
-def vcctrl_frame(seq: int) -> dict:
+def vcctrl_frame(seq: int, profile: "str | None" = None) -> dict:
     """One RAW frame by sequence number (from vcctrl_timeline). RAW means
     the daemon passes no picture judgement on it -- use vcctrl_shot for a
     judged frame."""
     out_path = _scratch_path("frame-%d" % seq, ".jpg")
-    res = _run_vcctrl(["frame", seq, "--out", out_path])
+    resolved = _resolve_profile(profile)
+    res = _run_vcctrl(["frame", seq, "--out", out_path] + _profile_flag(resolved))
     res["out"] = out_path if os.path.exists(out_path) else None
     return res
 
@@ -653,7 +818,7 @@ def _log_burst_call(n, context, res):
 
 
 @mcp.tool()
-def vcctrl_burst(n: int = 3, context: str = "") -> dict:
+def vcctrl_burst(n: int = 3, context: str = "", profile: "str | None" = None) -> dict:
     """n RAW frames at once, written to a local directory. All or
     nothing -- a burst with silent holes in it would look like a complete
     capture and is not, so a failure leaves no partial directory behind.
@@ -676,36 +841,38 @@ def vcctrl_burst(n: int = 3, context: str = "") -> dict:
     out_dir = tempfile.mkdtemp(prefix="burst-", dir=SCRATCH_DIR)
     os.rmdir(out_dir)   # vcctrl creates it; an empty dir already existing
                         # would defeat the "not empty -> refuse" guard.
-    res = _run_vcctrl(["burst", n, "--out-dir", out_dir])
+    resolved = _resolve_profile(profile)
+    res = _run_vcctrl(["burst", n, "--out-dir", out_dir] + _profile_flag(resolved))
     res["out_dir"] = out_dir if os.path.isdir(out_dir) else None
     _log_burst_call(n, context, res)
     return res
 
 
 @mcp.tool()
-def vcctrl_timeline() -> dict:
+def vcctrl_timeline(profile: "str | None" = None) -> dict:
     """Index of every frame in the scrub buffer: seq, timestamp, size. No
     pixels, so cheap to poll -- use this to find a seq for vcctrl_frame."""
-    return _run_vcctrl(["timeline"])
+    return _run_vcctrl_p(["timeline"], profile)
 
 
 @mcp.tool()
-def vcctrl_framestats(n: int = 100) -> dict:
+def vcctrl_framestats(n: int = 100, profile: "str | None" = None) -> dict:
     """Duplicate-hash stats over the last n frames."""
-    return _run_vcctrl(["framestats", n])
+    return _run_vcctrl_p(["framestats", n], profile)
 
 
 @mcp.tool()
-def vcctrl_pin(action: str = "status") -> dict:
+def vcctrl_pin(action: str = "status", profile: "str | None" = None) -> dict:
     """Stop the ring evicting frames while you examine them: action is
     status, on, or off. Auto-releases after 300s daemon-side regardless, so
     an interrupted session cannot wedge it."""
-    return _run_vcctrl(["pin", action])
+    return _run_vcctrl_p(["pin", action], profile)
 
 
 @mcp.tool()
 def vcctrl_record(since: str, from_seq: "int | None" = None,
-                  to_seq: "int | None" = None, clip: bool = False) -> dict:
+                  to_seq: "int | None" = None, clip: bool = False,
+                  profile: "str | None" = None) -> dict:
     """The scrub buffer as an AVI, written to a local file.
 
     `since` IS REQUIRED, not optional, and must be the caller's own start
@@ -728,7 +895,8 @@ def vcctrl_record(since: str, from_seq: "int | None" = None,
     args += ["--since", since]
     if clip:
         args.append("--clip")
-    res = _run_vcctrl(args, timeout=180.0)
+    resolved = _resolve_profile(profile)
+    res = _run_vcctrl(args + _profile_flag(resolved), timeout=180.0)
     res["out"] = out_path if os.path.exists(out_path) else None
     return res
 
@@ -841,72 +1009,75 @@ if ROLE == "control":
 
 
 @mcp.tool()
-def vcctrl_activity() -> dict:
+def vcctrl_activity(profile: "str | None" = None) -> dict:
     """What is running, for how long, and who holds input -- check this
     before acting, not only for a human watching the rig."""
-    return _run_vcctrl(["activity"])
+    return _run_vcctrl_p(["activity"], profile)
 
 
 @mcp.tool()
-def vcctrl_events(since: "int | None" = None) -> dict:
+def vcctrl_events(since: "int | None" = None, profile: "str | None" = None) -> dict:
     """Activity log since a sequence number (omit for the recent window)."""
     args = ["events"]
     if since is not None:
         args.append(since)
-    return _run_vcctrl(args)
+    return _run_vcctrl_p(args, profile)
 
 
 @mcp.tool()
-def vcctrl_lock_status() -> dict:
+def vcctrl_lock_status(profile: "str | None" = None) -> dict:
     """Input-lock status: who holds it, for how long. Never gated -- an
-    observation, not an action."""
-    return _run_vcctrl(["lock", "status"])
+    observation, not an action. Each profile has its OWN lock (its own
+    vcctrld instance, its own Arbiter) -- a lock held on the primary
+    instance says nothing about whether modernpc's is free, and vice versa."""
+    return _run_vcctrl_p(["lock", "status"], profile)
 
 
 # ---- Phase 2: input tools, lock-gated ----------------------------------
 
 @mcp.tool()
-def vcctrl_key(keys: "list[str]") -> dict:
+def vcctrl_key(keys: "list[str]", profile: "str | None" = None) -> dict:
     """Tap keys in sequence (e.g. ["enter"], ["esc","f1"]). Acquires the
     input lock first; refuses (does not force) if a human or peer holds
     it."""
-    return _gated_run(["key"] + list(keys))
+    return _gated_run(["key"] + list(keys), profile)
 
 
 @mcp.tool()
-def vcctrl_type(text: str) -> dict:
+def vcctrl_type(text: str, profile: "str | None" = None) -> dict:
     """Type literal text, shifted characters handled."""
-    return _gated_run(["type", text])
+    return _gated_run(["type", text], profile)
 
 
 @mcp.tool()
-def vcctrl_hold(key: str, ms: int) -> dict:
+def vcctrl_hold(key: str, ms: int, profile: "str | None" = None) -> dict:
     """Press, dwell ms, release -- the primitive gameplay/interactive
     testing needs; a keystroke with no duration cannot hold a direction."""
-    return _gated_run(["hold", key, ms], timeout=ms / 1000.0 + 30)
+    return _gated_run(["hold", key, ms], profile, timeout=ms / 1000.0 + 30)
 
 
 @mcp.tool()
-def vcctrl_keydown(key: str) -> dict:
+def vcctrl_keydown(key: str, profile: "str | None" = None) -> dict:
     """Press and hold, no release -- pair with vcctrl_keyup or
     vcctrl_release_all."""
-    return _gated_run(["keydown", key])
+    return _gated_run(["keydown", key], profile)
 
 
 @mcp.tool()
-def vcctrl_keyup(key: str) -> dict:
+def vcctrl_keyup(key: str, profile: "str | None" = None) -> dict:
     """Release a key held by vcctrl_keydown."""
-    return _gated_run(["keyup", key])
+    return _gated_run(["keyup", key], profile)
 
 
 @mcp.tool()
-def vcctrl_release_all() -> dict:
+def vcctrl_release_all(profile: "str | None" = None) -> dict:
     """Release every key currently held by vcctrl_keydown."""
-    return _gated_run(["release-all"])
+    return _gated_run(["release-all"], profile)
 
 
 @mcp.tool()
-def vcctrl_combo(keys: "list[str]", confirm: "str | None" = None) -> dict:
+def vcctrl_combo(keys: "list[str]", confirm: "str | None" = None,
+                 profile: "str | None" = None) -> dict:
     """Chord (e.g. ["ctrl","alt","delete"]). Keys press modifiers-first
     regardless of the order given, release in reverse; the reply echoes the
     order actually sent.
@@ -917,32 +1088,39 @@ def vcctrl_combo(keys: "list[str]", confirm: "str | None" = None) -> dict:
     human-in-the-loop gate -- an agentic caller can confirm autonomously
     when a reboot is genuinely what the task calls for -- it exists so a
     reboot is never the ACCIDENTAL shape of a call, only the deliberate one.
+
+    The reboot-chord CHECK itself is asked of the PRIMARY instance's keymap
+    regardless of `profile` (KEYMAP is fetched once, lazily, from whichever
+    daemon answered first) -- Ctrl-Alt-Delete is the same three USB HID
+    usages on every backend this daemon has, so this is a shared fact, not
+    a per-profile one, and re-fetching it per profile would just be the
+    same answer fetched twice.
     """
     if KEYMAP.is_reboot_combo(keys) and confirm != "reboot":
         return {"ok": False,
                 "error": ("this combo matches the reboot chord -- pass "
                           "confirm=\"reboot\" to send it"),
                 "keys": list(keys)}
-    return _gated_run(["combo"] + list(keys))
+    return _gated_run(["combo"] + list(keys), profile)
 
 
 @mcp.tool()
-def vcctrl_mouse_move(dx: int, dy: int) -> dict:
-    """Relative move. PS/2 and ADB mice are both relative-only -- there is
-    no absolute positioning; home the cursor by moving into a screen corner
-    first if you need a known starting point. Movement is silently clamped
-    at screen edges."""
-    return _gated_run(["mouse", "move", dx, dy])
+def vcctrl_mouse_move(dx: int, dy: int, profile: "str | None" = None) -> dict:
+    """Relative move. PS/2 and ADB mice, and the hid-gadget backend, are all
+    relative-only -- there is no absolute positioning; home the cursor by
+    moving into a screen corner first if you need a known starting point.
+    Movement is silently clamped at screen edges."""
+    return _gated_run(["mouse", "move", dx, dy], profile)
 
 
 @mcp.tool()
-def vcctrl_mouse_click(button: str = "left") -> dict:
+def vcctrl_mouse_click(button: str = "left", profile: "str | None" = None) -> dict:
     """Click left, right, or middle."""
-    return _gated_run(["mouse", "click", button])
+    return _gated_run(["mouse", "click", button], profile)
 
 
 @mcp.tool()
-def vcctrl_verify_input() -> dict:
+def vcctrl_verify_input(profile: "str | None" = None) -> dict:
     """Prove the input path by PS/2 LED round trip -- the only check that
     says anything about the FAR end of the wire; every other input status
     describes the Pi's own end. Refuses (exit 2, available: false) on
@@ -956,46 +1134,57 @@ def vcctrl_verify_input() -> dict:
     mid-sweep, and the daemon's GATED_COMMANDS set does not yet include it
     (a gap worth closing daemon-side too; see internal/MCP-PLAN.md sec. 10).
     This tool closes it on the MCP side regardless of what the daemon
-    enforces.
+    enforces. Always `available: false` on a hid-gadget profile -- see
+    vcctrl_leds; there is no LED channel to round-trip through there
+    either.
     """
-    return _gated_run(["verify-input"], timeout=15.0)
+    return _gated_run(["verify-input"], profile, timeout=15.0)
 
 
 @mcp.tool()
-def vcctrl_lock_acquire() -> dict:
+def vcctrl_lock_acquire(profile: "str | None" = None) -> dict:
     """Explicitly take the input lock AND KEEP IT HELD across every
-    subsequent gated call, until vcctrl_lock_release or the 300s idle
-    timer. Most tools acquire the lock automatically on first need and
-    release it again as soon as that one action finishes (see _gated_run);
-    call this only when you deliberately want a longer, visible hold across
-    a whole sequence.
+    subsequent gated call against this SAME profile, until
+    vcctrl_lock_release(profile) or the 300s idle timer. Most tools acquire
+    the lock automatically on first need and release it again as soon as
+    that one action finishes (see _gated_run); call this only when you
+    deliberately want a longer, visible hold across a whole sequence.
 
     Refuses if a file-transfer job (send/get/refresh/scan) or a harness job
-    (run_cell/run_sweep/collect) is currently running. A sticky hold taken
-    while your own background job is still in flight is exactly what
-    silently stalled a DOSSAGE fetch's return-reboot on 2026-08-31 -- the
-    job's own next typed step needed this lock and was refused, not
-    forced, so it sat stuck rather than failing loudly. Wait for the job to
-    finish (poll vcctrl_file_status / vcctrl_job_status) before asking for
-    a sticky hold, or vcctrl_file_cancel / vcctrl_job_cancel it first."""
-    conflict = _active_job_conflict("vcctrl_lock_acquire")
+    (run_cell/run_sweep/collect) is currently running -- checked only for
+    the primary instance, since neither kind of job exists for any other
+    profile (see _active_job_conflict). A sticky hold taken while your own
+    background job is still in flight is exactly what silently stalled a
+    DOSSAGE fetch's return-reboot on 2026-08-31 -- the job's own next typed
+    step needed this lock and was refused, not forced, so it sat stuck
+    rather than failing loudly. Wait for the job to finish (poll
+    vcctrl_file_status / vcctrl_job_status) before asking for a sticky hold
+    on the primary instance, or vcctrl_file_cancel / vcctrl_job_cancel it
+    first."""
+    resolved = _resolve_profile(profile)
+    conflict = _active_job_conflict("vcctrl_lock_acquire", resolved)
     if conflict is not None:
         return conflict
-    refusal = LOCK.ensure()
+    lock = _get_lock(resolved)
+    refusal = lock.ensure()
     if refusal is not None:
         return refusal
-    LOCK.mark_sticky()
-    return {"ok": True, "owner": OWNER, "sticky": True}
+    lock.mark_sticky()
+    return {"ok": True, "owner": OWNER, "sticky": True,
+            "profile": resolved or "default"}
 
 
 @mcp.tool()
-def vcctrl_lock_release() -> dict:
+def vcctrl_lock_release(profile: "str | None" = None) -> dict:
     """Release the input lock now (and clear any sticky hold from
-    vcctrl_lock_acquire), without waiting for the idle timeout -- use this
-    when you know you're done with input for a while and want to let a
-    human, peer, or one of your own in-flight jobs back in."""
-    LOCK.release()
-    return {"ok": True, "owner": None}
+    vcctrl_lock_acquire) for this profile, without waiting for the idle
+    timeout -- use this when you know you're done with input for a while
+    and want to let a human, peer, or one of your own in-flight jobs back
+    in. Releasing one profile's lock has no effect on any other profile's --
+    each has its own."""
+    resolved = _resolve_profile(profile)
+    _get_lock(resolved).release()
+    return {"ok": True, "owner": None, "profile": resolved or "default"}
 
 
 # ---- Phase 3: power tools ----------------------------------------------

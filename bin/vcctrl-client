@@ -7,6 +7,7 @@ never cross the network, and it means moving Claude onto the Pi later changes
 nothing but which wrapper you call.
 """
 
+import glob
 import json
 import os
 import socket
@@ -14,6 +15,40 @@ import sys
 import time
 
 SOCKET_PATH = "/run/vcctrl.sock"
+
+# THE NAMING CONVENTION IS THE REGISTRY. A second vcctrld instance (see
+# vcctrl-modernpc.example.yaml) is just another process on this same host with
+# its own `daemon.socket` -- and every one shipped so far names that socket
+# /run/vcctrl-<profile>.sock (vcctrld-modernpc.service's own VCCTRL_CONFIG
+# comment). A separate registry FILE listing profiles would need updating by
+# hand every time a profile is added or removed, and would be wrong the
+# instant it drifted -- exactly the failure mode CFG_ERROR's own "read once,
+# never fatal" comment in vcctrld.py warns about for config in general. This
+# glob asks the filesystem, which cannot be stale: a socket exists because a
+# systemd unit is running, or it does not.
+PROFILE_SOCKET_GLOB = "/run/vcctrl-*.sock"
+
+
+def profile_socket_path(name):
+    """`/run/vcctrl.sock` for no profile (unchanged default), else the
+    convention above. Does not check the socket exists -- `call()` already
+    reports "cannot reach vcctrld" with the exact path when it does not, and
+    duplicating that check here would just be a second place for the two to
+    disagree."""
+    if not name or name == "default":
+        return "/run/vcctrl.sock"
+    return "/run/vcctrl-%s.sock" % name
+
+
+def list_profiles():
+    """Every vcctrld socket actually present, primary included. Live
+    discovery (see PROFILE_SOCKET_GLOB above), not a maintained list."""
+    out = [{"profile": "default", "socket": "/run/vcctrl.sock",
+           "present": os.path.exists("/run/vcctrl.sock")}]
+    for path in sorted(glob.glob(PROFILE_SOCKET_GLOB)):
+        name = os.path.basename(path)[len("vcctrl-"):-len(".sock")]
+        out.append({"profile": name, "socket": path, "present": True})
+    return out
 
 USAGE = """usage: vcctrl <command> [args]
 
@@ -283,10 +318,22 @@ USAGE = """usage: vcctrl <command> [args]
                             input arbitration. Unheld by default; while held,
                             input from anyone else is refused. `break` takes it
                             by force and MARKS THE RUN TAINTED.
+  profiles                  every vcctrld instance actually running on this
+                            host, discovered by socket presence -- not a list
+                            that can drift out of sync with what is real.
+                            Always includes `default`, the unnamed primary
+                            instance every other command targets absent
+                            --profile.
 
 options:
   --pace <seconds>          inter-event gap (default 0.012)
   --as <name>               identify the caller to the input lock
+  --profile <name>          talk to a SECOND vcctrld instance instead of the
+                            default one -- e.g. --profile modernpc reaches
+                            /run/vcctrl-modernpc.sock. See `profiles`.
+  --socket <path>           talk to an arbitrary socket path directly,
+                            bypassing the --profile naming convention.
+                            --profile and --socket are mutually exclusive.
 """
 
 
@@ -1005,11 +1052,14 @@ def preflight(who=None, skip_input=False):
 
 
 def main(argv):
+    global SOCKET_PATH
     pace = None
     who = None
     out = None
     out_dir = None
     text = None
+    profile = None
+    explicit_socket = None
     # A recording's own start time, so the daemon can refuse a window that
     # opens before the run it claims to be of. `--since now` is the common
     # case: start the clock here, do the work, then record.
@@ -1047,14 +1097,35 @@ def main(argv):
             text = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--profile":
+            profile = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--socket":
+            explicit_socket = argv[i + 1]
+            i += 2
+            continue
         args.append(argv[i])
         i += 1
+
+    if profile is not None and explicit_socket is not None:
+        sys.stderr.write("--profile and --socket are mutually exclusive\n")
+        return 3
+    if explicit_socket is not None:
+        SOCKET_PATH = explicit_socket
+    elif profile is not None:
+        SOCKET_PATH = profile_socket_path(profile)
 
     if not args or args[0] in ("-h", "--help", "help"):
         sys.stdout.write(USAGE)
         return 0
 
     cmd, rest = args[0], args[1:]
+
+    if cmd == "profiles":
+        sys.stdout.write(json.dumps({"ok": True, "profiles": list_profiles()},
+                                    indent=2, sort_keys=True) + "\n")
+        return 0
     # Exit 3 rather than 2 here on purpose: 2 now means "could not look" for
     # verify-input, and a flag misapplied to a command is a tool misuse, not a
     # reading. Keeping them apart matters more than matching the old number,
