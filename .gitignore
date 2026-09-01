@@ -10,6 +10,9 @@ __pycache__/
 
 # The operator's real configuration. The tracked example is vcctrl.example.yaml.
 /vcctrl.yaml
+# Same reasoning, for the second vcctrld instance's config (the modernpc
+# profile). The tracked example is vcctrl-modernpc.example.yaml.
+/vcctrl-modernpc.yaml
 
 # PLANNING WORK THAT MUST NEVER REACH THE REPOSITORY.
 #

@@ -1,0 +1,39 @@
+[Unit]
+Description=vcctrld -- second instance, modernpc (HID-gadget Linux server target)
+# Needs /dev/hidg0/1 to exist before Devices() tries to open them (vcctrld.py
+# checks explicitly and refuses with a clear message rather than a raw
+# traceback if they are missing, but there is no reason to make Restart=always
+# spend restarts finding that out on every boot when ordering can avoid it).
+# vcctrl-hid-gadget.service is NOT required to be enabled for this unit to
+# start -- After=, not Requires= -- since a modernpc config can exist on a Pi
+# that has not wired up the gadget hardware yet.
+After=vcctrl-hid-gadget.service
+
+[Service]
+Type=simple
+# SAME BINARY as the primary vcctrld.service, deliberately -- one
+# implementation, not a forked copy that can drift. VCCTRL_CONFIG is the
+# entire difference between the two instances: everything else (socket,
+# state dir, capabilities, ports) comes from vcctrl-modernpc.yaml, not from
+# this unit.
+ExecStart=/usr/bin/python3 -u /opt/vcctrl/vcctrld.py
+Environment=PYTHONPATH=/opt/vcctrl
+Environment=VCCTRL_CONFIG=/opt/vcctrl/vcctrl-modernpc.yaml
+Restart=always
+RestartSec=2
+# Needs root for /dev/hidg0/1 (root:root, mode 0600 -- see
+# vcctrl-hid-gadget-setup.sh).
+User=root
+
+# NO ctrl-alt-del.target MASKING NEEDED HERE, unlike the primary instance.
+# That masking exists because a uinput keyboard is a keyboard to THIS Pi's
+# own kernel as well as to the DOS target -- an uninvolved observer, at risk
+# of reacting to a chord meant for someone else. A HID GADGET keyboard is
+# the opposite shape: /dev/hidg0 is consumed by the dwc2 controller and sent
+# OUT over the wire to whatever host is on the other end (modernpc, or the
+# laptop standing in for it during bring-up) -- the Pi never sees these
+# reports as its own local input at all, so there is no local Ctrl-Alt-Del
+# for this Pi's systemd to intercept in the first place.
+
+[Install]
+WantedBy=multi-user.target

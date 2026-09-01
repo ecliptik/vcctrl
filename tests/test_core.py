@@ -116,6 +116,7 @@ def make_devices(delay=0.0):
     """Build a Devices without touching /dev/uinput."""
     d = vcctrld.Devices.__new__(vcctrld.Devices)
     d.log = []
+    d.hid_mode = False
     d.kbd = FakeDev(d.log, delay)
     d.mouse = FakeDev(d.log, delay)
     d.lock = threading.Lock()

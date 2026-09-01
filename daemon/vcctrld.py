@@ -281,6 +281,71 @@ MOUSE_BUTTONS = {
     "left": e.BTN_LEFT, "right": e.BTN_RIGHT, "middle": e.BTN_MIDDLE,
 }
 
+# ------------------------------------------------------- HID gadget usage IDs
+#
+# The `hid-gadget` input backend (Devices, below) does not get its own copy of
+# NAMED_KEYS/CHARMAP -- it translates the SAME evdev codes those tables
+# already resolve names and characters into, via this one table. That is
+# deliberate: it is what guarantees the two backends accept exactly the same
+# key names and characters, rather than two hand-maintained tables that are
+# free to quietly disagree about what "f9" means.
+#
+# Modifiers are NOT here. A USB HID boot-protocol keyboard report has no
+# keycode for Ctrl/Alt/Shift/Meta at all -- they are eight bits in the
+# report's own first byte (HID_MODIFIER_BITS, below), not entries in its
+# 6-key array. A modifier evdev code is looked up there first and never
+# reaches this table.
+#
+# Values are USB HID Usage Tables 1.12, page 0x07 (Keyboard/Keypad), the same
+# numbers every USB keyboard on earth reports.
+EVDEV_TO_HID_USAGE = {
+    e.KEY_A: 0x04, e.KEY_B: 0x05, e.KEY_C: 0x06, e.KEY_D: 0x07,
+    e.KEY_E: 0x08, e.KEY_F: 0x09, e.KEY_G: 0x0A, e.KEY_H: 0x0B,
+    e.KEY_I: 0x0C, e.KEY_J: 0x0D, e.KEY_K: 0x0E, e.KEY_L: 0x0F,
+    e.KEY_M: 0x10, e.KEY_N: 0x11, e.KEY_O: 0x12, e.KEY_P: 0x13,
+    e.KEY_Q: 0x14, e.KEY_R: 0x15, e.KEY_S: 0x16, e.KEY_T: 0x17,
+    e.KEY_U: 0x18, e.KEY_V: 0x19, e.KEY_W: 0x1A, e.KEY_X: 0x1B,
+    e.KEY_Y: 0x1C, e.KEY_Z: 0x1D,
+    e.KEY_1: 0x1E, e.KEY_2: 0x1F, e.KEY_3: 0x20, e.KEY_4: 0x21,
+    e.KEY_5: 0x22, e.KEY_6: 0x23, e.KEY_7: 0x24, e.KEY_8: 0x25,
+    e.KEY_9: 0x26, e.KEY_0: 0x27,
+    e.KEY_ENTER: 0x28, e.KEY_ESC: 0x29, e.KEY_BACKSPACE: 0x2A,
+    e.KEY_TAB: 0x2B, e.KEY_SPACE: 0x2C,
+    e.KEY_MINUS: 0x2D, e.KEY_EQUAL: 0x2E, e.KEY_LEFTBRACE: 0x2F,
+    e.KEY_RIGHTBRACE: 0x30, e.KEY_BACKSLASH: 0x31,
+    e.KEY_SEMICOLON: 0x33, e.KEY_APOSTROPHE: 0x34, e.KEY_GRAVE: 0x35,
+    e.KEY_COMMA: 0x36, e.KEY_DOT: 0x37, e.KEY_SLASH: 0x38,
+    e.KEY_CAPSLOCK: 0x39,
+    e.KEY_F1: 0x3A, e.KEY_F2: 0x3B, e.KEY_F3: 0x3C, e.KEY_F4: 0x3D,
+    e.KEY_F5: 0x3E, e.KEY_F6: 0x3F, e.KEY_F7: 0x40, e.KEY_F8: 0x41,
+    e.KEY_F9: 0x42, e.KEY_F10: 0x43, e.KEY_F11: 0x44, e.KEY_F12: 0x45,
+    e.KEY_SYSRQ: 0x46, e.KEY_SCROLLLOCK: 0x47, e.KEY_PAUSE: 0x48,
+    e.KEY_INSERT: 0x49, e.KEY_HOME: 0x4A, e.KEY_PAGEUP: 0x4B,
+    e.KEY_DELETE: 0x4C, e.KEY_END: 0x4D, e.KEY_PAGEDOWN: 0x4E,
+    e.KEY_RIGHT: 0x4F, e.KEY_LEFT: 0x50, e.KEY_DOWN: 0x51, e.KEY_UP: 0x52,
+    e.KEY_NUMLOCK: 0x53, e.KEY_KPSLASH: 0x54, e.KEY_KPASTERISK: 0x55,
+    e.KEY_KPMINUS: 0x56, e.KEY_KPPLUS: 0x57, e.KEY_KPENTER: 0x58,
+    e.KEY_KP1: 0x59, e.KEY_KP2: 0x5A, e.KEY_KP3: 0x5B, e.KEY_KP4: 0x5C,
+    e.KEY_KP5: 0x5D, e.KEY_KP6: 0x5E, e.KEY_KP7: 0x5F, e.KEY_KP8: 0x60,
+    e.KEY_KP9: 0x61, e.KEY_KP0: 0x62, e.KEY_KPDOT: 0x63,
+    e.KEY_102ND: 0x64, e.KEY_COMPOSE: 0x65,
+}
+
+# Bit position in a HID keyboard report's modifier byte (report[0]), per USB
+# HID 1.11 sec 8.3. Checked BEFORE EVDEV_TO_HID_USAGE by every hid-gadget
+# press/release path -- see the comment above that table for why a modifier
+# must never reach it.
+HID_MODIFIER_BITS = {
+    e.KEY_LEFTCTRL: 0x01, e.KEY_LEFTSHIFT: 0x02, e.KEY_LEFTALT: 0x04,
+    e.KEY_LEFTMETA: 0x08, e.KEY_RIGHTCTRL: 0x10, e.KEY_RIGHTSHIFT: 0x20,
+    e.KEY_RIGHTALT: 0x40, e.KEY_RIGHTMETA: 0x80,
+}
+
+# Bit position in a HID mouse report's button byte (report[0]).
+HID_MOUSE_BUTTON_BITS = {
+    e.BTN_LEFT: 0x01, e.BTN_RIGHT: 0x02, e.BTN_MIDDLE: 0x04,
+}
+
 # THE ALIASES ARE THE POINT. NAMED_KEYS gives the same physical key several
 # names -- `ctrl`, `lctrl` and `rctrl` are three names for two keys that both
 # mean Ctrl to a chord -- so a check written against one spelling is a check
@@ -730,10 +795,62 @@ class ShellPower(object):
 POWER_BACKENDS = {"kasa-legacy": KasaLegacyPower, "shell": ShellPower}
 
 
+HID_KBD_DEVICE = CFG.default("capabilities.input.settings.hid_keyboard_device",
+                             "/dev/hidg0")
+HID_MOUSE_DEVICE = CFG.default("capabilities.input.settings.hid_mouse_device",
+                               "/dev/hidg1")
+
+
 class Devices(object):
-    """Owns the two uinput devices for the life of the process."""
+    """Owns the keyboard/mouse OUTPUT for the life of the process.
+
+    Two backends, chosen by `capabilities.input.backend` and never mixed:
+
+      usb4vc-uinput (default) -- two persistent uinput devices. USB4VC
+        discovers them on its 0.75s scan and relays their events over SPI to
+        a PS/2/ADB protocol board. This is the ONLY backend that existed
+        before the one below, and everything about it is unchanged.
+
+      hid-gadget -- the Pi's own USB-C port acting as a USB HID keyboard and
+        mouse (dwc2 peripheral mode + configfs; the gadget itself is built by
+        pi/files/vcctrl-hid-gadget-setup.sh, independently of this daemon --
+        see that script's own docstring for why). Raw HID reports are written
+        directly to /dev/hidg0/1. No USB4VC, no SPI, no protocol board: the
+        target here has a real USB port and needs none of that translation.
+
+    Both backends answer the SAME method surface below. InputCapability and
+    LedsCapability call into `self.devs` without knowing or caring which one
+    is underneath -- InputCapability's own Rule 1 depends on that.
+    """
 
     def __init__(self):
+        self.hid_mode = (CFG.default("capabilities.input.backend",
+                                      "usb4vc-uinput") == "hid-gadget")
+        self.lock = threading.Lock()
+        # Keys currently held by keydown with no matching keyup. Tracked so a
+        # disconnecting client cannot strand one down (see release_all).
+        # Holds evdev codes in BOTH backends -- translation to a HID usage ID
+        # or modifier bit happens only at the point of writing a report, in
+        # _press/_release below, so this set means the same thing either way.
+        self.held = set()
+
+        if self.hid_mode:
+            self.kbd = None
+            self.mouse = None
+            self._hid_kbd_fd = open(HID_KBD_DEVICE, "wb", buffering=0)
+            self._hid_mouse_fd = open(HID_MOUSE_DEVICE, "wb", buffering=0)
+            self._hid_mods = 0
+            self._hid_keys = []            # up to 6 pressed HID usage IDs
+            self._hid_mouse_buttons = 0
+            # No PS/2 return channel over a generic HID gadget -- there is no
+            # protocol message a HID host sends back that means "the lock
+            # light changed" the way USB4VC's PS/2 bridge has one. See
+            # read_leds() below.
+            self.led_paths = {}
+            self._write_hid_kbd_report()
+            self._write_hid_mouse_report()
+            return
+
         # KEY_ENTER and KEY_Y are required for USB4VC to classify this as a
         # keyboard. EV_LED gives us the PS/2 return channel (sec 2.1).
         kbd_keys = sorted(set(NAMED_KEYS.values()) |
@@ -751,10 +868,6 @@ class Devices(object):
              e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL]},
             name="vcctrl virtual mouse",
             vendor=VENDOR, product=MOUSE_PRODUCT, version=1)
-        self.lock = threading.Lock()
-        # Keys currently held by keydown with no matching keyup. Tracked so a
-        # disconnecting client cannot strand one down (see release_all).
-        self.held = set()
         self.led_paths = self._find_led_paths()
 
     def _find_led_paths(self):
@@ -778,6 +891,13 @@ class Devices(object):
         return out
 
     def read_leds(self):
+        # No PS/2 return channel exists over a generic HID gadget -- see the
+        # comment in __init__. Absent, not zero: LedsCapability's own contract
+        # (Capability's docstring, "value keys ABSENT when unavailable") is
+        # that a channel with nothing to read publishes no key at all, rather
+        # than a plausible-looking `{"capslock": 0}` nobody actually measured.
+        if self.hid_mode:
+            return {}
         out = {}
         for name, path in self.led_paths.items():
             try:
@@ -787,14 +907,75 @@ class Devices(object):
                 out[name] = None
         return out
 
-    # -- emission -----------------------------------------------------------
+    # -- HID gadget report I/O -----------------------------------------------
+    #
+    # One write() per report, unbuffered (Devices.__init__ opens both fds with
+    # buffering=0) -- a HID gadget report is a fixed-size datagram-like unit,
+    # not a byte stream, and a short or coalesced write would send a
+    # different report than the one built here.
 
-    def _tap(self, dev, code, pace):
-        dev.write(e.EV_KEY, code, 1)
-        dev.syn()
+    def _write_hid_kbd_report(self):
+        keys = (self._hid_keys + [0, 0, 0, 0, 0, 0])[:6]
+        self._hid_kbd_fd.write(bytes([self._hid_mods, 0] + keys))
+
+    def _write_hid_mouse_report(self, dx=0, dy=0, wheel=0):
+        def s8(v):
+            return max(-127, min(127, int(v))) & 0xff
+        self._hid_mouse_fd.write(
+            bytes([self._hid_mouse_buttons, s8(dx), s8(dy), s8(wheel)]))
+
+    # -- emission -------------------------------------------------------------
+    #
+    # _press/_release take an EVDEV code -- the same ones NAMED_KEYS/CHARMAP
+    # already resolve names and characters to -- and are the only place that
+    # branches on which backend is active. Every method below them (key,
+    # type_text, hold, combo, keydown, keyup, release_all) is backend-agnostic
+    # and UNCHANGED in shape from before hid-gadget existed; only the two
+    # primitives underneath it differ.
+
+    def _press(self, code):
+        if not self.hid_mode:
+            self.kbd.write(e.EV_KEY, code, 1)
+            self.kbd.syn()
+            return
+        bit = HID_MODIFIER_BITS.get(code)
+        if bit is not None:
+            self._hid_mods |= bit
+        else:
+            usage = EVDEV_TO_HID_USAGE.get(code)
+            if usage is None:
+                raise ValueError(
+                    "key has no HID usage mapping: evdev code %d" % code)
+            if usage not in self._hid_keys:
+                if len(self._hid_keys) >= 6:
+                    # A real keyboard reports all-1s ("phantom") on true
+                    # 6-key rollover; dropping the oldest held key instead is
+                    # a deliberate simplification -- nothing this daemon's
+                    # key/combo/keydown surface sends holds more than a
+                    # handful of keys at once, and phantom-state has no
+                    # meaning to relay to a caller anyway.
+                    self._hid_keys.pop(0)
+                self._hid_keys.append(usage)
+        self._write_hid_kbd_report()
+
+    def _release(self, code):
+        if not self.hid_mode:
+            self.kbd.write(e.EV_KEY, code, 0)
+            self.kbd.syn()
+            return
+        bit = HID_MODIFIER_BITS.get(code)
+        if bit is not None:
+            self._hid_mods &= ~bit
+        else:
+            usage = EVDEV_TO_HID_USAGE.get(code)
+            if usage in self._hid_keys:
+                self._hid_keys.remove(usage)
+        self._write_hid_kbd_report()
+
+    def _tap(self, code, pace):
+        self._press(code)
         time.sleep(pace)
-        dev.write(e.EV_KEY, code, 0)
-        dev.syn()
+        self._release(code)
         time.sleep(pace)
 
     def key(self, names, pace=DEFAULT_PACE_S):
@@ -803,7 +984,7 @@ class Devices(object):
                 code = NAMED_KEYS.get(n.lower())
                 if code is None:
                     raise ValueError("unknown key: %s" % n)
-                self._tap(self.kbd, code, pace)
+                self._tap(code, pace)
 
     def type_text(self, text, pace=DEFAULT_PACE_S):
         with self.lock:
@@ -813,13 +994,11 @@ class Devices(object):
                     raise ValueError("untypable character: %r" % ch)
                 code, shift = ent
                 if shift:
-                    self.kbd.write(e.EV_KEY, e.KEY_LEFTSHIFT, 1)
-                    self.kbd.syn()
+                    self._press(e.KEY_LEFTSHIFT)
                     time.sleep(pace)
-                self._tap(self.kbd, code, pace)
+                self._tap(code, pace)
                 if shift:
-                    self.kbd.write(e.EV_KEY, e.KEY_LEFTSHIFT, 0)
-                    self.kbd.syn()
+                    self._release(e.KEY_LEFTSHIFT)
                     time.sleep(pace)
 
     def hold(self, name, ms, pace=DEFAULT_PACE_S):
@@ -827,11 +1006,9 @@ class Devices(object):
         if code is None:
             raise ValueError("unknown key: %s" % name)
         with self.lock:
-            self.kbd.write(e.EV_KEY, code, 1)
-            self.kbd.syn()
+            self._press(code)
             time.sleep(ms / 1000.0)
-            self.kbd.write(e.EV_KEY, code, 0)
-            self.kbd.syn()
+            self._release(code)
             time.sleep(pace)
 
     def combo(self, names, pace=DEFAULT_PACE_S):
@@ -843,12 +1020,10 @@ class Devices(object):
             codes.append(c)
         with self.lock:
             for c in codes:
-                self.kbd.write(e.EV_KEY, c, 1)
-                self.kbd.syn()
+                self._press(c)
                 time.sleep(pace)
             for c in reversed(codes):
-                self.kbd.write(e.EV_KEY, c, 0)
-                self.kbd.syn()
+                self._release(c)
                 time.sleep(pace)
 
     def keydown(self, name):
@@ -863,8 +1038,7 @@ class Devices(object):
         if code is None:
             raise ValueError("unknown key: %s" % name)
         with self.lock:
-            self.kbd.write(e.EV_KEY, code, 1)
-            self.kbd.syn()
+            self._press(code)
             self.held.add(code)
 
     def keyup(self, name):
@@ -872,8 +1046,7 @@ class Devices(object):
         if code is None:
             raise ValueError("unknown key: %s" % name)
         with self.lock:
-            self.kbd.write(e.EV_KEY, code, 0)
-            self.kbd.syn()
+            self._release(code)
             self.held.discard(code)
 
     def release_all(self, pace=DEFAULT_PACE_S):
@@ -886,27 +1059,55 @@ class Devices(object):
         with self.lock:
             codes = sorted(self.held)
             for code in codes:
-                self.kbd.write(e.EV_KEY, code, 0)
-                self.kbd.syn()
+                self._release(code)
                 time.sleep(pace)
             self.held.clear()
         return len(codes)
 
     def mouse_move(self, dx, dy, pace=DEFAULT_PACE_S):
         with self.lock:
-            if dx:
-                self.mouse.write(e.EV_REL, e.REL_X, int(dx))
-            if dy:
-                self.mouse.write(e.EV_REL, e.REL_Y, int(dy))
-            self.mouse.syn()
-            time.sleep(pace)
+            if not self.hid_mode:
+                if dx:
+                    self.mouse.write(e.EV_REL, e.REL_X, int(dx))
+                if dy:
+                    self.mouse.write(e.EV_REL, e.REL_Y, int(dy))
+                self.mouse.syn()
+                time.sleep(pace)
+                return
+            # A HID relative report is one SIGNED BYTE per axis (-127..127),
+            # unlike EV_REL which takes any int -- so a move bigger than that
+            # is split into several reports summing to the same total
+            # distance, rather than being silently clamped to a fifth of what
+            # was asked for.
+            rx, ry = int(dx), int(dy)
+            while rx or ry:
+                sx = max(-127, min(127, rx))
+                sy = max(-127, min(127, ry))
+                self._write_hid_mouse_report(sx, sy)
+                rx -= sx
+                ry -= sy
+                time.sleep(pace)
 
     def mouse_click(self, button, pace=DEFAULT_PACE_S):
         code = MOUSE_BUTTONS.get(button.lower())
         if code is None:
             raise ValueError("unknown button: %s" % button)
         with self.lock:
-            self._tap(self.mouse, code, pace)
+            if not self.hid_mode:
+                self.mouse.write(e.EV_KEY, code, 1)
+                self.mouse.syn()
+                time.sleep(pace)
+                self.mouse.write(e.EV_KEY, code, 0)
+                self.mouse.syn()
+                time.sleep(pace)
+                return
+            bit = HID_MOUSE_BUTTON_BITS[code]
+            self._hid_mouse_buttons |= bit
+            self._write_hid_mouse_report()
+            time.sleep(pace)
+            self._hid_mouse_buttons &= ~bit
+            self._write_hid_mouse_report()
+            time.sleep(pace)
 
 
 def usb4vc_holds_us():
@@ -1515,7 +1716,21 @@ def installed_board_id():
     Capabilities do not call into each other here (see InputCapability's rule
     1), which is why this is a module function rather than a reach across the
     registry.
+
+    A `board: none` INSTANCE RETURNS None UNCONDITIONALLY, without even
+    trying the file. Not an optimization: /run/usb4vc/board.json is a path on
+    the HOST filesystem, not scoped to one vcctrld process, and a second
+    instance on the same Pi with no protocol board of its own (the
+    `hid-gadget` input backend has no USB4VC/SPI board at all) would
+    otherwise silently read whatever the OTHER instance's board happens to
+    be -- a real value about a real board, attributed to a target that has
+    none. `board: none` is this daemon's own declaration that the question
+    does not apply here, so the answer must not come from a file that was
+    never about this process to begin with.
     """
+    _board_backend = CFG.optional("capabilities.board.backend")
+    if _board_backend is vcconfig.NONE or _board_backend == "none":
+        return None
     try:
         with open(BoardCapability.FILE) as f:
             bid = json.load(f).get("id")
@@ -2498,6 +2713,19 @@ class VideoCapability(Capability):
     Rule 3 does not cover memory, so the ring is capped in BYTES. Frames is the
     wrong unit: frame size varies by an order of magnitude between a text
     console and a game screen, and an OOM takes the uinput devices with it.
+
+    NOT YET FIXED, LEFT AS A NOTE RATHER THAN A CHANGE (docs/FINDINGS.md #45):
+    the very first frame read after a v4l2 device is freshly opened can be a
+    stale "locked, no source" placeholder even when a real signal is present
+    -- measured on the SAME MacroSilicon chip family this class already
+    reads, resyncing correctly about 2s later. This class's own multi-frame
+    FROZEN_RUN check (8 consecutive identical frames) almost certainly
+    already absorbs this for the steady-running case -- one stale frame
+    right after a respawn is not 8 in a row -- but that has not been proven
+    against an actual respawn, only reasoned about, and a caller that does
+    ITS OWN single-shot open-and-read-one-frame (as this repo's own ad hoc
+    Phase 0 testing did) gets no such protection at all. Left alone here
+    rather than changed blind, in code this heavily measured already.
     """
 
     name = "video"
@@ -5039,7 +5267,8 @@ BoardCapability.DEFAULT_BACKEND_NAME = 'usb4vc-runfile'
 #
 # The single-name maps are also the extension point: a second implementation
 # is one more entry, and `none` already works for all of them.
-InputCapability.BACKENDS = {"usb4vc-uinput": InputCapability}
+InputCapability.BACKENDS = {"usb4vc-uinput": InputCapability,
+                            "hid-gadget": InputCapability}
 InputCapability.DEFAULT_BACKEND = InputCapability
 InputCapability.DEFAULT_BACKEND_NAME = 'usb4vc-uinput'
 LedsCapability.BACKENDS = {"ps2-sysfs": LedsCapability}
@@ -9366,10 +9595,22 @@ def handle(devs, registry, req):
     # to run a sweep because the web UI is down. Keeping them separate means
     # that mistake is not available to make.
     if cmd == "status":
+        # SAME TWO KEYS regardless of backend (see the comment above this
+        # function on why the shape is a compatibility contract) -- the
+        # VALUES differ, because there is no uinput device path to report
+        # under hid-gadget: the daemon side is /dev/hidg0/1, not an evdev
+        # node, and usb4vc_holds_us() answers a question that presupposes
+        # USB4VC exists, which it does not for this backend either.
+        if devs.hid_mode:
+            kbd_path, mouse_path = HID_KBD_DEVICE, HID_MOUSE_DEVICE
+            usb4vc_status = {}
+        else:
+            kbd_path, mouse_path = devs.kbd.device.path, devs.mouse.device.path
+            usb4vc_status = usb4vc_holds_us()
         return {"ok": True,
-                "keyboard": devs.kbd.device.path,
-                "mouse": devs.mouse.device.path,
-                "usb4vc": usb4vc_holds_us(),
+                "keyboard": kbd_path,
+                "mouse": mouse_path,
+                "usb4vc": usb4vc_status,
                 "led_paths": devs.led_paths,
                 "leds": devs.read_leds()}
 
@@ -9492,8 +9733,12 @@ def serve(devs, registry):
     srv.bind(SOCKET_PATH)
     os.chmod(SOCKET_PATH, 0o666)
     srv.listen(8)
+    if devs.hid_mode:
+        kbd_desc, mouse_desc = HID_KBD_DEVICE, HID_MOUSE_DEVICE
+    else:
+        kbd_desc, mouse_desc = devs.kbd.device.path, devs.mouse.device.path
     sys.stderr.write("vcctrld ready: kbd=%s mouse=%s leds=%s caps=%s\n" % (
-        devs.kbd.device.path, devs.mouse.device.path,
+        kbd_desc, mouse_desc,
         sorted(devs.led_paths), sorted(registry.caps)))
     if registry.failed:
         sys.stderr.write("vcctrld degraded: %s\n" % (sorted(registry.failed),))
@@ -9539,14 +9784,30 @@ def main():
     if os.geteuid() != 0:
         sys.stderr.write("vcctrld must run as root (needs /dev/uinput)\n")
         return 1
+    if CFG.default("capabilities.input.backend", "usb4vc-uinput") == "hid-gadget":
+        missing = [p for p in (HID_KBD_DEVICE, HID_MOUSE_DEVICE)
+                   if not os.path.exists(p)]
+        if missing:
+            sys.stderr.write(
+                "vcctrld: capabilities.input.backend is hid-gadget but %s "
+                "do(es) not exist -- has vcctrl-hid-gadget.service run on "
+                "this boot? (pi/files/vcctrl-hid-gadget-setup.sh builds "
+                "them; it needs dtoverlay=dwc2,dr_mode=peripheral active, "
+                "which needs a reboot after it is first added)\n"
+                % ", ".join(missing))
+            return 1
     devs = Devices()
-    # Give USB4VC's 0.75 s scan time to find us before accepting work, so the
-    # first command a client sends is not silently dropped.
-    time.sleep(1.5)
-    held = usb4vc_holds_us()
-    if not all(held.values()):
-        sys.stderr.write("warning: USB4VC has not opened %s\n" % (
-            [k for k, v in held.items() if not v],))
+    if not devs.hid_mode:
+        # Give USB4VC's 0.75 s scan time to find us before accepting work, so
+        # the first command a client sends is not silently dropped. Skipped
+        # entirely under hid-gadget: there is no USB4VC for this instance to
+        # be found by, and waiting 1.5s for a scan that will never happen and
+        # then warning about it is pure noise, not a diagnostic.
+        time.sleep(1.5)
+        held = usb4vc_holds_us()
+        if not all(held.values()):
+            sys.stderr.write("warning: USB4VC has not opened %s\n" % (
+                [k for k, v in held.items() if not v],))
     registry = Registry(devs)
     registry.start_web()
     serve(devs, registry)

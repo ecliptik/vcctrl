@@ -344,6 +344,33 @@ if [ "${1:-}" = "--hid-gadget" ]; then
   exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# MODERNPC PROFILE ONLY. Installs/restarts the SECOND vcctrld instance
+# (vcctrld-modernpc.service) -- the PRIMARY instance's own vcctrld.service is
+# never touched by this path, so this needs no guard_busy check either, same
+# reasoning as --mcp/--public/--hid-gadget above.
+if [ "${1:-}" = "--modernpc" ]; then
+  bash -n "$SRC/pi/install.sh" || { echo "refusing: pi/install.sh does not parse" >&2; exit 1; }
+  python3 -m py_compile "$SRC/daemon/vcctrld.py" || \
+    { echo "refusing: daemon/vcctrld.py does not compile" >&2; exit 1; }
+  rdir="/tmp/vcctrl-modernpc-deploy.$$"
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files" || explain_hang
+  $SCP "$SRC/daemon/vcctrld.py" "$SRC/daemon/vcweb.py" "$SRC/daemon/vcsysinfo.py" \
+    "$SRC/daemon/kvm.html" "$SRC/daemon/themes.css" "$SRC/daemon/keycoverage.json" \
+    "$HOST:$rdir/daemon/" || explain_hang
+  $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
+  $SCP "$SRC/pi/files/vcctrld-modernpc.service" "$HOST:$rdir/pi/files/" || explain_hang
+  # The example config too, but ONLY if a real one is not already deployed --
+  # install_modernpc_profile() (running remotely below) makes that same check
+  # itself; shipping it here regardless is harmless since it never overwrites.
+  [ -f "$SRC/vcctrl-modernpc.example.yaml" ] && \
+    { $SCP "$SRC/vcctrl-modernpc.example.yaml" "$HOST:$rdir/" || explain_hang; }
+  $SSH "$HOST" "bash $rdir/pi/install.sh --modernpc-only; rc=\$?; rm -rf $rdir; exit \$rc" \
+    || explain_hang
+  echo "installed vcctrld-modernpc (primary vcctrld untouched)"
+  exit 0
+fi
+
 if [ "${VCCTRL_FORCE:-0}" != "1" ]; then
   guard_busy || exit 1
 else

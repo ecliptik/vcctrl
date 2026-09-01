@@ -345,6 +345,60 @@ if [ "${1:-}" = "--hid-gadget-only" ]; then
   exit 0
 fi
 
+# install_modernpc_profile(): the SECOND vcctrld instance, driving the
+# modernpc Linux-server target over the hid-gadget input backend instead of
+# USB4VC/PS2. Runs the SAME /opt/vcctrl/vcctrld.py this function installs
+# (or re-installs, idempotently -- both instances share one $PREFIX, since
+# what differs between them is VCCTRL_CONFIG, not the code); only the
+# config and the systemd unit are instance-specific. See
+# vcctrl-modernpc.example.yaml's own comment for why this is a second
+# process rather than a second target inside one.
+install_modernpc_profile() {
+  if [ ! -f "$SRC/pi/files/vcctrld-modernpc.service" ]; then
+    echo "modernpc: pi/files/vcctrld-modernpc.service not in this checkout, skipping" >&2
+    return 0
+  fi
+
+  sudo mkdir -p "$PREFIX"
+  sudo install -m 0755 "$SRC/daemon/vcctrld.py"    "$PREFIX/vcctrld.py"
+  sudo install -m 0644 "$SRC/daemon/vcweb.py"      "$PREFIX/vcweb.py"
+  sudo install -m 0644 "$SRC/daemon/vcsysinfo.py"  "$PREFIX/vcsysinfo.py"
+  sudo install -m 0644 "$SRC/daemon/kvm.html"      "$PREFIX/kvm.html"
+  sudo install -m 0644 "$SRC/daemon/themes.css"    "$PREFIX/themes.css"
+  sudo install -m 0644 "$SRC/daemon/keycoverage.json" "$PREFIX/keycoverage.json"
+
+  # THE OPERATOR'S REAL CONFIG, NEVER OVERWRITTEN -- same discipline as
+  # vcctrl.yaml itself (see vcctrl-repo-conventions): a redeploy that
+  # clobbered an already-tuned modernpc config back to the tracked example
+  # would be the same mistake as scrubbing a live config into a template,
+  # just aimed at a file this script writes instead of one a person edits
+  # by hand off-repo.
+  if [ -f "$PREFIX/vcctrl-modernpc.yaml" ]; then
+    echo "modernpc: $PREFIX/vcctrl-modernpc.yaml already exists, leaving it untouched"
+  elif [ -f "$SRC/vcctrl-modernpc.example.yaml" ]; then
+    sudo install -m 0644 "$SRC/vcctrl-modernpc.example.yaml" \
+      "$PREFIX/vcctrl-modernpc.yaml"
+    echo "modernpc: installed the example config to $PREFIX/vcctrl-modernpc.yaml -- edit it for this rig's real device paths before relying on it"
+  fi
+
+  sudo install -m 0644 "$SRC/pi/files/vcctrld-modernpc.service" \
+    /etc/systemd/system/vcctrld-modernpc.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable vcctrld-modernpc
+
+  if [ -z "$(ls /dev/hidg0 /dev/hidg1 2>/dev/null)" ]; then
+    echo "modernpc: /dev/hidg0 or /dev/hidg1 not present yet -- enabled, and Restart=always will bring it up once vcctrl-hid-gadget.service has run (see --hid-gadget-only)"
+  fi
+  sudo systemctl restart vcctrld-modernpc
+  sleep 3
+  sudo systemctl --no-pager --lines=15 status vcctrld-modernpc || true
+}
+
+if [ "${1:-}" = "--modernpc-only" ]; then
+  install_modernpc_profile
+  exit 0
+fi
+
 # ---------------------------------------------------------------------------
 # THE PUBLIC READ-ONLY MIRROR -- daemon/vcweb_public.py, a separate process
 # from vcctrld (see that module's own docstring for why: it is auditable, by

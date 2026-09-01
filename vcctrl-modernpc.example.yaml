@@ -1,0 +1,161 @@
+# vcctrl configuration -- EXAMPLE, for the SECOND vcctrld instance that
+# drives the `modernpc` Linux-server target.
+#
+# See vcctrl.example.yaml first -- this file only documents what modernpc's
+# instance sets DIFFERENTLY from the primary one, not the whole schema again.
+# Copy to vcctrl-modernpc.yaml (gitignored, same reasoning as vcctrl.yaml) and
+# point a SECOND vcctrld process at it via VCCTRL_CONFIG, on the SAME Pi as
+# the primary instance -- see pi/files/vcctrld-modernpc.service.
+#
+# WHY A SECOND WHOLE PROCESS, not a second target inside one vcctrld: this
+# daemon has no concept of "which target" per request anywhere in it -- one
+# Arbiter, one Devices, one VideoCapability, one everything, all addressing
+# "the currently attached machine". modernpc is not a machine swapped in and
+# out of that one slot; it is a second machine, permanently present
+# alongside whichever PS/2/ADB board is seated. Two independent processes
+# get two independent Arbiters (an input lock on one target no longer holds
+# up work on the other, for free), two independent video pipelines, and
+# zero new code in vcctrld's own dispatch logic -- see docs/FINDINGS.md
+# #44-45 for how the hardware side of this was validated first.
+
+version: 1
+
+rig:
+  name: example-rig-modernpc
+
+control:
+  daemon_host: vcctrl-pi
+  web: https://vcctrl-pi.example.ts.net:8180
+  shots_dir: /tmp/vcctrl-modernpc-shots
+  # modernpc has no `files` capability configured below (no packet driver to
+  # dial, it is a real Linux box with real networking of its own) -- so no
+  # `fileserver:` block here either.
+
+daemon:
+  prefix: /opt/vcctrl
+  # DISTINCT from the primary instance's -- both processes run the SAME
+  # /opt/vcctrl/vcctrld.py binary on the SAME Pi, so anything not given its
+  # own path here collides with the primary instance's, silently, the first
+  # time both happen to write the same file at once.
+  state_dir: /var/lib/vcctrl-modernpc
+  socket: /run/vcctrl-modernpc.sock
+
+  # No `usb4vc:` block: this instance's input backend is `hid-gadget`, not
+  # `usb4vc-uinput`, so there is no USB4VC application for it to poll a
+  # debug log from or read a board file out of. Leaving the block out
+  # entirely (rather than pointing it at the primary's own paths) is
+  # deliberate -- usb4vc_holds_us() and installed_board_id() both degrade to
+  # honest "unknown"/absent answers on a missing file, which is what they
+  # should say for a target that was never on that bridge to begin with.
+
+  web:
+    bind: 127.0.0.1
+    # DISTINCT ports from the primary instance's 8080/8443, so both web UIs
+    # can run on this Pi at once -- see docs/WEBKVM.md's own note that
+    # "Caddy is the right answer the moment this Pi serves a second thing":
+    # Caddy (or `tailscale serve`) gets a path/port mapping to EACH of these,
+    # the primary instance's vcweb.py is completely unaware a second one
+    # exists, and neither port is a secret -- same "Tailscale is the
+    # authentication boundary" posture as the primary, unchanged.
+    port: 8180
+    tls_port: 8543
+    tls:
+      provider: tailscale
+      key: /var/lib/vcctrl-modernpc/tls.key
+      cert: /var/lib/vcctrl-modernpc/tls.crt
+  # No `web_public:` block -- the public read-only Funnel mirror stays
+  # pointed at the DOS/RetroPC profile only, for now (operator's call).
+
+capabilities:
+  input:
+    backend: hid-gadget            # usb4vc-uinput | hid-gadget | none
+    settings:
+      # The Pi's own USB-C gadget device nodes (pi/files/
+      # vcctrl-hid-gadget-setup.sh builds these at boot; see
+      # pi/files/vcctrl-hid-gadget.service). Defaults match that script's
+      # own device names, so this block only needs to exist if the gadget is
+      # ever renamed.
+      hid_keyboard_device: /dev/hidg0
+      hid_mouse_device: /dev/hidg1
+      pace_s: 0.012
+
+  # No `leds:` block -- `none` is the default the moment this key is set to
+  # it, and there is no PS/2 return channel over a generic HID gadget at
+  # all (see Devices.read_leds in daemon/vcctrld.py). Setting it explicitly
+  # here rather than omitting it: omitting a `backend:` key falls back to
+  # THAT capability's own default (ps2-sysfs), not to `none` -- see
+  # Registry._resolve_backend's own comment on why absence and `none` are
+  # different answers.
+  leds:
+    backend: none
+
+  # No Kasa smart plug on modernpc -- per the operator, this target has no
+  # power control at all. `power off`/`on`/`cycle` refuse cleanly with
+  # "not configured" rather than a stub that pretends to succeed.
+  power:
+    backend: none
+
+  video:
+    backend: v4l2-ffmpeg
+    settings:
+      # The HDMI capture dongle, NOT the primary instance's VGA capture
+      # stick -- a separate physical device on its own dedicated Pi USB
+      # port (see docs/FINDINGS.md #44's port-topology note). By-id, not by
+      # index, same discipline as the primary instance's own `video:`
+      # block, and doubly necessary here: with three capture-class UVC
+      # devices on one Pi, index drift on ANY of them can silently point
+      # this instance at somebody else's signal.
+      device: /dev/v4l/by-id/usb-MACROSILICON_USB3.0_Capture-video-index0
+
+  # EXPLICITLY `none`, NOT LEFT OUT. An absent `backend:` key does NOT mean
+  # disabled anywhere in this schema (Registry._resolve_backend falls back
+  # to THAT CLASS'S OWN DEFAULT_BACKEND_NAME on absence) -- omitting this
+  # block was tried first and measured live: it started AudioCapability
+  # against its hardcoded default `hw:1,0`, an ALSA card index this
+  # instance has no business touching. modernpc's HDMI capture may carry
+  # audio the same chip family's VGA-side sibling does not, but nothing has
+  # measured that yet, and guessing a device name here is how a rig ends up
+  # with two vcctrld instances fighting over one sound card.
+  audio:
+    backend: none
+
+  # EXPLICITLY `none`, same reason and same live mistake as `audio` above:
+  # CameraCapability's own default device is `/dev/video0` -- on THIS rig,
+  # the physical room camera the PRIMARY instance already owns and is
+  # already streaming from. Left out entirely, modernpc silently reported
+  # `camera: {configured: true, backend: v4l2-ffmpeg}` pointed at that same
+  # device, one HTTP request away from two ffmpeg processes opening one UVC
+  # camera concurrently. Which instance (if either) SHOULD own the room
+  # camera is still an open question the operator has not settled -- `none`
+  # is the answer that cannot make it worse while that is undecided.
+  camera:
+    backend: none
+
+  # EXPLICITLY `none`. FilesCapability's mtcp-ftp backend presupposes a DOS
+  # target with a packet driver and an FTP client on a floppy; modernpc is a
+  # real Linux box with its own networking, and "how files get onto it" is
+  # not a fact this daemon needs an opinion about.
+  files:
+    backend: none
+
+  # EXPLICITLY `none`. dinspect-pulled reads a SYSINFO.TXT the DOS side
+  # pushes over the files capability above -- with that off, this has
+  # nothing to read and no reason to be configured.
+  sysinfo:
+    backend: none
+
+  board:
+    backend: none
+    # No protocol board, no board.json, no board swap -- modernpc's identity
+    # IS the config it is running, permanently, not something detected off
+    # a runfile written by SPI hardware this instance does not have.
+
+# No `targets:` list -- board_id is a USB4VC protocol-board concept and
+# modernpc has no board_id. `keymap()`'s board_id/coverage/chords fields will
+# report None/null for this instance, which is the correct answer: nothing
+# has measured per-key coverage against a HID gadget target yet, and there
+# is no protocol board here for a measurement to be ABOUT.
+
+# No `harness:` block -- no target-software profile exists for modernpc yet
+# (see profiles/doskutsu.yaml for what one looks like once there is
+# something running on modernpc worth writing a harness profile for).
