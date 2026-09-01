@@ -10060,7 +10060,22 @@ def _start_web(built):
                         "port instead. Remove it from this profile's "
                         "config.\n" % (inst.label(), key, inst.label()))
 
+    # `None` (the "no /p/<name>/ prefix" default -- see vcweb.py's
+    # Handler._route_profile()) is ALWAYS an alias for `primary` here, even
+    # once it has a real declared name -- the exact same dual-key shape
+    # _build_instance() already gives the primary's SOCKET (both
+    # /run/vcctrl.sock and /run/vcctrl-<name>.sock reach it). Phase D gave
+    # the primary a real Instance.name and this dict stopped having a bare
+    # `None` entry for it -- every plain /state.json or /cmd request (no
+    # prefix at all) was resolving WebCapability.registry to
+    # self._registries.get(None), which no longer existed, and 500ing with
+    # "'NoneType' object has no attribute 'caps'"/"'execute'" on every
+    # single request. Caught live on the real rig after the Phase E
+    # cutover -- the unix-socket-based CLI/MCP path never went through this
+    # dict at all, so every test done that way looked completely healthy
+    # while the web UI was already broken for everyone.
     registries = {inst.name: inst.registry for inst in built}
+    registries[None] = primary.registry
     with _profile_scope(primary.cfg, primary.error):
         bind = CFG.default("daemon.web.bind", "127.0.0.1")
         port = int(CFG.default("daemon.web.port", 8080))
