@@ -3065,6 +3065,32 @@ load), and FINDINGS #46's PS/2 timing re-measured with the encoder
 running next to gateway2000's own timing-sensitive path. The guard rail
 itself (`_currently_throttled`, `H264Sidecar._watchdog`) is unit-tested
 against a monkeypatched reading, not against a real Pi that actually
-throttled. None of this has run against the real Pi at all yet -- this
-session's own validation is dev-host-only, real ffmpeg and a real
-browser, but not the real hardware the plan's numbers are about.
+throttled.
+
+**UPDATE, same day, after deploying to the real Pi 5**: the pipeline
+itself now IS confirmed against real hardware -- a real browser (Chromium/
+Playwright) loaded the real deployed page over the tailnet
+(`https://usb4vc.example.ts.net/`, real TLS, real `tailscale serve`
+proxy), selected the `modernpc` profile, and `connectH264()` connected,
+configured a `VideoDecoder`, and settled on `xport: 'h264'` with no
+fallback -- against the REAL `H264Sidecar` transcoding modernpc's REAL
+HDMI capture ring on the Pi 5 itself, not a dev-host stand-in. The
+canvas came back the correct 1920x1080 and entirely black, which is
+CORRECT rather than a decode failure: modernpc's own video state was
+`frozen` (a genuinely blank/locked display) at the time, the same
+known condition FINDINGS #48/#50 already recorded, not something this
+check could safely wake -- modernpc's HID gadget link is separately
+unattached right now (OPEN-FAULTS #21's own FIXED-2026-09-02 entry), so
+even a `mouse_move` nudge like FINDINGS #48's own wake-up test is not
+currently possible. A screenshot with the LNK lamp green over modernpc's
+genuinely-black picture is filed as the evidence rather than described.
+
+**Still open**: everything numeric. Glass-to-glass latency, CPU/thermal
+cost under this exact sidecar (not FINDINGS #48's hand-run ffmpeg
+command) while the Pi's other load (modernpc's own capture, USB4VC on
+gateway2000) runs alongside it, FINDINGS #46's PS/2 timing re-measured
+with the encoder running, and the guard rail actually observed tripping
+against a real `vcgencmd get_throttled` reading rather than a
+monkeypatched one. Also open: this was checked against a BLANK source:
+whether a real, changing desktop encodes and decodes cleanly at
+sustained motion is a different question a static frame cannot answer.
