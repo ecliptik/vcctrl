@@ -3592,16 +3592,25 @@ function wsURL() {
   // only, which is the configuration that carried 2 MB intact.
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   // The direct-TLS-port path bypasses `tailscale serve` entirely -- it opens
-  // a socket straight to the daemon's own in-process listener, not through
-  // the path-prefixed proxy mapping -- so it must NOT carry PROFILE_BASE:
-  // there is no proxy on that path to strip the prefix, and the backend's
-  // own flat route table has no route for a prefixed path at all. In
-  // practice this only ever fires for the primary instance today (modernpc's
-  // own in-process TLS listener has no certificate yet, so its /state.json
-  // reports no usable tlsPort and this branch never triggers for it).
+  // a socket straight to the daemon's own in-process listener instead of
+  // through the tailnet proxy. It MUST still carry PROFILE_BASE, though:
+  // this is the same Handler/_route_profile() dispatch either way (see
+  // vcweb.py's WebCapability.start(), one Handler class, two listening
+  // sockets), just reached on a different port -- the routing logic does
+  // not care which socket a request arrived on. Originally written
+  // assuming this branch "never fires for modernpc" because modernpc used
+  // to run its own separate, certificate-less WebCapability with no
+  // usable tls_port -- true before Phase C's single shared web server,
+  // false after it: every profile's /state.json now reports the SAME
+  // tls_port (the one shared instance's), so this branch fires for
+  // modernpc too. Without the prefix it silently landed on the PRIMARY's
+  // video instead -- a real, open, error-free connection to the wrong
+  // profile, which is exactly why gateway2000 being disconnected (VGA
+  // stick unplugged) made modernpc's view hang at "connecting" with zero
+  // frames rather than fail visibly. Caught live 2026-09-02.
   if (tlsPort && location.protocol === 'https:'
       && String(location.port || 443) !== String(tlsPort))
-    return `wss://${location.hostname}:${tlsPort}/ws`;
+    return `wss://${location.hostname}:${tlsPort}${apiPath('/ws')}`;
   return `${proto}://${location.host}${apiPath('/ws')}`;
 }
 
