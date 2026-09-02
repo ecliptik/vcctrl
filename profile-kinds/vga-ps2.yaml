@@ -68,10 +68,15 @@ capabilities:
       boards_with_channel: [1]
 
   power:
-    backend: kasa-legacy        # or `none` if this board has no plug of its own
+    # kasa-legacy | wemo | shell | none -- `none` if this board has no plug of
+    # its own, which is the right answer more often than it looks: a profile
+    # with no power capability cannot power-cycle the wrong machine at all.
+    # For `wemo`, drop the `port:` line rather than guessing one -- a Wemo
+    # picks its HTTP port at boot and the daemon walks the candidates.
+    backend: kasa-legacy
     settings:
       host: REPLACE_ME
-      port: 9999
+      port: 9999                # kasa-legacy's port; NOT a Wemo's
       alias: REPLACE_ME
       cycle_off_s: 15.0
       # THE SAFETY FACT, NOT A PREFERENCE: which board_id(s) this plug is
