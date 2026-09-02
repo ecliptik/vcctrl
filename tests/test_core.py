@@ -13127,3 +13127,72 @@ class _FakeVideoForH264Test(object):
         import collections as _c
         self.lock = threading.Lock()
         self.ring = _c.deque()
+
+
+def test_devices_survives_a_hid_gadget_that_is_not_attached_yet():
+    """Found live 2026-09-02, the hard way: a routine deploy restarted
+    vcctrld while modernpc's gadget link happened to be unattached (a
+    separate incident, unrelated to this bug), and Devices.__init__'s own
+    "clear the initial report" write raised BrokenPipeError, UNCAUGHT, in
+    `main()`'s _build_instance -- before any Capability's own start() ever
+    ran, so Rule 2 ("a capability that fails to start is recorded as
+    failed, the daemon carries on") never got a chance to apply. The whole
+    daemon crash-looped, and because ONE `Devices` object serves every
+    profile's build step, gateway2000 -- a fully separate machine with
+    nothing wrong with it -- went down too, for as long as modernpc's cable
+    stayed that way.
+
+    `/dev/full` reproduces the real failure shape (open() succeeds, write()
+    raises OSError) without needing an actual unattached gadget.
+    """
+    print("\nDevices(): an unattached hid-gadget link must not crash the daemon")
+    p = _tmp_yaml(
+        "version: 1\n"
+        "capabilities:\n"
+        "  input:\n"
+        "    backend: hid-gadget\n"
+        "    settings:\n"
+        "      hid_keyboard_device: /dev/full\n"
+        "      hid_mouse_device: /dev/full\n")
+    old = os.environ.get("VCCTRL_CONFIG")
+    try:
+        os.environ["VCCTRL_CONFIG"] = p
+        import importlib.util as _u
+        # A FRESH MODULE, same reasoning as test_backend_name_is_the_
+        # configured_name_not_the_class_name's own: CFG resolves
+        # capabilities.input.* at Devices.__init__ time against whatever
+        # VCCTRL_CONFIG named when THIS module was loaded, and the
+        # already-imported `vcctrld` this file's own module scope holds
+        # was loaded once, long before this test set the env var.
+        spec = _u.spec_from_file_location("vcctrld_hidcrash", DAEMON)
+        m = _u.module_from_spec(spec)
+        spec.loader.exec_module(m)
+
+        try:
+            devs = m.Devices()
+        except OSError as exc:
+            check("Devices() does not raise when its initial HID report "
+                  "write fails (the link not attached yet, /dev/full "
+                  "standing in for it) -- this is the exact crash: it "
+                  "used to take the whole daemon down, gateway2000 "
+                  "included, for as long as modernpc's cable was like this",
+                  False, "%s: %s" % (type(exc).__name__, exc))
+            return
+        check("Devices() constructs cleanly in hid-gadget mode against a "
+              "device whose write always fails",
+              devs.hid_mode is True, devs.hid_mode)
+
+        raised = False
+        try:
+            devs._write_hid_kbd_report()
+        except OSError:
+            raised = True
+        check("a write AFTER construction still raises normally -- only "
+              "the init-time clear is tolerated, not every write forever",
+              raised)
+    finally:
+        if old is None:
+            os.environ.pop("VCCTRL_CONFIG", None)
+        else:
+            os.environ["VCCTRL_CONFIG"] = old
+        os.unlink(p)

@@ -1205,8 +1205,35 @@ class Devices(object):
             # light changed" the way USB4VC's PS/2 bridge has one. See
             # read_leds() below.
             self.led_paths = {}
-            self._write_hid_kbd_report()
-            self._write_hid_mouse_report()
+            # BEST-EFFORT ONLY, HERE. This is clearing state on a device
+            # that may not have a host listening yet -- modernpc's gadget
+            # link can be unattached for reasons that have nothing to do
+            # with this daemon (the connected machine asleep or rebooting,
+            # a cable reseated) and are expected to clear on their own.
+            # Found live 2026-09-02: with the host not listening, this
+            # write raised BrokenPipeError (errno 108, "transport endpoint
+            # shutdown") UNCAUGHT, in Devices.__init__, before any
+            # Capability's own start() ever ran -- so Rule 2 ("a capability
+            # that fails to start is recorded as failed, the daemon
+            # carries on") never got a chance to apply, and the whole
+            # daemon crash-looped. A GATEWAY2000 restart during that
+            # window inherits the same crash, because one `Devices` object
+            # serves every profile's `main()` build step -- modernpc's own
+            # hardware taking down a daemon restart that has nothing to do
+            # with modernpc is exactly the failure this guards. The actual
+            # first real report (a keypress, a mouse move) still raises
+            # normally -- only this init-time "no keys held yet" write is
+            # tolerated, because there is nothing for its failure to be
+            # attributed to but "no host was listening at the moment the
+            # daemon started", which is not this daemon's fault to fix.
+            try:
+                self._write_hid_kbd_report()
+                self._write_hid_mouse_report()
+            except OSError as exc:
+                sys.stderr.write(
+                    "Devices: could not clear the HID gadget's initial "
+                    "report (%s) -- no host listening yet? Will retry on "
+                    "the first real keystroke.\n" % errstr(exc))
             return
 
         # KEY_ENTER and KEY_Y are required for USB4VC to classify this as a

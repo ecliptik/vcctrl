@@ -1856,3 +1856,45 @@ to verify it against; `vcctrl-macintosh.yaml` still cannot coexist with
 working as they do today. They're the specific places a NEXT change to
 this system (a third profile, a camera on `modernpc`, a heavier
 simultaneous load test) is most likely to find a surprise.
+
+### FIXED 2026-09-02: a modernpc-only hardware condition crashed gateway2000 too
+
+Found live, the hard way, during an unrelated deploy (WP7, H.264 video):
+modernpc's HID gadget was left with its USB link unattached (`/sys/class/
+udc/*/state` reading `not attached`, from an earlier gadget rebuild
+session-1 was still investigating -- unrelated to this bug). Restarting
+`vcctrld` for the deploy hit `Devices.__init__`'s own "clear the initial
+HID report" write (`_write_hid_kbd_report()`, called unconditionally for
+the `hid-gadget` backend) which raised `BrokenPipeError: [Errno 108]
+Cannot send after transport endpoint shutdown` -- UNCAUGHT, before any
+`Capability`'s own `start()` ever ran, so Rule 2 ("a capability that
+fails to start is recorded as failed, the daemon carries on") never got
+a chance to apply. The daemon crash-looped (`systemctl` restart counter
+climbing every ~3s).
+
+**The consequence was worse than "modernpc is down while its cable is
+like this."** `main()`'s `_build_instance` constructs ONE `Devices`
+object per profile inside the SAME process startup sequence, and a crash
+building modernpc's took the WHOLE PROCESS down before gateway2000's own
+build step ever ran -- a hardware condition on one machine, with nothing
+wrong with the other, made BOTH unreachable for as long as it lasted.
+
+Fixed in `Devices.__init__`: the two init-time report-clearing writes are
+now wrapped in `try/except OSError`, logging and continuing rather than
+raising. Deliberately narrow -- only the CONSTRUCTOR's own clear-state
+writes are tolerated; `_write_hid_kbd_report`/`_write_hid_mouse_report`
+called later, for a real keystroke or mouse move, still raise normally,
+so a genuine failure to reach the target during actual use is not
+silently swallowed. Guarded by `test_devices_survives_a_hid_gadget_that_is_not_attached_yet`
+(`tests/test_core.py`), which reproduces the exact failure shape with
+`/dev/full` (open succeeds, write raises `OSError`) rather than needing
+real unattached hardware.
+
+**Still true, and worth naming plainly**: this fix stops a daemon
+RESTART from crash-looping while modernpc's link is like this. It does
+not attach modernpc's gadget -- that is a separate, still-open condition
+(the operator's own working theory: modernpc suspended long enough that
+its USB host controller stopped listening; see
+`internal/KVM-MACHINES-PLAN.md`'s WP4 status note and the memory this
+session filed on it) -- and modernpc's own `input`/`msd` capabilities will
+report against a device that is not really reachable until that clears.
