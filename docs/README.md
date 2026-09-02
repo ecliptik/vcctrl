@@ -20,6 +20,11 @@ is worked around rather than fixed, and what to check before trusting a result.
 **Read this before running anything measured.** `FINDINGS.md` records what
 happened; this one records what will bite you.
 
+**`PROFILES.md`** — one `vcctrld` process, multiple targets (`gateway2000`,
+`modernpc`, and how to scaffold the next one). Written 2026-09-02 at the end
+of the session that built it; §21 of `OPEN-FAULTS.md` is its own
+forward-looking half.
+
 ---
 
 ## The Mach64 30-fps campaign, in reading order

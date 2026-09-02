@@ -1718,3 +1718,58 @@ documenting the hazard and the 180s self-clearing timeout. A
 "after the file in flight," which doesn't apply before a file transfer
 even starts) is the closest thing to a real fix and isn't implemented —
 flagged here rather than built, same sign-off reasoning as sec. 18-19.
+
+## 21. The multi-profile daemon (`gateway2000`/`modernpc`): known gaps — OPEN, WORKAROUND KNOWN
+
+See `docs/PROFILES.md` for the architecture this section assumes. Four
+specific things worth checking before trusting this further, none of
+them blocking today's actual use:
+
+**Non-video capabilities aren't profile-fresh yet, and it hasn't been
+tested because it hasn't needed to be.** `AudioCapability`/
+`CameraCapability`/`PowerCapability`'s own device/path class attributes,
+and `BoardCapability.FILE`, were left un-fixed by the single-process
+rewrite (`daemon/vcctrld.py`, commit `7bdede9`) — only `VideoCapability`
+and `Devices`/`Registry.start_web()` got the "resolve fresh per profile"
+treatment `_profile_scope()` needs. This is safe TODAY only because
+`modernpc`'s config sets all four of those to `backend: none`, so the
+capability is never instantiated for it at all — not because the code
+enforces the separation. A future profile that wants its OWN camera or
+audio device while `gateway2000`'s equivalent capability is also active
+would silently share `gateway2000`'s class-attribute value instead of
+its own. Nothing catches this at config time; it would just be wrong.
+
+**The hub-backfed power path had one confirmed brownout under full
+combined load, 2026-09-01** (`docs/FINDINGS.md` #44's own caveat named
+this risk before it happened). Real undervoltage events, real full
+power loss requiring a physical re-seat — not a simulation. Clean for
+17+ hours afterward under normal/idle-ish use (`vcgencmd get_throttled`
+reads `0x0`, no `dmesg` undervoltage lines), so this reads as
+load-triggered rather than a baseline inability to sustain the rig, but
+it has not been deliberately stress-tested since (both profiles' video
++ audio + camera + HID gadget all active at once, sustained, the way it
+was when it actually browned out). Don't assume this is settled just
+because it's been quiet.
+
+**No regression test exists for the class of bug that broke the web UI
+live in production twice in one afternoon** (`registries[None]` alias
+missing after Phase D named the primary, commit `386eaef`; `wsURL()`'s
+TLS-bypass branch dropping the profile prefix, commit `3ca61dd`). Both
+were caught by hand, live, after deploying — not by `tests/test_core.py`,
+which has no test that constructs a `WebCapability`/loads `kvm.html`
+with a NAMED (non-`None`) primary profile in the mix. A profile-naming
+change anywhere in this path has no safety net today beyond a human
+reloading the page.
+
+**`vcctrl-macintosh.yaml`/`profile-kinds/rgb2hdmi-usb4vc.yaml` are
+entirely unmeasured.** No RGB2HDMI board has ever been wired to this
+rig; the config is a scaffolded placeholder grounded in
+`docs/BOARD-IDENTITY.md`'s existing ADB findings, not in anything run
+against real hardware. Treat every value in it as a guess until proven
+otherwise, the same discipline this file already asks for everywhere
+else.
+
+**Not yet fixed:** none of the above blocks `gateway2000`/`modernpc`
+working as they do today. They're the specific places a NEXT change to
+this system (a third profile, a camera on `modernpc`, a heavier
+simultaneous load test) is most likely to find a surprise.
