@@ -163,6 +163,26 @@ USAGE = """usage: vcctrl <command> [args]
                             capabilities.camera.backend: none. `shot` is a
                             RAW latest frame, no ring or picture judgement
                             (see CameraCapability); use --out to write it.
+  msd list                  images in the library, sizes, kind (drive/cdrom),
+                            and free space -- absent/unconfigured on a rig
+                            with capabilities.msd.backend: none
+  msd status                what is mounted on the gadget's LUN right now
+  msd mount <image> [drive|cdrom] [--ro]
+                            attach an image already in the library -- a
+                            configfs write, never a USB re-enumeration.
+                            cdrom defaults read-only; drive defaults writable
+  msd eject                 detach whatever is mounted
+  msd stage <path> [name]   upload a local file into the image library,
+                            chunked and sha256-verified -- same discipline
+                            as `stage-file`, straight into the library
+                            rather than the FTP root, no DOS 8.3 conversion
+  msd build <source_dir> <name> [fat|iso] [--label L]
+                            build a FAT (mkfs.vfat+mtools) or ISO9660
+                            (xorriso) image in the library from a directory
+                            already on the daemon host's own disk (get it
+                            there with scp first -- this command does not
+                            move bytes, only builds the image). A copy, not
+                            a live share: mass storage is block-level.
   framestats [n]            duplicate-hash stats over the last n frames
   audio [state|acquire|release]
                             ALSA capture. The daemon owns hw:1,0 for its
@@ -588,6 +608,56 @@ def stage_file(path, as_name=None, replace=False):
                     return 1
     except OSError as exc:
         sys.stderr.write("stage-file: %s\n" % exc)
+        return 3
+
+
+def stage_msd(path, as_name=None):
+    """The identical chunked upload as stage_file, landing in the msd image
+    library instead of the FTP root -- msd_stage carries no DOS 8.3
+    conversion (see its own docstring), the one real difference from
+    _file_stage this otherwise mirrors line for line.
+    """
+    import base64 as _b64
+    import hashlib as _hl
+    if not os.path.isfile(path):
+        sys.stderr.write("msd stage: %s is not a file\n" % path)
+        return 3
+    total = os.path.getsize(path)
+    name = as_name or os.path.basename(path)
+    CHUNK = 4 * 1024 * 1024
+    h = _hl.sha256()
+    sent = 0
+    try:
+        with open(path, "rb") as f:
+            while True:
+                block = f.read(CHUNK)
+                h.update(block)
+                final = sent + len(block) >= total
+                req = {"cmd": "msd_stage", "name": name, "total": total,
+                       "offset": sent,
+                       "data": _b64.b64encode(block).decode("ascii"),
+                       "final": final}
+                if final:
+                    req["sha256"] = h.hexdigest()
+                resp = call(req)
+                if resp is None:
+                    sys.stderr.write("msd stage: the daemon did not answer\n")
+                    return 1
+                if not resp.get("ok"):
+                    sys.stderr.write("error: %s\n" % resp.get("error"))
+                    return 3 if resp.get("why") in (
+                        "bad-name", "name-taken") else 1
+                sent += len(block)
+                if final:
+                    sys.stdout.write(
+                        json.dumps(resp, indent=2, sort_keys=True) + "\n")
+                    return 0
+                if not block:
+                    sys.stderr.write("msd stage: %s shrank while reading\n"
+                                     % path)
+                    return 1
+    except OSError as exc:
+        sys.stderr.write("msd stage: %s\n" % exc)
         return 3
 
 
@@ -1329,6 +1399,51 @@ def main(argv):
         req = {"cmd": "video", "action": rest[0] if rest else "state"}
     elif cmd == "camera":
         req = {"cmd": "camera", "action": rest[0] if rest else "state"}
+    elif cmd == "msd":
+        if not rest:
+            sys.stderr.write(USAGE)
+            return 2
+        sub = rest[0]
+        if sub == "list":
+            req = {"cmd": "msd_list"}
+        elif sub == "status":
+            req = {"cmd": "msd_status"}
+        elif sub == "mount":
+            if len(rest) < 2:
+                sys.stderr.write(USAGE)
+                return 2
+            args = rest[1:]
+            ro = "--ro" in args
+            args = [a for a in args if a != "--ro"]
+            mode = args[1] if len(args) > 1 else "drive"
+            req = {"cmd": "msd_mount", "image": args[0], "mode": mode,
+                   "ro": ro}
+        elif sub == "eject":
+            req = {"cmd": "msd_eject"}
+        elif sub == "stage":
+            if len(rest) < 2:
+                sys.stderr.write("msd stage needs a local file to upload\n")
+                return 3
+            return stage_msd(rest[1], rest[2] if len(rest) > 2 else None)
+        elif sub == "build":
+            if len(rest) < 3:
+                sys.stderr.write(USAGE)
+                return 2
+            args = rest[1:]
+            label = None
+            if "--label" in args:
+                i = args.index("--label")
+                label = args[i + 1]
+                del args[i:i + 2]
+            source_dir, name = args[0], args[1]
+            mode = args[2] if len(args) > 2 else "fat"
+            req = {"cmd": "msd_build", "source_dir": source_dir, "name": name,
+                   "mode": mode}
+            if label:
+                req["label"] = label
+        else:
+            sys.stderr.write(USAGE)
+            return 2
     elif cmd == "framestats":
         req = {"cmd": "framestats", "n": int(rest[0]) if rest else 90}
     elif cmd == "shot":

@@ -30,6 +30,7 @@ import json
 import math
 import os
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -5395,6 +5396,395 @@ class CameraCapability(Capability):
         return {"ok": False, "error": "camera: unknown action %r" % action}
 
 
+class MsdCapability(Capability):
+    """A USB mass-storage LUN presented to the target over the same gadget
+    the HID keyboard/mouse/absolute-pointer functions use
+    (pi/files/vcctrl-hid-gadget-setup.sh). "Mount" is a configfs write to
+    lun.0/file naming an image already on THIS host's disk; the LUN exists
+    from boot with no file assigned, so mounting or ejecting is never a USB
+    re-enumeration once the gadget has been built once with this function
+    present (internal/KVM-MACHINES-PLAN.md WP4).
+
+    A copy, not a live share -- USB mass storage is block-level, so whichever
+    side has the image open owns the filesystem. `msd_build` makes that copy
+    at build time, from a directory already on this host (scp'd there; see
+    WP4 sec. 3) -- a FAT image via mkfs.vfat+mtools, or an ISO9660 image via
+    xorriso.
+
+    Synchronous filesystem/configfs operations throughout -- no ring, no
+    watchdog, nothing that needs a background thread the way a capture
+    device does.
+
+    ONLY THE INSTANCE READS self.settings, NEVER A CLASS ATTRIBUTE, unlike
+    CameraCapability.DEVICE/AudioCapability's own settings-derived class
+    attributes -- OPEN-FAULTS #21 already names those as not profile-fresh
+    (baked in at module import time, under whichever profile's CFG happened
+    to be bound then, "safe today only because modernpc disables them"). This
+    is new code with no such precedent to preserve, so it resolves its paths
+    in start(), from `self.settings` (set by the registry, fresh per
+    profile, before start() runs) -- the same thing PowerCapability's own
+    `_protocol()` already does for the identical reason.
+
+    The `why` set here is NOT CLOSED:
+
+        no_lun      the mass-storage LUN is not present on the gadget --
+                    built without this function, or not rebuilt since
+        host_busy   the connected host has the drive open; the kernel
+                    refuses a `lun.0/file` write while that holds
+    """
+
+    name = "msd"
+    BACKENDS = {}                          # filled in below
+
+    DEFAULT_LUN_DIR = ("/sys/kernel/config/usb_gadget/vcctrl-hid-km/"
+                       "functions/mass_storage.usb0/lun.0")
+    DEFAULT_IMAGE_DIR_NAME = "msd/images"  # under daemon.state_dir
+
+    # image library extension -> what a LUN can present it as
+    IMAGE_KINDS = {".img": "drive", ".vfat": "drive", ".iso": "cdrom"}
+
+    # Same ceiling as FilesCapability.STAGE_CHUNK_MAX and kvm.html's own
+    # CHUNK constant -- one number, not three that have to be kept equal by
+    # hand.
+    STAGE_CHUNK_MAX = 4 * 1024 * 1024
+
+    def __init__(self, devs, bus=None):
+        Capability.__init__(self, devs)
+        self.bus = bus
+        self.lock = threading.Lock()
+        self.lun_dir = self.DEFAULT_LUN_DIR
+        self.image_dir = os.path.join(STATE_DIR, self.DEFAULT_IMAGE_DIR_NAME)
+
+    def start(self):
+        settings = self.settings or {}
+        self.lun_dir = settings.get("lun_dir", self.DEFAULT_LUN_DIR)
+        self.image_dir = settings.get(
+            "image_dir", os.path.join(STATE_DIR, self.DEFAULT_IMAGE_DIR_NAME))
+        try:
+            os.makedirs(self.image_dir, exist_ok=True)
+        except OSError as exc:
+            sys.stderr.write("msd: could not create image dir %s: %s\n"
+                             % (self.image_dir, exc))
+
+    def _publish(self, kind, **kw):
+        if self.bus is not None:
+            self.bus.publish(kind, **kw)
+
+    # -- configfs LUN plumbing -------------------------------------------
+
+    def _lun_present(self):
+        return os.path.isdir(self.lun_dir)
+
+    def _read_lun(self, name, default=""):
+        try:
+            with open(os.path.join(self.lun_dir, name)) as f:
+                return f.read().strip()
+        except (IOError, OSError):
+            return default
+
+    def _write_lun(self, name, value):
+        with open(os.path.join(self.lun_dir, name), "w") as f:
+            f.write(value)
+
+    # -- the image library -------------------------------------------------
+
+    def _resolve_image(self, image_name):
+        """A basename only, resolved strictly inside image_dir -- refuses
+        anything that would leave it (`../`, an absolute path) rather than
+        silently collapsing it, because `mount` writes the result straight
+        into a kernel interface with no sandboxing of its own."""
+        if not image_name or os.path.basename(image_name) != image_name:
+            return None
+        path = os.path.join(self.image_dir, image_name)
+        if not os.path.isfile(path):
+            return None
+        return path
+
+    def _list_images(self):
+        out = []
+        try:
+            names = sorted(os.listdir(self.image_dir))
+        except OSError:
+            names = []
+        for name in names:
+            path = os.path.join(self.image_dir, name)
+            if not os.path.isfile(path):
+                continue
+            kind = self.IMAGE_KINDS.get(os.path.splitext(name)[1].lower())
+            if kind is None:
+                continue
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = None
+            out.append({"name": name, "size": size, "kind": kind})
+        return out
+
+    # -- commands -----------------------------------------------------------
+
+    def commands(self):
+        return {"msd_list": self._msd_list, "msd_mount": self._msd_mount,
+                "msd_eject": self._msd_eject, "msd_status": self._msd_status,
+                "msd_build": self._msd_build, "msd_stage": self._msd_stage}
+
+    def _msd_list(self, req):
+        # THE COST IS PART OF THE CHOICE, same rule as the capture-length
+        # menu: free space travels with the list so a browser upload or a
+        # build can be judged against it before either is started, not
+        # discovered as a failure partway through.
+        try:
+            free_bytes = shutil.disk_usage(self.image_dir).free
+        except OSError:
+            free_bytes = None
+        return {"ok": True, "images": self._list_images(),
+                "free_bytes": free_bytes}
+
+    def _msd_status(self, req):
+        if not self._lun_present():
+            return {"ok": False, "why": "no_lun",
+                    "error": "the mass-storage LUN is not present -- the "
+                    "gadget was built without it; rebuild with "
+                    "pi/install.sh --hid-gadget-only"}
+        current = self._read_lun("file")
+        return {"ok": True,
+                "mounted": os.path.basename(current) if current else None,
+                "mode": "cdrom" if self._read_lun("cdrom") == "1" else "drive",
+                "ro": self._read_lun("ro") == "1"}
+
+    def _msd_mount(self, req):
+        if not self._lun_present():
+            return {"ok": False, "why": "no_lun",
+                    "error": "the mass-storage LUN is not present -- the "
+                    "gadget was built without it; rebuild with "
+                    "pi/install.sh --hid-gadget-only"}
+        image = req.get("image")
+        path = self._resolve_image(image)
+        if path is None:
+            return {"ok": False, "error": "no such image: %r" % (image,)}
+        mode = req.get("mode", "drive")
+        if mode not in ("drive", "cdrom"):
+            return {"ok": False,
+                    "error": "mode must be drive or cdrom, got %r" % (mode,)}
+        ro = bool(req.get("ro", mode == "cdrom"))
+        with self.lock:
+            try:
+                # DETACH FIRST. cdrom/ro are refused by the kernel's mass
+                # storage function while a file is already attached to the
+                # LUN -- this is the write order, not just a style choice.
+                self._write_lun("file", "")
+                self._write_lun("cdrom", "1" if mode == "cdrom" else "0")
+                self._write_lun("ro", "1" if ro else "0")
+                self._write_lun("file", path)
+            except OSError as exc:
+                if exc.errno == errno.EBUSY:
+                    return {"ok": False, "why": "host_busy",
+                            "error": "the connected host has this drive "
+                            "open -- eject it there first"}
+                return {"ok": False, "error": "mount failed: %s" % exc}
+        name = os.path.basename(path)
+        self._publish("msd.mounted", image=name, mode=mode, ro=ro)
+        return {"ok": True, "mounted": name, "mode": mode, "ro": ro}
+
+    def _msd_eject(self, req):
+        if not self._lun_present():
+            return {"ok": False, "why": "no_lun",
+                    "error": "the mass-storage LUN is not present -- the "
+                    "gadget was built without it; rebuild with "
+                    "pi/install.sh --hid-gadget-only"}
+        with self.lock:
+            prev = self._read_lun("file")
+            try:
+                self._write_lun("file", "")
+            except OSError as exc:
+                if exc.errno == errno.EBUSY:
+                    return {"ok": False, "why": "host_busy",
+                            "error": "the connected host has this drive "
+                            "open -- eject it there first"}
+                return {"ok": False, "error": "eject failed: %s" % exc}
+        name = os.path.basename(prev) if prev else None
+        self._publish("msd.ejected", image=name)
+        return {"ok": True, "ejected": name}
+
+    def _msd_build(self, req):
+        """FAT (mode=fat) via mkfs.vfat+mtools, or ISO9660 (mode=iso) via
+        xorriso, from a directory this HOST already has on disk -- scp is
+        how it gets there (WP4 sec. 3 -- a browser cannot hand the daemon a
+        whole directory tree, only individual files). Blocking: this runs
+        on the request thread, same as VideoCapability's own `shot`, and a
+        multi-hundred-MB image is seconds, not the kind of long-running job
+        this daemon otherwise backgrounds (`vcctrl_job_status` and friends).
+        """
+        source = req.get("source_dir")
+        name = req.get("name")
+        mode = req.get("mode", "fat")
+        label = (req.get("label") or "VCCTRL")[:32]
+        if not source or not os.path.isdir(source):
+            return {"ok": False,
+                    "error": "source_dir does not exist: %r" % (source,)}
+        if not name or os.path.basename(name) != name:
+            return {"ok": False,
+                    "error": "name must be a plain filename, no path"}
+        if mode not in ("fat", "iso"):
+            return {"ok": False,
+                    "error": "mode must be fat or iso, got %r" % (mode,)}
+        ext = ".img" if mode == "fat" else ".iso"
+        if not name.lower().endswith(ext):
+            name = name + ext
+        dest = os.path.join(self.image_dir, name)
+        if os.path.exists(dest):
+            return {"ok": False,
+                    "error": "an image named %r already exists" % (name,)}
+        try:
+            if mode == "iso":
+                subprocess.run(
+                    ["xorriso", "-as", "mkisofs", "-J", "-R",
+                     "-V", label, "-o", dest, source],
+                    check=True, capture_output=True, timeout=300)
+            else:
+                size_bytes = 0
+                for root, _dirs, files in os.walk(source):
+                    for fn in files:
+                        try:
+                            size_bytes += os.path.getsize(os.path.join(root, fn))
+                        except OSError:
+                            pass
+                # 15% headroom for FAT overhead/directory entries, floored at
+                # 16 MiB so a near-empty source still makes a mountable
+                # filesystem -- mkfs.vfat refuses a volume below its own
+                # cluster-count minimum otherwise.
+                mb = max(16, int(size_bytes / (1024 * 1024) * 1.15) + 4)
+                subprocess.run(
+                    ["dd", "if=/dev/zero", "of=" + dest, "bs=1M",
+                     "count=%d" % mb],
+                    check=True, capture_output=True, timeout=120)
+                subprocess.run(["mkfs.vfat", "-n", label[:11].upper(), dest],
+                               check=True, capture_output=True, timeout=60)
+                entries = sorted(os.path.join(source, n)
+                                 for n in os.listdir(source))
+                if entries:
+                    subprocess.run(
+                        ["mcopy", "-s", "-i", dest] + entries + ["::"],
+                        check=True, capture_output=True, timeout=300)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+            if isinstance(exc, subprocess.TimeoutExpired):
+                return {"ok": False, "error": "image build timed out"}
+            detail = (exc.stderr or b"").decode("utf-8", "replace")[-500:]
+            return {"ok": False,
+                    "error": "%s failed: %s" % (exc.cmd[0], detail)}
+        size = os.path.getsize(dest)
+        self._publish("msd.built", name=name, mode=mode, size=size)
+        return {"ok": True, "name": name, "mode": mode, "size": size}
+
+    def _msd_stage(self, req):
+        """Chunked upload straight into the image library -- same
+        discipline as FilesCapability._file_stage (an `offset` that must
+        equal what has already arrived, a final chunk checked against a
+        declared sha256, promotion by atomic rename) with no DOS 8.3
+        conversion: an image name is whatever the browser sent it as, not
+        a name a DOS target has to open.
+
+        The `why` set here is NOT CLOSED:
+
+            bad-name          not a plain filename (a path, or empty)
+            name-taken        an image already exists under this name
+            offset-mismatch   a chunk did not start where the last one ended
+            short             the final chunk arrived and the file is
+                              undersized
+            sha-mismatch      the assembled bytes are not the declared ones
+        """
+        name = req.get("name")
+        if not name or os.path.basename(name) != name:
+            return {"ok": False, "why": "bad-name",
+                    "error": "name must be a plain filename, no path"}
+        try:
+            total = int(req.get("total"))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "total (the whole file's size in "
+                                          "bytes) is required"}
+        try:
+            offset = int(req.get("offset") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "offset must be a byte offset"}
+
+        dest = os.path.join(self.image_dir, name)
+        part = dest + ".part"
+        if offset == 0 and os.path.exists(dest):
+            return {"ok": False, "why": "name-taken",
+                    "error": "an image named %r already exists" % (name,)}
+
+        try:
+            chunk = base64.b64decode(req.get("data") or "", validate=True)
+        except Exception as exc:
+            return {"ok": False, "error": "data is not valid base64: %s" % exc}
+        if len(chunk) > self.STAGE_CHUNK_MAX:
+            return {"ok": False, "error": "chunk is %d bytes; the limit is %d"
+                                          % (len(chunk), self.STAGE_CHUNK_MAX)}
+
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        if offset == 0 and have:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            have = 0
+        if offset != have:
+            # LOUD, NOT PATCHED -- same reasoning as _file_stage's own
+            # comment: seeking to the offset would leave a hole full of
+            # zeroes, and the sha would fail at the end with nothing saying
+            # which chunk was lost.
+            return {"ok": False, "why": "offset-mismatch",
+                    "error": ("this chunk starts at %d and %d bytes have "
+                              "arrived" % (offset, have)), "have": have}
+        if have + len(chunk) > total:
+            return {"ok": False,
+                    "error": ("this chunk would take %s past its declared "
+                              "total of %d bytes" % (name, total))}
+        try:
+            with open(part, "ab") as f:
+                f.write(chunk)
+            have += len(chunk)
+        except OSError as exc:
+            return {"ok": False, "error": "cannot write %s: %s" % (part, exc)}
+
+        if not req.get("final"):
+            return {"ok": True, "name": name, "have": have, "total": total,
+                    "complete": False}
+
+        if have != total:
+            return {"ok": False, "why": "short",
+                    "error": ("final chunk received but %s is %d bytes, not "
+                              "the declared %d" % (name, have, total)),
+                    "have": have}
+
+        h = hashlib.sha256()
+        try:
+            with open(part, "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+        except OSError as exc:
+            return {"ok": False, "error": "cannot read back %s: %s"
+                                          % (part, exc)}
+        digest = h.hexdigest()
+        want = (req.get("sha256") or "").strip().lower()
+        if want and want != digest:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return {"ok": False, "why": "sha-mismatch",
+                    "error": ("%s arrived with sha256 %s, not the declared "
+                              "%s -- discarded rather than staged"
+                              % (name, digest[:16], want[:16]))}
+
+        os.rename(part, dest)
+        self._publish("msd.staged", name=name, bytes=have)
+        return {"ok": True, "name": name, "bytes": have, "complete": True}
+
+
 _UNSET = object()
 
 
@@ -9694,6 +10084,18 @@ AudioCapability.DEFAULT_BACKEND_NAME = 'alsa-ffmpeg'
 CameraCapability.BACKENDS = {"v4l2-ffmpeg": CameraCapability}
 CameraCapability.DEFAULT_BACKEND = CameraCapability
 CameraCapability.DEFAULT_BACKEND_NAME = 'v4l2-ffmpeg'
+# SAME SHAPE AS CAMERA ABOVE, same reason -- DEFAULT_BACKEND/_NAME name what
+# gets reported if the fallback path is ever taken (an absent `backend:` key
+# resolves to `cls` regardless of these two, see Registry._resolve_backend),
+# not whether it is safe to leave a profile silent about msd. It is not: a
+# profile sharing no USB port with modernpc's gadget (gateway2000) needs an
+# EXPLICIT `backend: none`, or an absent key gives it working-looking msd_*
+# commands aimed at hardware it has no relationship to. See every
+# profile-kind template and vcctrl.yaml/vcctrl-modernpc.yaml for the lines
+# that actually do the disabling.
+MsdCapability.BACKENDS = {"usb-gadget-msd": MsdCapability}
+MsdCapability.DEFAULT_BACKEND = MsdCapability
+MsdCapability.DEFAULT_BACKEND_NAME = 'usb-gadget-msd'
 
 FilesCapability.BACKENDS = {"mtcp-ftp": FilesCapability}
 FilesCapability.DEFAULT_BACKEND = FilesCapability
@@ -9821,6 +10223,7 @@ PublicTelemetryCapability.DEFAULT_BACKEND_NAME = 'file'
 
 CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 VideoCapability, AudioCapability, CameraCapability,
+                MsdCapability,
                 BoardCapability,
                 FilesCapability,
                 # Reads FilesCapability._pulled(), so it is registered

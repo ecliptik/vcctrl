@@ -460,7 +460,8 @@
        written tonight when the button family was consolidated; this is its
        blast radius. */
     body #cmdbar #grabbtn, body #cmdbar #soundwrap,
-    body #cmdbar #powerbtn, body #cmdbar #capwrap { display:none; }
+    body #cmdbar #powerbtn, body #cmdbar #capwrap,
+    body #cmdbar #msdbtn { display:none; }
     /* The word goes and the button squares off to match the clip and the
        keyboard: three equal glyphs and a field, which is all the room there
        is. */
@@ -1665,6 +1666,13 @@
   #cmdbar #filebtn:hover, #cmdbar #filestop:hover { background:var(--rule); }
   #cmdbar #filestop { color:var(--green); white-space:nowrap; }
   #cmdbar #filebtn[hidden], #cmdbar #filestop[hidden] { display:none; }
+  /* SAME FIGHT AS #filebtn's OWN RULE ABOVE, same fix: #cmdbar button
+     {display:flex} and [hidden] are equal specificity, and the author rule
+     wins on source order. #msdbtn hides/shows with capabilities.msd
+     (showMsdAvailable()) on every profile that has never touched the
+     gadget -- gateway2000, any PS/2/ADB kind -- so this is not a rare
+     path. */
+  #cmdbar #msdbtn[hidden] { display:none; }
   /* BOTH INPUTS, and the second one was missed. A bare `input type=file`
      renders its own "Browse..." control, so #xferinput appeared as a stray
      button sitting in the command bar -- a control nobody put there, next to
@@ -1863,7 +1871,15 @@
      unavailable, `disabled` is the mechanism: it already has a treatment on
      this page, and it is not an opacity over text. */
 
-  button, select {
+  /* label.btn -- A LABEL THAT LOOKS LIKE A BUTTON, for the same reason
+     #fileinput/#xferinput are triggered from a <label for=""> rather than a
+     script .click(): a real tap on a real field is what raises a native
+     file picker reliably (see #pop-file's own comment on the control this
+     page already had for this). #msd-upload's label needed the identical
+     mechanism and there was no button-styled label selector to reuse --
+     button, select already shares one rule for exactly this reason, so
+     label.btn joins it here rather than growing a second copy. */
+  button, select, label.btn {
     font:500 var(--t-read)/1 var(--sans); color:var(--text);
     /* A DARKER GROUND, not another token. --bg and --panel are only a step
        apart in most of the 22 themes -- in Tokyo Night the panel is actually
@@ -1891,6 +1907,10 @@
      cannot read a CSS variable -- so it is a mid grey rather than var(--dim);
      that reads acceptably on every theme tried, but is worth a look on the
      extremes (near-white and near-black) rather than taking on faith. */
+  /* A LABEL IS display:inline BY DEFAULT, so padding/min-height above
+     collapse to the text's own line box without this -- a button needs no
+     equivalent because form controls get their own box model for free. */
+  label.btn { display:inline-flex; align-items:center; }
   select {
     -webkit-appearance:none; appearance:none;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='7'%3E%3Cpath d='M0 0h11L5.5 7z' fill='%23888'/%3E%3C/svg%3E");
@@ -1907,8 +1927,8 @@
   }
   button:disabled:hover { border-color:var(--rule);
     background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1))); }
-  button:hover { border-color:var(--muted); }
-  button:active { background:var(--rule); }
+  button:hover, label.btn:hover { border-color:var(--muted); }
+  button:active, label.btn:active { background:var(--rule); }
   button.on { border-color:var(--green); color:var(--green); }
   /* RED WHILE IT SITS THERE, not only while pressed. These are the controls
      that reboot the machine or cut its mains, and a warning you only see
@@ -2150,6 +2170,12 @@
      Each panel now sizes to its own content, which is what "intentional"
      means here. */
   .poprow { display:flex; gap:6px; flex-wrap:wrap; }
+  /* SAME FIGHT AS #pop-keys[hidden]'s OWN COMMENT: a class that sets
+     `display` is equal specificity to the bare [hidden] UA rule and wins on
+     source order, so a .poprow this page hides itself (paintMsd() toggling
+     #msd-ejectrow when nothing is mounted) needs the explicit override, not
+     just the attribute. */
+  .poprow[hidden] { display:none; }
   /* ONE OBJECT PER SECTION, collapsed by default (no `open` attribute in
      the markup) -- a native <details>/<summary> rather than a hand-rolled
      accordion, so a section opens and closes with no JS at all and Enter/
@@ -2749,6 +2775,13 @@
     </span>
     <button id="powerbtn" aria-haspopup="true" aria-expanded="false"
             title="Mains power: on, off, power cycle"><span class="bi">🔌</span><span class="bl">Power</span><span class="caret dn" aria-hidden="true"></span></button>
+    <!-- ABSENT ON A RIG WITHOUT IT, THE SAME WAY SOUND/POWER STAY IN THE
+         STRIP EVEN WHEN NOT CONFIGURED -- msdNow.available (paintMsd())
+         hides this rather than greying it, because "no gadget LUN on this
+         machine" is not a fact worth a permanent disabled button on every
+         profile that will never have one (gateway2000, any PS/2/ADB kind). -->
+    <button id="msdbtn" hidden aria-haspopup="true" aria-expanded="false"
+            title="Mount or eject a disk image"><span class="bi">💽</span><span class="bl">Disk</span><span class="caret dn" aria-hidden="true"></span></button>
   </div>
 
   <!-- A POPOVER, like Sound and Power. As a row in the flow it took ~40px of
@@ -3100,6 +3133,35 @@
   <div class="hint" id="plugid" style="margin:9px 0 0">—</div>
 </div>
 
+<!-- A copy on the daemon host's own disk, mounted onto the gadget LUN --
+     never a live share of the browser's filesystem, and never a re-
+     enumeration on the target: mount/eject are configfs writes against a
+     LUN that has existed since the gadget was last built
+     (internal/KVM-MACHINES-PLAN.md WP4). paintMsd() draws everything below
+     from one msd_list + msd_status pair, called by openPop('msd'); nothing
+     here is in the 1.5s poll loop, because a mount only changes on a
+     deliberate action, not on a clock. -->
+<div id="pop-msd" class="pop" role="dialog" aria-label="Disk" hidden>
+  <div class="hint" id="msd-mounted" style="margin-left:0">—</div>
+  <div class="poprow" id="msd-ejectrow" hidden>
+    <button id="msd-ejectbtn" class="danger">Eject</button>
+  </div>
+  <div id="msd-images"></div>
+  <div class="hint" id="msd-empty" hidden style="margin-left:0">No images in
+    the library yet -- upload one below, or build one on the daemon host
+    with <code>vcctrl msd build</code>.</div>
+  <hr>
+  <div class="poprow">
+    <!-- A LABEL, NOT A SCRIPTED .click() -- same reasoning as #fileinput's
+         own comment: this is the one path every browser agrees on for
+         opening a native picker from a tap. -->
+    <label for="msd-upload" class="btn">Upload image</label>
+    <input id="msd-upload" type="file" tabindex="-1" aria-hidden="true">
+  </div>
+  <div class="hint" id="msd-free" style="margin-left:0">—</div>
+  <div class="hint" id="msd-uploadstatus" hidden style="margin-left:0"></div>
+</div>
+
   <div id="tabs" role="navigation" aria-label="Panel view">
     <button data-tab="none" class="on" aria-current="true" title="Just the picture">SCREEN</button>
     <!-- TYPE, not KEYS. This tab opens the COMMAND LINE -- a field you type
@@ -3116,6 +3178,9 @@
     <!-- Beside the thing it records rather than at the far end: what you type
          and what was captured are two views of the same session. -->
     <button data-tab="buffer" title="Look back through what the screen did">CAPTURE</button>
+    <!-- ABSENT ON A RIG WITHOUT ONE, same as #msdbtn in the header strip --
+         see setMsdTabVisible(), driven by the same msdNow.available. -->
+    <button data-tab="msd" hidden title="Mount or eject a disk image">DISK</button>
     <button data-tab="sound" title="Sound and volume">SOUND</button>
     <button data-tab="power" title="Mains power and the input link">POWER</button>
     <button data-tab="log" title="What the daemon has been doing">LOG</button>
@@ -6127,7 +6192,7 @@ for (const k of Object.keys(OPTS)) {
 // and clamped to the window -- a menu that opens off the right edge of a
 // phone is a menu you cannot use.
 const POP = {sound: 'soundbtn', power: 'powerbtn', zoom: 'zoombtn',
-             keys: 'keysbtn', file: 'filebtn', get: 'filebtn'};
+             keys: 'keysbtn', file: 'filebtn', get: 'filebtn', msd: 'msdbtn'};
 // The scrub overlay is a menu too, but it is not a .pop -- it is anchored to
 // the picture rather than to its button, because a timeline the width of a
 // button would be a timeline you cannot use. So it drives its own caret and
@@ -6219,7 +6284,8 @@ function openPop(name) {
   // as TYPE and CAPTURE and they take the same shape: full width, sitting on
   // the tab bar. Zoom is excluded on purpose; it opens from the header and
   // belongs to the button that opened it.
-  const tabbed = (name === 'sound' || name === 'power')
+  if (name === 'msd') paintMsd();
+  const tabbed = (name === 'sound' || name === 'power' || name === 'msd')
                  && matchMedia('(max-width:640px)').matches;
   if (tabbed) {
     const tr = $('tabs').getBoundingClientRect();
@@ -6371,8 +6437,8 @@ function paintMachine(j) {
   // a fourth PLACE this page shows the answer it already has.
   html += '<div class="kvt-sec">Capabilities</div>';
   const caps = (j && j.caps) || {};
-  for (const name of ['video', 'audio', 'camera', 'power', 'leds', 'board',
-                      'files', 'sysinfo']) {
+  for (const name of ['video', 'audio', 'camera', 'msd', 'power', 'leds',
+                      'board', 'files', 'sysinfo']) {
     const c = caps[name];
     if (!c) continue;
     const state = c.ok ? 'ok' : c.configured === false ? 'not configured'
@@ -6421,6 +6487,122 @@ async function loadConfigSection() {
 }
 $('soundbtn').onclick = () => openPop('sound');
 $('powerbtn').onclick = () => openPop('power');
+$('msdbtn').onclick = () => openPop('msd');
+
+// ── DISK: mount/eject/upload against MsdCapability (WP4) ────────────────
+//
+// ABSENT, NOT GREYED, on a rig without the gadget's mass-storage LUN --
+// caps.msd.configured (the same three-state answer paintMachine() already
+// reads) drives both the header button and the phone tab, checked every
+// poll so a profile switch (modernpc <-> gateway2000) hides/shows this
+// without a reload. gateway2000 explicitly sets capabilities.msd.backend:
+// none (vcctrl.yaml's own comment on why "explicit" matters here).
+function showMsdAvailable(caps) {
+  const c = (caps || {}).msd;
+  const on = !!(c && c.configured);
+  $('msdbtn').hidden = !on;
+  const tab = document.querySelector('#tabs button[data-tab="msd"]');
+  if (tab) tab.hidden = !on;
+}
+
+// NOT IN THE 1.5s POLL LOOP. A mount only changes on a deliberate action,
+// never on a clock -- unlike video/audio/leds this has nothing to poll FOR,
+// so it is fetched once when the popover/tab actually opens (openPop/setTab
+// below) and again after any action this popover itself takes.
+async function paintMsd() {
+  const [list, status] = await Promise.all([
+    post('msd_list', {}), post('msd_status', {})]);
+  if (!list || !list.ok) {
+    $('msd-mounted').textContent = 'Disk is not available.';
+    $('msd-images').innerHTML = '';
+    $('msd-ejectrow').hidden = true;
+    $('msd-empty').hidden = true;
+    $('msd-free').textContent = '';
+    return;
+  }
+  const mounted = (status && status.ok) ? status.mounted : null;
+  $('msd-mounted').textContent =
+    (status && status.ok)
+      ? (mounted ? 'Mounted: ' + mounted + ' (' + status.mode
+                   + (status.ro ? ', read-only' : '') + ')'
+                 : 'Nothing mounted')
+      : ((status && status.error) || 'status unavailable');
+  $('msd-ejectrow').hidden = !mounted;
+  const images = list.images || [];
+  $('msd-empty').hidden = images.length > 0;
+  $('msd-images').innerHTML = images.map(img => {
+    const isMounted = img.name === mounted;
+    return '<div class="poprow">'
+      + '<span style="flex:1 1 auto;min-width:0;overflow:hidden;'
+      + 'text-overflow:ellipsis;white-space:nowrap">' + esc(img.name)
+      + '</span>'
+      + '<span class="hint" style="margin:0">' + fmtBytes(img.size || 0)
+      + ' · ' + esc(img.kind) + '</span>'
+      + '<button data-msd-mount="' + esc(img.name) + '" data-msd-mode="'
+      + esc(img.kind) + '"' + (isMounted ? ' class="on" disabled' : '') + '>'
+      + (isMounted ? 'Mounted' : 'Mount') + '</button>'
+      + '</div>';
+  }).join('');
+  for (const b of $('msd-images').querySelectorAll('button[data-msd-mount]')) {
+    b.onclick = async () => {
+      const r = await post('msd_mount', {image: b.dataset.msdMount,
+                                         mode: b.dataset.msdMode});
+      if (r && r.ok) addLine(new Date(), 'ui',
+        'mounted ' + r.mounted + ' as ' + r.mode, 'k-note');
+      paintMsd();
+    };
+  }
+  $('msd-free').textContent = list.free_bytes != null
+    ? fmtBytes(list.free_bytes) + ' free on the daemon host' : '';
+}
+$('msd-ejectbtn').onclick = async () => {
+  const r = await post('msd_eject', {});
+  if (r && r.ok) addLine(new Date(), 'ui',
+    r.ejected ? 'ejected ' + r.ejected : 'nothing was mounted', 'k-note');
+  paintMsd();
+};
+
+// CHUNKED, SHA256-VERIFIED, SAME SHAPE AS stageOne() -- a separate function
+// rather than a shared one: the two upload flows genuinely differ (this one
+// never reboots anything and shows live progress, stageOne's confirms a
+// reboot and does not), and forcing them through one function would mean a
+// parameter for every place they disagree.
+async function stageMsdImage(file) {
+  const status = $('msd-uploadstatus');
+  status.hidden = false;
+  status.textContent = 'uploading ' + file.name + '…';
+  const buf = await file.arrayBuffer();
+  const sha = await sha256Hex(buf);
+  const bytes = new Uint8Array(buf);
+  for (let off = 0; off < bytes.length || off === 0; off += CHUNK) {
+    const slice = bytes.subarray(off, Math.min(off + CHUNK, bytes.length));
+    let bin = '';
+    for (let i = 0; i < slice.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, slice.subarray(i, i + 0x8000));
+    }
+    const final = off + slice.length >= bytes.length;
+    const r = await post('msd_stage', {
+      name: file.name, total: bytes.length, offset: off,
+      data: btoa(bin), final: final, sha256: final ? sha : undefined,
+    });
+    if (!r || !r.ok) {
+      status.textContent = 'upload failed: ' + (r ? r.error : 'no answer from the daemon');
+      return;
+    }
+    if (final) {
+      status.textContent = 'uploaded ' + r.name;
+      paintMsd();
+      return;
+    }
+    status.textContent = 'uploading ' + file.name + ': '
+      + Math.round(100 * r.have / r.total) + '%';
+  }
+}
+$('msd-upload').onchange = () => {
+  const f = $('msd-upload').files[0];
+  $('msd-upload').value = '';
+  if (f) stageMsdImage(f);
+};
 $('setback').onclick = () => { closePop(); showSettings(false); };
 addEventListener('keydown', e => {
   // Only while the target is NOT taking keys: an Escape meant for a DOS menu
@@ -7551,6 +7733,7 @@ async function pollState() {
   showBoard(j.board);
   showTitle(j.board, j.profile);
   showFiles(j.files);
+  showMsdAvailable(j.caps);
   showAudioDevice(j.audio);
   noteSourceRate(j.video);
   noteWsRate(j.ws);
@@ -8357,7 +8540,7 @@ function setTab(name) {
   // menu when that was unstacked -- so it must close whatever IS open. It was
   // still in this exemption from when it did open one, which left the Sound
   // popover sitting over the key rail until Sound was pressed again.
-  if (name !== 'sound' && name !== 'power') closePop();
+  if (name !== 'sound' && name !== 'power' && name !== 'msd') closePop();
   // Leaving the BUFFER tab has to release the ring, or a phone that wandered
   // off to another tab would hold it until the daemon's 300s backstop.
   if (name !== 'buffer' && reviewing) exitReview();
@@ -8395,6 +8578,7 @@ function setTab(name) {
   else if (name === 'keys') { body.classList.add('closed'); }
   else if (name === 'sound') { openPop('sound'); body.classList.add('closed'); }
   else if (name === 'power') { openPop('power'); body.classList.add('closed'); }
+  else if (name === 'msd')   { openPop('msd'); body.classList.add('closed'); }
   else if (name === 'set')   { showSettings(true); body.classList.add('closed'); }
   else body.classList.add('closed');
   localStorage.setItem('vcctrl.tab', name);

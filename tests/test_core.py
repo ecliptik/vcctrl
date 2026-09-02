@@ -12501,3 +12501,273 @@ def test_the_opus_side_stream_encodes_the_ring_and_replays_headers():
         stop.set()
         with cap.opus_lock:
             cap._opus_kill_locked()
+
+
+def test_msd_capability_mount_eject_list_and_the_path_traversal_guard():
+    """MsdCapability against a plain directory standing in for the configfs
+    LUN (lun.0/file, /cdrom, /ro as regular files) -- exercises the logic
+    this class owns without needing the real gadget or root. The kernel's
+    OWN part (a configfs write actually reaching /dev/hidg*-style behaviour)
+    is not this test's job; docs/FINDINGS.md carries that measurement once
+    it exists against real hardware, the same split VideoCapability's own
+    tests already draw between "the daemon's logic" and "the stick".
+    """
+    print("\nmsd: mount/eject/list, and the traversal guard")
+    import shutil as _shutil
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="msdtest")
+    try:
+        lun_dir = os.path.join(tmp, "lun.0")
+        os.makedirs(lun_dir)
+        image_dir = os.path.join(tmp, "images")
+
+        cap = vcctrld.MsdCapability(devs=None, bus=None)
+        cap.settings = {"lun_dir": lun_dir, "image_dir": image_dir}
+        cap.start()
+
+        r = cap._msd_list({})
+        check("an empty library lists as empty, not an error",
+              r["ok"] and r["images"] == [], r)
+
+        r = cap._msd_status({})
+        check("status before anything is ever mounted is a clean 'nothing'",
+              r["ok"] and r["mounted"] is None, r)
+
+        with open(os.path.join(image_dir, "test.img"), "wb") as f:
+            f.write(b"\x00" * 1024)
+        with open(os.path.join(image_dir, "test.iso"), "wb") as f:
+            f.write(b"\x00" * 2048)
+        with open(os.path.join(image_dir, "ignored.txt"), "w") as f:
+            f.write("not an image")
+
+        r = cap._msd_list({})
+        names = sorted(i["name"] for i in r["images"])
+        check("the library lists real images and skips a non-image file",
+              names == ["test.img", "test.iso"], names)
+        kinds = {i["name"]: i["kind"] for i in r["images"]}
+        check("a .img classifies as a drive and a .iso as a cdrom",
+              kinds == {"test.img": "drive", "test.iso": "cdrom"}, kinds)
+
+        r = cap._msd_mount({"image": "test.img", "mode": "drive"})
+        check("mounting a real image as a drive succeeds",
+              r["ok"] and r["mounted"] == "test.img" and r["mode"] == "drive"
+              and r["ro"] is False, r)
+        r = cap._msd_status({})
+        check("status reflects the mount", r["ok"] and r["mounted"] == "test.img", r)
+
+        r = cap._msd_mount({"image": "../../etc/passwd"})
+        check("a path that would leave image_dir is refused, not resolved",
+              r["ok"] is False, r)
+        r = cap._msd_mount({"image": "/etc/passwd"})
+        check("an absolute path is refused the same way", r["ok"] is False, r)
+        r = cap._msd_mount({"image": "nonexistent.img"})
+        check("a name that just isn't there is refused, not a crash",
+              r["ok"] is False, r)
+
+        r = cap._msd_mount({"image": "test.iso", "mode": "cdrom"})
+        check("mounting as cdrom defaults read-only",
+              r["ok"] and r["mode"] == "cdrom" and r["ro"] is True, r)
+
+        r = cap._msd_eject({})
+        check("eject reports what it ejected",
+              r["ok"] and r["ejected"] == "test.iso", r)
+        r = cap._msd_status({})
+        check("and status agrees nothing is mounted afterward",
+              r["ok"] and r["mounted"] is None, r)
+
+        r = cap._msd_eject({})
+        check("ejecting an already-empty LUN is a no-op, not an error",
+              r["ok"] and r["ejected"] is None, r)
+
+        # THE LUN NOT EXISTING AT ALL -- a gadget built before this feature
+        # shipped, or one that failed to rebuild -- is a clean, named refusal
+        # (why: no_lun), not an unhandled OSError from open().
+        cap2 = vcctrld.MsdCapability(devs=None, bus=None)
+        cap2.settings = {"lun_dir": os.path.join(tmp, "no-such-lun"),
+                         "image_dir": image_dir}
+        cap2.start()
+        r = cap2._msd_status({})
+        check("no_lun is a named, clean refusal",
+              r["ok"] is False and r["why"] == "no_lun", r)
+        r = cap2._msd_mount({"image": "test.img"})
+        check("mount refuses the same way when the LUN is absent",
+              r["ok"] is False and r["why"] == "no_lun", r)
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_msd_capability_builds_a_fat_image_and_an_iso_from_a_directory():
+    """msd_build against mkfs.vfat/mtools/xorriso -- the real tools, not a
+    mock, because the thing worth proving is that the FILES actually land
+    inside the image (mdir/xorriso -find read it back), not merely that the
+    subprocess calls didn't raise. Skips if this host doesn't have the
+    tools -- the Pi's own pi/install.sh is what guarantees they exist there;
+    this is the same "measure against the real thing, skip cleanly if it
+    isn't here" shape test_zoom_layout_in_a_browser already uses for
+    chromium.
+    """
+    print("\nmsd: building a FAT image and an ISO from a directory")
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import tempfile
+
+    have_vfat = _shutil.which("mkfs.vfat") or os.path.exists("/usr/sbin/mkfs.vfat")
+    have_mcopy = _shutil.which("mcopy")
+    have_xorriso = _shutil.which("xorriso")
+    if not (have_vfat and have_mcopy and have_xorriso):
+        print("  SKIP  mkfs.vfat/mtools/xorriso not all on this host")
+        return
+
+    tmp = tempfile.mkdtemp(prefix="msdbuild")
+    try:
+        # As root on the Pi these live on PATH; here they may only be under
+        # /usr/sbin, same as any other dev host that hasn't logged in as root.
+        env = dict(os.environ)
+        env["PATH"] = "/usr/sbin:/sbin:" + env.get("PATH", "")
+
+        lun_dir = os.path.join(tmp, "lun.0")
+        os.makedirs(lun_dir)
+        image_dir = os.path.join(tmp, "images")
+        source = os.path.join(tmp, "src")
+        os.makedirs(os.path.join(source, "sub"))
+        with open(os.path.join(source, "autoexec.bat"), "w") as f:
+            f.write("@echo off\n")
+        with open(os.path.join(source, "sub", "readme.txt"), "w") as f:
+            f.write("hello from a subdirectory\n" * 100)
+
+        cap = vcctrld.MsdCapability(devs=None, bus=None)
+        cap.settings = {"lun_dir": lun_dir, "image_dir": image_dir}
+        cap.start()
+
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = env["PATH"]
+        try:
+            r = cap._msd_build({"source_dir": source, "name": "testdisk",
+                                "mode": "fat", "label": "TESTDISK"})
+        finally:
+            os.environ["PATH"] = old_path
+        check("a FAT build reports ok with the .img extension added",
+              r["ok"] and r["name"] == "testdisk.img", r)
+        check("the image file actually exists at the reported size",
+              r["ok"] and os.path.getsize(os.path.join(image_dir, "testdisk.img"))
+              == r["size"], r)
+
+        mdir = _subprocess.run(
+            ["mdir", "-i", os.path.join(image_dir, "testdisk.img"), "-/", "::"],
+            capture_output=True, text=True, env=env)
+        check("the FAT image actually contains the source's files, "
+              "recursively",
+              "AUTOEXEC" in mdir.stdout.upper()
+              and "README" in mdir.stdout.upper(), mdir.stdout)
+
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = env["PATH"]
+        try:
+            r2 = cap._msd_build({"source_dir": source, "name": "testcd",
+                                 "mode": "iso", "label": "TESTCD"})
+        finally:
+            os.environ["PATH"] = old_path
+        check("an ISO build reports ok with the .iso extension added",
+              r2["ok"] and r2["name"] == "testcd.iso", r2)
+
+        xr = _subprocess.run(
+            ["xorriso", "-indev", os.path.join(image_dir, "testcd.iso"),
+             "-find", "/"], capture_output=True, text=True, env=env)
+        check("the ISO actually contains the source's files, recursively",
+              "/autoexec.bat" in xr.stdout and "/sub/readme.txt" in xr.stdout,
+              xr.stdout)
+
+        r3 = cap._msd_build({"source_dir": source, "name": "testdisk",
+                             "mode": "fat"})
+        check("building over an existing name is refused, not overwritten",
+              r3["ok"] is False, r3)
+
+        r4 = cap._msd_build({"source_dir": source, "name": "../evil",
+                             "mode": "fat"})
+        check("a name that is actually a path is refused",
+              r4["ok"] is False, r4)
+
+        r5 = cap._msd_build({"source_dir": "/no/such/dir", "name": "x",
+                             "mode": "fat"})
+        check("a source_dir that does not exist is refused, not a crash",
+              r5["ok"] is False, r5)
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_msd_stage_is_chunked_resumable_and_sha_verified():
+    """msd_stage mirrors FilesCapability._file_stage's own discipline
+    (offset must equal what has arrived, the final chunk is checked against
+    a declared sha256, promotion is an atomic rename) -- exercised directly
+    rather than assumed from the shared shape, because the two differ in
+    exactly the place a copy-paste would get wrong: no DOS 8.3 conversion.
+    """
+    print("\nmsd_stage: chunked, resumable, sha-verified")
+    import base64 as _b64
+    import hashlib as _hl
+    import shutil as _shutil
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="msdstage")
+    try:
+        image_dir = os.path.join(tmp, "images")
+        cap = vcctrld.MsdCapability(devs=None, bus=None)
+        cap.settings = {"lun_dir": os.path.join(tmp, "lun.0"),
+                        "image_dir": image_dir}
+        cap.start()
+
+        data = os.urandom(10 * 1024)   # small; the logic is what's tested
+        sha = _hl.sha256(data).hexdigest()
+        half = len(data) // 2
+
+        r = cap._msd_stage({"name": "up.img", "total": len(data), "offset": 0,
+                            "data": _b64.b64encode(data[:half]).decode(),
+                            "final": False})
+        check("a non-final chunk reports progress, not completion",
+              r["ok"] and r["complete"] is False and r["have"] == half, r)
+        check("and the image is not visible in the library mid-upload",
+              not os.path.exists(os.path.join(image_dir, "up.img")), None)
+
+        r = cap._msd_stage({"name": "up.img", "total": len(data),
+                            "offset": half + 1,
+                            "data": _b64.b64encode(data[half:]).decode(),
+                            "final": True})
+        check("a chunk that does not start where the last one ended is "
+              "refused, not silently patched with a hole",
+              r["ok"] is False and r["why"] == "offset-mismatch", r)
+
+        r = cap._msd_stage({"name": "up.img", "total": len(data),
+                            "offset": half,
+                            "data": _b64.b64encode(data[half:]).decode(),
+                            "final": True, "sha256": "0" * 64})
+        check("a wrong declared sha256 is refused and discards the bytes",
+              r["ok"] is False and r["why"] == "sha-mismatch", r)
+        check("discarded, not left behind as a partial",
+              not os.path.exists(os.path.join(image_dir, "up.img.part")), None)
+
+        # Resume from scratch (the .part was removed above) with the
+        # correct sha this time.
+        r = cap._msd_stage({"name": "up.img", "total": len(data), "offset": 0,
+                            "data": _b64.b64encode(data).decode(),
+                            "final": True, "sha256": sha})
+        check("a correct upload promotes the file into the library",
+              r["ok"] and r["complete"] is True, r)
+        with open(os.path.join(image_dir, "up.img"), "rb") as f:
+            check("and the bytes on disk are exactly what was sent",
+                  f.read() == data, None)
+
+        r = cap._msd_stage({"name": "up.img", "total": len(data), "offset": 0,
+                            "data": _b64.b64encode(data).decode(),
+                            "final": True, "sha256": sha})
+        check("uploading over an existing name is refused, not overwritten",
+              r["ok"] is False and r["why"] == "name-taken", r)
+
+        r = cap._msd_stage({"name": "../evil.img", "total": 1, "offset": 0,
+                            "data": _b64.b64encode(b"x").decode(),
+                            "final": True})
+        check("a name that is actually a path is refused before any bytes "
+              "are written",
+              r["ok"] is False and r["why"] == "bad-name", r)
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)

@@ -308,6 +308,22 @@ capabilities:
       # of each other.
       device: /dev/v4l/by-id/usb-EXAMPLE_CAMERA-video-index0
 
+  # A USB mass-storage LUN presented to the target over a Pi-side HID/MSD
+  # gadget (pi/files/vcctrl-hid-gadget-setup.sh) -- only meaningful for an
+  # `hdmi-usb`-kind machine that is actually plugged into the Pi's own
+  # USB-C port; `none` on every other kind, same "must be explicit" reason
+  # as `camera` above. See MsdCapability in daemon/vcctrld.py and
+  # internal/KVM-MACHINES-PLAN.md WP4.
+  msd:
+    backend: none                 # usb-gadget-msd | none
+    settings:
+      # Both have working defaults matching the gadget setup script and
+      # daemon.state_dir above -- only worth overriding for a second
+      # hdmi-usb-kind profile sharing the SAME gadget's image library under
+      # a different lun_dir (no such profile exists on this rig yet).
+      # lun_dir: /sys/kernel/config/usb_gadget/vcctrl-hid-km/functions/mass_storage.usb0/lun.0
+      # image_dir: /var/lib/vcctrl/msd/images
+
   # Putting a file ONTO the target. The backend names the METHOD; `targets:`
   # says which attached machines it applies to, so a rig can have one of each.
   #

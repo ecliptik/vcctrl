@@ -83,6 +83,10 @@ capabilities:
     backend: none        # "not planned" per docs/BOARD-IDENTITY.md sec. 4
   camera:
     backend: none
+  # No USB gadget on this kind -- ADB over USB4VC, not a HID/mass-storage
+  # gadget on the Pi's own USB-C port. See profile-kinds/hdmi-usb.yaml.
+  msd:
+    backend: none                  # usb-gadget-msd | none
   files:
     backend: none
     # "No packet driver, no FTP client, nothing to pull with. Working

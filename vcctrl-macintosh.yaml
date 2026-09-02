@@ -76,6 +76,10 @@ capabilities:
     backend: none        # "not planned" per docs/BOARD-IDENTITY.md sec. 4
   camera:
     backend: none
+  # No USB gadget on this kind -- ADB over USB4VC. See vcctrl-modernpc.yaml
+  # (hdmi-usb kind) for a profile that DOES have one.
+  msd:
+    backend: none                  # usb-gadget-msd | none
   files:
     backend: none
     # "No packet driver, no FTP client, nothing to pull with. Working

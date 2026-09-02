@@ -31,6 +31,15 @@ capabilities:
       hid_mouse_device: /dev/hidg1
       pace_s: 0.012
 
+  # The mass-storage LUN on the SAME gadget `input` above uses -- present
+  # from boot with no file assigned (pi/files/vcctrl-hid-gadget-setup.sh),
+  # so mount/eject never re-enumerate. Defaults (lun_dir/image_dir) match
+  # that script and daemon.state_dir; only worth overriding for a SECOND
+  # hdmi-usb profile sharing one gadget, which this rig's own comment above
+  # already says it does not have hardware for today.
+  msd:
+    backend: usb-gadget-msd        # usb-gadget-msd | none
+
   video:
     backend: v4l2-ffmpeg
     settings:

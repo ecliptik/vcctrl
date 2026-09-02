@@ -300,6 +300,24 @@ install_hid_gadget() {
     return 0
   fi
 
+  # MsdCapability's own tools (daemon/vcctrld.py msd_build): mkfs.vfat and
+  # mtools' mcopy for a FAT image, xorriso for an ISO9660 one. Installed
+  # here, not unconditionally with ffmpeg and the rest -- same "opt-in"
+  # reasoning this whole function already carries: a rig without the
+  # gadget has no mass-storage LUN to build an image FOR.
+  if ! dpkg -s dosfstools >/dev/null 2>&1; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q dosfstools \
+      && echo "installed dosfstools (mkfs.vfat, for msd_build's FAT images)"
+  fi
+  if ! dpkg -s mtools >/dev/null 2>&1; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q mtools \
+      && echo "installed mtools (mcopy, for msd_build's FAT images)"
+  fi
+  if ! dpkg -s xorriso >/dev/null 2>&1; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q xorriso \
+      && echo "installed xorriso (for msd_build's ISO9660 images)"
+  fi
+
   # Idempotent: only touch config.txt if the exact line isn't already there.
   # Scoped under [pi5] (not [all]) so this overlay only ever applies to a
   # Pi 5 -- the file's existing [cm5] section is a different, unrelated

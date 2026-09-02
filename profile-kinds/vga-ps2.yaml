@@ -105,6 +105,10 @@ capabilities:
   # make easy to get right by default).
   camera:
     backend: none
+  # No USB gadget on this kind -- PS/2 over USB4VC, not a HID/mass-storage
+  # gadget on the Pi's own USB-C port. See profile-kinds/hdmi-usb.yaml.
+  msd:
+    backend: none                  # usb-gadget-msd | none
   sysinfo:
     backend: none
 
