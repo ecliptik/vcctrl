@@ -1469,6 +1469,35 @@ class Devices(object):
                 ry -= sy
                 time.sleep(pace)
 
+    def mouse_wheel(self, dy, pace=DEFAULT_PACE_S):
+        """Scroll. Chunked into signed-byte HID reports the same way
+        mouse_move chunks a delta too large for one -- see its own comment;
+        _write_hid_mouse_report's own clamp would otherwise silently throw
+        away everything past +-127 instead of sending it as more than one
+        report.
+
+        UNMEASURED ON PS/2 (docs/MOUSE.md sec 7): the uinput mouse device
+        declares REL_WHEEL and USB4VC's own bridge may or may not carry it
+        through to a PS/2 IntelliMouse-style packet, and DOS's CTMOUSE may
+        or may not honour one if it does. This sends the event either way;
+        nothing has confirmed a DOS program's own window scrolls because of
+        it. Sign/direction is passed through exactly as given, unverified
+        against either path -- see the browser's own wheel handler.
+        """
+        with self.lock:
+            if not self.hid_mode:
+                if dy:
+                    self.mouse.write(e.EV_REL, e.REL_WHEEL, int(dy))
+                    self.mouse.syn()
+                    time.sleep(pace)
+                return
+            ry = int(dy)
+            while ry:
+                sy = max(-127, min(127, ry))
+                self._write_hid_mouse_report(0, 0, sy)
+                ry -= sy
+                time.sleep(pace)
+
     def _mouse_button_press(self, code):
         """The lower half of a click: press one MOUSE_BUTTONS code and leave
         it down. Caller holds self.lock. Shared by mouse_click and
@@ -1583,7 +1612,7 @@ def usb4vc_holds_us():
 GATED_COMMANDS = frozenset([
     "key", "type", "hold", "combo", "keydown", "keyup", "release_all",
     "mouse_move", "mouse_click", "mouse_down", "mouse_up",
-    "mouse_release_all",
+    "mouse_release_all", "mouse_wheel",
 ])
 
 # Power ACTIONS that change the target's state. Gated like input, because
@@ -1867,6 +1896,7 @@ class InputCapability(Capability):
             "mouse_move": self._mouse_move, "mouse_click": self._mouse_click,
             "mouse_down": self._mouse_down, "mouse_up": self._mouse_up,
             "mouse_release_all": self._mouse_release_all,
+            "mouse_wheel": self._mouse_wheel,
             # Read-only, and deliberately a COMMAND rather than a field on
             # /state.json: it is a constant, and every open tab polls state
             # every 1.5 s. Same argument as /wslog.json.
@@ -1933,6 +1963,10 @@ class InputCapability(Capability):
 
     def _mouse_release_all(self, req):
         return {"ok": True, "released": self.devs.mouse_release_all(_pace(req))}
+
+    def _mouse_wheel(self, req):
+        self.devs.mouse_wheel(req.get("dy", 0), _pace(req))
+        return {"ok": True}
 
 
 class TargetEpoch(object):
@@ -10093,6 +10127,8 @@ def _summarise(cmd, req):
         return "%s,%s" % (req.get("dx", 0), req.get("dy", 0))
     if cmd in ("mouse_down", "mouse_up"):
         return req.get("button", "left")
+    if cmd == "mouse_wheel":
+        return str(req.get("dy", 0))
     return ""
 
 

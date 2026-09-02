@@ -94,6 +94,20 @@ def check(name, cond, detail=""):
 
 # ---------------------------------------------------------------- fakes
 
+class FakeHidFile(object):
+    """Stands in for /dev/hidg0 / /dev/hidg1 -- a raw byte-writing file, not
+    the evdev-style (etype, code, value) interface FakeDev mimics. Records
+    each report written as raw bytes; a caller decodes the fields it cares
+    about (see _write_hid_mouse_report's own byte layout: buttons, dx, dy,
+    wheel, each a clamped-to-+-127 signed byte)."""
+
+    def __init__(self, log):
+        self.log = log
+
+    def write(self, data):
+        self.log.append(bytes(data))
+
+
 class FakeDev(object):
     """Records (code, value) in order. The sleep widens the interleaving
     window: without it a race can hide behind the GIL switching interval."""
@@ -264,9 +278,10 @@ def test_mouse_down_up_release_all():
     target any more than a disconnect mid-keypress may.
 
     release_all() and mouse_release_all() are DELIBERATELY TWO VERBS, not
-    one covering both. The web KVM's keyboard capture and mouse capture are
-    independent controls -- a viewer can hold one and not the other -- so
-    giving up one must not reach across and silently end whatever the
+    one covering both -- even though the web KVM's Grab button now starts
+    BOTH keyboard capture and mouse capture together (one control, per the
+    operator), an MCP or CLI caller can still hold one without the other,
+    and giving up one must not reach across and silently end whatever the
     other is mid-operation on: a latched on-screen modifier not yet sent,
     or a mouse button held for a drag. The first version of this fix made
     them one verb; this test is the control that would have caught it --
@@ -302,6 +317,43 @@ def test_mouse_down_up_release_all():
         check("unknown button rejected", False, "no exception")
     except ValueError:
         check("unknown button rejected", True)
+
+
+def test_mouse_wheel_chunks_a_hid_report_like_mouse_move_does():
+    """mouse_wheel is a third HID/EV_REL axis, and the HID half needs the
+    SAME chunking mouse_move already needs: _write_hid_mouse_report's own
+    clamp silently truncates anything past +-127 rather than sending the
+    rest as a second report, which is exactly the bug mouse_move's own
+    chunking loop exists to avoid for dx/dy. This is that same loop, for
+    the third field of the same report.
+    """
+    def unsigned8(b):
+        return b if b < 128 else b - 256
+
+    print("\nmouse_wheel")
+    d = make_devices()
+    d.mouse_wheel(5, 0.0)
+    wheel_events = [v for (et, c, v) in d.log if et == e.EV_REL and c == e.REL_WHEEL]
+    check("a small scroll is one EV_REL wheel event", wheel_events == [5],
+          wheel_events)
+
+    hidlog = []
+    d.hid_mode = True
+    d._hid_mouse_fd = FakeHidFile(hidlog)
+    d._hid_mods = 0
+    d._hid_keys = []
+    d._hid_mouse_buttons = 0
+    d.mouse_wheel(200, 0.0)
+    # Each HID mouse report is 4 bytes: buttons, dx, dy, wheel (see
+    # _write_hid_mouse_report) -- dx/dy are 0 here, byte 3 is the wheel
+    # value actually written for that report, signed.
+    check("200 does not fit one signed byte, so it is more than one report",
+          len(hidlog) > 1, hidlog)
+    check("every report's dx/dy stayed zero -- only the wheel field moved",
+          all(r[1] == 0 and r[2] == 0 for r in hidlog), hidlog)
+    total = sum(unsigned8(r[3]) for r in hidlog)
+    check("and the reports sum to the full 200, not a truncated 127",
+          total == 200, total)
 
 
 # ---------------------------------------------------------------- registry

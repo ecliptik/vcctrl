@@ -194,21 +194,35 @@ not.
    `movementX/movementY` are relative natively, so they match PS/2 and ADB with
    no cursor-position fiction in between. The hard part is not the transport.
 
-## 7. The browser now forwards it — 2026-09-02
+## 7. The browser now forwards it — 2026-09-02, folded into Grab 2026-09-02
 
 Section 6.5 above called Pointer Lock the right primitive before anything
-used it. It is now what the web KVM's Mouse control (`kvm.html`,
-independent of the keyboard's own Grab) is built on: `movementX/movementY`
-accumulated and flushed as `mouse_move` on a fixed 40ms timer, so a fast
-trackpad costs one HTTP round trip per tick rather than one per event.
+used it. It is now what the web KVM's mouse forwarding (`kvm.html`) is
+built on: `movementX/movementY` accumulated and flushed as `mouse_move`
+on a fixed 40ms timer, so a fast trackpad costs one HTTP round trip per
+tick rather than one per event.
+
+**One button, not two.** The first version of this shipped as a second,
+independent "Mouse" control beside Grab. The operator asked for one --
+in practice keyboard and pointer are always wanted together -- so
+`setArmed(true)` now both focuses the keyboard AND requests the lock,
+and `setArmed(false)` releases both. The one thing that stays genuinely
+independent underneath is WHETHER THE LOCK IS ACTUALLY HELD right now:
+Escape always exits Pointer Lock and nothing can override that (it has
+to stay typable at a DOS prompt while Grab is on), so losing the lock no
+longer un-arms the keyboard -- the mouse half simply pauses and the
+`pointerdown` handler re-requests the lock the next time the picture is
+clicked, since that click is itself the user gesture a new request
+needs.
 
 **Two new daemon primitives, not just the existing move/click.**
 `mouse_down`/`mouse_up` press-and-hold a button independently (for a
 drag), the same shape as `keydown`/`keyup`. **Their release is a
-SEPARATE verb from the keyboard's**, `mouse_release_all`, deliberately —
-Grab and Mouse are independent controls a viewer can hold one of without
-the other, and the first draft of this fix made them one verb
-(`release_all` covering both), which meant releasing the KEYBOARD would
+SEPARATE verb from the keyboard's**, `mouse_release_all`, on purpose and
+this did NOT change when the button merged: an MCP or CLI caller can
+still hold one without the other even though the web page's own button
+now starts both together, and the first draft of this fix made
+`release_all` cover both, which meant releasing the KEYBOARD would
 silently drop a mouse button still down mid-drag. Caught before it
 shipped by asking what happens when both are held at once; the
 regression test for it is `test_mouse_down_up_release_all` in
@@ -218,17 +232,28 @@ regression test for it is `test_mouse_down_up_release_all` in
 fifteen `mouse_move -300 -300` calls, sequential, the same "slam into a
 corner" primitive proven there, not a new one.
 
+**A wheel, added and confirmed 2026-09-02**: `mouse_wheel` writes the
+third field of the same HID report `mouse_move`/`mouse_click` already
+write (the descriptor always reserved a byte for it, per section 6.5's
+own note -- nothing had ever generated the value until now) and
+`EV_REL`/`REL_WHEEL` on the uinput path, chunked into signed-byte HID
+reports the same way a large `mouse_move` already is. The browser
+coalesces wheel events on the same 40ms timer as mouse_move.
+**Confirmed live against modernpc**: six `mouse_wheel dy=50` calls
+visibly scrolled a terminal window's content (FINDINGS #49). **Still
+unmeasured on PS/2** -- whether this rig's protocol carries a wheel
+through to DOS at all, and what CTMOUSE does with one if it arrives --
+this sends the EV_REL event on that path too, but nothing has looked at
+a screen to confirm it does anything.
+
 **Still not built:** the Macintosh/ADB side (untouched, as section 6.4
 already expected); an absolute-positioning mode for `hid-gadget` targets
 like `modernpc` (Pointer Lock's relative deltas are correct for PS/2 and
 ADB, both genuinely relative-only, but a modern target expects an
-absolute pointer — a planned second HID function, not this one); a mouse
-wheel (the HID report descriptor already reserves a byte for it, but
-nothing generates the value, and whether DOS-era PS/2 mice on this board
-even carry a wheel channel at all is unmeasured); and touch as a mouse on
-a phone (Pointer Lock has no meaningful behavior on a touchscreen, so the
-button is hidden below the desktop breakpoint rather than shown
-non-functional).
+absolute pointer — a planned second HID function, not this one); and
+touch as a mouse on a phone (Pointer Lock has no meaningful behavior on
+a touchscreen, so Grab's mouse half is simply inert there rather than
+shown as a separate, non-functional control).
 
 ## 8. Open questions
 
@@ -238,5 +263,6 @@ non-functional).
 - Whether any DOS program on the Gateway renders a cursor in mode 12h. If one
   does, it removes the need to start Windows for every mouse test.
 - The Macintosh side, entirely.
-- Whether this rig's PS/2 mouse protocol carries a scroll wheel at all, and
-  whether DOS-era `CTMOUSE` exposes it if so — unmeasured, see section 7.
+- Whether this rig's PS/2 mouse protocol carries a scroll wheel through to
+  DOS at all, and what CTMOUSE does with one if so — unmeasured, see
+  section 7.

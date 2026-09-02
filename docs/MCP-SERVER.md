@@ -68,7 +68,7 @@ the local filesystem, so the host-boundary machinery simply isn't needed.
 |---|---|---|
 | status/read | `vcctrl_status`, `_board`, `_caps`, `_keymap`, `_activity`, `_power_state` | no lock needed |
 | capture | `_shot`, `_frame`, `_burst`, `_timeline`, `_record`, `_level`, `_camera_shot`, `_camera_state` | files land on whichever machine runs the MCP server; camera is a separate, ringless device -- see `vcctrl-camera` |
-| input | `_key`, `_type`, `_hold`, `_combo`, `_mouse_move/_click/_down/_up/_release_all`, `_verify_input` | takes the shared hardware lock |
+| input | `_key`, `_type`, `_hold`, `_combo`, `_mouse_move/_click/_down/_up/_release_all/_wheel`, `_verify_input` | takes the shared hardware lock |
 | power | `_power` (on/off/cycle) | board-scoped; refuses on a board the configured plug doesn't control |
 | file transfer | `_stage_file`, `_send_file`, `_file_status`, `_get_file`, `_pulled`, ... | reboots the target for send/refresh/get |
 | harness workflows (**vm only**) | `_preflight`, `_run_cell`, `_run_sweep`, `_collect`, `_job_status` | long-running, launched as background jobs |

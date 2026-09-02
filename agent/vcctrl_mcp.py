@@ -1144,6 +1144,14 @@ def vcctrl_mouse_release_all(profile: "str | None" = None) -> dict:
 
 
 @mcp.tool()
+def vcctrl_mouse_wheel(dy: int, profile: "str | None" = None) -> dict:
+    """Scroll. Confirmed live 2026-09-02 over the hid-gadget backend (a
+    terminal window on modernpc visibly scrolled). Unmeasured on PS/2 --
+    see docs/MOUSE.md sec 7 -- whether it reaches DOS at all."""
+    return _gated_run(["mouse", "wheel", dy], profile)
+
+
+@mcp.tool()
 def vcctrl_verify_input(profile: "str | None" = None) -> dict:
     """Prove the input path by PS/2 LED round trip -- the only check that
     says anything about the FAR end of the wire; every other input status

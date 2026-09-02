@@ -128,6 +128,8 @@ USAGE = """usage: vcctrl <command> [args]
                             held -- the mouse's own release-all, separate
                             from the keyboard's: releasing one must not
                             drop what the other is mid-operation on
+  mouse wheel <dy>          scroll -- unmeasured whether PS/2 carries this
+                            through to DOS at all, see docs/MOUSE.md sec 7
   leds                      read PS/2 LED return channel
   ledwait [timeout_s]       block until LED state changes
   led-changes [n]           the last n LED transitions, newest first, with a
@@ -1286,6 +1288,8 @@ def main(argv):
                    "button": rest[1] if len(rest) > 1 else "left"}
         elif rest[0] in ("release-all", "release_all"):
             req = {"cmd": "mouse_release_all"}
+        elif rest[0] == "wheel":
+            req = {"cmd": "mouse_wheel", "dy": int(rest[1])}
         else:
             sys.stderr.write(USAGE)
             return 2

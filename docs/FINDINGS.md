@@ -2899,3 +2899,30 @@ for the primary's PS/2 timing was measured against modernpc-shaped I/O, not
 against an encoder. Bandwidth today for comparison: that lock screen at
 30 fps is ~40 Mbit/s of MJPEG; a 1080p desktop at x264 ultrafast sits
 at 2-4 Mbit/s.
+
+## 49. The mouse wheel reaches modernpc over the hid-gadget backend  [measured 2026-09-02]
+
+`mouse_wheel` was added (a third field in the same HID report `mouse_move`/
+`mouse_click` already write, and `EV_REL`/`REL_WHEEL` on the uinput path)
+after the operator reported clicks working but scrolling not, having tried
+it against `modernpc`'s live desktop.
+
+Six `vcctrl_mouse_wheel dy=50` calls (profile `modernpc`, build after commit
+`046d772`) were sent while a terminal window sat under the cursor on
+modernpc's desktop, a Signal window also visible but not under the cursor.
+The next raw frame showed the terminal's visible boot-log content had
+scrolled to a different position; the Signal window's content did not
+change (consistent with the cursor sitting over the terminal, not Signal --
+this OS scrolls whatever is under the pointer, same as any desktop). Two
+consecutive frames, before and after, both captured and compared by eye,
+not inferred from a lack of error.
+
+**Not measured by this**: sign/direction convention (only positive `dy` was
+tried), a specific scroll-distance-per-unit mapping, and anything at all
+about the PS/2/uinput path -- `mouse_wheel` was also called against
+`gateway2000` and returned `{"ok": true}` (the evdev write did not raise),
+but the VGA capture stick was unplugged for the unrelated brownout
+diagnosis (FINDINGS #44) at the time, so nothing could look at the screen to
+confirm a DOS program's own window actually scrolled, or that USB4VC's
+bridge carries a wheel channel through to a PS/2 packet at all. Docs/
+MOUSE.md sec 7 names this the open question it still is.

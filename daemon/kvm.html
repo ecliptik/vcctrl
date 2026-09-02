@@ -454,16 +454,6 @@
        blast radius. */
     body #cmdbar #grabbtn, body #cmdbar #soundwrap,
     body #cmdbar #powerbtn, body #cmdbar #capwrap { display:none; }
-    /* NOT A DUPLICATE LIKE THE FOUR ABOVE -- there is no phone equivalent
-       yet. Pointer Lock (what requestMouseGrab() asks for) has no
-       meaningful behavior on a touch screen: there is no hover pointer to
-       lock, and movementX/Y never arrives. Showing the button here would
-       be a control that looks pressable and does nothing, which this file
-       already treats as worse than one that is simply not there. Touch's
-       own way to drive the mouse is a later piece of work (see
-       internal/KVM-MACHINES-PLAN.md WP6), not this button pretending to
-       be it. */
-    body #cmdbar #mousebtn { display:none; }
     /* The word goes and the button squares off to match the clip and the
        keyboard: three equal glyphs and a field, which is all the room there
        is. */
@@ -2677,14 +2667,7 @@
       <button id="sendline" title="Type this line at the target and press Enter"><span class="bl">Send</span><span class="ret">↵</span></button>
     </div>
     <span class="sep barsep" aria-hidden="true">|</span>
-    <button id="grabbtn" title="Send what you type straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
-    <!-- INDEPENDENT OF GRAB, DELIBERATELY. A DOS/Windows session commonly
-         wants both at once (typing AND pointing), so this is its own
-         control with its own lock check and its own release path -- not a
-         second mode of the same button. See setMouseArmed()'s own comment
-         on why its release must not touch whatever Grab is mid-operation
-         on, and vice versa. -->
-    <button id="mousebtn" title="Send mouse movement and clicks straight to the target"><span class="bi">🖱️</span><span class="bl">Mouse</span></button>
+    <button id="grabbtn" title="Send keys and mouse straight to the target"><span class="bi">🔐</span><span class="bl">Grab</span></button>
     <!-- ALWAYS RECORDING, so this does not start anything -- which is why it
          is not called Record. The ring has been rolling since the daemon came
          up; the button opens a window onto what it is already holding. It
@@ -3232,6 +3215,17 @@ function switchProfile(id) {
   // rather than erroring, since `since=<a number modernpc's own counter has
   // not reached yet>` is a valid, silently-empty request.
   if (typeof seq !== 'undefined') seq = 0;
+  // SETTINGS' "System Config" READS ONE PROFILE'S RESOLVED CONFIG AND
+  // CACHES IT (loadConfigSection's own cfgLoaded flag) -- correct under the
+  // assumption it was written for, that config never changes without a
+  // daemon restart. A profile switch breaks that assumption without any
+  // restart at all: the SAME open panel now needs a DIFFERENT profile's
+  // config. Reported live: switching from gateway2000 to modernpc left the
+  // tree showing gateway2000's. Reset the flag and re-fetch unconditionally
+  // -- a no-op cost if Settings happens to be closed, same as showSettings's
+  // own unconditional call on open.
+  cfgLoaded = false;
+  loadConfigSection();
   restart();
   if (typeof stopAudio === 'function') stopAudio();
   if (typeof soundOn !== 'undefined' && soundOn
@@ -5177,7 +5171,7 @@ function isReleaseChord() {
   return Object.values(RELEASE).every(names => names.some(n => pressed.has(n)));
 }
 
-function setArmed(v, opts) {
+function setArmed(v) {
   // GRABBING IS REFUSED WHILE SOMEONE ELSE HOLDS THE INPUT LOCK.
   //
   // Reported: "if I grab the screen, and then another process holds input,
@@ -5231,13 +5225,18 @@ function setArmed(v, opts) {
     // Must happen synchronously inside the tap handler: iOS ignores focus()
     // called from a timer or after an await.
     try { ghost.focus({preventScroll:true}); } catch (e) {}
-    addLine(new Date(), 'ui', 'keyboard grabbed'
-            + (document.activeElement === ghost ? '' : ', focus refused'),
+    // MOUSE, TOO -- ONE BUTTON FOR BOTH, per the operator: a separate Mouse
+    // control was one button too many for what is, in practice, always
+    // wanted together. Best-effort: Pointer Lock needs a user gesture,
+    // which this click already is, but a touch device or a browser that
+    // simply refuses leaves the mouse half silently unavailable while
+    // keyboard capture still works -- .catch() is that silence, not a bug
+    // to surface, since the MOS lamp already says whether it is reachable.
+    $('stage').requestPointerLock().catch(() => {});
+    hint('keyboard and mouse grabbed, Ctrl + Alt + Shift releases');
+    addLine(new Date(), 'ui', 'keyboard and mouse grabbed, Ctrl+Alt+Shift releases'
+            + (document.activeElement === ghost ? '' : ' (focus refused)'),
             'k-note');
-    hint('keyboard grabbed, Ctrl + Alt + Shift releases');
-    if (!opts || !opts.quiet)
-      addLine(new Date(), 'ui', 'keyboard grabbed, Ctrl+Alt+Shift releases',
-              'k-note');
   } else {
     ghost.blur();
     // Anything still held goes up, on this side and at the g2k. Releasing
@@ -5246,8 +5245,13 @@ function setArmed(v, opts) {
     for (const k of pressed) send({t:'up', k});
     pressed.clear();
     post('release_all', {});
-    if (!opts || !opts.quiet)
-      addLine(new Date(), 'ui', 'keyboard released', 'k-note');
+    // THE MOUSE'S OWN RELEASE, A SEPARATE CALL FROM THE KEYBOARD'S ABOVE --
+    // see mouse_release_all's own comment server-side: a button still down
+    // from a drag in progress must be released explicitly, not folded into
+    // release_all, even though one visible control now starts both.
+    if (document.pointerLockElement === $('stage')) document.exitPointerLock();
+    post('mouse_release_all', {});
+    addLine(new Date(), 'ui', 'keyboard and mouse released', 'k-note');
   }
 }
 // Capture-phase, so nothing layered over the video can swallow the click, and
@@ -5267,7 +5271,7 @@ $('verifybtn').onclick = async () => {
 };
 $('grabbtn').onclick = () => setArmed(!armed);
 
-// ── MOUSE, INDEPENDENT OF THE KEYBOARD'S OWN GRAB ────────────────────────
+// ── MOUSE, FOLDED INTO GRAB (setArmed() requests/releases the lock) ─────
 //
 // Relative-only, the same as the PS/2/ADB mouse it drives (docs/MOUSE.md):
 // there is no "the cursor is at x,y", only "move it by dx,dy" -- so this
@@ -5277,13 +5281,26 @@ $('grabbtn').onclick = () => setArmed(!armed);
 // and Pointer Lock is what every other relative-mouse web app (VNC clients,
 // browser games) uses for exactly this reason.
 //
+// ONE VISIBLE CONTROL, TWO INDEPENDENT MECHANISMS UNDERNEATH. The operator
+// asked for one Grab button rather than a second one beside it -- so
+// setArmed(true) both focuses the keyboard AND requests the lock, and
+// setArmed(false) releases both. What stays independent is WHETHER THE
+// LOCK IS ACTUALLY HELD RIGHT NOW: the browser can drop it on its own
+// (Escape always exits Pointer Lock, and nothing here can override that --
+// it would otherwise be unable to type Escape at a DOS prompt while
+// grabbed) without `armed` itself going false. So `armed` means "Grab is
+// on"; document.pointerLockElement === $('stage') means "the mouse half is
+// actually connected this instant" -- the pointerdown handler below
+// re-requests the lock the next time the picture is clicked if the two
+// have drifted apart, which is the one recovery a user gesture allows.
+//
 // COALESCED, NOT SENT PER EVENT. A trackpad can fire pointermove well past
 // 100/s; each mouse_move is its own HTTP round trip and the daemon paces
 // every HID/uinput write it makes (capabilities.input.settings.pace_s), so
 // flushing the accumulated delta on a fixed timer keeps this at one
-// request per tick regardless of how fast the input device polls.
-let mouseArmed = false;
-let mouseAccDx = 0, mouseAccDy = 0, mouseFlushTimer = null;
+// request per tick regardless of how fast the input device polls. The
+// wheel gets the same treatment, for the same reason.
+let mouseAccDx = 0, mouseAccDy = 0, mouseAccWheel = 0, mouseFlushTimer = null;
 
 function mouseSensitivity() {
   return parseFloat(localStorage.getItem('vcctrl.mousesens') || '1') || 1;
@@ -5296,55 +5313,39 @@ function flushMouseMove() {
   // trackpad, that adds up to a cursor that visibly lags a fast swipe.
   mouseAccDx -= dx; mouseAccDy -= dy;
   if (dx || dy) post('mouse_move', {dx, dy});
+  const wheel = Math.round(mouseAccWheel);
+  mouseAccWheel -= wheel;
+  if (wheel) post('mouse_wheel', {dy: wheel});
 }
-
-// mouseArmed's TRUE VALUE LIVES IN THE pointerlockchange HANDLER BELOW, not
-// here -- a lock request is asynchronous and the browser can refuse or drop
-// it (Esc, its own UI, a tab switch) with no call of ours in the loop. This
-// function only ever ASKS for a transition; same "ask, then let the event
-// be the source of truth" shape setFullscreen()/fullscreenchange already
-// use on this page.
-function requestMouseGrab() {
-  if (inputHeldBy) { hint('input held by "' + inputHeldBy + '"'); return; }
-  if (document.pointerLockElement === $('stage')) { document.exitPointerLock(); return; }
-  $('stage').requestPointerLock().catch(() => {
-    note('mouse: this browser refused pointer lock');
-  });
-}
-$('mousebtn').onclick = requestMouseGrab;
 
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === $('stage');
-  if (locked === mouseArmed) return;
-  mouseArmed = locked;
-  $('mousebtn').classList.toggle('on', mouseArmed);
-  $('mousebtn').querySelector('.bl').textContent = mouseArmed ? 'Release' : 'Mouse';
-  $('mousebtn').title = mouseArmed ? 'Esc releases'
-                                   : 'Send the mouse straight to ' + targetName();
-  if (mouseArmed) {
-    mouseAccDx = mouseAccDy = 0;
+  if (locked && !mouseFlushTimer) {
+    mouseAccDx = mouseAccDy = mouseAccWheel = 0;
     mouseFlushTimer = setInterval(flushMouseMove, 40);
-    hint('mouse grabbed, Esc releases');
-    addLine(new Date(), 'ui', 'mouse grabbed', 'k-note');
-  } else {
+  } else if (!locked && mouseFlushTimer) {
     clearInterval(mouseFlushTimer);
     mouseFlushTimer = null;
-    // THE MOUSE'S OWN release_all -- see mouse_release_all's own comment on
-    // why this is a separate verb from the keyboard Release's. A button
-    // still down at the target from a drag in progress must not survive
-    // losing the pointer lock, the same guarantee keyboard Release already
-    // gives a key left down by keydown.
-    post('mouse_release_all', {});
-    addLine(new Date(), 'ui', 'mouse released', 'k-note');
   }
 });
 
 $('stage').addEventListener('pointermove', e => {
-  if (!mouseArmed) return;
+  if (!armed || document.pointerLockElement !== $('stage')) return;
   const sens = mouseSensitivity();
   mouseAccDx += e.movementX * sens;
   mouseAccDy += e.movementY * sens;
 });
+// TRACKPAD SCROLL AND A PHYSICAL WHEEL BOTH ARRIVE AS 'wheel'. deltaMode
+// distinguishes pixels (0, a trackpad) from lines (1, most wheel mice) --
+// scaled up here so a single wheel click reads as a real step rather than
+// the same one-pixel nudge a trackpad sends. Sensitivity is deliberately
+// NOT applied a second time: it already governs how far the pointer moves
+// per pixel, and a scroll step is a count of clicks, not a distance.
+$('stage').addEventListener('wheel', e => {
+  if (!armed || document.pointerLockElement !== $('stage')) return;
+  e.preventDefault();
+  mouseAccWheel += e.deltaY * (e.deltaMode === 1 ? 4 : 0.25);
+}, {passive: false});
 
 const MOUSE_BTN_NAME = {0: 'left', 1: 'middle', 2: 'right'};
 // THE OVERLAYS ARE NOT THE PICTURE, same exclusion and the same reason as
@@ -5358,19 +5359,27 @@ function onOverlay(e) {
                         + '#camoverlay, #camswap');
 }
 $('stage').addEventListener('pointerdown', e => {
-  if (!mouseArmed || onOverlay(e)) return;
+  if (!armed || onOverlay(e)) return;
+  if (document.pointerLockElement !== $('stage')) {
+    // THE RECOVERY PATH -- see the block comment above. This click is
+    // itself a user gesture, which is what a new lock request needs; the
+    // click that asks for it is spent asking, not forwarded as a mouse_down
+    // (the request is async, so there is nothing yet to forward it as).
+    $('stage').requestPointerLock().catch(() => {});
+    return;
+  }
   e.preventDefault();
   const b = MOUSE_BTN_NAME[e.button];
   if (b) post('mouse_down', {button: b});
 });
 $('stage').addEventListener('pointerup', e => {
-  if (!mouseArmed || onOverlay(e)) return;
+  if (!armed || onOverlay(e) || document.pointerLockElement !== $('stage')) return;
   const b = MOUSE_BTN_NAME[e.button];
   if (b) post('mouse_up', {button: b});
 });
 // RIGHT-CLICK MUST REACH THE TARGET, NOT THIS PAGE. Without this the
 // browser's own context menu opens over the picture on every right mouse_down.
-$('stage').addEventListener('contextmenu', e => { if (mouseArmed) e.preventDefault(); });
+$('stage').addEventListener('contextmenu', e => { if (armed) e.preventDefault(); });
 
 // THE ONLY RELIABLE WAY TO ESTABLISH A KNOWN POSITION on a relative-only
 // mouse (docs/MOUSE.md sec 3): repeated moves into a corner, absorbed by
@@ -5387,11 +5396,6 @@ $('mousesens').oninput = () => {
 };
 
 function armFromStage(e) {
-  // A TAP WHILE THE MOUSE IS GRABBED IS A CLICK, NOT A KEYBOARD REQUEST.
-  // Without this, tapping the picture on a phone with Mouse engaged both
-  // sent the click (via the pointer listeners below) AND raised the
-  // on-screen keyboard, which is the wrong control answering the tap.
-  if (mouseArmed) return;
   // THE OVERLAYS ARE NOT THE PICTURE. The scrub panel, the No Signal notice
   // and the update toast all live inside #stage so they can float over it
   // without re-fitting anything -- which means a tap on any of them reached
@@ -7520,6 +7524,7 @@ function setInputLamps(held, inputCap) {
             : 'Keyboard reachable, press Grab to send from here';
   const mos = broken ? 'Mouse unavailable'
             : held ? 'Mouse held by ' + held
+            : armed ? 'Mouse reachable, and this browser is sending'
             : MOUSE_PROVEN ? 'Mouse ready, cursor movement seen '
                              + MOUSE_PROVEN
             : 'Mouse ready, never yet tested on a target';
@@ -7548,7 +7553,7 @@ function setInputHeld(owner) {
   // arming signal, so leaving it live means the on-screen keyboard rises for
   // a grab that setArmed is about to refuse. A disabled input cannot take
   // focus, which stops the keyboard before it starts.
-  for (const el of [$('line'), $('sendline'), $('grabbtn'), $('mousebtn'), ghost]) {
+  for (const el of [$('line'), $('sendline'), $('grabbtn'), ghost]) {
     el.disabled = !!owner;
     if (owner) el.title = why;
   }
@@ -7569,12 +7574,9 @@ function setInputHeld(owner) {
   // puts that back. Two owners for one boolean, which is the shape that needs
   // a re-assertion rather than a second flag.
   else paintLatched();
+  // setArmed(false) now releases the mouse half too (one button, one
+  // release path) -- see its own comment.
   if (owner && armed) setArmed(false);
-  // SAME REASON, THE MOUSE'S OWN GRAB. exitPointerLock() is the request;
-  // the pointerlockchange handler is what actually flips mouseArmed and
-  // releases anything mouse_down left held, the same "ask, then let the
-  // event decide" shape requestMouseGrab() itself uses.
-  if (owner && mouseArmed) document.exitPointerLock();
   if (!owner) {
     $('sendline').title = 'Type this line at ' + targetName() + ' and press Enter';
     $('line').title = '';
@@ -8562,7 +8564,7 @@ $('stage').addEventListener('pointerdown', e => {
   // A click near the top edge while the mouse is grabbed is a click AT
   // THE TARGET, not a request to reveal the fullscreen toolbar -- the
   // pointerdown/pointerup pair below is what must see it.
-  if (mouseArmed || !fsOn || e.clientY > 64) return;
+  if (armed || !fsOn || e.clientY > 64) return;
   e.preventDefault();
   e.stopPropagation();
   document.body.classList.toggle('peek');
@@ -8745,7 +8747,7 @@ setInterval(() => {
     // Dragging the picture to pan it and dragging to move the target's
     // cursor are the same gesture on the same surface -- Mouse wins while
     // it is grabbed, the same as it wins over armFromStage's tap-to-type.
-    if (mouseArmed) return;
+    if (armed) return;
     const camMain = document.body.classList.contains('cam-swapped');
     el = camMain ? $('camoverlay') : $('scroll');
     cursorEl = camMain ? el : $('frame');

@@ -1086,7 +1086,7 @@ class WebCapability(object):
     ALLOWED = frozenset([
         "key", "type", "hold", "combo", "keydown", "keyup", "release_all",
         "mouse_move", "mouse_click", "mouse_down", "mouse_up",
-        "mouse_release_all", "power", "leds", "status", "caps",
+        "mouse_release_all", "mouse_wheel", "power", "leds", "status", "caps",
         "events", "activity", "lock", "shot", "lastgood", "video",
         "framestats", "verify_input", "buffer",
         # The page holds the ring while there is no picture, so the seconds
