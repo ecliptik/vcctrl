@@ -99,6 +99,8 @@ reached a target that had no power to receive it.
   when they do". A chord ordered in the browser and not in the CLI was two
   different commands with one name, and the verb count could not see it.
 - **`MOUSE.md`**, **`TIMING-FIXES.md`** — input path and settling races.
+- **`MSD.md`** — USB mass storage: mounting a disk image onto a
+  `hdmi-usb`-kind target over the same gadget as its keyboard/mouse.
 - **`PI5-MIGRATION.md`** — the Pi 3 → Pi 5 move, closed.
 
 ## The standard

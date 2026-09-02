@@ -932,6 +932,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Sec-WebSocket-Accept", accept)
         self.end_headers()
         fps = 20.0
+        video_codec = "mjpeg"
         if "?" in self.path:
             for part in self.path.split("?", 1)[1].split("&"):
                 if part.startswith("fps="):
@@ -948,6 +949,16 @@ class Handler(BaseHTTPRequestHandler):
                         fps = max(1.0, min(60.0, float(part[4:])))
                     except ValueError:
                         pass
+                # WP7: an H.264 viewer is the SAME connection as MJPEG's --
+                # same keyboard/mouse input channel, same state-change
+                # messages, only which ring the "HERE -> CLIENT" half of
+                # _ws_pump reads from changes. Kept as a query param on the
+                # existing endpoint, not a fourth `kind`, because it isn't
+                # a different PURPOSE the way audio is -- it's the same
+                # video connection asking for a different transport, the
+                # same thing `fps=` already is.
+                elif part == "codec=h264":
+                    video_codec = "h264"
         if kind == "audio":
             codec = "pcm"
             if "?" in self.path:
@@ -956,7 +967,8 @@ class Handler(BaseHTTPRequestHandler):
                         codec = "opus"
             return self.cap.serve_ws_audio(self.connection, codec=codec)
         self.cap.serve_ws(self.connection,
-                          agent=self.headers.get("User-Agent"), fps=fps)
+                          agent=self.headers.get("User-Agent"), fps=fps,
+                          video_codec=video_codec)
 
 
 class Server(ThreadingHTTPServer):
@@ -1640,7 +1652,7 @@ class WebCapability(object):
 
     # -- the stream ---------------------------------------------------------
 
-    def serve_ws(self, sock, agent=None, fps=20.0):
+    def serve_ws(self, sock, agent=None, fps=20.0, video_codec="mjpeg"):
         """One connection, ONE THREAD, and that thread owns the socket.
 
         WHY THIS IS NOT TWO THREADS ANY MORE. It used to be a frame pump plus
@@ -1664,6 +1676,19 @@ class WebCapability(object):
         ten-second unwritable stall test, and the applied-rate echo. Those are
         described where they happen in `_ws_pump`.
         """
+        # WP7: an H.264 viewer takes a lease on the encoder for exactly the
+        # lifetime of this connection -- acquire() before the pump runs,
+        # release() in the SAME finally every other per-connection cleanup
+        # already lives in, so a dropped socket (any reason: closed tab,
+        # network gone, an exception in the pump) releases it exactly as
+        # reliably as `held` keys get released. acquire() can refuse
+        # (currently throttled, or the spawn failed); the pump below reads
+        # `h264_ok` and, if refused, sends nothing and lets the STALL path
+        # (already there for a silent socket) do what it already does.
+        h264_ok = True
+        vid = self.video()
+        if video_codec == "h264" and vid is not None:
+            h264_ok = vid.h264.acquire()
         with self.lock:
             self.clients += 1
             self.ws_opened += 1
@@ -1679,11 +1704,14 @@ class WebCapability(object):
         # the client knows how it is doing far better than this side can infer.
         rate = [fps]
         try:
-            self._ws_pump(sock, held, rate)
+            self._ws_pump(sock, held, rate, video_codec=video_codec,
+                          h264_ok=h264_ok)
         except Exception as exc:
             with self.lock:
                 self.ws_last_error = "%s: %s" % (type(exc).__name__, exc)
         finally:
+            if video_codec == "h264" and vid is not None:
+                vid.h264.release()
             with self.lock:
                 self.clients -= 1
                 self.ws_closed += 1
@@ -1747,7 +1775,7 @@ class WebCapability(object):
         except Exception:
             pass
 
-    def _ws_pump(self, sock, held, rate):
+    def _ws_pump(self, sock, held, rate, video_codec="mjpeg", h264_ok=True):
         """Both directions, one thread, `select` deciding which runs next.
 
         Returns when the connection is finished, for any reason. It never
@@ -1778,6 +1806,20 @@ class WebCapability(object):
         for the next frame, so the wait is a `select` on the socket with the
         time until the next frame as its timeout: input wakes it immediately,
         and an idle client still gets frames on time.
+
+        DROP-RATHER-THAN-QUEUE DOES NOT SURVIVE video_codec == 'h264'. Every
+        JPEG frame is a complete, independent picture, so skipping a stale
+        one to send the current one loses nothing a viewer wanted. An H.264
+        delta frame is a diff against the frame before it -- skipping ONE
+        corrupts every frame after it until the next keyframe, which a
+        decoder either refuses outright or renders as visible corruption.
+        So the h264 branch below sends AUs in strict sequence and never
+        skips ahead: if the socket cannot take a write, it retries the SAME
+        pending AU next tick rather than moving on, and only STALL_S of
+        that (identical to the mjpeg path) closes the connection -- a
+        reconnect costs at most one GOP's wait (see H264Sidecar's own
+        docstring on why repeat-headers=1 makes that bound ~1s), which is
+        cheap next to shipping a stream a real decoder may reject.
         """
         vid = self.video()
         # A CLIENT THAT NEVER DRAINS IS GONE, AND THIS LOOP CANNOT SEE IT.
@@ -1801,6 +1843,14 @@ class WebCapability(object):
         STALL_S = 10.0
         stalled_since = None
         last_t, last_state = 0.0, None
+        # h264 only: the last AU sequence number actually SENT (not merely
+        # seen) -- 0 means "nothing yet", which is also H264Sidecar.au_after's
+        # own signal to hand back the ring's most recent KEYFRAME rather
+        # than its most recent AU. Whether the "not currently available"
+        # reason (throttled, or the spawn failed) has been told to this
+        # client yet, so it is said once, not on every tick.
+        last_h264_seq = 0
+        h264_reason_sent = False
         # Zero rather than "now": the first frame goes as soon as there is one.
         next_due = 0.0
         # THE RATE IS THIS SIDE'S NUMBER, SO THIS SIDE SAYS WHAT IT IS.
@@ -1846,38 +1896,101 @@ class WebCapability(object):
                 next_due += 1.0 / max(1.0, rate[0])
                 if next_due < now:
                     next_due = now + 1.0 / max(1.0, rate[0])
-                with vid.lock:
+
+                if video_codec == "h264":
                     state = vid.state
-                    item = vid.ring[-1] if vid.ring else None
-                if item is not None and item[0] > last_t:
-                    try:
-                        writable = bool(select.select([], [sock], [], 0)[1])
-                    except Exception:
-                        return
-                    if writable:
-                        stalled_since = None
-                        last_t = item[0]
+                    if not h264_ok:
+                        # Refused at acquire() time (throttled, or the spawn
+                        # failed) -- said ONCE, then this tick behaves like
+                        # "no new item" forever, the same shape a genuinely
+                        # silent encoder has. The page's own first-frame
+                        # timeout (already there for the mjpeg/ws path) is
+                        # what actually falls it back; this message is only
+                        # so the log names a reason instead of a guess.
+                        if not h264_reason_sent:
+                            h264_reason_sent = True
+                            try:
+                                sock.sendall(ws_frame(json.dumps(
+                                    {"h264_error": vid.h264.last_error}
+                                ).encode(), opcode=0x1))
+                            except Exception:
+                                return
+                    else:
+                        got = vid.h264.au_after(last_h264_seq)
+                        if got is not None:
+                            seq, au, _iskf = got
+                            # NEVER SKIPPED, NEVER DROPPED -- see this
+                            # function's own docstring on why an H.264
+                            # delta frame cannot be treated the way a
+                            # standalone JPEG frame is. `writable` gates
+                            # whether we send THIS tick at all; `last_h264_seq`
+                            # only advances on a successful send, so a
+                            # not-yet-writable socket retries the identical
+                            # AU next tick rather than moving on to a newer
+                            # one and leaving a gap in the decoder's input.
+                            try:
+                                writable = bool(
+                                    select.select([], [sock], [], 0)[1])
+                            except Exception:
+                                return
+                            if writable:
+                                stalled_since = None
+                                try:
+                                    sock.sendall(ws_frame(au, opcode=0x2))
+                                except Exception:
+                                    return
+                                last_h264_seq = seq
+                                with self.lock:
+                                    self.ws_sent_frames += 1
+                                    self.ws_sent_bytes += len(au)
+                            elif stalled_since is None:
+                                stalled_since = now
+                                with self.lock:
+                                    self.ws_dropped += 1
+                            elif now - stalled_since > STALL_S:
+                                with self.lock:
+                                    self.ws_dropped += 1
+                                    self.ws_last = (
+                                        "closed: unwritable for %.0fs after "
+                                        "%d frames" % (STALL_S,
+                                                       self.ws_sent_frames))
+                                return
+                            else:
+                                with self.lock:
+                                    self.ws_dropped += 1
+                else:
+                    with vid.lock:
+                        state = vid.state
+                        item = vid.ring[-1] if vid.ring else None
+                    if item is not None and item[0] > last_t:
                         try:
-                            sock.sendall(ws_frame(item[2], opcode=0x2))
+                            writable = bool(select.select([], [sock], [], 0)[1])
                         except Exception:
                             return
-                        with self.lock:
-                            self.ws_sent_frames += 1
-                            self.ws_sent_bytes += len(item[2])
-                    elif stalled_since is None:
-                        stalled_since = now
-                        with self.lock:
-                            self.ws_dropped += 1
-                    elif now - stalled_since > STALL_S:
-                        with self.lock:
-                            self.ws_dropped += 1
-                            self.ws_last = ("closed: unwritable for %.0fs after "
-                                            "%d frames" % (STALL_S,
-                                                           self.ws_sent_frames))
-                        return
-                    else:
-                        with self.lock:
-                            self.ws_dropped += 1
+                        if writable:
+                            stalled_since = None
+                            last_t = item[0]
+                            try:
+                                sock.sendall(ws_frame(item[2], opcode=0x2))
+                            except Exception:
+                                return
+                            with self.lock:
+                                self.ws_sent_frames += 1
+                                self.ws_sent_bytes += len(item[2])
+                        elif stalled_since is None:
+                            stalled_since = now
+                            with self.lock:
+                                self.ws_dropped += 1
+                        elif now - stalled_since > STALL_S:
+                            with self.lock:
+                                self.ws_dropped += 1
+                                self.ws_last = ("closed: unwritable for %.0fs after "
+                                                "%d frames" % (STALL_S,
+                                                               self.ws_sent_frames))
+                            return
+                        else:
+                            with self.lock:
+                                self.ws_dropped += 1
                 if state != last_state:
                     last_state = state
                     try:

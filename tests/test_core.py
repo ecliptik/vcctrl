@@ -12771,3 +12771,359 @@ def test_msd_stage_is_chunked_resumable_and_sha_verified():
               r["ok"] is False and r["why"] == "bad-name", r)
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_h264_annexb_splitting_survives_multi_slice_pictures_and_any_chunking():
+    """`_split_h264_annexb` against a REAL libx264 encode, not synthetic
+    bytes -- the bug this guards (naively treating every slice NAL as its
+    own access unit) only shows up against `-tune zerolatency`'s real
+    sliced-threading output, which is not something worth hand-rolling a
+    fixture for. Skips cleanly if this host has no ffmpeg+libx264, the
+    same shape test_zoom_layout_in_a_browser already uses for chromium.
+    """
+    print("\nh264 Annex-B access-unit splitting")
+    import random as _random
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import tempfile
+
+    ffmpeg = _shutil.which("ffmpeg")
+    if not ffmpeg:
+        print("  SKIP  no ffmpeg on this host")
+        return
+    if b"libx264" not in _subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True).stdout:
+        print("  SKIP  ffmpeg on this host has no libx264")
+        return
+
+    tmp = tempfile.mkdtemp(prefix="h264split")
+    try:
+        mjpeg = os.path.join(tmp, "src.mjpeg")
+        h264 = os.path.join(tmp, "out.h264")
+        _subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+             "-i", "testsrc2=size=640x480:rate=30:duration=2",
+             "-c:v", "mjpeg", "-q:v", "4", "-f", "mjpeg", mjpeg],
+            check=True, timeout=60)
+        _subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "mjpeg",
+             "-i", mjpeg, "-c:v", "libx264", "-preset", "ultrafast",
+             "-tune", "zerolatency", "-g", "30", "-pix_fmt", "yuv420p",
+             "-x264-params", "repeat-headers=1", "-f", "h264", h264],
+            check=True, timeout=60)
+        data = open(h264, "rb").read()
+
+        aus, rem = vcctrld._split_h264_annexb(data)
+        check("single-shot split is byte-exact (nothing dropped, nothing "
+              "duplicated)", b"".join(aus) + rem == data,
+              (len(aus), len(rem), len(data)))
+
+        # Every AU's OWN leading slice must be a new-picture start -- the
+        # exact bug (SPS/PPS bleeding into the wrong AU, or a continuation
+        # slice treated as a boundary) would show up as a slice here whose
+        # first_mb_in_slice bit is 0.
+        bad = []
+        for idx, au in enumerate(aus):
+            i, n = 0, len(au)
+            slice_type = slice_mb_bit = None
+            while i < n - 3:
+                if au[i] == 0 and au[i + 1] == 0:
+                    if au[i + 2] == 1:
+                        p = i + 3
+                    elif au[i + 2] == 0 and au[i + 3] == 1:
+                        p = i + 4
+                    else:
+                        i += 1
+                        continue
+                    t = au[p] & 0x1F
+                    if t in (1, 5):
+                        slice_type, slice_mb_bit = t, (au[p + 1] >> 7) & 1
+                        break
+                    i = p
+                    continue
+                i += 1
+            if not (slice_type in (1, 5) and slice_mb_bit == 1):
+                bad.append((idx, slice_type, slice_mb_bit))
+        check("every access unit's own leading slice starts a new picture "
+              "(first_mb_in_slice's Exp-Golomb-0 bit is set)",
+              not bad, bad[:5])
+
+        check("a real -tune zerolatency encode actually exercises the "
+              "multi-slice-per-picture case this guards (more slice NALs "
+              "than access units)",
+              data.count(b"\x00\x00\x01") + data.count(b"\x00\x00\x00\x01")
+              > len(aus) * 1.5, None)
+
+        keyframe_aus = [i for i, au in enumerate(aus)
+                        if vcctrld._au_is_keyframe(au)]
+        check("keyframes land close to the -g 30 GOP (roughly one per 30 "
+              "of ~60 frames, at least one)",
+              1 <= len(keyframe_aus) <= 4, keyframe_aus)
+
+        # Streaming: the same bytes through arbitrary chunk boundaries must
+        # reassemble to the identical AU list, not just the identical bytes
+        # -- a chunking-dependent AU count would mean a real pipe reader
+        # sees a different picture sequence than this single-shot check.
+        _random.seed(2026)
+        buf = b""
+        streamed = []
+        pos = 0
+        while pos < len(data):
+            step = _random.randint(200, 6000)
+            chunk = data[pos:pos + step]
+            pos += len(chunk)
+            buf += chunk
+            new_aus, buf = vcctrld._split_h264_annexb(buf)
+            streamed.extend(new_aus)
+        check("arbitrarily-chunked streaming reassembles to the identical "
+              "byte stream and the identical access-unit list as a "
+              "single-shot split",
+              b"".join(streamed) + buf == data and streamed == aus,
+              (len(streamed), len(aus)))
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_h264_ws_transport_ships_real_decodable_access_units():
+    """serve_ws(video_codec='h264') end to end: a real H264Sidecar, fed real
+    JPEG frames the way VideoCapability's own ring is, over a real socket
+    with real (unmasked, server->client) WebSocket framing -- not a mock of
+    any of those three. Skips cleanly without ffmpeg+libx264, the same
+    shape every other real-encoder test in this file uses.
+    """
+    print("\nh264 ws transport")
+    import collections
+    import socket as _socket
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import sys as _sys
+    import tempfile
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    ffmpeg = _shutil.which("ffmpeg")
+    if not ffmpeg or b"libx264" not in _subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True).stdout:
+        print("  SKIP  no ffmpeg+libx264 on this host")
+        return
+
+    def read_server_frame(sock, timeout=8.0):
+        """Server -> client frames are UNMASKED -- the mirror image of
+        client_frame() in the ws-single-owner test above, not a reuse of
+        it, because the mask bit differs in exactly the way that matters."""
+        sock.settimeout(timeout)
+        hdr = sock.recv(2)
+        if len(hdr) < 2:
+            return None, None
+        opcode = hdr[0] & 0x0F
+        length = hdr[1] & 0x7F
+        if length == 126:
+            length = int.from_bytes(sock.recv(2), "big")
+        elif length == 127:
+            length = int.from_bytes(sock.recv(8), "big")
+        body = b""
+        while len(body) < length:
+            chunk = sock.recv(length - len(body))
+            if not chunk:
+                break
+            body += chunk
+        return opcode, body
+
+    tmp = tempfile.mkdtemp(prefix="h264ws")
+    try:
+        mjpeg = os.path.join(tmp, "src.mjpeg")
+        _subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+             "-i", "testsrc2=size=320x240:rate=30:duration=3",
+             "-c:v", "mjpeg", "-q:v", "6", "-f", "mjpeg", mjpeg],
+            check=True, timeout=60)
+        frames, _ = vcctrld._split_mjpeg(open(mjpeg, "rb").read())
+        check("the synthetic source actually has frames to feed",
+              len(frames) >= 30, len(frames))
+
+        class FakeVid(object):
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.state = "locked"
+                self.ring = collections.deque()
+                self.h264 = vcctrld.H264Sidecar(self)
+
+        vid = FakeVid()
+        cap = vcweb.WebCapability.__new__(vcweb.WebCapability)
+        cap.lock = threading.Lock()
+        cap.clients = 0
+        cap.ws_opened = cap.ws_closed = cap.ws_dropped = 0
+        cap.ws_sent_frames = cap.ws_sent_bytes = 0
+        cap.ws_client_ops = []
+        cap.ws_last_agent = None
+        cap.ws_last = None
+        cap.ws_last_error = None
+        cap.ws_log = []
+        cap.video = lambda: vid
+
+        a, b = _socket.socketpair()
+        stop_feed = threading.Event()
+
+        def feed():
+            for f in frames:
+                if stop_feed.is_set():
+                    return
+                with vid.lock:
+                    vid.ring.append((time.time(), 0, f))
+                    if len(vid.ring) > 5:
+                        vid.ring.popleft()
+                time.sleep(1.0 / 30)
+            # Keep feeding the last frame so the encoder (and a slow test
+            # runner) has time to catch up rather than starving mid-test.
+            while not stop_feed.is_set():
+                with vid.lock:
+                    vid.ring.append((time.time(), 0, frames[-1]))
+                    if len(vid.ring) > 5:
+                        vid.ring.popleft()
+                time.sleep(1.0 / 30)
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+
+        done = threading.Event()
+
+        def run():
+            try:
+                cap.serve_ws(b_side, agent="probe", fps=30.0,
+                            video_codec="h264")
+            finally:
+                done.set()
+
+        b_side = b
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+
+        received = []
+        deadline = time.time() + 15.0
+        try:
+            while time.time() < deadline and len(received) < 3:
+                opcode, payload = read_server_frame(a, timeout=8.0)
+                if opcode is None:
+                    break
+                if opcode == 0x2:
+                    received.append(payload)
+        except Exception as exc:
+            check("reading the h264 ws stream did not raise", False, exc)
+
+        check("at least one real H.264 access unit arrived over the "
+              "websocket (binary opcode)", len(received) >= 1,
+              len(received))
+
+        def leads_with_new_picture(au):
+            """Does `au` itself begin with a slice NAL whose
+            first_mb_in_slice bit is set -- i.e. is this actually a single,
+            correctly-bounded access unit, not a fragment or a continuation
+            slice mistakenly sent as if it were a whole picture? Detailed
+            AU-splitting correctness is `test_h264_annexb_splitting_...`'s
+            job; this only checks that what came off THE WIRE has the shape
+            an access unit is supposed to have."""
+            i, n = 0, len(au)
+            while i < n - 3:
+                if au[i] == 0 and au[i + 1] == 0:
+                    if au[i + 2] == 1:
+                        p = i + 3
+                    elif au[i + 2] == 0 and au[i + 3] == 1:
+                        p = i + 4
+                    else:
+                        i += 1
+                        continue
+                    t = au[p] & 0x1F
+                    if t in (1, 5):
+                        return p + 1 < n and (au[p + 1] >> 7) & 1 == 1
+                    i = p
+                    continue
+                i += 1
+            return False
+
+        if received:
+            check("the FIRST access unit a joining viewer receives is a "
+                  "keyframe (au_after(0)'s own contract)",
+                  vcctrld._au_is_keyframe(received[0]),
+                  len(received[0]))
+            bad = [i for i, au in enumerate(received)
+                  if not leads_with_new_picture(au)]
+            check("every access unit received over the wire actually "
+                  "starts a new picture, not a fragment or a mid-picture "
+                  "continuation slice", not bad, bad)
+
+        stop_feed.set()
+        try:
+            a.close()
+        except Exception:
+            pass
+        done.wait(6.0)
+        t.join(timeout=3.0)
+        check("serve_ws returns once the client is gone", not t.is_alive(),
+              "still running")
+        check("H264Sidecar released the encoder on disconnect "
+              "(viewers back to 0)", vid.h264.state()["viewers"] == 0,
+              vid.h264.state())
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_h264_sidecar_refuses_new_viewers_and_stops_encoding_while_throttled():
+    """The one guard rail this pass actually implements (see H264Sidecar's
+    own docstring on why not the plan's full two-stage 720p-then-mjpeg
+    drop): `vcgencmd get_throttled` reporting the Pi currently throttled
+    must refuse acquire() outright, and must stop an ALREADY-RUNNING
+    encoder rather than let a viewer keep costing CPU on a Pi that just
+    said it is in trouble. `_currently_throttled` is monkeypatched rather
+    than faked at the vcgencmd/subprocess layer -- what this guards is the
+    SIDECAR'S reaction to the reading, not whether vcgencmd's own output
+    parses (a non-Pi test host has no vcgencmd at all, which already
+    reads as "not throttled" -- see _currently_throttled's own except).
+    """
+    print("\nh264 sidecar: the throttle guard rail")
+    orig = vcctrld._currently_throttled
+    try:
+        fv = _FakeVideoForH264Test()
+        sc = vcctrld.H264Sidecar(fv)
+
+        vcctrld._currently_throttled = lambda: True
+        ok = sc.acquire()
+        check("acquire() refuses outright while throttled",
+              ok is False, sc.state())
+        check("and does not count a refused caller as a viewer",
+              sc.state()["viewers"] == 0, sc.state())
+        check("and no encoder was ever spawned for it",
+              sc.state()["spawns"] == 0, sc.state())
+
+        vcctrld._currently_throttled = lambda: False
+        ok2 = sc.acquire()
+        check("acquire() succeeds once no longer throttled",
+              ok2 is True and sc.state()["active"], sc.state())
+
+        vcctrld._currently_throttled = lambda: True
+        deadline = time.time() + 5.0
+        while time.time() < deadline and sc.state()["active"]:
+            time.sleep(0.1)
+        check("the watchdog stops an ALREADY-RUNNING encoder within a "
+              "few seconds of throttling starting, not just refusing "
+              "the next new viewer",
+              not sc.state()["active"], sc.state())
+        check("viewers is left as the caller's own bookkeeping, not "
+              "silently zeroed by the watchdog -- release() is still "
+              "the only thing that changes it",
+              sc.state()["viewers"] == 1, sc.state())
+
+        sc.release()
+        check("release() still works normally after a throttle-kill "
+              "(no exception, viewers back to 0)",
+              sc.state()["viewers"] == 0, sc.state())
+    finally:
+        vcctrld._currently_throttled = orig
+
+
+class _FakeVideoForH264Test(object):
+    def __init__(self):
+        import collections as _c
+        self.lock = threading.Lock()
+        self.ring = _c.deque()

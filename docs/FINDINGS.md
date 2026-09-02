@@ -2982,3 +2982,89 @@ long-press), because no absolute-mode command exists on the daemon yet
 (WP4); the MOUSE tab refuses to forward anything when
 `machine.mouse !== 'relative'` rather than guess at semantics for a
 command that isn't there.
+
+## 51. H.264 over WebCodecs: real end to end, and the AU-splitting bug that would have shipped silently  [measured 2026-09-02]
+
+WP7 of `internal/KVM-MACHINES-PLAN.md`. Two things settled while building
+the encoder sidecar (`H264Sidecar`, `daemon/vcctrld.py`) and the page's
+WebCodecs decode path, both worth filing here rather than trusting to the
+code alone.
+
+### A real access unit is not one NAL, and `-tune zerolatency` is why
+
+The plan's own `-tune zerolatency` (chosen so latency does not grow with
+encoder thread count) forces x264 into SLICED multi-threading rather than
+frame-threading -- frame-threading buffers whole frames across threads,
+which is exactly the latency zerolatency exists to avoid, so zerolatency
+takes multi-core throughput from slicing ONE picture across several NALs
+instead. Measured against a real 2-second, 60-frame `libx264 ultrafast`
+encode on this dev host (4 threads): ordinary slice NALs (type 1)
+outnumbered actual pictures roughly 4:1, and treating every slice NAL as
+its own access unit produced 240 "pictures" from 60 real ones -- a run of
+four consecutive type-5 (IDR) NALs for what was one picture was the
+symptom that gave it away.
+
+The fix -- `_split_h264_annexb`'s whole reason for existing -- reads
+`first_mb_in_slice`: a slice NAL's RBSP begins with this field as an
+Exp-Golomb code, and Exp-Golomb 0 is a single `1` bit, so the top bit of
+the byte right after a slice NAL's header tells new-picture from
+continuation-slice with no further parsing. Checked against the same real
+encode: exactly 60 slice NALs have that bit set. A second, easy-to-get-
+backwards detail: repeated SPS/PPS/SEI (`-x264-params repeat-headers=1`,
+so a joining viewer's wait is bounded by the GOP) precede the slice they
+configure, so an access-unit boundary is the START of that header run,
+not the slice's own start code -- getting this backwards silently drops
+every leading SPS/PPS/SEI into the WRONG access unit's tail, which is
+invisible until a real decoder is fed the result and fails to configure.
+
+Both guarded now: `test_h264_annexb_splitting_survives_multi_slice_pictures_and_any_chunking`
+(`tests/test_core.py`) runs a real ffmpeg encode with these exact settings
+and asserts every emitted access unit's own leading slice sets that bit,
+byte-exact reconstruction under arbitrary chunk boundaries (500-8000B,
+matching real pipe-read sizes), and that the encode actually exercises
+the multi-slice case (more slice NALs than access units) rather than
+passing by accident on content that never triggers it.
+
+### The full pipeline decodes a real picture in a real browser
+
+`test_the_h264_ws_transport_ships_real_decodable_access_units` proves the
+daemon side (real ffmpeg encode, real WebSocket framing over a real
+socket, `H264Sidecar` acquire/release across the connection lifetime).
+Beyond that test, this session also ran the whole chain through an actual
+Chromium `VideoDecoder`, browser to canvas: a real `vcweb.WebCapability`
+server (fake `VideoCapability`, real `H264Sidecar`) fed real
+`testsrc2`-source JPEG frames at 30fps; a real Playwright-driven Chromium
+page loaded the real `kvm.html`, ran `connectH264()` unmodified, and
+after ~1s was decoding real pictures: `xport` settled on `'h264'` with no
+fallback logged, `VideoDecoder.configure()` succeeded from the codec
+string this session's own `avcCodecString()` derived off the wire
+(`avc1.42c01e`, matching the SPS's own profile/constraint/level bytes
+exactly), and a canvas pixel sample came back 100% non-black at the
+correct 640x480 -- a screenshot shows the `testsrc2` pattern's own moving
+timecode, legible and advancing, which is not something a corrupted or
+frozen decode produces.
+
+**The bug this caught before it shipped**: the first version of
+`connectH264()` used a SEPARATE timer variable from `connectWsJpeg()`'s
+own `firstFrameTimer`. `gotFrame()` (shared by both transports' success
+paths) clears `firstFrameTimer` on every real decoded frame -- the h264
+path's own timer was never told a frame had arrived, so it fired its "no
+frame in 4s" fallback on a fixed clock regardless of whether decoding was
+actually succeeding. First run of the real-browser test: h264 connected,
+decoded nothing visibly wrong, and still fell back to mjpeg at 4s, every
+time. Fixed by reusing the one shared variable; the real-browser run
+above is POST-fix.
+
+### What is NOT yet measured
+
+Everything the plan calls "measurement," specifically: glass-to-glass
+latency (MJPEG vs H.264, LAN and tailnet), CPU/thermal cost on the
+ACTUAL Pi 5 under this real code path (FINDINGS #48's ~2/3-core figure
+was a synthetic-content, hand-run ffmpeg command, not this sidecar under
+load), and FINDINGS #46's PS/2 timing re-measured with the encoder
+running next to gateway2000's own timing-sensitive path. The guard rail
+itself (`_currently_throttled`, `H264Sidecar._watchdog`) is unit-tested
+against a monkeypatched reading, not against a real Pi that actually
+throttled. None of this has run against the real Pi at all yet -- this
+session's own validation is dev-host-only, real ffmpeg and a real
+browser, but not the real hardware the plan's numbers are about.

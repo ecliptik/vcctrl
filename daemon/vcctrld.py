@@ -3073,6 +3073,122 @@ def _split_mjpeg(buf):
             frames.append(frame)
     return frames, buf
 
+
+def _split_h264_annexb(buf):
+    """Split complete ACCESS UNITS (one decoded picture's worth of NALs)
+    out of an Annex-B H.264 byte stream. Same (items, remaining) contract
+    as `_split_mjpeg`, and shares its reason for existing: WebCodecs'
+    `EncodedVideoChunk` is one picture per chunk, so whatever feeds it has
+    to draw the same boundary libx264's own stdout does not draw for you.
+
+    NAL START CODES are 3 bytes (`00 00 01`) or 4 (`00 00 00 01`); both
+    appear in real ffmpeg output, sometimes in the SAME stream (measured:
+    x264 emits 4-byte codes before SPS/PPS and 3-byte before SEI/slices).
+    Safe to scan for byte-for-byte the same way `_split_mjpeg`'s SOI/EOI
+    scan is: Annex-B's own emulation-prevention rule (a `03` byte inserted
+    after any `00 00` followed by `00`/`01`/`02`/`03` inside a NAL's RBSP)
+    guarantees a real `00 00 01` never occurs except at a genuine start
+    code, so this never has to look inside entropy-coded slice data to
+    tell a start code from picture content.
+
+    ONE NAL IS NOT ONE PICTURE, and finding that out cost a false start:
+    `-tune zerolatency` forces x264 into SLICED multi-threading (it cannot
+    use frame-threading, which buffers whole frames and so adds the exact
+    latency zerolatency exists to remove) -- measured against a real
+    2-second/60-frame encode, ordinary slice NALs (type 1) outnumbered
+    frames roughly 4:1, one run of four consecutive type-5 (IDR) NALs
+    appeared for what was ONE picture, and naively treating every slice
+    NAL as its own access unit produced 240 "pictures" from 60 real ones.
+    The fix -- and this is the one bit of the spec this function actually
+    leans on -- is `first_mb_in_slice`: a slice NAL's RBSP begins with
+    this field as an Exp-Golomb code, and Exp-Golomb 0 is encoded as a
+    single `1` bit, so the TOP BIT of the byte right after a slice NAL's
+    1-byte header is 1 if and only if this slice is the FIRST slice of a
+    new picture (`first_mb_in_slice == 0`) rather than a continuation
+    slice of the picture already in progress. Checked against the same
+    real encode: exactly 60 slice NALs have that bit set, matching the
+    true frame count.
+
+    HEADERS BELONG TO THE PICTURE THAT FOLLOWS THEM, NOT THE ONE BEFORE.
+    SPS/PPS/SEI (`-x264-params repeat-headers=1` puts a fresh SPS+PPS
+    before every IDR, so a joining viewer never waits past the next
+    keyframe) arrive immediately BEFORE the slice they belong to, so an
+    access unit boundary is the start of that NAL run, not the start of
+    the slice itself -- getting this backwards silently drops every
+    leading SPS/PPS/SEI into the PRECEDING access unit's tail instead of
+    the one it configures, which is invisible until a decoder is actually
+    fed the result and fails to configure from the first keyframe.
+    """
+    n = len(buf)
+    starts = []
+    i = 0
+    while i < n - 3:
+        if buf[i] == 0 and buf[i + 1] == 0:
+            if buf[i + 2] == 1:
+                starts.append((i, i + 3))
+                i += 3
+                continue
+            elif buf[i + 2] == 0 and buf[i + 3] == 1:
+                starts.append((i, i + 4))
+                i += 4
+                continue
+        i += 1
+
+    boundaries = []
+    pending_run_start = None
+    for (sc, payload_off) in starts:
+        if payload_off + 1 >= n:
+            # The NAL's own type byte, or the byte after it a slice needs
+            # to read first_mb_in_slice, has not fully arrived. Stop here
+            # rather than guess -- everything from this NAL's start code
+            # onward stays in `remaining` until a later call has more.
+            break
+        nal_type = buf[payload_off] & 0x1F
+        if nal_type in (1, 5):                       # non-IDR / IDR slice
+            first_mb_bit = (buf[payload_off + 1] >> 7) & 1
+            if first_mb_bit == 1:
+                boundaries.append(pending_run_start
+                                  if pending_run_start is not None else sc)
+            pending_run_start = None
+        elif pending_run_start is None:
+            pending_run_start = sc
+
+    aus = []
+    if len(boundaries) >= 2:
+        for i in range(len(boundaries) - 1):
+            aus.append(bytes(buf[boundaries[i]:boundaries[i + 1]]))
+        tail_start = boundaries[-1]
+    elif len(boundaries) == 1:
+        tail_start = boundaries[0]
+    else:
+        tail_start = 0
+    return aus, bytes(buf[tail_start:])
+
+
+def _au_is_keyframe(au):
+    """Does this access unit (as `_split_h264_annexb` cuts them) contain an
+    IDR slice (NAL type 5)? A joining viewer has to start on one -- feeding
+    a decoder a delta frame first is feeding it a picture defined in terms
+    of a reference frame it was never given."""
+    n = len(au)
+    i = 0
+    while i < n - 3:
+        if au[i] == 0 and au[i + 1] == 0:
+            if au[i + 2] == 1:
+                payload_off = i + 3
+            elif au[i + 2] == 0 and au[i + 3] == 1:
+                payload_off = i + 4
+            else:
+                i += 1
+                continue
+            if payload_off < n and (au[payload_off] & 0x1F) == 5:
+                return True
+            i = payload_off
+            continue
+        i += 1
+    return False
+
+
 # ── MJPEG IN AVI ──────────────────────────────────────────────────────────
 # The ring already holds JPEGs. Muxing them into a container costs no encode
 # and loses no byte: what plays back is exactly what the daemon judged, which
@@ -3389,6 +3505,12 @@ class VideoCapability(Capability):
         # timeline is asked for, never on the capture path.
         self._chg = {}
         self.mem_limited = False
+        # WP7: a second, OPTIONAL consumer of this same JPEG ring, live only
+        # while an H.264 viewer is connected (H264Sidecar.acquire/release,
+        # called from vcweb.py's WS pump). Created unconditionally -- cheap,
+        # no subprocess until the first viewer -- so `caps.video` reporting
+        # and vcweb.py's own lookups never have to special-case its absence.
+        self.h264 = H264Sidecar(self)
 
     # -- device lifecycle ---------------------------------------------------
 
@@ -3438,6 +3560,7 @@ class VideoCapability(Capability):
     def stop(self):
         self.running = False
         self._release()
+        self.h264.shutdown()
 
     def _acquire(self):
         with self.lock:
@@ -4462,7 +4585,8 @@ class VideoCapability(Capability):
                     # shares one.
                     "target_span_s": self.TARGET_SPAN_S,
                     "mem_limited": self.mem_limited,
-                    "last_frame_age_s": round(age, 3) if age else None}
+                    "last_frame_age_s": round(age, 3) if age else None,
+                    "h264": self.h264.state()}
 
     def _latest(self):
         """(timestamp, jpeg_bytes) of the newest ring frame, or (None, None).
@@ -4509,6 +4633,266 @@ class VideoCapability(Capability):
                 "repeated": sum(1 for c in counts if c > 1),
                 "largest_group": counts[0] if counts else 0,
                 "sizes": [len(f) for _t, _s, f in items[-8:]]}
+
+
+_THROTTLE_CACHE = [0.0, False]     # [checked_at, currently_throttled]
+_THROTTLE_CACHE_S = 5.0            # matches vcweb.py's own host-facts cache
+
+
+def _currently_throttled():
+    """Bit 2 of `vcgencmd get_throttled` -- "throttled now", not "ever
+    since boot" (bit 18). A cheap, independent read: WP7's guard rail does
+    not reach into vcweb.py's own host-facts cache (a request-driven cache
+    in a different module, for a human-facing readout) for the same reason
+    MsdCapability resolves its own settings instead of sharing a class
+    attribute -- two callers with different questions sharing one cache is
+    how one of them ends up reading the other's answer.
+    """
+    now = time.time()
+    if now - _THROTTLE_CACHE[0] < _THROTTLE_CACHE_S:
+        return _THROTTLE_CACHE[1]
+    throttled = False
+    try:
+        out = subprocess.run(["vcgencmd", "get_throttled"],
+                             capture_output=True, text=True,
+                             timeout=2).stdout.strip()
+        if "=" in out:
+            throttled = bool(int(out.split("=", 1)[1], 16) & 0x4)
+    except Exception:
+        pass       # non-Pi host, or vcgencmd absent: reads as not-throttled
+    _THROTTLE_CACHE[0] = now
+    _THROTTLE_CACHE[1] = throttled
+    return throttled
+
+
+class H264Sidecar(object):
+    """Transcodes a VideoCapability's own JPEG ring to H.264, live only
+    while at least one viewer wants it (`acquire()`/`release()`,
+    ref-counted -- called from vcweb.py's WS pump on connect/disconnect).
+
+    A SECOND CONSUMER OF THE RING, NOT A SECOND CAPTURE. Feeds from
+    `video.ring[-1]`, the exact bytes the MJPEG path already reads --
+    `-c:v copy` on the primary capture means nothing here ever asks the
+    stick for more than one encode's worth of work. FINDINGS #48 measured
+    libx264 ultrafast/zerolatency at up to ~2/3 of a core on synthetic
+    1080p30 content; that cost is not worth paying with nobody watching,
+    the same reasoning Video/CameraCapability's own subprocess only exists
+    while `owned`, just gated on viewer count here instead of on daemon
+    lifetime.
+
+    `-tune zerolatency` (forces sliced multi-threading, not frame-
+    threading, so latency does not grow with thread count) and
+    `-x264-params repeat-headers=1` (a fresh SPS+PPS before every IDR, so
+    ANY joining viewer's wait is bounded by the GOP, not by whether they
+    happened to connect before the first one) are both load-bearing, not
+    tuning knobs -- see `_split_h264_annexb`'s own docstring for what the
+    first actually does to the output shape.
+
+    ONE GUARD RAIL, NOT TWO. The plan
+    (internal/KVM-MACHINES-PLAN.md WP7) asks for a two-stage drop (720p,
+    then MJPEG) when `vcgencmd get_throttled` reports the Pi currently
+    throttled. This implements the second stage only -- `_watchdog` kills
+    the encoder outright and refuses new viewers while throttled, which a
+    connected viewer's own page reads as an encoder that stopped sending
+    and falls back to MJPEG the same way it already does for a stalled
+    WebSocket. A resolution step in between is real, useful polish that
+    did not make this pass -- recorded here rather than silently dropped.
+    """
+
+    AU_RING_LEN = 90           # ~3s at 30fps -- a joining viewer's own window
+    FEED_POLL_S = 1.0 / 60     # finer than the 30fps source so a new ring
+                               # frame is picked up within one tick, not one
+                               # source frame late
+    WATCHDOG_POLL_S = 2.0
+
+    def __init__(self, video):
+        self.video = video
+        self.lock = threading.Lock()
+        self.viewers = 0
+        self.proc = None
+        self.running = False
+        self.au_ring = collections.deque(maxlen=self.AU_RING_LEN)
+        self.seq = 0
+        self.spawns = 0
+        self.last_error = None
+        self.throttled_refusal = False
+        self._watchdog_started = False
+
+    def state(self):
+        with self.lock:
+            return {"active": self.running, "viewers": self.viewers,
+                    "spawns": self.spawns, "last_error": self.last_error,
+                    "throttled_refusal": self.throttled_refusal,
+                    "au_ring_len": len(self.au_ring)}
+
+    # -- lifecycle, ref-counted by connected viewers -----------------------
+
+    def acquire(self):
+        """True if a viewer may proceed; False (with `last_error` set) if
+        refused -- currently throttled, or the spawn itself failed."""
+        if not self._watchdog_started:
+            self._watchdog_started = True
+            threading.Thread(target=self._watchdog, daemon=True).start()
+        with self.lock:
+            if _currently_throttled():
+                self.throttled_refusal = True
+                self.last_error = ("Pi currently throttled "
+                                   "(vcgencmd get_throttled) -- refusing a "
+                                   "new H.264 viewer rather than adding load")
+                return False
+            self.throttled_refusal = False
+            self.viewers += 1
+            # NOT gated on the viewer count crossing 0 -> 1: a viewer that
+            # is still nominally "acquired" (never called release()) after
+            # the watchdog kills the encoder for thermal reasons must not
+            # permanently wedge this sidecar into "never respawns" just
+            # because the count never returned to zero. Gated on whether an
+            # encoder is actually alive instead, which is the real question.
+            if not self.running:
+                self._spawn_locked()
+            return self.proc is not None
+
+    def release(self):
+        with self.lock:
+            self.viewers = max(0, self.viewers - 1)
+            if self.viewers == 0:
+                self._kill_locked()
+
+    def shutdown(self):
+        """Called from VideoCapability.stop() -- the daemon is going away,
+        not merely "no viewers right now"."""
+        with self.lock:
+            self.viewers = 0
+            self._kill_locked()
+
+    def _spawn_locked(self):
+        """Caller holds self.lock."""
+        try:
+            self.proc = subprocess.Popen(
+                ["nice", "-n", "5", "ffmpeg", "-hide_banner",
+                 "-loglevel", "error", "-f", "mjpeg", "-i", "pipe:0",
+                 "-c:v", "libx264", "-preset", "ultrafast",
+                 "-tune", "zerolatency", "-g", "30", "-pix_fmt", "yuv420p",
+                 "-x264-params", "repeat-headers=1",
+                 "-f", "h264", "pipe:1"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, bufsize=0)
+        except Exception as exc:
+            self.last_error = errstr(exc)
+            self.proc = None
+            return
+        self.running = True
+        self.spawns += 1
+        self.last_error = None
+        self.au_ring.clear()
+        threading.Thread(target=_keep_stderr, args=(self, self.proc),
+                         daemon=True).start()
+        threading.Thread(target=self._feed, args=(self.proc,),
+                         daemon=True).start()
+        threading.Thread(target=self._read_nals, args=(self.proc,),
+                         daemon=True).start()
+
+    def _kill_locked(self):
+        """Caller holds self.lock."""
+        self.running = False
+        proc, self.proc = self.proc, None
+        if proc is None:
+            return
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.kill()
+            proc.wait(timeout=3)
+        except Exception:
+            pass
+
+    # -- feeding JPEGs in, reading H.264 out --------------------------------
+
+    def _feed(self, proc):
+        """Tails video.ring, writing each frame ONCE to ffmpeg's stdin as
+        it arrives -- not a re-read of frames already sent. `last_t` is
+        this thread's own bookmark, independent of the MJPEG path's."""
+        last_t = 0.0
+        while self.running and proc.poll() is None:
+            with self.video.lock:
+                item = self.video.ring[-1] if self.video.ring else None
+            if item is not None and item[0] > last_t:
+                last_t = item[0]
+                try:
+                    proc.stdin.write(item[2])
+                except Exception:
+                    break
+            else:
+                time.sleep(self.FEED_POLL_S)
+
+    def _read_nals(self, proc):
+        buf = b""
+        fd = proc.stdout.fileno()
+        while self.running:
+            try:
+                chunk = os.read(fd, 65536)
+            except Exception as exc:
+                with self.lock:
+                    self.last_error = errstr(exc, "reader: ")
+                break
+            if not chunk:
+                break
+            buf += chunk
+            aus, buf = _split_h264_annexb(buf)
+            for au in aus:
+                self._push(au)
+        with self.lock:
+            self.running = False
+
+    def _push(self, au):
+        with self.lock:
+            self.seq += 1
+            self.au_ring.append((time.time(), self.seq, au,
+                                 _au_is_keyframe(au)))
+
+    def latest(self):
+        """(seq, keyframe) of the newest AU, or (0, False)."""
+        with self.lock:
+            if not self.au_ring:
+                return 0, False
+            t, seq, au, kf = self.au_ring[-1]
+            return seq, kf
+
+    def au_after(self, since_seq):
+        """The oldest AU newer than `since_seq`, and whether it is a
+        keyframe -- (seq, au_bytes, is_keyframe) or None. A viewer that has
+        never received anything (since_seq == 0) is handed the ring's own
+        most recent KEYFRAME rather than its most recent AU: starting a
+        brand-new decoder on a delta frame is starting it on a picture
+        defined relative to a reference frame it was never given."""
+        with self.lock:
+            if since_seq == 0:
+                for (_t, seq, au, kf) in reversed(self.au_ring):
+                    if kf:
+                        return seq, au, True
+                return None
+            for (_t, seq, au, kf) in self.au_ring:
+                if seq > since_seq:
+                    return seq, au, kf
+        return None
+
+    # -- the guard rail -------------------------------------------------
+
+    def _watchdog(self):
+        """Runs for the life of the daemon (the thread is only started
+        once, on the first acquire()), not just while a viewer is
+        connected -- a throttled-now Pi with an encoder mid-spawn needs
+        this to fire even if nobody is polling `state()`."""
+        while True:
+            time.sleep(self.WATCHDOG_POLL_S)
+            with self.lock:
+                if self.running and _currently_throttled():
+                    self.throttled_refusal = True
+                    self.last_error = ("Pi currently throttled -- stopping "
+                                       "the H.264 encoder")
+                    self._kill_locked()
 
 
 class AudioCapability(Capability):

@@ -2986,6 +2986,29 @@
              override in a settings panel, labelled as though it governed the
              normal behaviour. The LNK lamp already says which transport is in
              use, so nothing is lost by not being able to force it. -->
+
+        <!-- UNLIKE THAT ONE, THIS CONTROL HAS A COST ON THE OTHER END. H.264
+             is not a second, equally-cheap way to deliver the same bytes --
+             choosing it asks the Pi to run an encoder (H264Sidecar, daemon/
+             vcctrld.py; up to ~2/3 of a core, FINDINGS #48) that mjpeg never
+             costs. "Automatic" already skips it the moment the daemon
+             refuses (currently throttled) or WebCodecs cannot configure
+             from what arrives, so this exists for the one thing automatic
+             fallback cannot know on its own: that THIS viewer would rather
+             not spend the Pi's CPU at all, on a rig with only one of it to
+             share. -->
+        <div class="row" style="margin-bottom:4px; margin-top:10px">
+          <span id="transportsellabel" style="flex:1 1 auto">Video transport</span>
+          <select id="transportsel" aria-labelledby="transportsellabel"
+                  title="H.264 costs Pi CPU (an encoder runs only while a viewer wants it); mjpeg costs none">
+            <option value="auto">Automatic (H.264 when it works)</option>
+            <option value="mjpeg">MJPEG only</option>
+          </select>
+        </div>
+        <div class="hint" style="margin-left:0">The LNK lamp says which one a
+          tab actually ended up on. Automatic falls back to mjpeg on its own
+          -- refused (the Pi is currently throttled), a browser that cannot
+          decode what arrived, or no frame in 4s -- without asking again.</div>
       </div>
     </details>
 
@@ -3453,8 +3476,8 @@ function setXport(x) {
   // calling it a fallback reads as a degraded state when nothing is wrong.
   const narrow = matchMedia('(max-width:640px)').matches;
   const label = (narrow
-    ? {ws:'WS', mjpeg:'MJPEG', connecting:'…', down:'NONE'}
-    : {ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
+    ? {h264:'H264', ws:'WS', mjpeg:'MJPEG', connecting:'…', down:'NONE'}
+    : {h264:'h264', ws:'websocket', mjpeg:'mjpeg', connecting:'connecting…', down:'no video'}
   )[x] || x;
   xportLabel = label;
   // AMBER IS UNAMBIGUOUS NOW THAT THE OVERRIDE IS GONE.
@@ -3465,11 +3488,17 @@ function setXport(x) {
   // the setting removed there is only one way to be on mjpeg: the websocket
   // was attempted and did not hold. That IS worth flagging, so amber means
   // exactly one thing again and the marker is honest.
+  //
+  // h264 GETS THE SAME GREEN AS ws, NOT A THIRD COLOUR -- both are "the
+  // preferred transport is actually working"; only mjpeg (a fallback that
+  // held) and down (nothing) are the two states worth a different colour.
   setLamp('lamp-link',
-    x === 'ws' ? 'on' : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
+    x === 'ws' || x === 'h264' ? 'on'
+    : x === 'mjpeg' ? 'warn' : x === 'connecting' ? 'stale' : 'bad',
     // Just the transport name -- the label already carries which one, and
     // the fps difference between them is not worth a hover explanation.
     x === 'ws' ? 'WebSocket'
+    : x === 'h264' ? 'H.264 (WebCodecs)'
     : x === 'mjpeg' ? 'mjpeg'
     : x === 'connecting' ? 'Connecting…'
     : 'Disconnected');
@@ -3878,7 +3907,217 @@ async function checkPort() {
   return portOK;
 }
 
+// ── H.264, WP7 -- WebCodecs first, falling into the untouched ws/mjpeg
+// chain below on anything short of a decoded frame actually landing.
+//
+// SAME /ws ENDPOINT, ONE QUERY PARAM -- see vcweb.py's own comment on why
+// this is not a fourth `kind` the way audio is: it is the same video
+// connection (same keyboard/mouse input channel) asking for a different
+// transport, the same thing `fps=` already was.
+//
+// VideoFrame IS A CanvasImageSource. Decoded output goes straight to the
+// SAME canvas (`cv`) the ws-jpeg tier already draws to with
+// ctx.drawImage(bmp,...) -- no createImageBitmap step, because a
+// VideoDecoder's output already is one.
+function wantH264() {
+  if (typeof VideoDecoder === 'undefined') return false;
+  const pref = localStorage.getItem('vcctrl.transport') || 'auto';
+  return pref !== 'mjpeg';
+}
+$('transportsel').value = localStorage.getItem('vcctrl.transport') || 'auto';
+$('transportsel').onchange = () => {
+  localStorage.setItem('vcctrl.transport', $('transportsel').value);
+  restart();     // reconnect now, under the new choice, rather than on
+                 // whatever event happens to trigger the next one
+};
+
+let h264Sock = null, h264Decoder = null, h264Configured = false;
+
+function dropH264Socket() {
+  // THE SAME firstFrameTimer connectWsJpeg USES, DELIBERATELY -- not a
+  // second variable. gotFrame() (shared by both the h264 decoder's own
+  // `output` callback and the ws-jpeg path's onmessage) clears exactly
+  // this one on a real decoded frame; a second, h264-only timer variable
+  // would never be told a frame arrived and would fire the 4s "no frame"
+  // fallback regardless of whether frames were decoding successfully.
+  // Found live in this session's own testing: h264 was streaming and
+  // decoding real pictures, and still fell back at 4s every time.
+  if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
+  if (h264Decoder) {
+    try { h264Decoder.close(); } catch (e) {}
+    h264Decoder = null;
+  }
+  h264Configured = false;
+  if (!h264Sock) return;
+  try {
+    h264Sock.onopen = h264Sock.onclose = h264Sock.onerror = h264Sock.onmessage = null;
+    h264Sock.close();
+  } catch (e) {}
+  h264Sock = null;
+}
+
+// Does this access unit (exactly the bytes _split_h264_annexb, daemon/
+// vcctrld.py, cut it into) contain an IDR slice? Mirrors _au_is_keyframe
+// there -- kept in sync by hand, the same as the AU-boundary logic itself
+// is not shared across the Python/JS language boundary anywhere else in
+// this codebase either.
+function auIsKeyframe(bytes) {
+  let i = 0;
+  const n = bytes.length;
+  while (i < n - 3) {
+    if (bytes[i] === 0 && bytes[i + 1] === 0) {
+      let p = -1;
+      if (bytes[i + 2] === 1) p = i + 3;
+      else if (bytes[i + 2] === 0 && bytes[i + 3] === 1) p = i + 4;
+      if (p < 0) { i++; continue; }
+      if (p < n && (bytes[p] & 0x1f) === 5) return true;
+      i = p;
+      continue;
+    }
+    i++;
+  }
+  return false;
+}
+
+// The SPS's own profile_idc/constraint_flags/level_idc, read straight off
+// the wire rather than guessed -- a hardcoded 'avc1.42E01E' is the wrong
+// tool the moment the encoder's actual preset changes what it emits, and
+// WebCodecs refuses to configure on a codec string that does not match.
+function avcCodecString(bytes) {
+  let i = 0;
+  const n = bytes.length;
+  while (i < n - 3) {
+    if (bytes[i] === 0 && bytes[i + 1] === 0) {
+      let p = -1;
+      if (bytes[i + 2] === 1) p = i + 3;
+      else if (bytes[i + 2] === 0 && bytes[i + 3] === 1) p = i + 4;
+      if (p < 0) { i++; continue; }
+      if (p + 3 < n && (bytes[p] & 0x1f) === 7) {
+        const hex = b => b.toString(16).padStart(2, '0');
+        return 'avc1.' + hex(bytes[p + 1]) + hex(bytes[p + 2]) + hex(bytes[p + 3]);
+      }
+      i = p;
+      continue;
+    }
+    i++;
+  }
+  return null;
+}
+
+function connectH264() {
+  addLine(new Date(), 'transport', 'trying h264: opening ' + wsURL(), 'k-cmd');
+  let sock;
+  dropH264Socket();
+  try {
+    sock = new WebSocket(wsURL() + '?codec=h264');
+  } catch (e) { connectWsJpeg(); return; }
+  h264Sock = sock;
+  sock.binaryType = 'arraybuffer';
+  // Same guard as connectWsJpeg's own `mine()`: a superseded socket's
+  // handlers still fire after we have moved on, and must not speak for
+  // the page once they have.
+  const mine = () => h264Sock === sock;
+
+  const fallback = why => {
+    if (!mine()) return;
+    addLine(new Date(), 'transport', 'h264 ' + why + ', falling back to '
+            + 'the ws/mjpeg chain', 'k-note');
+    dropH264Socket();
+    connectWsJpeg();
+  };
+
+  function judgeFirstFrame() {
+    if (!mine()) return;
+    if (!sourceIsLive()) {
+      // Same reasoning as connectWsJpeg's own judgeFirstFrame: no picture
+      // to send is not evidence against THIS transport.
+      firstFrameTimer = setTimeout(judgeFirstFrame, 4000);
+      return;
+    }
+    fallback('delivered no frame in 4s');
+  }
+  firstFrameTimer = setTimeout(judgeFirstFrame, 4000);
+
+  sock.onopen = () => {
+    if (!mine()) { try { sock.close(); } catch (e) {} return; }
+    addLine(new Date(), 'transport', 'h264 websocket connected', 'k-vid');
+  };
+  sock.onerror = () => { if (mine()) fallback('errored'); };
+  sock.onclose = e => { if (mine()) fallback('closed code=' + e.code); };
+  sock.onmessage = ev => {
+    if (!mine()) return;
+    if (typeof ev.data === 'string') {
+      // {"h264_error": ...} is vcweb.py's own refusal (currently
+      // throttled, or the encoder failed to spawn) -- said once, per its
+      // own comment; treated here as an immediate, decisive fallback
+      // rather than waiting out the 4s judge, since the daemon has
+      // already told us definitively rather than merely gone quiet.
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.h264_error) fallback('refused: ' + m.h264_error);
+      } catch (e) {}
+      return;
+    }
+    const bytes = new Uint8Array(ev.data);
+    if (!h264Configured) {
+      // The FIRST thing this socket ever sends is a keyframe -- the
+      // server's own au_after(0) contract (daemon/vcctrld.py's
+      // H264Sidecar) -- so the very first message already carries SPS/PPS
+      // to configure from.
+      const codec = avcCodecString(bytes);
+      if (!codec) { fallback('first access unit carried no SPS'); return; }
+      try {
+        h264Decoder = new VideoDecoder({
+          output: frame => {
+            if (!mine()) { frame.close(); return; }
+            if (xport !== 'h264') {
+              setXport('h264');
+              img.style.display = 'none';
+              cv.style.display = '';
+            }
+            if (cv.width !== frame.displayWidth) {
+              cv.width = frame.displayWidth;
+              cv.height = frame.displayHeight;
+            }
+            ctx.drawImage(frame, 0, 0);
+            frame.close();
+            gotFrame();
+          },
+          error: e => fallback('decoder error: ' + e.message),
+        });
+        h264Decoder.configure({codec, avc: {format: 'annexb'},
+                               optimizeForLatency: true});
+        h264Configured = true;
+      } catch (e) { fallback('configure threw: ' + e); return; }
+    }
+    try {
+      h264Decoder.decode(new EncodedVideoChunk({
+        type: auIsKeyframe(bytes) ? 'key' : 'delta',
+        // A synthetic, monotonic clock -- zerolatency's sliced threading
+        // means decode order already equals presentation order (no
+        // B-frames to reorder), so this only has to increase, not track
+        // any real capture-side PTS.
+        timestamp: performance.now() * 1000,
+        data: bytes,
+      }));
+    } catch (e) { fallback('decode threw: ' + e); }
+  };
+}
+
+// THE TOP OF THE FALLBACK CHAIN, WP7. Every existing call site (restart(),
+// the bootstrap below, ws.onclose's own retry) already calls `connect()` --
+// so this stays the name everyone calls, and what used to BE connect()'s
+// whole body moved to connectWsJpeg() unchanged. h264 gets first refusal;
+// its own failure paths call connectWsJpeg() directly (never connect()),
+// so a run of h264 failures cannot loop back into trying h264 again in the
+// same breath -- the existing ws/mjpeg chain, untouched below, is what
+// actually retries.
 function connect() {
+  if (wantH264()) { connectH264(); return; }
+  connectWsJpeg();
+}
+
+function connectWsJpeg() {
   addLine(new Date(), 'transport', 'opening ' + wsURL(), 'k-cmd');
   if (portOK === false) { useMjpeg('port ' + tlsPort + ' unreachable'); return; }
   let sock;
@@ -4000,6 +4239,11 @@ function dropSocket() {
 function restart() {
   if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
   dropSocket();
+  // WP7: the h264 tier is a SEPARATE socket/decoder from the ws-jpeg one
+  // dropSocket() already tears down -- without this, a restart() while
+  // h264 was active (a resumed tab, the refresh button) left its socket
+  // open and unreferenced by anything that would ever close it again.
+  dropH264Socket();
   img.onerror = null;
   img.src = '';
   img.style.display = 'none';
