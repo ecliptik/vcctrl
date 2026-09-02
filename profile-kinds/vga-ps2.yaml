@@ -108,6 +108,15 @@ capabilities:
   sysinfo:
     backend: none
 
+machine:
+  label: REPLACE_ME
+  kind: vga-ps2
+  os: dos
+  keyboard: pc-at-101
+  mouse: relative
+  native: {width: 640, height: 480}
+  board_id: 1
+
 targets:
   - board_id: 1
     name: REPLACE_ME

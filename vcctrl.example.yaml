@@ -419,6 +419,26 @@ capabilities:
     # because it resembles evidence.
 
 # ---------------------------------------------------------------------------
+# The machine THIS PROFILE's own file/socket/web-prefix identifies -- see
+# internal/KVM-MACHINES-PLAN.md sec 1 for the "one profile file per
+# machine" decision this is the first piece of. `keyboard` here is a
+# fallback of last resort for a profile with no protocol board at all
+# (see vcctrl-modernpc.example.yaml's own machine: block); this profile
+# already has board detection, so `targets:` below is what actually
+# answers `keyboard` for it day to day -- this block exists for
+# consistency and for whatever reads machine.* generically across every
+# profile rather than reaching into board-specific detection.
+# ---------------------------------------------------------------------------
+machine:
+  label: Example PC
+  kind: vga-ps2
+  os: dos
+  keyboard: pc-at-101
+  mouse: relative
+  native: {width: 640, height: 480}
+  board_id: 1
+
+# ---------------------------------------------------------------------------
 # Targets: which machine each protocol board implies.
 #
 # `unknown` must stay a real answer. A rig that cannot tell which board is

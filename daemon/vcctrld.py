@@ -10086,6 +10086,33 @@ class Registry(object):
                         "leds": row.get("leds")})
         return out
 
+    def configured_machine(self):
+        """The `machine:` block as the page needs it, or {} when absent.
+
+        OPTIONAL, NOT YET UNIVERSAL. Every profile will carry one once WP2
+        of internal/KVM-MACHINES-PLAN.md is fully landed; today a profile
+        written before that (or a usb4vc-kind profile still describing
+        itself through `targets:` alone) simply has none, and {} is that
+        profile saying so -- not an error, the same "absent is a real
+        answer" shape `configured_targets()` beside this uses for an empty
+        list.
+
+        `keyboard` is the one field a consumer needs even for a profile
+        with no protocol board to detect one from -- see
+        vcweb.py's board-capability fallback, which reaches for exactly
+        this when `board` itself is unconfigured (modernpc: `backend:
+        none`, so there is no BoardCapability instance to answer at all).
+        """
+        m = CFG.optional("machine")
+        if m is vcconfig.ABSENT or m is vcconfig.NONE or not isinstance(m, dict):
+            return {}
+        nat = m.get("native") or {}
+        return {"label": m.get("label"), "kind": m.get("kind"),
+                "os": m.get("os"), "keyboard": m.get("keyboard"),
+                "mouse": m.get("mouse"),
+                "native": ({"width": nat.get("width"),
+                           "height": nat.get("height")} if nat else None)}
+
     def report(self):
         """Three states, never two.
 

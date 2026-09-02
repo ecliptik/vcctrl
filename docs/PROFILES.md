@@ -54,7 +54,11 @@ exactly what that means in practice.
 3. Fill in the `REPLACE_ME` placeholders (device by-id paths especially
    — always by-id, never `/dev/videoN`, see `docs/FINDINGS.md` #44's
    port-topology note on why index drift is a real hazard with three-
-   plus UVC devices on one Pi).
+   plus UVC devices on one Pi) — including the `machine:` block's own
+   `label`/`os`/`keyboard`, added 2026-09-02. `keyboard` matters most for
+   an `hdmi-usb` profile: it has no protocol board and no `targets:` row,
+   so `machine.keyboard` is the *only* place a layout can come from (see
+   `OPEN-FAULTS.md` #21's "modernpc had no keyboard layout at all").
 4. Deploy: `pi/deploy.sh --profile <name>` (or `pi/install.sh
    --profile-only <name>` on the Pi directly). This is currently
    **transitional** — it installs a second systemd unit

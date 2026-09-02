@@ -84,3 +84,17 @@ capabilities:
 # for a profile of this kind, correctly: nothing has measured per-key
 # coverage against a HID gadget target, and there is no protocol board
 # here for a measurement to be about.
+
+# machine.keyboard IS THE ONLY PLACE THIS KIND CAN DECLARE ONE -- see the
+# comment immediately above: no targets:, no board, no board-driven
+# detection. Without it a profile of this kind draws no keyboard at all
+# (modernpc shipped this gap before machine: existed; see docs/
+# PROFILES.md). pc-104 because a modern desktop has Windows/Menu keys a
+# plain PC/AT 101-key board does not.
+machine:
+  label: REPLACE_ME
+  kind: hdmi-usb
+  os: REPLACE_ME          # linux | windows | macos-classic | unknown
+  keyboard: pc-104
+  mouse: relative          # absolute mode is planned, not yet built -- see docs/MOUSE.md sec 7
+  native: {width: 1920, height: 1080}

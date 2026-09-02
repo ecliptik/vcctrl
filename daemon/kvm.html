@@ -2840,6 +2840,22 @@
       </div>
     </details>
 
+    <details class="setsec" data-sec="machine">
+      <summary>Machine<span class="caret dn" aria-hidden="true"></span></summary>
+      <div class="setsecbody">
+        <!-- WHAT THE PROFILE SAYS ABOUT ITSELF (state.json's own `machine`
+             block), NOT A SECOND COPY REMEMBERED HERE -- same reasoning as
+             System Config below: one source, this panel just draws it.
+             Filled in by paintMachine(), called from pollState() the same
+             way #stats is, and for the same reason a profile switch must
+             not leave this showing what was true before it. -->
+        <div id="machinebody" class="kvtree">—</div>
+        <div class="hint" style="margin-left:0">Setting up another machine
+          is a control-host task today (<code>tools/new-profile.py</code>),
+          not yet a browser one.</div>
+      </div>
+    </details>
+
     <details class="setsec" data-sec="input">
       <summary>Input<span class="caret dn" aria-hidden="true"></span></summary>
       <div class="setsecbody">
@@ -4085,6 +4101,96 @@ const LAYOUTS = {
       {keys:['ctrl','a'], cap:'Ctrl-A',
        title:'^A, a control character at the DOS prompt; EDIT and QBasic '
            + 'give it meanings, COMMAND.COM does not'},
+      {keys:['ctrl','alt','delete'], cap:'Ctrl-Alt-Del', danger:true},
+    ],
+  },
+
+  // SAME BOARD AS pc-at-101 PLUS THE THREE KEYS A 104-KEY BOARD ADDS: two
+  // Windows/GUI keys and Menu, either side of the bottom row's Alt keys.
+  // Everything else (fkeys, main block, compact/nav/locks, chords) is
+  // identical on purpose -- a 104-key board is a 101-key board with three
+  // more keys, not a different keyboard, and drawing two near-identical
+  // ~70-line literals is what this file already does for every layout
+  // rather than composing one from another (see mac-plus below, its own
+  // complete literal beside this one's).
+  //
+  // FOR A HID-GADGET TARGET (modernpc, hdmi-usb kind): no protocol board, no
+  // detection, drawn only because machine.keyboard says so -- a DECLARED
+  // fact, the same "asserted, not observed" shape BoardCapability's own
+  // `static` backend already uses for a board id. leftmeta/rightmeta/menu
+  // all already exist in NAMED_KEYS and the HID keyboard usage table; nothing
+  // about drawing them here is new to what the wire already carries.
+  'pc-104': {
+    name: 'PC 104-key',
+    fkeys: [
+      {k:'esc', cap:'Esc'}, {w:1},
+      {k:'f1',cap:'F1'},{k:'f2',cap:'F2'},{k:'f3',cap:'F3'},{k:'f4',cap:'F4'},
+      {w:0.5},
+      {k:'f5',cap:'F5'},{k:'f6',cap:'F6'},{k:'f7',cap:'F7'},{k:'f8',cap:'F8'},
+      {w:0.5},
+      {k:'f9',cap:'F9'},{k:'f10',cap:'F10'},{k:'f11',cap:'F11'},
+      {k:'f12',cap:'F12'},
+    ],
+    main: [
+      [{k:'`',cap:'`',sub:'~'},{k:'1',cap:'1',sub:'!'},{k:'2',cap:'2',sub:'@'},
+       {k:'3',cap:'3',sub:'#'},{k:'4',cap:'4',sub:'$'},{k:'5',cap:'5',sub:'%'},
+       {k:'6',cap:'6',sub:'^'},{k:'7',cap:'7',sub:'&'},{k:'8',cap:'8',sub:'*'},
+       {k:'9',cap:'9',sub:'('},{k:'0',cap:'0',sub:')'},{k:'-',cap:'-',sub:'_'},
+       {k:'=',cap:'=',sub:'+'},{k:'backspace',cap:'Backspace',w:2}],
+      [{k:'tab',cap:'Tab',w:1.5},{k:'q',cap:'Q'},{k:'w',cap:'W'},
+       {k:'e',cap:'E'},{k:'r',cap:'R'},{k:'t',cap:'T'},{k:'y',cap:'Y'},
+       {k:'u',cap:'U'},{k:'i',cap:'I'},{k:'o',cap:'O'},{k:'p',cap:'P'},
+       {k:'[',cap:'[',sub:'{'},{k:']',cap:']',sub:'}'},
+       {k:'\\',cap:'\\',sub:'|',w:1.5}],
+      [{k:'capslock',cap:'Caps',w:1.75},{k:'a',cap:'A'},{k:'s',cap:'S'},
+       {k:'d',cap:'D'},{k:'f',cap:'F'},{k:'g',cap:'G'},{k:'h',cap:'H'},
+       {k:'j',cap:'J'},{k:'k',cap:'K'},{k:'l',cap:'L'},
+       {k:';',cap:';',sub:':'},{k:'\'',cap:'\'',sub:'"'},
+       {k:'enter',cap:'Enter',w:2.25}],
+      [{mod:'lshift',cap:'Shift',w:2.25},{k:'z',cap:'Z'},{k:'x',cap:'X'},
+       {k:'c',cap:'C'},{k:'v',cap:'V'},{k:'b',cap:'B'},{k:'n',cap:'N'},
+       {k:'m',cap:'M'},{k:',',cap:',',sub:'<'},{k:'.',cap:'.',sub:'>'},
+       {k:'/',cap:'/',sub:'?'},{mod:'rshift',cap:'Shift',w:2.75}],
+    ],
+    // 15u, same total as pc-at-101's -- three keys added, five keys narrowed
+    // to make room, none dropped.
+    bottom: [
+      {mod:'lctrl',cap:'Ctrl',w:1.25},
+      {mod:'leftmeta',cap:'Win',aria:'Windows',w:1.25},
+      {mod:'lalt',cap:'Alt',w:1.25},
+      {k:'space',cap:'Space',w:6.25},
+      {mod:'ralt',cap:'Alt',w:1.25},
+      {mod:'rightmeta',cap:'Win',aria:'Windows',w:1.25},
+      {k:'menu',cap:'Menu',aria:'Menu (context menu key)',w:1.25},
+      {mod:'rctrl',cap:'Ctrl',w:1.25},
+    ],
+    compact: [
+      {k:'tab',cap:'Tab',auto:true},{k:'backspace',cap:'Backspace',auto:true},
+      {k:'enter',cap:'Enter',auto:true},{k:'space',cap:'Space',auto:true},
+      {k:'capslock',cap:'Caps Lock',auto:true},
+      {mod:'lshift',cap:'Shift',auto:true},{mod:'lctrl',cap:'Ctrl',auto:true},
+      {mod:'lalt',cap:'Alt',auto:true},
+      {mod:'leftmeta',cap:'Win',aria:'Windows',auto:true},
+    ],
+    nav: [{k:'insert',cap:'Ins',auto:true},{k:'home',cap:'Home',auto:true},
+          {k:'pgup',cap:'PgUp',auto:true},{k:'delete',cap:'Del',auto:true},
+          {k:'end',cap:'End',auto:true},{k:'pgdn',cap:'PgDn',auto:true}],
+    locks: [{k:'numlock',cap:'Num Lock',auto:true},
+            {k:'scrolllock',cap:'Scroll Lock',auto:true}],
+    arrows: true,
+    // KEPT TO THE SAME THREE AS pc-at-101's OWN SAFE SET, DELIBERATELY --
+    // not a Win-D/Win-L pair or similar. Every one of these sends keys a
+    // real HID keyboard chord has already been proven to deliver (this
+    // session's own mouse/click/wheel verification against modernpc); a
+    // Windows-key SHORTCUT additionally depends on the host OS's own
+    // global-hotkey handling actually catching it, which nothing here has
+    // watched happen. Add them once someone has looked at a screen after
+    // sending one, not before.
+    chords: [
+      {keys:['ctrl','c'], cap:'Ctrl-C',
+       title:'Break the running program'},
+      {keys:['ctrl','z'], cap:'Ctrl-Z',
+       title:'^Z, end-of-file'},
       {keys:['ctrl','alt','delete'], cap:'Ctrl-Alt-Del', danger:true},
     ],
   },
@@ -6098,6 +6204,46 @@ function showSettings(on) {
 }
 $('gbtn').onclick = () => showSettings($('settings').hidden);
 
+// THE MACHINE THIS PROFILE SAYS IT IS -- state.json's own `machine` block
+// (Registry.configured_machine(), reused directly by state.json's own
+// assembly rather than a second reading of it), reusing renderCfgNode's
+// kvt-row/kvt-sec classes for one consistent look with System Config
+// below rather than a third table style on this same page.
+function paintMachine(j) {
+  const m = (j && j.machine) || {};
+  if (!m.label && !m.kind && !m.os && !m.keyboard) {
+    $('machinebody').innerHTML = '<div class="hint" style="margin-left:0">'
+      + 'This profile has no <code>machine:</code> block yet -- an older '
+      + 'config, or one still described entirely through '
+      + '<code>targets:</code>.</div>';
+    return;
+  }
+  const rows = [
+    ['Label', m.label], ['Kind', m.kind], ['OS', m.os],
+    ['Keyboard', m.keyboard], ['Mouse', m.mouse],
+    ['Native size', m.native ? m.native.width + '×' + m.native.height : null],
+  ];
+  let html = rows.map(([k, v]) => '<div class="kvt-row">'
+    + '<span>' + esc(k) + '</span><span>' + esc(v == null ? '—' : v)
+    + '</span></div>').join('');
+  // ONE ROW PER CAPABILITY, THE SAME THREE-STATE ANSWER caps.* ALREADY
+  // CARRIES -- not a fourth way of asking whether video/audio/etc. work,
+  // a fourth PLACE this page shows the answer it already has.
+  html += '<div class="kvt-sec">Capabilities</div>';
+  const caps = (j && j.caps) || {};
+  for (const name of ['video', 'audio', 'camera', 'power', 'leds', 'board',
+                      'files', 'sysinfo']) {
+    const c = caps[name];
+    if (!c) continue;
+    const state = c.ok ? 'ok' : c.configured === false ? 'not configured'
+                                                        : 'error';
+    html += '<div class="kvt-row" style="padding-left:12px">'
+          + '<span>' + esc(name) + '</span><span>' + esc(state)
+          + '</span></div>';
+  }
+  $('machinebody').innerHTML = html;
+}
+
 // WHAT THE DAEMON RESOLVED, fetched once: it does not change without a
 // restart, so re-fetching on every open would only ask the same question.
 let cfgLoaded = false;
@@ -7275,6 +7421,13 @@ async function pollState() {
   // Only while it is on screen: this rebuilds a dozen rows and nobody is
   // reading them behind a closed drawer.
   if ($('stats').clientHeight) $('stats').innerHTML = statsRows(j);
+  // SAME GUARD, SAME REASON, and it is what makes a profile switch correct
+  // here for free: this reads straight off the poll that is already
+  // running against whichever profile is currently selected, rather than
+  // caching a fetch the way System Config's loadConfigSection() does --
+  // see switchProfile()'s own comment on why THAT one needed an explicit
+  // invalidation and this one does not.
+  if ($('machinebody').clientHeight) paintMachine(j);
   // What this tab is actually pulling. Two tabs open is two of these, and on
   // this rig that is the difference between a smooth picture and a stuttering
   // one -- worth being able to see rather than guess at.
@@ -7484,6 +7637,13 @@ for (const d of document.querySelectorAll('#setbody details.setsec')) {
     const c = d.querySelector('summary .caret');
     if (c) c.classList.toggle('up', d.open);
     if (c) c.classList.toggle('dn', !d.open);
+    // FILLED ON THE WAY IN, same reason showPanel() fills Status on the
+    // way in rather than waiting for the next poll: opening this onto
+    // last poll's numbers (or a blank div on a fresh load, before the
+    // first poll has ever landed) is the failure this page keeps having
+    // to design against. pollState()'s own clientHeight guard takes over
+    // for every poll after this one.
+    if (d.dataset.sec === 'machine' && d.open && lastState) paintMachine(lastState);
   };
   paint();
   d.addEventListener('toggle', () => {

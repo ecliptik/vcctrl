@@ -89,6 +89,15 @@ capabilities:
     settings:
       file: /run/usb4vc/board.json
 
+machine:
+  label: REPLACE_ME
+  kind: rgb2hdmi-usb4vc
+  os: macos-classic
+  keyboard: mac-plus
+  mouse: relative
+  native: {width: 512, height: 342}
+  board_id: 3
+
 targets:
   - board_id: 3
     name: REPLACE_ME

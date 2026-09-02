@@ -1817,6 +1817,41 @@ against real hardware. Treat every value in it as a guess until proven
 otherwise, the same discipline this file already asks for everywhere
 else.
 
+### FIXED 2026-09-02: modernpc had no keyboard layout at all
+
+Reported live: opening the on-screen keyboard against `modernpc` drew
+nothing and the TYPE tab warned in the daemon's own backend jargon
+("backend is `none` -- not configured..."). `board: backend: none` means
+no `BoardCapability` instance exists for a board-less profile, so there
+was no `targets:` row for a keyboard id to come from either -- the two
+existing mechanisms both assumed a protocol board.
+
+Fixed with a `machine:` config block (schema in `common/vcconfig.py`,
+optional -- see `Registry.configured_machine()`'s own comment on why {}
+is a real answer for a profile written before this existed) whose
+`keyboard` field is a DECLARED fact, the same "asserted, not detected"
+shape `BoardCapability`'s own `static` backend already uses --
+`vcweb.py`'s `_absent_board()` reaches for it when there is no board
+capability to ask at all. A new `pc-104` layout (`kvm.html`) adds the
+Windows/GUI and Menu keys a plain `pc-at-101` board does not have.
+`vcctrl.yaml` and `vcctrl-modernpc.yaml` on the Pi both carry a real
+`machine:` block now (backups taken before editing); every example file
+and `profile-kinds/*.yaml` template does too, so a newly scaffolded
+profile gets one from the start.
+
+**Also published**: `state.json` now carries the whole `machine` block
+directly (label/kind/os/keyboard/mouse/native), and Settings gained a
+collapsed-by-default Machine section showing it alongside each hardware
+capability's three-state answer -- the read-only half of WP2 item 6 in
+`internal/KVM-MACHINES-PLAN.md`. **Not built**: the interactive
+`vcctrl profile new` wizard (item 2), a live `vcctrl config check`
+(item 3), and removing the per-profile systemd unit (item 4) -- and
+the hardware-groups mechanism section 1 of that plan describes (one
+active profile per group of profiles sharing exclusive hardware) is
+UNBUILT, since there is no second real usb4vc-kind profile on this rig
+to verify it against; `vcctrl-macintosh.yaml` still cannot coexist with
+`gateway2000` today (B11, unchanged).
+
 **Not yet fixed:** none of the above blocks `gateway2000`/`modernpc`
 working as they do today. They're the specific places a NEXT change to
 this system (a third profile, a camera on `modernpc`, a heavier

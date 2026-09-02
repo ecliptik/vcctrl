@@ -177,6 +177,24 @@ capabilities:
 # has measured per-key coverage against a HID gadget target yet, and there
 # is no protocol board here for a measurement to be ABOUT.
 
+# WHAT `targets:` CANNOT SAY FOR A BOARD-LESS PROFILE. `keyboard` here is
+# what state.json's board fallback reaches for when there is no
+# BoardCapability at all to answer from (Registry.configured_machine(),
+# vcweb.py) -- without it this profile drew no keyboard whatsoever and the
+# TYPE tab warned in the daemon's own backend jargon instead of naming the
+# machine. `pc-104` because a modern Linux/Windows desktop has Windows and
+# Menu keys a plain PC/AT 101-key board does not, and the HID path already
+# carries leftmeta/rightmeta/menu.
+machine:
+  label: modernpc
+  kind: hdmi-usb
+  os: linux
+  keyboard: pc-104
+  mouse: relative       # see docs/MOUSE.md sec 7 -- absolute mode is planned,
+                         # not yet built; Pointer Lock's relative deltas are
+                         # what this instance's HID mouse function accepts today
+  native: {width: 1920, height: 1080}
+
 # No `harness:` block -- no target-software profile exists for modernpc yet
 # (see profiles/doskutsu.yaml for what one looks like once there is
 # something running on modernpc worth writing a harness profile for).

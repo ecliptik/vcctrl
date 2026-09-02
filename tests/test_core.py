@@ -358,6 +358,76 @@ def test_mouse_wheel_chunks_a_hid_report_like_mouse_move_does():
 
 # ---------------------------------------------------------------- registry
 
+def test_configured_machine_is_optional_and_a_real_answer_either_way():
+    """Registry.configured_machine() -- {} for a profile written before
+    `machine:` existed (or one still describing itself through `targets:`
+    alone), the block verbatim otherwise. Mirrors configured_targets()'s
+    own "absent is a real answer, not an error" shape right beside it.
+    """
+    print("\nconfigured_machine")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    # tests/test-config.yaml (this whole suite's ambient CFG) has no
+    # machine: block -- the real, unstubbed absent case, not a mock of it.
+    check("no machine: -> {}", reg.configured_machine() == {}, reg.configured_machine())
+
+    cfg = vcctrld.vcconfig.Config(
+        {"machine": {"label": "modernpc", "kind": "hdmi-usb", "os": "linux",
+                     "keyboard": "pc-104", "mouse": "relative",
+                     "native": {"width": 1920, "height": 1080}}},
+        source="test")
+    with vcctrld._profile_scope(cfg):
+        m = reg.configured_machine()
+    check("a configured machine: comes through verbatim",
+          m == {"label": "modernpc", "kind": "hdmi-usb", "os": "linux",
+                "keyboard": "pc-104", "mouse": "relative",
+                "native": {"width": 1920, "height": 1080}}, m)
+
+    cfg2 = vcctrld.vcconfig.Config({"machine": {"label": "x"}}, source="test")
+    with vcctrld._profile_scope(cfg2):
+        m2 = reg.configured_machine()
+    check("a partial machine: block -- missing keys are None, not absent",
+          m2["keyboard"] is None and m2["native"] is None, m2)
+
+
+def test_a_board_less_profile_still_declares_a_keyboard():
+    """The one thing machine.keyboard exists for: a profile with no
+    protocol board at all (board: backend: none, modernpc's shape) has no
+    targets: row for board detection to key a layout off of, so without
+    this the TYPE tab drew no keyboard whatsoever -- not an unconfirmed
+    one, none. See _absent_board()'s own comment in vcweb.py.
+    """
+    print("\nboard-less profile keyboard fallback")
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    class Reg(object):
+        def __init__(self, machine):
+            self.disabled = {"board": "backend is `none`"}
+            self.failed = {}
+            self._machine = machine
+
+        def configured_machine(self):
+            return self._machine
+
+    web = vcweb.WebCapability(Reg({"keyboard": "pc-104"}), "127.0.0.1", 0)
+    out = web._absent_board()
+    check("a configured machine.keyboard is reported",
+          out["keyboard"] == "pc-104", out)
+    check("with source configured -- declared, not detected",
+          out["source"] == "configured", out)
+    check("why/reason still come from the real absence -- no board capability",
+          out["why"] == "not_configured", out)
+
+    # Control: no machine.keyboard at all -- the pre-existing "no keyboard
+    # declared" answer must survive unchanged, not be papered over.
+    web2 = vcweb.WebCapability(Reg({}), "127.0.0.1", 0)
+    out2 = web2._absent_board()
+    check("control: nothing configured -> keyboard stays null",
+          out2["keyboard"] is None and out2["source"] is None, out2)
+
+
 def test_registry():
     print("\nregistry and dispatch")
     d = make_devices()
@@ -3771,10 +3841,24 @@ def test_coverage_is_scoped_and_absence_is_not_a_negative():
     page_src = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
                     encoding="utf-8").read()
     blk = re.search(r"^const LAYOUTS = \{$(.*?)^\};$", page_src, re.S | re.M).group(1)
-    pc = blk[:blk.index("'mac-plus'")]
+    # SLICED TO pc-at-101 SPECIFICALLY, not "everything before mac-plus" --
+    # that slice was correct only by accident, back when pc-at-101 was the
+    # sole non-Mac layout in the file. pc-104 (added for hid-gadget targets
+    # like modernpc, which have no board_id and no USB4VC path at all) sits
+    # between them now, and its chords have nothing to do with board 1's
+    # measured coverage -- sweeping them into this assertion would either
+    # fail honestly (as it did, the day this comment was written) or, worse,
+    # get "fixed" by fabricating board-1 coverage rows for chords that were
+    # never run through board 1's own protocol path. Every top-level layout
+    # key is `  '<id>': {` at two-space indent; pc-at-101's own span is from
+    # its key to the next one, whichever layout that happens to be.
+    keys = [m.start() for m in re.finditer(r"^  '[\w-]+':\s*\{", blk, re.M)]
+    pc_start = blk.index("'pc-at-101'")
+    pc_end = next((k for k in keys if k > pc_start), len(blk))
+    pc = blk[pc_start:pc_end]
     declared = [re.findall(r"'((?:[^'\\]|\\.)*)'", lst)
                 for lst in re.findall(r"\bkeys:\s*\[([^\]]*)\]", pc)]
-    check("the pc layout declares chords", len(declared) == 7, len(declared))
+    check("the pc-at-101 layout declares chords", len(declared) == 7, len(declared))
     for keys in declared:
         name = "+".join(can[k] for k in keys)
         check("chord %s has a coverage row" % "+".join(keys), name in chords,

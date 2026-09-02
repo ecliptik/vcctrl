@@ -1337,6 +1337,34 @@ class WebCapability(object):
         why, reason = self._absent_reason(cap_name)
         return dict(null_fields, why=why, reason=reason)
 
+    def _absent_board(self):
+        """board's own _absent() fallback, with one exception: a profile
+        with no board capability at all (modernpc: `board: backend: none`)
+        can still have a DECLARED keyboard via its own `machine.keyboard`
+        -- an assertion, not a detection, the same "declared, not
+        detected" shape BoardCapability's own `static` backend already
+        uses for a board id (see its snapshot()'s own comment). Without
+        this, a board-less profile reports `keyboard: null` forever and
+        the TYPE tab draws no keyboard at all, which is a worse answer
+        than an unconfirmed one.
+        """
+        # keyboard=None IS ONE OF THE NULL FIELDS HERE, NOT AN OVERSIGHT --
+        # BoardCapability.snapshot()'s own docstring says every key is
+        # always present, null where unknown, and this fallback was the one
+        # path that quietly did not: `keyboard` was simply absent from the
+        # dict when no board capability existed at all, harmless only
+        # because kvm.html reads it through `b.keyboard || null`, which
+        # cannot tell a missing key from an explicit null. Fixed alongside
+        # the machine.keyboard read below, found by a test that could tell
+        # the difference.
+        out = self._absent("board", id=None, name=None, target=None,
+                            source=None, stale=None, keyboard=None)
+        kb = self.registry.configured_machine().get("keyboard")
+        if kb:
+            out["keyboard"] = kb
+            out["source"] = "configured"
+        return out
+
     def snapshot(self):
         """Everything the page needs to answer "is it stuck", in one request."""
         vid = self.video()
@@ -1414,6 +1442,15 @@ class WebCapability(object):
                 # tooltip that says so rather than one naming somebody else's
                 # hardware.
                 "targets": self.registry.configured_targets(),
+                # THE MACHINE THIS PROFILE OWN DESCRIBES ITSELF AS -- see
+                # Registry.configured_machine()'s own comment on why {} is
+                # a real, unfinished-but-not-broken answer. Distinct from
+                # `board`, which is what a PROTOCOL BOARD reports (or a
+                # profile with none of those declares via machine.keyboard
+                # in the fallback above): this is the profile's own
+                # self-description, present or not regardless of whether a
+                # board exists to report anything at all.
+                "machine": self.registry.configured_machine(),
                 # Plug identity so a consumer can say WHICH plug it is about
                 # -- "power: on" is not actionable when the rig has one plug
                 # that serves whichever machine is currently connected to it.
@@ -1428,9 +1465,7 @@ class WebCapability(object):
                 # first-class answer -- never a default to IBMPC.
                 "board": (self.registry.caps["board"].snapshot()
                           if "board" in self.registry.caps else
-                          self._absent("board", id=None, name=None,
-                                       target=None, source=None,
-                                       stale=None)),
+                          self._absent_board()),
                 # The DOS target's own hardware, as dinspect last measured
                 # it -- a READING with an age, never a live poll (a scan
                 # reboots the machine twice). `null` fields and `source:

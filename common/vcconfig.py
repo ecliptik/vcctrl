@@ -268,6 +268,39 @@ SCHEMA = {
         "keyboard": str,             # a layout id, e.g. pc-at-101, mac-plus
     }),
 
+    # ONE MACHINE THIS PROFILE DRIVES. Optional today -- see
+    # Registry.configured_machine()'s own comment on why {} is a real
+    # answer and not yet every profile's -- the field this schema exists
+    # to protect is `keyboard`: a board-less profile (modernpc: `board:
+    # backend: none`) has no `targets:` row for the daemon's board
+    # detection to key a layout off of, and this is the only other place
+    # one can be declared. See docs/PROFILES.md and
+    # internal/KVM-MACHINES-PLAN.md sec 1 for the machine-model reasoning
+    # this block is the first piece of.
+    "machine": {
+        "label": str,
+        # NOT IN ENUMS, DELIBERATELY, AND UNLIKE leds/transfer ABOVE THAT
+        # IS A GAP RATHER THAN A MATCHED DECISION: nothing branches on the
+        # exact spelling of kind/os/mouse yet, so a typo here fails
+        # nowhere today. Add them to ENUMS the moment code starts reading
+        # one of these three and choosing behaviour by it -- the same
+        # trigger that moved leds/transfer into ENUMS after they had
+        # branch-worthy consumers, not before.
+        "kind": str,              # vga-ps2 | hdmi-usb | rgb2hdmi-usb4vc
+        "os": str,                # dos | windows | macos-classic | linux | unknown
+        # SAME REASONING AS targets.keyboard ABOVE, not restated: a layout
+        # id, unenumerated here on purpose, verbatim-reported if the page
+        # does not have it.
+        "keyboard": str,
+        "mouse": str,             # absolute | relative | none
+        "native": {"width": int, "height": int},
+        # usb4vc KINDS ONLY -- which protocol board this machine is, so a
+        # future board-driven activation can say which profile a seated
+        # board belongs to. Absent for a profile with no protocol board
+        # at all (modernpc), which is a real answer, not a gap.
+        "board_id": int,
+    },
+
     "harness": {
         "profile": str,
         "timing": {
