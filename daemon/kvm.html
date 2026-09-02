@@ -409,15 +409,17 @@
        what the eye catches -- reported as "the shading makes them look off".
        An outline drawn tight around a single emoji is a weak affordance
        anyway; the glyph is the control, and press and hover say the rest. */
-    body #dbtn, body #gbtn, body #zoombtn {
+    body #dbtn, body #gbtn, body #zoombtn, body #profilebtn {
       border-color:transparent; background:transparent;
     }
-    body #dbtn:active, body #gbtn:active, body #zoombtn:active {
+    body #dbtn:active, body #gbtn:active, body #zoombtn:active,
+    body #profilebtn:active {
       background:var(--rule);
     }
     /* Open still shows: the caret flips and the ground fills, which is the
        state, rather than a permanent outline that says nothing. */
-    body #zoombtn[aria-expanded="true"], body #gbtn[aria-expanded="true"] {
+    body #zoombtn[aria-expanded="true"], body #gbtn[aria-expanded="true"],
+    body #profilebtn[aria-expanded="true"] {
       background:var(--rule);
     }
     /* THE CARET WITHOUT ITS LABEL READS AS A MISSING LABEL, which is what
@@ -428,9 +430,14 @@
        The separators go too. Between boxed buttons a rule is structure;
        between three bare glyphs it is a mark floating in space. */
     body #gbtn .bl, body #zoombtn #zoomlabel,
-    body #zoombtn .caret, body header > .sep { display:none; }
-    body #gbtn, body #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
-    body #gbtn .bi, body #zoombtn .bi { border-right:0; padding-right:0; }
+    body #zoombtn .caret, body header > .sep,
+    body #profilebtn #profilelabel, body #profilebtn .caret { display:none; }
+    body #gbtn, body #zoombtn, body #profilebtn {
+      min-width:38px; padding:0 7px; gap:5px;
+    }
+    body #gbtn .bi, body #zoombtn .bi, body #profilebtn .bi {
+      border-right:0; padding-right:0;
+    }
     /* Keys is inside the command field now, so there is nothing here to hide
        or to keep: it travels with the row the KEYS tab opens. */
     /* The tab bar is the panel here; there is no column to collapse. */
@@ -1222,13 +1229,21 @@
      and "400% Original" is 124, so a button sized for the shorter one changes
      width when you change mode and shoves the three buttons beside it. */
   #zoombtn { color:var(--text); min-width:141px; }
+  /* SAME WIDTH AS FIT TO SCREEN, DELIBERATELY -- not measured against this
+     button's own label the way #zoombtn's is, because that label is
+     config-driven (a profile/machine name) rather than a small fixed set of
+     known strings. "gateway2000" and "modernpc" both fit comfortably inside
+     141px at this font; a future name that does not will need this
+     revisited, the same way #zoombtn's own value would need revisiting if
+     "Fit to Screen" grew a longer sibling label. */
+  #profilebtn { color:var(--text); min-width:141px; }
   /* A real gap, not a space in the string: HTML collapses runs of whitespace,
      so "🖥️  Fit" and "🖥️ Fit" render identically and the emoji sits right on
      the F. Flex gap is the only version that actually moves it. */
   /* The divider, and the spacing that makes it read as one. Same shape as the
      command field: an emoji cell, a rule, then the label. */
   .bi { flex:none; font-size:14px; line-height:1; }
-  #cmdbar button > .bi, #zoombtn > .bi, .lbtn > .bi {
+  #cmdbar button > .bi, #zoombtn > .bi, #profilebtn > .bi, .lbtn > .bi {
     border-right:1px solid var(--edge); padding-right:8px; margin-right:0;
   }
   /* 600, NOT 500. Reported as the strip buttons looking "thin", and they
@@ -1242,11 +1257,11 @@
      This covers every button in both strips at once -- Send, Grab, Capture,
      Sound, Power, the zoom control and the log buttons all resolve through
      this one rule, so none of them can drift from the others. */
-  #cmdbar button, #zoombtn, .lbtn {
+  #cmdbar button, #zoombtn, #profilebtn, .lbtn {
     display:flex; align-items:center; gap:8px;
     font:600 var(--t-data)/1 var(--sans); letter-spacing:0; padding:0 9px;
   }
-  #cmdbar button > .bl, #zoombtn > .bl, .lbtn > .bl {
+  #cmdbar button > .bl, #zoombtn > .bl, #profilebtn > .bl, .lbtn > .bl {
     flex:none; white-space:nowrap;
   }
   /* THE CARET IS AN ICON, NOT A LETTER. It was riding on the label's 13px
@@ -1335,6 +1350,14 @@
      the trade this was asked for by name, not an oversight. */
 
   .popmenu { padding:5px; min-width:150px; }
+  /* .pop SETS position:fixed FOR EVERY OTHER POPUP ON THIS PAGE; this one
+     overrides back to absolute because its JS computes top/left from
+     #profilebtn's own getBoundingClientRect() -- fixed coordinates and
+     absolute coordinates are the same math only when nothing between this
+     element and the viewport is itself positioned, and this menu predates
+     that assumption being safe to make either way, so it keeps the
+     positioning contract its own JS was written against. */
+  #profilemenu { position:absolute; z-index:50; min-width:9em; }
   /* 500, STATED. `font:` is a shorthand and resets every part it does not
      name, so `font:var(--t-read)/1 var(--sans)` silently set weight back to
      400 -- and the screen menu was the one list on the page a shade lighter
@@ -2067,7 +2090,7 @@
   }
   #settings[hidden] { display:none; }
   #setbody { overflow-y:auto; -webkit-overflow-scrolling:touch;
-             padding:10px 14px 24px; }
+             padding:2px 14px 24px; }
   #sethdr {
     flex:none; display:flex; align-items:center; justify-content:space-between;
     gap:10px; padding:10px 12px 10px 14px; border-bottom:1px solid var(--rule);
@@ -2105,6 +2128,35 @@
      Each panel now sizes to its own content, which is what "intentional"
      means here. */
   .poprow { display:flex; gap:6px; flex-wrap:wrap; }
+  /* ONE OBJECT PER SECTION, collapsed by default (no `open` attribute in
+     the markup) -- a native <details>/<summary> rather than a hand-rolled
+     accordion, so a section opens and closes with no JS at all and Enter/
+     Space on the summary work for free. The small script that pairs with
+     this (setsecState()) only remembers which sections were left open and
+     draws the caret; the disclosure itself is the browser's own. */
+  #setbody details.setsec { border-bottom:1px solid var(--rule); }
+  #setbody details.setsec:last-of-type { border-bottom:0; }
+  #setbody summary {
+    display:flex; align-items:center; justify-content:space-between;
+    gap:8px; cursor:pointer; list-style:none;
+    font:600 var(--t-micro)/1 var(--mono); letter-spacing:.12em;
+    text-transform:uppercase; color:var(--muted);
+    padding:11px 2px; margin:0;
+  }
+  /* Chrome/Safari draw their own disclosure triangle beside the marker
+     this removes; Firefox already respects list-style:none above. Two
+     rules for one browser split, same reasoning as this file's other
+     vendor-prefixed pairs. */
+  #setbody summary::-webkit-details-marker { display:none; }
+  #setbody summary:hover { color:var(--text); }
+  #setbody details[open] > summary { color:var(--text); }
+  .setsecbody { padding:0 2px 14px; }
+  /* SPACING LIVES ON THE BODY'S CHILDREN, NOT ON THE SECTION. A <details>
+     with no margin of its own butts its border-bottom against the next
+     summary; the padding above and below is what a plain h2 rule used to
+     give each block via its own border-bottom, and it moves here rather
+     than growing <details> itself so a currently-closed section costs
+     nothing but its one summary row. */
   #setback[hidden] { display:none; }
   #settings label { display:flex; align-items:center; gap:9px; padding:6px 0;
                     font:var(--t-read)/1.3 var(--sans); cursor:pointer; }
@@ -2196,10 +2248,10 @@
      nothing about the rig. */
   @media (min-width:641px) and (max-width:1099px) {
     h1, h1 + .sep, #state, #state + .sep { display:none; }
-    #zoomlabel, header .lbtn .bl { display:none; }
-    header .lbtn, #zoombtn { min-width:38px; padding:0 7px; gap:5px; }
-    header .lbtn .bi, #zoombtn .bi { border-right:0; padding-right:0; }
-    #zoombtn { min-width:52px; }
+    #zoomlabel, header .lbtn .bl, #profilelabel { display:none; }
+    header .lbtn, #zoombtn, #profilebtn { min-width:38px; padding:0 7px; gap:5px; }
+    header .lbtn .bi, #zoombtn .bi, #profilebtn .bi { border-right:0; padding-right:0; }
+    #zoombtn, #profilebtn { min-width:52px; }
   }
 
   /* THE SETTING ITSELF, not just its effect, stays out of sight below the
@@ -2219,16 +2271,18 @@
   @media (min-width:1100px) {
     body.btn-icon #zoomlabel, body.btn-icon header .lbtn .bl,
     body.btn-icon #grabbtn .bl, body.btn-icon #powerbtn .bl,
-    body.btn-icon #sendline .bl,
+    body.btn-icon #sendline .bl, body.btn-icon #profilelabel,
     body.btn-icon #bufbtn .bl, body.btn-icon #soundbtn .bl { display:none; }
     body.btn-text header .lbtn .bi, body.btn-text #zoombtn .bi,
-    body.btn-text #grabbtn .bi, body.btn-text #powerbtn .bi { display:none; }
+    body.btn-text #grabbtn .bi, body.btn-text #powerbtn .bi,
+    body.btn-text #profilebtn .bi { display:none; }
     /* The divider between icon and label is drawn by the icon half, so an
        icon with no label beside it keeps a rule on its own free edge unless
        this comes off too. */
     body.btn-icon header .lbtn .bi, body.btn-icon #zoombtn .bi,
     body.btn-icon #grabbtn .bi, body.btn-icon #powerbtn .bi,
-    body.btn-icon #bufbtn .bi, body.btn-icon #soundbtn .bi {
+    body.btn-icon #bufbtn .bi, body.btn-icon #soundbtn .bi,
+    body.btn-icon #profilebtn .bi {
       border-right:0; padding-right:0;
     }
     /* CAPTURE AND SOUND ARE TWO BUTTONS, NOT ONE -- a quick-action icon
@@ -2244,7 +2298,8 @@
     /* Sized for "Fit to Screen" beside its icon AND its label -- wider than
        either alone needs, so dropping either left the button still that
        wide, with the freed space sitting empty past the caret. */
-    body.btn-icon #zoombtn, body.btn-text #zoombtn { min-width:52px; }
+    body.btn-icon #zoombtn, body.btn-text #zoombtn,
+    body.btn-icon #profilebtn, body.btn-text #profilebtn { min-width:52px; }
   }
 
   /* ── desktop ─────────────────────────────────────────────────────────── */
@@ -2391,13 +2446,19 @@
     -->
     <button id="profilebtn" aria-haspopup="true" aria-expanded="false"
             title="Which target this page controls">
-      <span class="bi">🎯</span><span id="profilelabel">DOS/RetroPC</span><span class="caret dn" aria-hidden="true"></span>
+      <span class="bi">🎯</span><span id="profilelabel">gateway2000</span><span class="caret dn" aria-hidden="true"></span>
     </button>
-    <div id="profilemenu" role="menu" hidden
-         style="position:absolute;z-index:50;min-width:9em;
-                background:var(--panel,#222);color:var(--fg,#eee);
-                border:1px solid var(--border,#555);border-radius:6px;
-                padding:4px;box-shadow:0 4px 12px rgba(0,0,0,.4);"></div>
+    <!-- .pop .popmenu, THE SAME CLASSES #pop-zoom USES -- shares its panel
+         chrome (background/border/radius/shadow) and its button styling
+         (.popmenu button, including the .sel green this menu's own JS now
+         sets on the current profile) without sharing its JS: see the HTML
+         comment above the profile-switcher IIFE for why this stays a
+         second, independent control rather than joining openPop()/
+         closePop(). position/z-index/min-width stay their OWN rule below,
+         not .pop's (position:fixed) -- this menu is positioned by
+         JS-computed coordinates off #profilebtn's own rect, which is
+         absolute positioning's contract, not fixed's. -->
+    <div id="profilemenu" class="pop popmenu" role="menu" hidden></div>
     <span class="sep" aria-hidden="true">|</span>
     <!-- The two column panels, and they behave like the tabs on a phone:
          each opens its own thing, and pressing the lit one puts the column
@@ -2742,140 +2803,164 @@
        still work; they are shortcuts rather than the way. -->
   <div id="sethdr"><span>Settings</span></div>
   <div id="setbody">
-      <h2>Theme</h2>
-      <div id="themes"></div>
-      <div class="row" style="margin-bottom:8px">
-        <span id="themename">—</span>
-        <button id="dbtn2" title="pick the other half of this pair">Switch to light</button>
+    <!-- EVERY SECTION IS A <details>, COLLAPSED BY DEFAULT. A native
+         element rather than a hand-rolled toggle: it needs no JS to expand,
+         works with Enter/Space on its own <summary> for free, and degrades
+         to "everything visible" if the small persistence script below never
+         runs. setsecState() below is only what REMEMBERS the choice across
+         a reload and draws the caret -- the open/close itself is the
+         browser's own behaviour, not this page's. -->
+    <details class="setsec" data-sec="appearance">
+      <summary>Appearance<span class="caret dn" aria-hidden="true"></span></summary>
+      <div class="setsecbody">
+        <div id="themes"></div>
+        <div class="row" style="margin-bottom:8px">
+          <span id="themename">—</span>
+          <button id="dbtn2" title="pick the other half of this pair">Switch to light</button>
+        </div>
+        <label><input type="checkbox" id="opt-auto">
+          Follow the system light/dark setting</label>
+
+        <!-- HIDDEN, NOT JUST INERT, BELOW 1100PX. The control already had no
+             effect there -- below 1100px the toolbar already forces icon-only
+             to fit -- and a selector that visibly exists but silently does
+             nothing is worse than one that isn't there to wonder about. -->
+        <div id="btnstylesection">
+          <div class="row" style="margin-bottom:4px; margin-top:14px">
+            <span id="btnstylelabel" style="flex:1 1 auto">Toolbar buttons</span>
+            <!-- ≥1100px only. Below that, the toolbar already forces icon-only to
+                 fit -- see the 641-1099px band and the ≤640px sheet UI -- so a
+                 manual choice there would just clip. Default is "both", which is
+                 every existing layout unchanged until someone opens this menu.
+                 aria-labelledby, not a duplicate aria-label: axe-core flagged
+                 `title` alone as not a visible/reliable accessible name
+                 (label-title-only) -- pointing at the row's own label span
+                 keeps one string rather than two that could drift apart. -->
+            <select id="btnstylesel" aria-labelledby="btnstylelabel"
+                    title="How toolbar buttons are labelled on a wide window">
+              <option value="both">Icon + text</option>
+              <option value="icon">Icon only</option>
+              <option value="text">Text only</option>
+            </select>
+          </div>
+        </div>
+
+        <label style="margin-top:10px"><input type="checkbox" id="opt-worklabel">
+          Show status bar</label>
+        <div class="hint" style="margin-left:0">One line for what the rig is
+          doing right now, e.g. mid-reboot.</div>
+
+        <label><input type="checkbox" id="opt-camera">
+          Show hardware camera</label>
+        <div class="hint" style="margin-left:0">A second camera pointed at the
+          actual machine, when one is connected.</div>
       </div>
-      <label><input type="checkbox" id="opt-auto">
-        Follow the system light/dark setting</label>
+    </details>
 
-      <h2 style="margin-top:14px">Status bar</h2>
-      <label><input type="checkbox" id="opt-worklabel">
-        Show status bar</label>
-      <div class="hint" style="margin-left:0">One line for what the rig is
-        doing right now, e.g. mid-reboot.</div>
+    <details class="setsec" data-sec="input">
+      <summary>Input<span class="caret dn" aria-hidden="true"></span></summary>
+      <div class="setsecbody">
+        <div class="row" style="margin-bottom:6px">
+          <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
+        </div>
+        <div class="hint" style="margin-left:0">Toggles Caps Lock and waits for
+          the PS/2 LED to come back. Worth running when the target stops
+          responding and you need to know which half is at fault.</div>
 
-      <label><input type="checkbox" id="opt-camera">
-        Show hardware camera</label>
-      <div class="hint" style="margin-left:0">A second camera pointed at the
-        actual machine, when one is connected.</div>
-
-      <h2 style="margin-top:14px">Input</h2>
-      <div class="row" style="margin-bottom:6px">
-        <button id="verifybtn" title="Send a keystroke and watch the LED come back">Verify input link</button>
+        <div class="row" style="margin-bottom:4px; margin-top:10px">
+          <span id="mousesenslabel" style="flex:1 1 auto">Mouse speed</span>
+          <input id="mousesens" type="range" min="0.25" max="3" step="0.05"
+                 value="1" aria-labelledby="mousesenslabel"
+                 title="How far the target's cursor moves per pixel you move">
+        </div>
+        <div class="row" style="margin-bottom:6px">
+          <button id="parkbtn" title="Slam the cursor into a corner">Park cursor</button>
+        </div>
+        <div class="hint" style="margin-left:0">The mouse is relative-only, the
+          same as a real PS/2 or ADB mouse: there is no "put the cursor here",
+          only "move it". Park re-homes it to a known corner when it has
+          drifted from what the picture shows.</div>
       </div>
-      <div class="hint" style="margin-left:0">Toggles Caps Lock and waits for
-        the PS/2 LED to come back. Worth running when the target stops
-        responding and you need to know which half is at fault.</div>
+    </details>
 
-      <div class="row" style="margin-bottom:4px; margin-top:10px">
-        <span id="mousesenslabel" style="flex:1 1 auto">Mouse speed</span>
-        <input id="mousesens" type="range" min="0.25" max="3" step="0.05"
-               value="1" aria-labelledby="mousesenslabel"
-               title="How far the target's cursor moves per pixel you move">
-      </div>
-      <div class="row" style="margin-bottom:6px">
-        <button id="parkbtn" title="Slam the cursor into a corner">Park cursor</button>
-      </div>
-      <div class="hint" style="margin-left:0">The mouse is relative-only, the
-        same as a real PS/2 or ADB mouse: there is no "put the cursor here",
-        only "move it". Park re-homes it to a known corner when it has
-        drifted from what the picture shows.</div>
-
-      <!-- HIDDEN, NOT JUST INERT, BELOW 1100PX. The control already had no
-           effect there -- below 1100px the toolbar already forces icon-only
-           to fit -- and a selector that visibly exists but silently does
-           nothing is worse than one that isn't there to wonder about. -->
-      <div id="btnstylesection">
-        <h2 style="margin-top:14px">Buttons</h2>
+    <details class="setsec" data-sec="video">
+      <summary>Video<span class="caret dn" aria-hidden="true"></span></summary>
+      <div class="setsecbody">
         <div class="row" style="margin-bottom:4px">
-          <span id="btnstylelabel" style="flex:1 1 auto">Show</span>
-          <!-- ≥1100px only. Below that, the toolbar already forces icon-only to
-               fit -- see the 641-1099px band and the ≤640px sheet UI -- so a
-               manual choice there would just clip. Default is "both", which is
-               every existing layout unchanged until someone opens this menu.
-               aria-labelledby, not a duplicate aria-label: axe-core flagged
-               `title` alone as not a visible/reliable accessible name
-               (label-title-only) -- pointing at the row's own "Show" span
-               keeps one string rather than two that could drift apart. -->
-          <select id="btnstylesel" aria-labelledby="btnstylelabel"
-                  title="How toolbar buttons are labelled on a wide window">
-            <option value="both">Icon + text</option>
-            <option value="icon">Icon only</option>
-            <option value="text">Text only</option>
+          <span id="bufsellabel" style="flex:1 1 auto">Capture length</span>
+          <!-- THE COST IS PART OF THE CHOICE. This is asked for in seconds and
+               paid for in Pi memory at about 1.6 MB a second, so ten minutes is
+               most of a gigabyte on a four-gigabyte box with no swap. The daemon
+               clamps against free memory and says when it has, but a menu that
+               lets you pick a number without showing what it spends is a menu
+               that has to be regretted before it teaches you anything.
+               aria-labelledby -- see #btnstylesel above for why not a second
+               aria-label string. -->
+          <select id="bufsel" aria-labelledby="bufsellabel"
+                  title="How much recent video the daemon keeps">
+            <option value="30">30 seconds · ~48 MB</option>
+            <option value="60">1 minute · ~96 MB</option>
+            <option value="120">2 minutes · ~190 MB</option>
+            <option value="300">5 minutes · ~480 MB</option>
+            <option value="600">10 minutes · ~960 MB</option>
           </select>
         </div>
+        <div class="hint" id="bufinfo" style="margin-left:0">—</div>
+
+        <!-- "Use WebSocket when it works" lived here. Removed: the automatic
+             fallback it appeared to control already existed and always did,
+             and the box only ever DISABLED the websocket -- a diagnostic
+             override in a settings panel, labelled as though it governed the
+             normal behaviour. The LNK lamp already says which transport is in
+             use, so nothing is lost by not being able to force it. -->
       </div>
+    </details>
 
-      <h2 style="margin-top:14px">Video</h2>
-      <div class="row" style="margin-bottom:4px">
-        <span id="bufsellabel" style="flex:1 1 auto">Capture length</span>
-        <!-- THE COST IS PART OF THE CHOICE. This is asked for in seconds and
-             paid for in Pi memory at about 1.6 MB a second, so ten minutes is
-             most of a gigabyte on a four-gigabyte box with no swap. The daemon
-             clamps against free memory and says when it has, but a menu that
-             lets you pick a number without showing what it spends is a menu
-             that has to be regretted before it teaches you anything.
-             aria-labelledby -- see #btnstylesel above for why not a second
-             aria-label string. -->
-        <select id="bufsel" aria-labelledby="bufsellabel"
-                title="How much recent video the daemon keeps">
-          <option value="30">30 seconds · ~48 MB</option>
-          <option value="60">1 minute · ~96 MB</option>
-          <option value="120">2 minutes · ~190 MB</option>
-          <option value="300">5 minutes · ~480 MB</option>
-          <option value="600">10 minutes · ~960 MB</option>
-        </select>
+    <details class="setsec" data-sec="activitylog">
+      <summary>Activity log<span class="caret dn" aria-hidden="true"></span></summary>
+      <div class="setsecbody">
+        <div class="hint" style="margin-left:0">Filters the view only.</div>
+        <label><input type="checkbox" id="opt-probe">
+          LED and probe traffic</label>
+        <div class="hint">Caps Lock toggles and LED reads, which the harness
+          repeats constantly to test whether the machine answers.</div>
+        <label><input type="checkbox" id="opt-poll">
+          Read-only queries</label>
+        <div class="hint">Screenshots, status and power polls, on a timer from
+          every open tab.</div>
+        <label><input type="checkbox" id="opt-mine">
+          This browser&rsquo;s own commands</label>
+        <div class="hint">Off by default: you know what you just did.</div>
+        <label><input type="checkbox" id="opt-mcp">
+          MCP tool calls</label>
+        <div class="hint">On by default: an agent (Claude Code or another MCP
+          client) driving the rig shows up the same way a person typing
+          does.</div>
+        <label><input type="checkbox" id="opt-rate">
+          Stream rate changes</label>
+        <div class="hint">Off by default: this tab asking for a different frame
+          rate, and what the daemon says it is actually sending, logged each
+          time either one changes -- noisy, and rarely the thing you are
+          looking for.</div>
+        <label><input type="checkbox" id="opt-transport">
+          Transport messages</label>
+        <div class="hint">Off by default: reconnects, websocket retries,
+          stalled-stream restarts -- true, but about the connection to this
+          page rather than the target, and noise next to everything else
+          here.</div>
       </div>
-      <div class="hint" id="bufinfo" style="margin-left:0">—</div>
+    </details>
 
-      <!-- "Use WebSocket when it works" lived here. Removed: the automatic
-           fallback it appeared to control already existed and always did,
-           and the box only ever DISABLED the websocket -- a diagnostic
-           override in a settings panel, labelled as though it governed the
-           normal behaviour. The LNK lamp already says which transport is in
-           use, so nothing is lost by not being able to force it. -->
-
-      <h2 style="margin-top:14px">Activity log</h2>
-      <div class="hint" style="margin-left:0">Filters the view only.</div>
-      <label><input type="checkbox" id="opt-probe">
-        LED and probe traffic</label>
-      <div class="hint">Caps Lock toggles and LED reads, which the harness
-        repeats constantly to test whether the machine answers.</div>
-      <label><input type="checkbox" id="opt-poll">
-        Read-only queries</label>
-      <div class="hint">Screenshots, status and power polls, on a timer from
-        every open tab.</div>
-      <label><input type="checkbox" id="opt-mine">
-        This browser&rsquo;s own commands</label>
-      <div class="hint">Off by default: you know what you just did.</div>
-      <label><input type="checkbox" id="opt-mcp">
-        MCP tool calls</label>
-      <div class="hint">On by default: an agent (Claude Code or another MCP
-        client) driving the rig shows up the same way a person typing
-        does.</div>
-      <label><input type="checkbox" id="opt-rate">
-        Stream rate changes</label>
-      <div class="hint">Off by default: this tab asking for a different frame
-        rate, and what the daemon says it is actually sending, logged each
-        time either one changes -- noisy, and rarely the thing you are
-        looking for.</div>
-      <label><input type="checkbox" id="opt-transport">
-        Transport messages</label>
-      <div class="hint">Off by default: reconnects, websocket retries,
-        stalled-stream restarts -- true, but about the connection to this
-        page rather than the target, and noise next to everything else
-        here.</div>
-
-      <h2 style="margin-top:14px">System config</h2>
-      <!-- WHAT THE DAEMON RESOLVED, not the file on disk. Same source as
-           `vcctrl config show` -- fetched once, since it does not change
-           without a daemon restart. -->
-      <div class="hint" id="cfgsrc" style="margin-left:0">—</div>
-      <div id="cfgtree" class="kvtree"></div>
-
+    <details class="setsec" data-sec="sysconfig">
+      <summary>System config<span class="caret dn" aria-hidden="true"></span></summary>
+      <div class="setsecbody">
+        <!-- WHAT THE DAEMON RESOLVED, not the file on disk. Same source as
+             `vcctrl config show` -- fetched once, since it does not change
+             without a daemon restart. -->
+        <div class="hint" id="cfgsrc" style="margin-left:0">—</div>
+        <div id="cfgtree" class="kvtree"></div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -7381,6 +7466,28 @@ $('btnstylesel').onchange = () => {
   applyBtnStyle(v);
 };
 
+// EVERY SETTINGS SECTION REMEMBERS WHETHER IT WAS LEFT OPEN, collapsed by
+// default on a browser that has never opened one (no localStorage entry
+// yet) -- the markup itself ships with no `open` attribute on any of them,
+// so "collapsed" is what a script-disabled or first-ever load already
+// shows, and this only overrides that once someone has actually opened
+// one. The <details> element does the disclosure itself; this only draws
+// the caret and persists the choice.
+for (const d of document.querySelectorAll('#setbody details.setsec')) {
+  const key = 'vcctrl.set.' + d.dataset.sec;
+  if (localStorage.getItem(key) === '1') d.open = true;
+  const paint = () => {
+    const c = d.querySelector('summary .caret');
+    if (c) c.classList.toggle('up', d.open);
+    if (c) c.classList.toggle('dn', !d.open);
+  };
+  paint();
+  d.addEventListener('toggle', () => {
+    localStorage.setItem(key, d.open ? '1' : '0');
+    paint();
+  });
+}
+
 // WHILE SOMETHING ELSE IS DRIVING, DO NOT OFFER TO DRIVE. The daemon refuses
 // input from anyone but the lock holder, which is the point of the lock -- but
 // the page went on presenting a working command line and a Send button, and
@@ -8358,15 +8465,16 @@ addEventListener('resize', () => applyZoom());
 (function () {
   const btn = $('profilebtn'), menu = $('profilemenu'), label = $('profilelabel');
   function render() {
+    // .popmenu button's OWN CSS now styles these -- see the HTML comment on
+    // #profilemenu -- so this only sets the one state CSS can't know:
+    // which profile is current. Same convention #pop-zoom, the theme
+    // swatches and the sound-device picker already use for the same job.
     menu.innerHTML = '';
     for (const p of PROFILES) {
       const item = document.createElement('button');
       item.type = 'button';
       item.textContent = p.label;
-      item.style.cssText = 'display:block;width:100%;text-align:left;'
-        + 'padding:6px 10px;border:0;background:transparent;cursor:pointer;'
-        + 'color:inherit;font:inherit;';
-      if (p.id === PROFILE_BASE) item.style.fontWeight = 'bold';
+      item.classList.toggle('sel', p.id === PROFILE_BASE);
       item.onclick = () => {
         switchProfile(p.id);
         label.textContent = p.label;
