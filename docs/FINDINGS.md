@@ -2926,3 +2926,59 @@ diagnosis (FINDINGS #44) at the time, so nothing could look at the screen to
 confirm a DOS program's own window actually scrolled, or that USB4VC's
 bridge carries a wheel channel through to a PS/2 packet at all. Docs/
 MOUSE.md sec 7 names this the open question it still is.
+
+## 50. The MOUSE tab's touch trackpad reaches a real 390px phone width and a real target  [measured 2026-09-02]
+
+WP6 of `internal/KVM-MACHINES-PLAN.md` (phone tab bar gains MOUSE; a tap
+becomes a click instead of a keyboard grab; drag is a relative trackpad).
+Two measurements taken while shipping it, because both settle a question
+the feature depended on and a wrong guess either way would have looked
+fine in a quick glance:
+
+**The tab bar overflowed a real 390px phone, and the top-level headless
+technique would have said it didn't.** `chromium --headless --window-size=390,844`
+clamps `innerWidth` to 500 regardless (memory: headless-chromium-clamps-to-500px);
+Playwright's `viewport={width:390,...}` sets a genuine CDP-emulated
+viewport and does not have that bug (confirmed: `innerWidth` read back as
+390). Measured before adding MOUSE: seven tabs at 357px of content in a
+370px row (10px side padding). After adding MOUSE at the plan's own 6px
+button padding: `#tabs.scrollWidth` 417px against a 390px `clientWidth` --
+27px of overflow a real phone would have shown, a 500px-clamped headless
+run would not have. Fixed two ways: `overflow-x:auto` on `#tabs` as a
+standing fallback (the row will need this again the day WP4's DISK tab
+lands), and the button/row padding trimmed from 6px/10px to 4px/8px, which
+brings eight labels back to 391px -- 1px over, absorbed invisibly by the
+same fallback rather than chased to an exact fit that font-hinting on a
+different platform could have blown anyway.
+
+**The touch gesture logic was exercised with synthetic `PointerEvent`s
+(`pointerType:'touch'`) dispatched directly at `#stage`, both against a
+route-mocked page (tap -> `mouse_click` left, two-finger tap -> `mouse_click`
+right, a drag that moves but never taps -> no click, `machine.mouse:
+'none'` -> nothing sent, leaving the tab clears `touchPointers` and stops
+the flush timer) and, once, against the real deployed page and the real
+`modernpc` profile over the tailnet.** The live one: `PROFILE_BASE` set to
+`/p/modernpc` before load, MOUSE tab opened, a synthetic single-finger drag
+of 60 CSS px dispatched. The page's own network log showed one `POST /cmd
+{"cmd":"mouse_move","dx":60,"dy":0}`; `vcctrl_events profile=modernpc`
+independently showed the daemon received and executed it (`seq 7, cmd
+mouse_move, detail "60,0", ok true, ms 12.1, by browser` -- the daemon's
+own record, not the page's claim of success, per the "attest from the
+thing that ran it" discipline). Unlike FINDINGS #48's identical-shaped
+dx=60 test, the capture stayed a uniform blank afterward (`vcctrl_shot`:
+"every frame ... was a uniform constant") -- the target's display did not
+visibly wake this time, a DPMS/screen-power difference from #48's run, not
+a defect in this path: the daemon accepted and wrote the HID report
+either way, which is the boundary this measurement was taken to prove.
+
+**Not measured by this**: a real touchscreen. Every gesture above was a
+synthetic `PointerEvent`, which exercises the page's own gesture logic
+faithfully (tap/drag/two-finger discrimination, thresholds, the flush
+timer) but says nothing about a real finger's jitter, a real browser's own
+touch-to-pointer-event translation, or how the tab reads at arm's length
+on actual glass -- the plan's own WP6 item 4 ("verify on the real phone")
+is still open. Also not measured: absolute-pointer gestures (tap-to-move,
+long-press), because no absolute-mode command exists on the daemon yet
+(WP4); the MOUSE tab refuses to forward anything when
+`machine.mouse !== 'relative'` rather than guess at semantics for a
+command that isn't there.

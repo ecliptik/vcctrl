@@ -281,6 +281,13 @@
       color:transparent; caret-color:transparent; border:0; padding:0;
       -webkit-user-select:text;
     }
+    /* MOUSE TAB TAKES THE GLASS BACK FROM #ghost. Its whole job is "a tap
+       IS a tap on the field" -- exactly the behaviour the MOUSE tab exists
+       to turn off. pointer-events:none here, not a second z-index fight,
+       so the same touch reaches #scroll/#frame underneath (already
+       touch-action:none, see its own comment) instead of focusing an
+       input and raising a keyboard nobody asked for. */
+    body #stage.mousetab #ghost { pointer-events:none; }
     header { gap:5px; padding:0 7px;
              height:calc(38px + env(safe-area-inset-top,0px)); }
     .chip { font-size:10px; letter-spacing:.03em; }
@@ -506,7 +513,15 @@
       display:flex; flex:none; border-top:1px solid var(--rule);
       background:var(--panel);
       padding-bottom:env(safe-area-inset-bottom,0px);
+      /* MOUSE pushed eight labels past a real 390px phone (measured:
+         417px of buttons in a 390px row, iframe-viewport technique --
+         top-level headless clamps to 500 and would have said "fits").
+         space-between still owns the common case where everything DOES
+         fit; this is the fallback for when it does not, rather than a
+         redesign of the row for one word. */
+      overflow-x:auto; scrollbar-width:none;
     }
+    body #tabs::-webkit-scrollbar { display:none; }
     /* EVEN GAPS, NOT EVEN CELLS -- and the difference is the whole
        complaint. flex:1 1 0 gave every tab the same width, so the WORDS sat
        centred in equal boxes and the space between them varied with their
@@ -514,10 +529,14 @@
        visibly closer than LOG and STATUS. Equalising the cells optimised the
        thing nobody looks at. space-between with natural widths equalises the
        gaps, which is what the eye is actually measuring. */
-    body #tabs { justify-content:space-between; padding-left:10px;
-                 padding-right:10px; }
+    body #tabs { justify-content:space-between; padding-left:8px;
+                 padding-right:8px; }
     #tabs button {
-      flex:0 0 auto; padding:0 6px;
+      /* 6px was tuned for seven tabs; MOUSE made it eight, 37px over a
+         real 390px phone (measured; see #tabs' own comment). 4px gets
+         eight labels back under 391px without shrinking the touch target
+         itself -- min-height, not this, is what makes a tab tappable. */
+      flex:0 0 auto; padding:0 4px;
       min-width:0; border:0; border-radius:0; background:transparent;
       color:var(--dim); font:var(--t-micro)/1 var(--mono);
       letter-spacing:.06em; min-height:46px;
@@ -1418,6 +1437,19 @@
     padding:5px 8px; opacity:0; transition:opacity .25s linear;
   }
   #zhint.show { opacity:1; }
+  /* Same corner language as #zhint (opaque --panel over video, never a
+     translucent scrim) but LEFT, not right, and a real button rather than
+     a pointer-events:none toast -- #zhint and this can be on screen
+     together (a letterboxed capture plus the MOUSE tab) and must not sit
+     on top of each other. --tap keeps it a real touch target rather than
+     matching the toast's read-only padding. */
+  #mouseparkbtn {
+    position:absolute; left:10px; bottom:10px; z-index:3;
+    font:var(--t-micro) var(--mono); letter-spacing:.06em; color:var(--text);
+    background:var(--panel); border:1px solid var(--edge); border-radius:5px;
+    box-shadow:0 2px 10px rgba(0,0,0,.35);
+    padding:0 12px; min-height:var(--tap, 44px);
+  }
   /* The last live picture, behind the notice. Dimmed so it cannot be mistaken
      for the current screen -- but readable, because it is often the only
      picture there is. Full brightness is one click away and is remembered. */
@@ -2600,6 +2632,15 @@
     <button id="camswap" hidden title="Swap sizes with the main view"
             aria-label="Swap sizes with the main view">⇄</button>
     <div id="zhint" aria-hidden="true"></div>
+    <!-- Floats at the foot of the picture, right where it meets #tabs below
+         it -- "in the tab row" without becoming a ninth flex child of a row
+         that already scrolls at 390px (see #tabs' own comment). Shown only
+         while the MOUSE tab is open (setTab()), same as Settings' own
+         #parkbtn does the identical move -- one action, two buttons,
+         because the phone one has to be reachable without leaving the
+         picture to find Settings. -->
+    <button id="mouseparkbtn" hidden
+            title="Slam the cursor into a corner">Park</button>
     <input id="ghost" autocapitalize="off" autocorrect="off" spellcheck="false"
            autocomplete="off" enterkeyhint="enter" aria-label="type at the target">
     <div id="veil">
@@ -3067,6 +3108,11 @@
          strip is invisible and this tab is the only way to the field, that is
          the tab most likely to be looked for by what it does. -->
     <button data-tab="keys" title="Type at the target">TYPE</button>
+    <!-- The one gesture iOS cannot give back: a tap on the picture already
+         means "focus #ghost, raise the keyboard" on TYPE/SCREEN, so a
+         second meaning for the same tap needs its own tab rather than a
+         mode hidden inside one that already owns it. -->
+    <button data-tab="mouse" title="Touch the picture as a mouse">MOUSE</button>
     <!-- Beside the thing it records rather than at the far end: what you type
          and what was captured are two views of the same session. -->
     <button data-tab="buffer" title="Look back through what the screen did">CAPTURE</button>
@@ -5424,15 +5470,26 @@ function flushMouseMove() {
   if (wheel) post('mouse_wheel', {dy: wheel});
 }
 
+// SHARED BY POINTER LOCK (desktop Grab) AND THE PHONE MOUSE TAB -- two
+// different gestures feeding the same accumulator and the same paced
+// flush, so they share the one timer rather than each keeping its own.
+function startMouseFlush() {
+  if (mouseFlushTimer) return;
+  mouseAccDx = mouseAccDy = mouseAccWheel = 0;
+  mouseFlushTimer = setInterval(flushMouseMove, 40);
+}
+function stopMouseFlush() {
+  if (!mouseFlushTimer) return;
+  clearInterval(mouseFlushTimer);
+  mouseFlushTimer = null;
+}
 document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === $('stage');
-  if (locked && !mouseFlushTimer) {
-    mouseAccDx = mouseAccDy = mouseAccWheel = 0;
-    mouseFlushTimer = setInterval(flushMouseMove, 40);
-  } else if (!locked && mouseFlushTimer) {
-    clearInterval(mouseFlushTimer);
-    mouseFlushTimer = null;
-  }
+  if (document.pointerLockElement === $('stage')) startMouseFlush();
+  // NOT an unconditional stop -- the MOUSE tab wants the same timer and
+  // does not go through Pointer Lock at all, so losing the lock must not
+  // stop a flush the touch path still needs. setTab() stops it on the way
+  // out of the MOUSE tab instead.
+  else if (curTab !== 'mouse') stopMouseFlush();
 });
 
 $('stage').addEventListener('pointermove', e => {
@@ -5492,14 +5549,91 @@ $('stage').addEventListener('contextmenu', e => { if (armed) e.preventDefault();
 // the target's own silent clamp at the screen edge. Sequential, not
 // parallel -- this is a rare, deliberate recovery action, not something
 // that needs to race normal input for the daemon's pacing.
-$('parkbtn').onclick = async () => {
+async function parkMouse() {
   for (let i = 0; i < 15; i++) await post('mouse_move', {dx: -300, dy: -300});
   addLine(new Date(), 'ui', 'mouse parked to top-left', 'k-note');
-};
+}
+// Settings' own button (desktop and phone both, via the drawer) and the
+// MOUSE tab's floating one (phone only, reachable without leaving the
+// picture) are one action -- see #mouseparkbtn's own markup comment.
+$('parkbtn').onclick = parkMouse;
+$('mouseparkbtn').onclick = parkMouse;
 $('mousesens').value = mouseSensitivity();
 $('mousesens').oninput = () => {
   localStorage.setItem('vcctrl.mousesens', $('mousesens').value);
 };
+
+// ── THE MOUSE TAB: TOUCH AS A TRACKPAD, RELATIVE TARGETS ONLY ───────────
+//
+// Pointer Lock (the desktop Grab path above) does not exist on a touch
+// device worth naming -- iOS Safari has never implemented it -- so this is
+// a second, independent forwarding path, not Grab's mouse half wearing a
+// phone costume. It shares the accumulator and the paced flush
+// (startMouseFlush/flushMouseMove above) and nothing else: no Pointer
+// Lock request, no keyboard focus, no `armed`.
+//
+// SCOPED TO machine.mouse === 'relative' ON PURPOSE. Both machines this
+// rig runs today are relative-only (docs/MOUSE.md), and an absolute
+// target needs a daemon command (mouse_abs) that does not exist yet --
+// WP4 in internal/KVM-MACHINES-PLAN.md, not this. Guessing at absolute
+// semantics against a command that isn't there would be untestable and
+// silently wrong the day it landed; refusing with a clear reason is not.
+function mouseMode() {
+  return (lastState && lastState.machine && lastState.machine.mouse) || 'relative';
+}
+
+const TOUCH_MOVE_THRESH = 10;  // px of travel before a touch is a drag, not a tap
+const TOUCH_TAP_MS = 350;      // longest hold that still counts as a tap
+let touchPointers = new Map(); // pointerId -> last {x, y} seen for it
+let touchGestureStart = 0, touchMaxFingers = 0, touchMoved = false;
+
+function mouseTabDown(e) {
+  if (mouseMode() !== 'relative' || onOverlay(e)) return;
+  if (e.cancelable) e.preventDefault();
+  if (touchPointers.size === 0) {
+    touchGestureStart = Date.now();
+    touchMaxFingers = 0;
+    touchMoved = false;
+    startMouseFlush();
+  }
+  touchPointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  touchMaxFingers = Math.max(touchMaxFingers, touchPointers.size);
+}
+function mouseTabMove(e) {
+  const p = touchPointers.get(e.pointerId);
+  if (!p) return;
+  if (e.cancelable) e.preventDefault();
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  if (Math.abs(dx) > TOUCH_MOVE_THRESH || Math.abs(dy) > TOUCH_MOVE_THRESH) touchMoved = true;
+  p.x = e.clientX; p.y = e.clientY;
+  // ONLY WHILE EXACTLY ONE FINGER IS DOWN. A second finger arriving is an
+  // attempt at a two-finger tap (right click), not a faster drag -- adding
+  // its delta in too would send the cursor wherever the average of two
+  // independently-moving fingers happens to land.
+  if (touchPointers.size !== 1) return;
+  const sens = mouseSensitivity();
+  mouseAccDx += dx * sens;
+  mouseAccDy += dy * sens;
+}
+function mouseTabUp(e) {
+  if (!touchPointers.has(e.pointerId)) return;
+  touchPointers.delete(e.pointerId);
+  if (touchPointers.size > 0) return;
+  const held = Date.now() - touchGestureStart;
+  if (!touchMoved && held < TOUCH_TAP_MS) {
+    post('mouse_click', {button: touchMaxFingers >= 2 ? 'right' : 'left'});
+  }
+}
+$('stage').addEventListener('pointerdown', e => { if (curTab === 'mouse') mouseTabDown(e); });
+$('stage').addEventListener('pointermove', e => { if (curTab === 'mouse') mouseTabMove(e); }, {passive: false});
+$('stage').addEventListener('pointerup', e => { if (curTab === 'mouse') mouseTabUp(e); });
+// A finger lifted off the glass entirely (an incoming call, a notification
+// swipe) still has to leave the trackpad in a clean state -- treated as an
+// up with no tap, same as a drag that never resolved into a click.
+$('stage').addEventListener('pointercancel', e => {
+  if (curTab !== 'mouse' || !touchPointers.has(e.pointerId)) return;
+  touchPointers.delete(e.pointerId);
+});
 
 function armFromStage(e) {
   // THE OVERLAYS ARE NOT THE PICTURE. The scrub panel, the No Signal notice
@@ -5512,6 +5646,12 @@ function armFromStage(e) {
   if (e && e.target && e.target.closest
       && e.target.closest('#scrub, #veil, #stalebar, #veilback, '
                           + '#camoverlay, #camswap')) return;
+  // THE ONE GESTURE iOS CANNOT REPLACE, STILL SPOKEN FOR -- a tap on the
+  // MOUSE tab is a click for the target, not a request for this browser's
+  // keyboard. #ghost is pointer-events:none while this tab is open (see
+  // its own CSS comment) so this should be unreachable in practice; kept
+  // as the second door, the same discipline setArmed's own lock check uses.
+  if (curTab === 'mouse') return;
   if (armed) {
     // Already grabbed. Do not silently do nothing -- the previous build's
     // real bug was invisible state, so say what is true, over the picture
@@ -5523,7 +5663,7 @@ function armFromStage(e) {
 }
 // On a phone the tap lands on the transparent input, so its focus event is
 // the arming signal; the click handler still covers desktop.
-ghost.addEventListener('focus', () => { if (!armed) setArmed(true); });
+ghost.addEventListener('focus', () => { if (!armed && curTab !== 'mouse') setArmed(true); });
 // RELEASE ON BLUR ONLY WHERE THE GHOST IS THE AFFORDANCE. On a phone, focus
 // is the grab. On a desktop, clicking ANY control blurs it -- including the
 // release button itself, whose blur handler turned `armed` off a moment
@@ -8194,6 +8334,20 @@ let curTab = 'none';
 function setTab(name) {
   const body = $('body'), panels = $('panels');
   curTab = name;
+  // MOUSE TAB: touch becomes the trackpad (mouseTabDown/Move/Up above),
+  // #ghost stops eating the tap (its own CSS, keyed off this same class),
+  // and the floating Park button appears where Settings' own is out of
+  // reach without leaving the picture.
+  $('stage').classList.toggle('mousetab', name === 'mouse');
+  $('mouseparkbtn').hidden = name !== 'mouse';
+  if (name === 'mouse') {
+    hint('drag to move the pointer, tap to click, two fingers to right-click');
+  } else {
+    // Leaving mid-gesture must not strand the flush timer running forever,
+    // or leave a stale finger in the map deciding the NEXT gesture's tap.
+    touchPointers.clear();
+    stopMouseFlush();
+  }
   // Closing a tab has to close what the tab opened. Settings and the two
   // popovers are their own surfaces now, so switching away from them left
   // them on screen with nothing highlighted -- a panel with no way back to
@@ -8907,7 +9061,10 @@ setInterval(() => {
     // Dragging the picture to pan it and dragging to move the target's
     // cursor are the same gesture on the same surface -- Mouse wins while
     // it is grabbed, the same as it wins over armFromStage's tap-to-type.
-    if (armed) return;
+    // The MOUSE tab is the same conflict again: a drag there is the
+    // trackpad, not a pan, even at a zoom level where panning would
+    // otherwise apply.
+    if (armed || curTab === 'mouse') return;
     const camMain = document.body.classList.contains('cam-swapped');
     el = camMain ? $('camoverlay') : $('scroll');
     cursorEl = camMain ? el : $('frame');
