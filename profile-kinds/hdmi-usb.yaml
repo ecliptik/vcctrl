@@ -46,6 +46,15 @@ capabilities:
       # byte-identical indefinitely. Leaving this at the default (True,
       # correct for vga-ps2) mislabels a healthy idle screen "NO SIGNAL".
       analog: false
+      # NOT the class default (640x480) -- that value matches the PRIMARY
+      # instance's own DOS target VGA mode, not a good default in general.
+      # -c:v copy means ffmpeg does not scale, so asking for less than
+      # this dongle's native resolution throws detail away for free --
+      # confirmed via `v4l2-ctl --list-formats-ext` on modernpc's own
+      # dongle (1920x1080 MJPG at 30/60fps, natively). Check the SAME
+      # command against this specific target's own dongle before trusting
+      # this value -- not every capture chip supports every resolution.
+      resolution: "1920x1080"
 
   # Everything below is EXPLICITLY `none`, not omitted -- Registry.
   # _resolve_backend falls back to a capability's OWN class default on an

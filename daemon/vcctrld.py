@@ -3113,6 +3113,22 @@ class VideoCapability(Capability):
     # likely) still has a value here instead of raising on the first
     # _state() call.
     ANALOG = bool(CFG.default("capabilities.video.settings.analog", True))
+    # Defaults to 640x480 -- the historical hardcoded value, correct for
+    # the primary's VGA capture because it MATCHES the DOS target's own
+    # native mode (see this file's own "the Gateway's stick emits 640x480
+    # today" comment elsewhere), not because it's a good default in
+    # general. A digital-source profile capturing a modern display's own
+    # native resolution needs its own value here -- unlike
+    # CameraCapability's equivalent (always the same one physical room
+    # camera, correctly left hardcoded), this class now serves genuinely
+    # different physical devices per profile, so it has to be a setting.
+    # `-c:v copy` means ffmpeg does not scale or re-encode: this must be a
+    # size the DEVICE ITSELF produces MJPEG at natively, not an arbitrary
+    # request -- check with `v4l2-ctl --list-formats-ext` before changing
+    # it for a given profile, the same way CameraCapability's own 1920x1080
+    # was confirmed rather than assumed.
+    RESOLUTION = CFG.default("capabilities.video.settings.resolution",
+                             "640x480")
     # 48 MB. 30 s at 30 fps is 900 frames: 13.5 MB of text console but 63 MB of
     # a dense screen, a 4.7x spread. A buffer sized in seconds has no fixed
     # cost and one sized in bytes has no fixed duration, so this is capped in
@@ -3303,6 +3319,11 @@ class VideoCapability(Capability):
         # for it (see kvm.html's own use of this field).
         self.ANALOG = bool(CFG.default("capabilities.video.settings.analog",
                                        True))
+        # Resolved fresh here too, same reasoning as DEVICE/ANALOG above --
+        # this profile's own capture resolution, not whichever profile's
+        # class attribute happened to be baked in at import time.
+        self.RESOLUTION = CFG.default("capabilities.video.settings.resolution",
+                                      "640x480")
         self.running = True
         self._acquire()
         threading.Thread(target=self._watchdog, daemon=True).start()
@@ -3319,7 +3340,7 @@ class VideoCapability(Capability):
                 self.proc = subprocess.Popen(
                     ["ffmpeg", "-hide_banner", "-loglevel", "error",
                      "-f", "v4l2", "-input_format", "mjpeg",
-                     "-video_size", "640x480", "-framerate", "30",
+                     "-video_size", self.RESOLUTION, "-framerate", "30",
                      "-i", self.DEVICE,
                      "-c:v", "copy", "-f", "mjpeg", "-"],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,

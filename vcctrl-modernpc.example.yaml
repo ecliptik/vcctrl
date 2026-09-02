@@ -116,6 +116,17 @@ capabilities:
       # for the VGA-stick primary) made kvm.html label a perfectly healthy,
       # responsive idle screen "NO SIGNAL". Caught live 2026-09-01.
       analog: false
+      # NOT the class default (640x480) -- that value is correct for the
+      # PRIMARY instance because it matches the DOS target's own native
+      # VGA mode, not because it's a good default in general. This
+      # dongle's laptop/server source runs at a modern resolution, and
+      # -c:v copy means ffmpeg does not scale -- asking for less than the
+      # source's own resolution just throws detail away for free, which
+      # is exactly why gateway2000's tiny text looked fine at 640x480 (it
+      # IS 640x480) and modernpc's did not (it never was). Confirmed via
+      # `v4l2-ctl --list-formats-ext` on the live dongle: 1920x1080 MJPG
+      # at 30fps (and even 60fps) is natively supported, not assumed.
+      resolution: "1920x1080"
 
   # EXPLICITLY `none`, NOT LEFT OUT. An absent `backend:` key does NOT mean
   # disabled anywhere in this schema (Registry._resolve_backend falls back
