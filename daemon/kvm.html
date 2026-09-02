@@ -6935,7 +6935,18 @@ async function pollState() {
   // are in hand.
   if (!keymap) loadKeymap();
   const v = j.video || {};
-  if (v.state === 'locked') {
+  // FROZEN MEANS NO SIGNAL ONLY ON AN ANALOG SOURCE (see pill()'s own
+  // comment on this exact daemon field, and daemon/vcctrld.py's
+  // VideoCapability.start() for the measured reason: analog sampling
+  // noise means a live picture never repeats byte-for-byte, so identical
+  // frames are reliable evidence of nothing coming in. A DIGITAL source
+  // (v.analog === false, e.g. modernpc's HDMI capture) has no such noise
+  // floor -- a genuinely static, fully-connected picture can sit
+  // byte-identical indefinitely, which this page was labelling "NO
+  // SIGNAL" regardless of v.analog until caught live 2026-09-01 against a
+  // real, responsive HDMI target sitting at an idle browser tab.
+  const digitalFrozen = v.state === 'frozen' && v.analog === false;
+  if (v.state === 'locked' || digitalFrozen) {
     pill('p-video','on','video locked');
     // A real picture ends the choice: the next outage starts with the notice
     // shown rather than silently suppressed by a decision made an hour ago.

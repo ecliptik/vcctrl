@@ -3107,6 +3107,12 @@ class VideoCapability(Capability):
     # source on hardware is the last thing anyone should be doing.
     # /dev/v4l/by-id/... is the stable name if the index ever moves.
     DEVICE = CFG.default("capabilities.video.settings.device", "/dev/video0")
+    # Class-level default, same reasoning as DEVICE above (and shadowed by
+    # an instance attribute in start() the same way) -- so anything that
+    # builds a VideoCapability without going through start() (tests, most
+    # likely) still has a value here instead of raising on the first
+    # _state() call.
+    ANALOG = bool(CFG.default("capabilities.video.settings.analog", True))
     # 48 MB. 30 s at 30 fps is 900 frames: 13.5 MB of text console but 63 MB of
     # a dense screen, a 4.7x spread. A buffer sized in seconds has no fixed
     # cost and one sized in bytes has no fixed duration, so this is capped in
@@ -3277,6 +3283,26 @@ class VideoCapability(Capability):
         # method on THIS instance, which all already read `self.DEVICE`.
         self.DEVICE = CFG.default("capabilities.video.settings.device",
                                   "/dev/video0")
+        # WHETHER "frozen" MEANS "no signal" DEPENDS ON THE SOURCE. The
+        # "frozen -> NO SIGNAL" reading above (see the watchdog's own
+        # comment) is a MEASURED fact about the analog VGA capture stick
+        # specifically: analog sampling noise means a live, connected
+        # signal never produces byte-identical frames, mean absolute
+        # difference ~1 with peaks near 40 on a still DOS prompt -- so
+        # identical frames are the stick's own "locked, no source" tell.
+        # A DIGITAL capture (modernpc's HDMI dongle) has no such noise
+        # floor: a genuinely static, fully-connected picture can produce
+        # byte-identical frames forever, which this same page (daemon/
+        # kvm.html) was labelling "NO SIGNAL" regardless -- caught live
+        # 2026-09-01 when a real, responsive HDMI target sat at an idle
+        # browser tab and the page insisted nothing was connected.
+        # Defaults to True (the historical, still-correct behavior for
+        # every VGA-stick profile that already exists) so nothing already
+        # deployed changes; a digital-source profile's own config sets
+        # this False and the page adjusts what "frozen" is allowed to mean
+        # for it (see kvm.html's own use of this field).
+        self.ANALOG = bool(CFG.default("capabilities.video.settings.analog",
+                                       True))
         self.running = True
         self._acquire()
         threading.Thread(target=self._watchdog, daemon=True).start()
@@ -4262,6 +4288,9 @@ class VideoCapability(Capability):
                     # be the instrument's own state reported as the target's.
                     "device_present": os.path.exists(self.DEVICE),
                     "device": self.DEVICE,
+                    # Whether "frozen" (below) is trustworthy evidence of no
+                    # signal for THIS source -- see start()'s own comment.
+                    "analog": self.ANALOG,
                     "pinned": bool(self.pin_holders),
                     # Frames that would not decode. Zero is a real answer here
                     # and an interesting one: it says the capture pipe has

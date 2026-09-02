@@ -106,6 +106,16 @@ capabilities:
       # devices on one Pi, index drift on ANY of them can silently point
       # this instance at somebody else's signal.
       device: /dev/v4l/by-id/usb-MACROSILICON_USB3.0_Capture-video-index0
+      # DIGITAL SOURCE -- see daemon/vcctrld.py's VideoCapability.start()
+      # for the measured reason this matters: "frozen" (byte-identical
+      # frames) is reliable evidence of no signal only for an ANALOG
+      # capture, where sampling noise means a live picture never repeats
+      # exactly. HDMI has no such noise floor -- a genuinely static,
+      # fully-connected picture can sit byte-identical for as long as
+      # nothing on screen changes, and defaulting this to True (correct
+      # for the VGA-stick primary) made kvm.html label a perfectly healthy,
+      # responsive idle screen "NO SIGNAL". Caught live 2026-09-01.
+      analog: false
 
   # EXPLICITLY `none`, NOT LEFT OUT. An absent `backend:` key does NOT mean
   # disabled anywhere in this schema (Registry._resolve_backend falls back

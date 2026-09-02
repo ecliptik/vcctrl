@@ -38,6 +38,14 @@ capabilities:
       # vga-ps2.yaml's own video device comment. Fill in with this
       # target's own HDMI capture dongle's by-id path.
       device: /dev/v4l/by-id/REPLACE_ME-video-index0
+      # DIGITAL SOURCE -- see daemon/vcctrld.py's VideoCapability.start()
+      # comment: "frozen" (byte-identical frames) is only reliable
+      # evidence of no signal on an ANALOG capture (sampling noise means
+      # a live picture never repeats exactly); HDMI has no such noise
+      # floor, so a genuinely static, connected picture can sit
+      # byte-identical indefinitely. Leaving this at the default (True,
+      # correct for vga-ps2) mislabels a healthy idle screen "NO SIGNAL".
+      analog: false
 
   # Everything below is EXPLICITLY `none`, not omitted -- Registry.
   # _resolve_backend falls back to a capability's OWN class default on an

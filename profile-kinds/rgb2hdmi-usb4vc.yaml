@@ -50,6 +50,11 @@ capabilities:
       # docs/BOARD-IDENTITY.md sec. 4 names RGB2HDMI -> HDMI-USB capture
       # as the intended path but nothing has run it here.
       device: /dev/v4l/by-id/REPLACE_ME-video-index0
+      # DIGITAL SOURCE -- same reasoning as profile-kinds/hdmi-usb.yaml's
+      # own comment: the capture point here is RGB2HDMI's HDMI OUTPUT, not
+      # the original analog signal, so it has no analog sampling-noise
+      # floor and "frozen" must not be read as "no signal" for it.
+      analog: false
 
   leds:
     backend: none

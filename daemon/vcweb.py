@@ -1271,6 +1271,38 @@ class WebCapability(object):
     def camera(self):
         return self.registry.caps.get("camera")
 
+    def _absent_reason(self, cap_name):
+        """Why `cap_name` is missing from self.registry.caps -- disabled (a
+        deliberate `backend: none`, Registry's own "third state") or
+        genuinely failed (registry.failed's own detail) -- never a blanket
+        "X capability failed to start" for both, which is what every
+        snapshot() fallback below used to say regardless of which was
+        true. Dormant until a profile actually set something to `none`
+        here: gateway2000 never did, so this shipped invisibly until
+        modernpc's board/power/sysinfo all did, live 2026-09-01.
+
+        Returns (why, reason) -- `why` matching the vocabulary
+        Registry.__init__ already uses (disabled/failed), not a fourth
+        invented word, so a caller checking `why == "not_configured"` gets
+        the same answer this capability's own snapshot() would have given
+        had it started at all.
+        """
+        if cap_name in self.registry.disabled:
+            return "not_configured", self.registry.disabled[cap_name]
+        if cap_name in self.registry.failed:
+            return "error", self.registry.failed[cap_name]
+        return "error", "%s capability failed to start" % cap_name
+
+    def _absent(self, cap_name, **null_fields):
+        """A complete snapshot()-shaped fallback for an ABSENT capability --
+        every null field this capability's own working snapshot() would
+        carry, plus the ACCURATE why/reason from _absent_reason() above.
+        One call per capability inline in snapshot()'s dict literal below,
+        so each fallback stays a single expression instead of needing a
+        why/reason pair computed as separate statements first."""
+        why, reason = self._absent_reason(cap_name)
+        return dict(null_fields, why=why, reason=reason)
+
     def snapshot(self):
         """Everything the page needs to answer "is it stuck", in one request."""
         vid = self.video()
@@ -1280,8 +1312,8 @@ class WebCapability(object):
         # in the same poll as everything else rather than needing a second one.
         leds_cap = self.registry.caps.get("leds")
         if leds_cap is None:
-            leds = {"available": False, "why": "error",
-                    "reason": "leds capability failed to start"}
+            _why, _reason = self._absent_reason("leds")
+            leds = {"available": False, "why": _why, "reason": _reason}
         else:
             try:
                 leds = leds_cap.snapshot()
@@ -1301,8 +1333,8 @@ class WebCapability(object):
         # that does not apply -- and a Macintosh must not render like a
         # Gateway with a dead PS/2 lead.
         if leds_cap is None:
-            verified = {"available": False, "why": "error",
-                        "reason": "leds capability failed to start"}
+            _why, _reason = self._absent_reason("leds")
+            verified = {"available": False, "why": _why, "reason": _reason}
         elif leds.get("why") == "unsupported":
             verified = {"available": False, "why": "unsupported",
                         "reason": leds.get("reason")}
@@ -1354,17 +1386,17 @@ class WebCapability(object):
                 # Cached, never a live query: see PowerCapability.snapshot().
                 "power": (self.registry.caps["power"].snapshot()
                           if "power" in self.registry.caps else
-                          {"host": None, "alias": None, "model": None,
-                           "on": None, "age_s": None, "stale": None,
-                           "reason": "power capability failed to start"}),
+                          self._absent("power", host=None, alias=None,
+                                       model=None, on=None, age_s=None,
+                                       stale=None)),
                 # Which protocol board is installed, and therefore which
                 # computer the input path is actually wired to. Unknown is a
                 # first-class answer -- never a default to IBMPC.
                 "board": (self.registry.caps["board"].snapshot()
                           if "board" in self.registry.caps else
-                          {"id": None, "name": None, "target": None,
-                           "source": None, "stale": None,
-                           "reason": "board capability failed to start"}),
+                          self._absent("board", id=None, name=None,
+                                       target=None, source=None,
+                                       stale=None)),
                 # The DOS target's own hardware, as dinspect last measured
                 # it -- a READING with an age, never a live poll (a scan
                 # reboots the machine twice). `null` fields and `source:
@@ -1372,18 +1404,17 @@ class WebCapability(object):
                 # hardware" -- see SysinfoCapability.snapshot().
                 "sysinfo": (self.registry.caps["sysinfo"].snapshot()
                             if "sysinfo" in self.registry.caps else
-                            {"fields": None, "other": None, "source": None,
-                             "age_s": None, "stale": None,
-                             "reason": "sysinfo capability failed to start"}),
+                            self._absent("sysinfo", fields=None, other=None,
+                                         source=None, age_s=None,
+                                         stale=None)),
                 # Whether this machine can be sent a file at all, and if
                 # not, WHICH not -- the page greys the transfer entry with the
                 # reason rather than hiding it or letting it fail on click.
                 "files": (self.registry.caps["files"].snapshot()
                           if "files" in self.registry.caps else
-                          {"available": False, "why": "not_configured",
-                           "reason": "the files capability is not running",
-                           "backend": None, "server": None, "dest": None,
-                           "warn_bytes": None, "refuse_bytes": None}),
+                          self._absent("files", available=False, backend=None,
+                                       server=None, dest=None, warn_bytes=None,
+                                       refuse_bytes=None)),
                 # THE BOOT PROFILE, AS A READING AND NOT A STATUS. Null
                 # whenever it has not been established or a reboot has
                 # invalidated it -- absent rather than old, because a stale
@@ -1394,8 +1425,8 @@ class WebCapability(object):
                 "profile": (self.registry.caps["board"]._profile(
                                 {"action": "state"})["profile"]
                             if "board" in self.registry.caps else
-                            {"name": None, "at": None, "how": None,
-                             "reason": "board capability failed to start"}),
+                            self._absent("board", name=None, at=None,
+                                         how=None)),
                 # Host facts. The login banner has had these since the Pi 5
                 # build and the page has not, so "is it thermally throttling
                 # while I watch the stream stutter" was answerable at a shell
@@ -1412,8 +1443,7 @@ class WebCapability(object):
                 # in the slot the file/type/send controls used to occupy.
                 "note": (self.registry.caps["note"].snapshot()
                          if "note" in self.registry.caps else
-                         {"text": None, "at": None, "by": None,
-                          "reason": "note capability failed to start"}),
+                         self._absent("note", text=None, at=None, by=None)),
                 "viewers": self.clients,
                 "listeners": self.listeners,
                 "audio": (self.audio()._state() if self.audio()

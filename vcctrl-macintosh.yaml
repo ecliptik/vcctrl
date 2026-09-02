@@ -44,6 +44,10 @@ capabilities:
       # docs/BOARD-IDENTITY.md sec. 4 names RGB2HDMI -> HDMI-USB capture
       # as the intended path but nothing has run it here.
       device: /dev/v4l/by-id/REPLACE_ME-video-index0
+      # DIGITAL SOURCE -- see profile-kinds/rgb2hdmi-usb4vc.yaml's own
+      # comment: the capture point is RGB2HDMI's HDMI output, not the
+      # original analog signal, so "frozen" must not be read as no signal.
+      analog: false
 
   leds:
     backend: none
