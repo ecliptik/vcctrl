@@ -119,6 +119,15 @@ USAGE = """usage: vcctrl <command> [args]
                             sweep at the machine can (docs/WEBKVM.md 5.2).
   mouse move <dx> <dy>
   mouse click [left|right|middle]
+  mouse down [left|right|middle]  press and hold, for a drag -- release_all
+                            (or `mouse up`) lets go; a dropped connection
+                            with a button still down is why release_all
+                            releases mouse buttons too, not just keys
+  mouse up [left|right|middle]
+  mouse release-all         release every mouse button mouse-down left
+                            held -- the mouse's own release-all, separate
+                            from the keyboard's: releasing one must not
+                            drop what the other is mid-operation on
   leds                      read PS/2 LED return channel
   ledwait [timeout_s]       block until LED state changes
   led-changes [n]           the last n LED transitions, newest first, with a
@@ -1269,6 +1278,14 @@ def main(argv):
         elif rest[0] == "click":
             req = {"cmd": "mouse_click",
                    "button": rest[1] if len(rest) > 1 else "left"}
+        elif rest[0] == "down":
+            req = {"cmd": "mouse_down",
+                   "button": rest[1] if len(rest) > 1 else "left"}
+        elif rest[0] == "up":
+            req = {"cmd": "mouse_up",
+                   "button": rest[1] if len(rest) > 1 else "left"}
+        elif rest[0] in ("release-all", "release_all"):
+            req = {"cmd": "mouse_release_all"}
         else:
             sys.stderr.write(USAGE)
             return 2

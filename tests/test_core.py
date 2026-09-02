@@ -122,6 +122,7 @@ def make_devices(delay=0.0):
     d.mouse = FakeDev(d.log, delay)
     d.lock = threading.Lock()
     d.held = set()
+    d.held_mouse = set()
     d.led_paths = {}
     return d
 
@@ -255,6 +256,52 @@ def test_keydown_release_all():
         check("unknown key rejected", False, "no exception")
     except ValueError:
         check("unknown key rejected", True)
+
+
+def test_mouse_down_up_release_all():
+    """The mouse's own keydown/keyup/release_all -- for a drag, and for the
+    same reason: a disconnect mid-drag must not leave a button down at the
+    target any more than a disconnect mid-keypress may.
+
+    release_all() and mouse_release_all() are DELIBERATELY TWO VERBS, not
+    one covering both. The web KVM's keyboard capture and mouse capture are
+    independent controls -- a viewer can hold one and not the other -- so
+    giving up one must not reach across and silently end whatever the
+    other is mid-operation on: a latched on-screen modifier not yet sent,
+    or a mouse button held for a drag. The first version of this fix made
+    them one verb; this test is the control that would have caught it --
+    releasing the KEYBOARD must leave a mouse button held, and releasing
+    the MOUSE must leave a key held.
+    """
+    print("\nmouse_down / mouse_up / release_all")
+    d = make_devices()
+    d.mouse_down("left")
+    check("held_mouse tracks the pressed button",
+          d.held_mouse == {e.BTN_LEFT}, d.held_mouse)
+    check("mouse_down actually pressed it, not just recorded it",
+          (e.EV_KEY, e.BTN_LEFT, 1) in [(et, c, v) for (et, c, v) in d.log])
+    d.mouse_up("left")
+    check("mouse_up drops it", not d.held_mouse)
+    check("and released it",
+          (e.EV_KEY, e.BTN_LEFT, 0) in [(et, c, v) for (et, c, v) in d.log])
+
+    # THE INDEPENDENCE CONTROL. A key held via keydown and a button held via
+    # mouse_down at the same time -- releasing one must not touch the other.
+    d.keydown("left")
+    d.mouse_down("right")
+    n = d.release_all(0.0)
+    check("release_all releases only the key", n == 1 and not d.held, (n, d.held))
+    check("and leaves the mouse button held",
+          d.held_mouse == {e.BTN_RIGHT}, d.held_mouse)
+    n = d.mouse_release_all(0.0)
+    check("mouse_release_all releases only the button",
+          n == 1 and not d.held_mouse, (n, d.held_mouse))
+
+    try:
+        d.mouse_down("nosuchbutton")
+        check("unknown button rejected", False, "no exception")
+    except ValueError:
+        check("unknown button rejected", True)
 
 
 # ---------------------------------------------------------------- registry

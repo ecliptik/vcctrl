@@ -1120,6 +1120,30 @@ def vcctrl_mouse_click(button: str = "left", profile: "str | None" = None) -> di
 
 
 @mcp.tool()
+def vcctrl_mouse_down(button: str = "left", profile: "str | None" = None) -> dict:
+    """Press and hold a mouse button, for a drag. The matching
+    vcctrl_mouse_up may never come from your side -- a disconnect (or the
+    web KVM releasing capture) still releases it, the same guarantee
+    release_all already gives a key left down by vcctrl_keydown."""
+    return _gated_run(["mouse", "down", button], profile)
+
+
+@mcp.tool()
+def vcctrl_mouse_up(button: str = "left", profile: "str | None" = None) -> dict:
+    """Release a mouse button held by vcctrl_mouse_down."""
+    return _gated_run(["mouse", "up", button], profile)
+
+
+@mcp.tool()
+def vcctrl_mouse_release_all(profile: "str | None" = None) -> dict:
+    """Release every mouse button vcctrl_mouse_down left held. Separate
+    from vcctrl_release_all (the keyboard's own version): a viewer can hold
+    keyboard and mouse capture independently, and giving up one must not
+    silently drop whatever the other is mid-operation on."""
+    return _gated_run(["mouse", "release-all"], profile)
+
+
+@mcp.tool()
 def vcctrl_verify_input(profile: "str | None" = None) -> dict:
     """Prove the input path by PS/2 LED round trip -- the only check that
     says anything about the FAR end of the wire; every other input status

@@ -194,12 +194,49 @@ not.
    `movementX/movementY` are relative natively, so they match PS/2 and ADB with
    no cursor-position fiction in between. The hard part is not the transport.
 
-## 7. Open questions
+## 7. The browser now forwards it — 2026-09-02
 
-- Clicks. `vcctrl mouse click` has never been exercised at all.
+Section 6.5 above called Pointer Lock the right primitive before anything
+used it. It is now what the web KVM's Mouse control (`kvm.html`,
+independent of the keyboard's own Grab) is built on: `movementX/movementY`
+accumulated and flushed as `mouse_move` on a fixed 40ms timer, so a fast
+trackpad costs one HTTP round trip per tick rather than one per event.
+
+**Two new daemon primitives, not just the existing move/click.**
+`mouse_down`/`mouse_up` press-and-hold a button independently (for a
+drag), the same shape as `keydown`/`keyup`. **Their release is a
+SEPARATE verb from the keyboard's**, `mouse_release_all`, deliberately —
+Grab and Mouse are independent controls a viewer can hold one of without
+the other, and the first draft of this fix made them one verb
+(`release_all` covering both), which meant releasing the KEYBOARD would
+silently drop a mouse button still down mid-drag. Caught before it
+shipped by asking what happens when both are held at once; the
+regression test for it is `test_mouse_down_up_release_all` in
+`tests/test_core.py`.
+
+**A Park button is the browser's own copy of the section 3 technique**:
+fifteen `mouse_move -300 -300` calls, sequential, the same "slam into a
+corner" primitive proven there, not a new one.
+
+**Still not built:** the Macintosh/ADB side (untouched, as section 6.4
+already expected); an absolute-positioning mode for `hid-gadget` targets
+like `modernpc` (Pointer Lock's relative deltas are correct for PS/2 and
+ADB, both genuinely relative-only, but a modern target expects an
+absolute pointer — a planned second HID function, not this one); a mouse
+wheel (the HID report descriptor already reserves a byte for it, but
+nothing generates the value, and whether DOS-era PS/2 mice on this board
+even carry a wheel channel at all is unmeasured); and touch as a mouse on
+a phone (Pointer Lock has no meaningful behavior on a touchscreen, so the
+button is hidden below the desktop breakpoint rather than shown
+non-functional).
+
+## 8. Open questions
+
 - Whether the acceleration factor is stable within one environment or varies
   with speed, which is what a real acceleration *curve* would imply. 1.49x was
   measured at one speed only.
 - Whether any DOS program on the Gateway renders a cursor in mode 12h. If one
   does, it removes the need to start Windows for every mouse test.
 - The Macintosh side, entirely.
+- Whether this rig's PS/2 mouse protocol carries a scroll wheel at all, and
+  whether DOS-era `CTMOUSE` exposes it if so — unmeasured, see section 7.

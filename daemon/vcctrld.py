@@ -1166,6 +1166,11 @@ class Devices(object):
         # or modifier bit happens only at the point of writing a report, in
         # _press/_release below, so this set means the same thing either way.
         self.held = set()
+        # SAME REASONING, FOR MOUSE BUTTONS HELD BY mouse_down WITH NO
+        # MATCHING mouse_up -- a dropped connection mid-drag must not leave
+        # a button down at the target any more than mid-keypress may.
+        # Holds MOUSE_BUTTONS evdev codes in both backends, same as `held`.
+        self.held_mouse = set()
 
         if self.hid_mode:
             self.kbd = None
@@ -1404,9 +1409,17 @@ class Devices(object):
     def release_all(self, pace=DEFAULT_PACE_S):
         """Release every key held via keydown. Returns how many.
 
-        The web KVM must call this when a viewer's socket closes. A dropped
-        wifi connection mid-keypress would otherwise leave a key down at the
-        g2k forever, which at a DOS prompt types until the buffer fills.
+        The web KVM must call this when a viewer's socket closes, or gives
+        up keyboard capture. A dropped wifi connection mid-keypress would
+        otherwise leave a key down at the g2k forever, which at a DOS
+        prompt types until the buffer fills.
+
+        KEYS ONLY, DELIBERATELY -- see mouse_release_all for the mouse's
+        own version and why the two are not one verb. Keyboard capture and
+        mouse capture are independent controls in the web KVM; releasing
+        one must not reach across and end whatever the other is
+        mid-operation on (a latched on-screen modifier held for a chord
+        that has not been sent yet, or a mouse button held for a drag).
         """
         with self.lock:
             codes = sorted(self.held)
@@ -1414,6 +1427,22 @@ class Devices(object):
                 self._release(code)
                 time.sleep(pace)
             self.held.clear()
+        return len(codes)
+
+    def mouse_release_all(self, pace=DEFAULT_PACE_S):
+        """release_all's mouse-button counterpart. Returns how many.
+
+        A separate verb rather than release_all covering both: a viewer can
+        hold keyboard capture and mouse capture independently, and giving
+        up one must not silently drop whatever the other is mid-operation
+        on. See release_all's own docstring.
+        """
+        with self.lock:
+            codes = sorted(self.held_mouse)
+            for code in codes:
+                self._mouse_button_release(code)
+                time.sleep(pace)
+            self.held_mouse.clear()
         return len(codes)
 
     def mouse_move(self, dx, dy, pace=DEFAULT_PACE_S):
@@ -1440,26 +1469,55 @@ class Devices(object):
                 ry -= sy
                 time.sleep(pace)
 
+    def _mouse_button_press(self, code):
+        """The lower half of a click: press one MOUSE_BUTTONS code and leave
+        it down. Caller holds self.lock. Shared by mouse_click and
+        mouse_down so the two backends' report-writing logic exists once."""
+        if not self.hid_mode:
+            self.mouse.write(e.EV_KEY, code, 1)
+            self.mouse.syn()
+            return
+        self._hid_mouse_buttons |= HID_MOUSE_BUTTON_BITS[code]
+        self._write_hid_mouse_report()
+
+    def _mouse_button_release(self, code):
+        """The upper half of a click. Caller holds self.lock."""
+        if not self.hid_mode:
+            self.mouse.write(e.EV_KEY, code, 0)
+            self.mouse.syn()
+            return
+        self._hid_mouse_buttons &= ~HID_MOUSE_BUTTON_BITS[code]
+        self._write_hid_mouse_report()
+
     def mouse_click(self, button, pace=DEFAULT_PACE_S):
         code = MOUSE_BUTTONS.get(button.lower())
         if code is None:
             raise ValueError("unknown button: %s" % button)
         with self.lock:
-            if not self.hid_mode:
-                self.mouse.write(e.EV_KEY, code, 1)
-                self.mouse.syn()
-                time.sleep(pace)
-                self.mouse.write(e.EV_KEY, code, 0)
-                self.mouse.syn()
-                time.sleep(pace)
-                return
-            bit = HID_MOUSE_BUTTON_BITS[code]
-            self._hid_mouse_buttons |= bit
-            self._write_hid_mouse_report()
+            self._mouse_button_press(code)
             time.sleep(pace)
-            self._hid_mouse_buttons &= ~bit
-            self._write_hid_mouse_report()
+            self._mouse_button_release(code)
             time.sleep(pace)
+
+    def mouse_down(self, button):
+        """Press and hold, for a drag. The matching mouse_up may never
+        come -- see release_all. Unlike mouse_click this does not bracket
+        a complete operation, so (mirroring keydown) it takes the lock only
+        for the single event."""
+        code = MOUSE_BUTTONS.get(button.lower())
+        if code is None:
+            raise ValueError("unknown button: %s" % button)
+        with self.lock:
+            self._mouse_button_press(code)
+            self.held_mouse.add(code)
+
+    def mouse_up(self, button):
+        code = MOUSE_BUTTONS.get(button.lower())
+        if code is None:
+            raise ValueError("unknown button: %s" % button)
+        with self.lock:
+            self._mouse_button_release(code)
+            self.held_mouse.discard(code)
 
 
 def usb4vc_holds_us():
@@ -1524,7 +1582,8 @@ def usb4vc_holds_us():
 # sweep that has wedged past the point where input would help.
 GATED_COMMANDS = frozenset([
     "key", "type", "hold", "combo", "keydown", "keyup", "release_all",
-    "mouse_move", "mouse_click",
+    "mouse_move", "mouse_click", "mouse_down", "mouse_up",
+    "mouse_release_all",
 ])
 
 # Power ACTIONS that change the target's state. Gated like input, because
@@ -1806,6 +1865,8 @@ class InputCapability(Capability):
             "combo": self._combo, "keydown": self._keydown,
             "keyup": self._keyup, "release_all": self._release_all,
             "mouse_move": self._mouse_move, "mouse_click": self._mouse_click,
+            "mouse_down": self._mouse_down, "mouse_up": self._mouse_up,
+            "mouse_release_all": self._mouse_release_all,
             # Read-only, and deliberately a COMMAND rather than a field on
             # /state.json: it is a constant, and every open tab polls state
             # every 1.5 s. Same argument as /wslog.json.
@@ -1861,6 +1922,17 @@ class InputCapability(Capability):
     def _mouse_click(self, req):
         self.devs.mouse_click(req.get("button", "left"), _pace(req))
         return {"ok": True}
+
+    def _mouse_down(self, req):
+        self.devs.mouse_down(req.get("button", "left"))
+        return {"ok": True}
+
+    def _mouse_up(self, req):
+        self.devs.mouse_up(req.get("button", "left"))
+        return {"ok": True}
+
+    def _mouse_release_all(self, req):
+        return {"ok": True, "released": self.devs.mouse_release_all(_pace(req))}
 
 
 class TargetEpoch(object):
@@ -10019,6 +10091,8 @@ def _summarise(cmd, req):
         return req.get("action", "state")
     if cmd == "mouse_move":
         return "%s,%s" % (req.get("dx", 0), req.get("dy", 0))
+    if cmd in ("mouse_down", "mouse_up"):
+        return req.get("button", "left")
     return ""
 
 
