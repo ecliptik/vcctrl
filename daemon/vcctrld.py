@@ -36,6 +36,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 
 from evdev import UInput, ecodes as e
 
@@ -670,8 +672,18 @@ def load_config():
     return data
 
 
-def kasa_host():
+def power_host():
     """Where the smart plug is, YAML first and legacy JSON second.
+
+    BACKEND-INDEPENDENT, and named for that after `wemo` became the third
+    backend: this reads `capabilities.power.settings.host`, which is whatever
+    the configured backend dials -- a Kasa plug on 9999, a Wemo on 4915x, or
+    nothing at all. It was called `kasa_host` while Kasa was the only thing
+    with a host, and a name that states one backend while serving three is
+    exactly the comment-that-stopped-being-true this repo keeps getting bitten
+    by. The LEGACY JSON KEY below is still spelled `kasa_host`, because that
+    is a fact about a file already on disk and renaming it here would not
+    rename it there.
 
     Returns None when neither names one, and None must stay a real answer:
     a rig with no plug configured has NO POWER CONTROL, and reporting that
@@ -776,14 +788,174 @@ def power_set(host, on):
     return err
 
 
+# ---------------------------------------------------------------- wemo transport
+#
+# Belkin's Wemo plugs speak SOAP over plain HTTP on the LAN. No cloud account
+# and no dependency, same as the Kasa path above and for the same reason: a
+# power backend that needs an internet round trip is one that stops working on
+# exactly the day the rig's uplink is the thing being debugged.
+#
+# FOUR THINGS ABOUT THIS PROTOCOL THAT READ AS BUGS AND ARE NOT. All four were
+# measured 2026-09-01 against a Wemo Insight running firmware
+# WeMo_WW_2.00.11532.PVT-OWRT-Insight, on a flat LAN with the daemon host; see
+# docs/FINDINGS.md sec. 47 for the readings and the conditions.
+#
+# 1. THE PORT MOVES. The device picks its HTTP port at boot; 49153 is only the
+#    usual answer and 49152/49154/49155 are the others it takes. A literal here
+#    would be the same defect this file already records against `kasa_send`, so
+#    `port:` is obeyed where the operator pins one and the candidates are
+#    walked where they do not -- see `wemo_call`.
+#
+# 2. `BinaryState` 8 MEANS ON. On an Insight it is "relay closed, load below
+#    the standby threshold" -- a real machine, powered, idling. Read as False
+#    it reports a running target as off, which is the exact collapse the
+#    tri-state `on` exists to prevent. Some firmwares also answer with the
+#    state pipe-joined onto the Insight counters (`1|1788297732|0|...`), so the
+#    first field is the state and the rest of the string is not.
+#
+# 3. THE REPLY'S XML NAMESPACE IS WRONG, so it cannot be matched on. A call to
+#    `urn:Belkin:service:insight:1#GetInsightParams` came back in an envelope
+#    declaring `xmlns:u="urn:Belkin:service:metainfo:1"` -- the wrong service
+#    entirely. A namespace-aware parse of that reply finds nothing and reports
+#    a healthy plug as unreachable. Local tag name, therefore, and nothing
+#    else: `_wemo_tag`.
+#
+# 4. ITS HTTP SERVER DROPS OFF WHILE SSDP KEEPS ADVERTISING IT, FOR AS LONG AS
+#    17.5 MINUTES, AND THEN COMES BACK BY ITSELF. Measured: ICMP answered 45/45
+#    samples over three minutes, SSDP kept announcing
+#    `LOCATION: http://<device>:49153/setup.xml`, and every connection to that
+#    port came back ECONNREFUSED -- an active RST, so the device's TCP stack
+#    was alive and NOTHING WAS BOUND. A full 1-65535 sweep during the outage
+#    found no other listening port, so it had not moved either. It then cleared
+#    with nothing touching it. Three consequences, all load-bearing:
+#    `wemo_call` walks the candidate ports ONE AT A TIME (the first such outage
+#    followed a 200-thread scan -- suspicious enough to design around, not
+#    enough to call a cause, since a later one followed a handful of ordinary
+#    requests); "discovery says it is there and the socket says it is not" is a
+#    real state of this device rather than a wrong address to go looking past;
+#    and a power backend on one of these is UNAVAILABLE FOR MINUTES AT A TIME
+#    by its own nature, so `PowerCapability`'s tri-state `on` and its `reason`
+#    are doing real work here -- an outage must read as "could not ask", never
+#    as "the machine is off".
+
+WEMO_PORTS = (49153, 49152, 49154, 49155)
+
+# host -> the port that last answered. Module-level, not per-instance, because
+# `PowerCapability._protocol()` deliberately builds a FRESH backend object on
+# every call so a settings change takes effect without a daemon restart. A
+# cache on the instance would be thrown away before it was ever read, and the
+# port walk would then run on every single poll of a device that note 4 says
+# must not be hammered.
+_WEMO_PORT = {}
+
+WEMO_ENVELOPE = ('<?xml version="1.0" encoding="utf-8"?>'
+                 '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+                 ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+                 '<s:Body>%s</s:Body></s:Envelope>')
+
+
+def wemo_call(host, call, port=None, timeout=5.0):
+    """Run `call(port)` against whichever port this Wemo is answering on.
+
+    A CONFIGURED PORT IS NEVER SECOND-GUESSED. Where the operator pinned one, a
+    failure there is a fault to report -- knocking on three more ports would
+    turn "the plug you named is not answering" into "no Wemo anywhere", which
+    is a different and much less useful sentence to hand someone.
+
+    AN HTTP ERROR ENDS THE WALK, because it is a real answer: something at that
+    port spoke back, so that is the device and its complaint is the finding.
+    Only a connection that never landed moves on to the next candidate. Without
+    this split, a plug returning 500 would be reported as absent, and the port
+    it is plainly sitting on would be listed as one of four that "did not
+    answer".
+    """
+    if port:
+        return call(int(port))
+    tried, seen = [], _WEMO_PORT.get(host)
+    order = ([seen] if seen else []) + [p for p in WEMO_PORTS if p != seen]
+    for cand in order:
+        try:
+            out = call(cand)
+        except urllib.error.HTTPError:
+            _WEMO_PORT[host] = cand
+            raise
+        except (urllib.error.URLError, OSError) as exc:
+            tried.append("%d %s" % (cand, type(exc).__name__))
+            continue
+        _WEMO_PORT[host] = cand
+        return out
+    raise IOError("no Wemo answered at %s on ports %s (%s)"
+                  % (host, "/".join(str(x) for x in order), "; ".join(tried)))
+
+
+def wemo_soap(host, service, path, action, body="", port=None, timeout=5.0):
+    """One SOAP call to a Wemo. Returns the reply document as text."""
+    env = (WEMO_ENVELOPE % ('<u:%s xmlns:u="urn:Belkin:service:%s">%s</u:%s>'
+                            % (action, service, body, action))).encode()
+
+    def call(cand):
+        req = urllib.request.Request(
+            "http://%s:%d%s" % (host, cand, path), data=env,
+            headers={"Content-Type": 'text/xml; charset="utf-8"',
+                     "SOAPACTION": '"urn:Belkin:service:%s#%s"'
+                                   % (service, action)})
+        with contextlib.closing(
+                urllib.request.urlopen(req, timeout=timeout)) as resp:
+            return resp.read().decode("utf-8", "replace")
+
+    return wemo_call(host, call, port=port, timeout=timeout)
+
+
+def wemo_setup_xml(host, port=None, timeout=5.0):
+    """The device description document: friendly name, model, firmware."""
+    def call(cand):
+        with contextlib.closing(urllib.request.urlopen(
+                "http://%s:%d/setup.xml" % (host, cand), timeout=timeout)) as r:
+            return r.read().decode("utf-8", "replace")
+
+    return wemo_call(host, call, port=port, timeout=timeout)
+
+
+def _wemo_tag(xml, tag):
+    """The text of the first `<tag>`, whatever namespace prefix it wears.
+
+    Note 3 above: the prefix on a Wemo reply is not reliable and has been
+    measured naming the wrong service outright, so this matches the LOCAL NAME
+    and ignores any `foo:` in front of it.
+    """
+    pat = r"<(?:[\w.-]+:)?%s\b[^>]*>(.*?)</(?:[\w.-]+:)?%s\s*>" % (tag, tag)
+    m = re.search(pat, xml or "", re.S)
+    return m.group(1).strip() if m else None
+
+
+def wemo_on(raw):
+    """True / False / None from a Wemo `BinaryState` value.
+
+    None is "answered without saying" and it has to survive: see note 2 above,
+    and `power_state`'s own comment on why bool(None) is the wrong answer to
+    give about a machine's mains.
+    """
+    if raw is None:
+        return None
+    head = raw.split("|")[0].strip()
+    if head in ("1", "8"):
+        return True
+    if head == "0":
+        return False
+    return None
+
+
 # --------------------------------------------------------------- power backends
 #
-# Two real implementations, not one plus an interface. An interface with a
+# Three real implementations, not one plus an interface. An interface with a
 # single implementation is a guess about what varies, and this one was wrong
 # twice before it was written down: `kasa_send` had the port as a literal, and
-# `power_state` is shaped like the Kasa reply rather than like a plug.
+# `power_state` is shaped like the Kasa reply rather than like a plug. The
+# third one, `wemo`, found the same literal-port mistake waiting to be made
+# again and a second Kasa shape baked in besides -- `on_time_s` and `rssi` are
+# free in Kasa's one `get_sysinfo` reply and cost a round trip each on a Wemo.
 #
-# Both return the SAME three-valued `on`: True, False, or None for "answered
+# All three return the SAME three-valued `on`: True, False, or None for "answered
 # without saying". None must survive to the caller -- bool(None) is False,
 # which reports "the machine is off" on the word of a reply that never
 # mentioned it.
@@ -798,13 +970,107 @@ class KasaLegacyPower(object):
         self.settings = settings or {}
 
     def host(self):
-        return self.settings.get("host") or kasa_host()
+        return self.settings.get("host") or power_host()
 
     def state(self):
         return power_state(self.host())
 
     def set(self, on):
         return power_set(self.host(), on)
+
+
+class WemoPower(object):
+    """Belkin Wemo over its LAN SOAP API. No cloud account, no dependency."""
+
+    name = "wemo"
+
+    # setup.xml is IDENTITY, not state: the friendly name and model do not
+    # change while the daemon runs, and this device's HTTP server is the
+    # flakiest thing on the LAN (note 4 in the transport section above), so it
+    # is fetched once per host per process. Module-level for the same reason
+    # `_WEMO_PORT` is -- the backend object is rebuilt on every call and cannot
+    # hold a cache of its own.
+    #
+    # A FAILED IDENTITY FETCH IS NOT CACHED AND NEVER FAILS THE RELAY READ.
+    # Not knowing what the plug is called is a different fact from not knowing
+    # whether it is on, and only one of those is worth reporting as a fault.
+    _IDENT = {}
+
+    def __init__(self, settings):
+        self.settings = settings or {}
+
+    def host(self):
+        return self.settings.get("host") or power_host()
+
+    def _timeout(self):
+        return float(self.settings.get("timeout_s", 5.0))
+
+    def _soap(self, action, body=""):
+        return wemo_soap(self.host(), "basicevent:1",
+                         "/upnp/control/basicevent1", action, body,
+                         port=self.settings.get("port"),
+                         timeout=self._timeout())
+
+    def _ident(self):
+        host = self.host()
+        if host not in self._IDENT:
+            try:
+                xml = wemo_setup_xml(host, self.settings.get("port"),
+                                     self._timeout())
+            except Exception:
+                return {}
+            self._IDENT[host] = {"alias": _wemo_tag(xml, "friendlyName"),
+                                 "model": _wemo_tag(xml, "modelName"),
+                                 "firmware": _wemo_tag(xml, "firmwareVersion")}
+        return self._IDENT[host]
+
+    def state(self):
+        xml = self._soap("GetBinaryState", "<BinaryState>0</BinaryState>")
+        raw = _wemo_tag(xml, "BinaryState")
+        on = wemo_on(raw)
+        ident = self._ident()
+        return {"on": on,
+                # The device's own name wins over the configured one: `alias`
+                # in the config is a label somebody typed, and the plug knows
+                # what it was actually named.
+                "alias": ident.get("alias") or self.settings.get("alias"),
+                "model": ident.get("model"),
+                # BOTH null ON PURPOSE, and null is the honest answer rather
+                # than a gap. Kasa carries them for free inside the one
+                # `get_sysinfo` it already makes; Wemo does not. An Insight's
+                # on-time counter is behind `insight:1#GetInsightParams` and
+                # the signal strength behind another call again -- two more
+                # round trips per poll, to a device measured refusing
+                # connections under load, to fill two fields that nothing in
+                # this repo reads. Zero would be a lie meaning "just switched
+                # on"; None means "this backend does not report it".
+                "on_time_s": None,
+                "rssi": None,
+                "reason": None if on is not None else
+                          ("the plug answered without a usable BinaryState "
+                           "(%r)" % (raw,))}
+
+    def set(self, on):
+        got = _wemo_tag(self._soap("SetBinaryState",
+                                   "<BinaryState>%d</BinaryState>"
+                                   % (1 if on else 0)), "BinaryState")
+        if wemo_on(got) is bool(on):
+            return 0
+        # ANYTHING ELSE IS NOT YET A FAILURE. This device answers the literal
+        # word `Error` where the state should be when it is ALREADY in the
+        # state asked for -- a no-op, not a fault, and `cycle` walks into it
+        # every time it starts from off. Raising on the word would abort a
+        # power cycle at its first step and report a working plug as broken.
+        #
+        # So the reply is not trusted in either direction: read the relay back
+        # and let the hardware settle it. That read is the only thing here that
+        # can distinguish "already off" from "refused to switch", and it costs
+        # one request on the unhappy path only.
+        st = self.state()
+        if st.get("on") is bool(on):
+            return 0
+        raise IOError("wemo SetBinaryState(%s) answered %r and the relay then "
+                      "read %r" % ("on" if on else "off", got, st.get("on")))
 
 
 class ShellPower(object):
@@ -858,7 +1124,8 @@ class ShellPower(object):
         return 0
 
 
-POWER_BACKENDS = {"kasa-legacy": KasaLegacyPower, "shell": ShellPower}
+POWER_BACKENDS = {"kasa-legacy": KasaLegacyPower, "wemo": WemoPower,
+                  "shell": ShellPower}
 
 
 HID_KBD_DEVICE = CFG.default("capabilities.input.settings.hid_keyboard_device",
@@ -1498,8 +1765,8 @@ class Capability(object):
     DEFAULT_BACKEND = None
 
     # The NAME of that default. Separate from the class because several
-    # backends share one class -- power's kasa-legacy and shell are the same
-    # capability with a different protocol object -- so the class cannot say
+    # backends share one class -- power's kasa-legacy, wemo and shell are the
+    # same capability with a different protocol object -- so the class cannot say
     # which one was chosen. Reporting the class's own name here is what broke
     # power on the rig: `backend_name` came back as "power", and the protocol
     # lookup for "power" found nothing.
@@ -2359,8 +2626,9 @@ class PowerCapability(Capability):
 
     The PROTOCOL is pluggable; the capability is not. Both entries below map to
     this same class, and `self.backend_name` selects which protocol object it
-    builds. That is the honest factoring: switching from a Kasa plug to a shell
-    command changes how a relay is toggled, not what mains control means.
+    builds. That is the honest factoring: switching from a Kasa plug to a Wemo
+    or to a shell command changes how a relay is toggled, not what mains
+    control means.
 
     BOARD-SCOPED, as of the fix docs/BOARD-IDENTITY.md sec. 5 named and left
     open: the configured plug is wired to ONE machine, and with a different
@@ -2376,7 +2644,8 @@ class PowerCapability(Capability):
     """
 
     name = "power"
-    BACKENDS = {"kasa-legacy": None, "shell": None}   # filled in below
+    BACKENDS = {"kasa-legacy": None, "wemo": None,
+                "shell": None}                        # filled in below
 
     # Mains control is the most consequential thing this rig can do, and the
     # event bus is in MEMORY. A daemon restart erases it -- and a restart is
@@ -2437,7 +2706,7 @@ class PowerCapability(Capability):
 
     def _refresh(self):
         try:
-            host = kasa_host()
+            host = power_host()
             if host:
                 self._remember(host, self._protocol().state())
                 self._fail = None
@@ -2495,7 +2764,7 @@ class PowerCapability(Capability):
         """
         cfg_host = None
         try:
-            cfg_host = kasa_host()
+            cfg_host = power_host()
         except Exception:
             pass
         # Informational, never gating: `board_match` tells a caller (a
@@ -2575,7 +2844,7 @@ class PowerCapability(Capability):
         # rather than in a listener because the invalidation must not be able
         # to arrive after the reboot it describes.
         PROFILE.invalidate("power %s" % (req.get("action") or "action"))
-        host = req.get("host") or kasa_host()
+        host = req.get("host") or power_host()
         if not host:
             return {"ok": False, "error":
                     "no power host configured -- set "
@@ -5354,9 +5623,10 @@ def _cap_settings(name):
     return v
 
 
-# Both protocol backends are served by the one capability class; the registry
+# Every protocol backend is served by the one capability class; the registry
 # only needs to know the NAMES are valid, so a typo is refused rather than
-# silently falling back to the default.
+# silently falling back to the default. Derived from POWER_BACKENDS rather
+# than written out, so adding a protocol cannot leave the registry behind.
 PowerCapability.BACKENDS = {k: PowerCapability for k in POWER_BACKENDS}
 PowerCapability.DEFAULT_BACKEND = PowerCapability
 PowerCapability.DEFAULT_BACKEND_NAME = "kasa-legacy"

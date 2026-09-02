@@ -2703,3 +2703,125 @@ excess keystrokes regardless of any daemon timing question. That is a
 DOS-side buffer-length artifact in the test's own design, not a timing
 finding, and a repeat of this measurement should clear the line (Enter or
 Escape) between trials.
+
+## 47. A Wemo answers ICMP and SSDP for minutes after its HTTP server has stopped answering at all  [measured 2026-09-01]
+
+Adding a `wemo` power backend alongside `kasa-legacy`. Conditions, because
+every number below is worthless without them: one Belkin Wemo **Insight**,
+firmware `WeMo_WW_2.00.11532.PVT-OWRT-Insight`, on the lab LAN, probed from the
+**control host** (not the daemon host) over wired Ethernet on the same /24 as
+the device — no router hop, ~0.9 ms RTT. The plug's relay was **open** and its
+Insight meter read **0 mW** throughout, so nothing measured here involved a
+load, and nothing was switched.
+
+### The protocol works and needs no library
+
+`GET /setup.xml` and SOAP `POST /upnp/control/basicevent1` both answered
+first time, no cloud account and no pairing:
+
+| call | reply |
+|---|---|
+| `setup.xml` | `modelName Insight`, `deviceType urn:Belkin:device:insight:1`, firmware as above |
+| `basicevent:1#GetBinaryState` | `<BinaryState>0</BinaryState>` |
+| `basicevent:1#GetFriendlyName` | the plug's configured name |
+| `insight:1#GetInsightParams` | `0`, then the counters: last-change epoch, on-for, on-today, on-total, timespan `1209600`, average power `9`, current power `0` mW, threshold `8000` |
+
+That is the same shape as the Kasa path (finding #12): LAN only, stdlib only.
+
+### Three reply quirks, each of which reads as a different bug
+
+1. **`BinaryState` 8 means ON.** On an Insight it is "relay closed, load under
+   the standby threshold" — a powered machine, idling. Anything that maps it
+   to false reports a running target as powered off, which is the exact
+   collapse `power_state`'s tri-state `on` exists to prevent.
+
+2. **The state can arrive pipe-joined to the Insight counters**
+   (`1|1788297732|0|...`). Compared whole against `"1"` it matches nothing and
+   a healthy plug reads as unreachable.
+
+3. **The reply's XML namespace can name the wrong service.** The
+   `insight:1#GetInsightParams` reply above came back inside
+   `<u:GetInsightParamsResponse xmlns:u="urn:Belkin:service:metainfo:1">` —
+   *metainfo*, not *insight*. A namespace-aware parse of that document finds
+   nothing. The backend therefore matches the **local tag name** and ignores
+   the prefix entirely.
+
+### The finding that changes how it must be polled
+
+After a 200-thread TCP port scan of the device, **every** connection to 49153
+was refused — while SSDP `M-SEARCH` kept answering from the same address, with
+`LOCATION: http://<device>:49153/setup.xml` naming the exact port that was
+refusing.
+
+Characterised over a 180 s window, sampling every 4 s: ICMP echo succeeded on
+**45/45** samples, TCP connect to 49152/49153/49154/49155 succeeded on
+**0/45**. Every one of those failures was `ECONNREFUSED` — an active RST, not a
+timeout, so the device's TCP stack was alive and answering and **nothing was
+bound to the port**. A full 1–65535 sweep during the outage found no other
+listening port on the device, so the server had not moved: it was gone.
+It had recovered ~1 minute after the first such outage earlier the same hour,
+then wedged again after a handful of ordinary requests. The outage
+characterised above ran for **17.5 minutes** and then cleared with nothing
+touching the device — no unplug, no reboot, no request that succeeded in
+between. So the 3-minute window is a lower bound on the outage and not the
+shape of it, and "it needs a physical power cycle" — which is what this looked
+like at minute three, and what a person would reasonably have done next — was
+about to be a wrong conclusion drawn from a true observation.
+
+**What is established and what is not.** Established: the device can be fully
+alive at the network layer, and advertising a port over SSDP, while that port
+accepts nothing — for at least three minutes. Not established: the *cause*.
+The first outage followed a heavy parallel scan, which makes the scan the
+obvious suspect and is why the backend walks candidate ports strictly one at a
+time; but the second outage followed only a handful of sequential requests, so
+"the scan did it" does not survive its own evidence, and neither does "it is
+just flaky under load". Do not carry either sentence forward as fact.
+
+### What it costs the backend
+
+- **The port is walked, not assumed** — `49153, 49152, 49154, 49155`, one at a
+  time, with the winner cached per host. A pinned `port:` in config is obeyed
+  and never second-guessed, because "the port you named is not answering" is a
+  more useful sentence than "no Wemo anywhere".
+- **An HTTP error ends the walk.** Something spoke SOAP back, so that *is* the
+  device and its complaint is the finding. Only a connection that never landed
+  moves on. Without the split, a plug returning 500 would be reported as
+  absent from a port it is plainly sitting on.
+- **`on_time_s` and `rssi` are null.** Kasa carries both inside the one
+  `get_sysinfo` it already makes; Wemo needs a separate round trip for each,
+  and nothing in this repo reads either field. Two extra requests per poll to
+  a device with this availability record, to fill a field no consumer reads,
+  is the wrong trade. Null means "this backend does not report it"; a zero
+  on-time would have read as "just switched on".
+- **`SetBinaryState` answering `Error` is not necessarily a failure.** This
+  device is documented to answer that word when asked for the state it is
+  already in — a no-op that `power cycle` walks into every time it starts
+  from off. The backend does not trust the word in either direction: it reads
+  the relay back and lets the hardware settle it. *That specific
+  already-in-state case has not been reproduced on this rig* — nothing was
+  switched — so it is handled defensively rather than confirmed, and the
+  read-back is what makes the handling safe either way.
+
+### The read path, proven through the backend and not just by hand
+
+Everything above was gathered with `curl`, which proves the protocol and not
+the code. `WemoPower.state()` was then run against the device the moment it
+came back, and answered:
+
+```
+{'on': False, 'alias': 'RaspberryPi', 'model': 'Insight',
+ 'on_time_s': None, 'rssi': None, 'reason': None}     port cache: {<device>: 49153}
+```
+
+— the relay read live, the alias and model from `setup.xml`, the two
+unavailable fields null rather than zero, and the port walk settling on 49153
+and remembering it. (`alias` is the plug's own friendly name, which on this
+device is a leftover label and not a description of what it feeds.)
+
+### Not measured, and worth saying so
+
+**No switching was performed.** `SetBinaryState` has never been sent to this
+device from this repo, so the write path — `on`, `off`, `cycle`, and the
+`Error`-means-already-in-that-state handling — is exercised only by
+`tests/test_core.py::test_wemo_power_backend_reads_the_states_the_device_actually_sends`
+over a fake transport. Every read above is real; nothing about real mains is.

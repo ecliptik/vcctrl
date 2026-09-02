@@ -203,7 +203,7 @@ capabilities:
       boards_with_channel: [1]
 
   power:
-    backend: kasa-legacy          # kasa-legacy | shell | none
+    backend: kasa-legacy          # kasa-legacy | wemo | shell | none
     settings:
       host: 192.0.2.20
       port: 9999
@@ -225,6 +225,35 @@ capabilities:
       # `power state` is unaffected: it is a read, never gated, and must
       # keep answering even when the installed board is unknown.
       boards: [1]
+    #
+    # The `wemo` backend drives a Belkin Wemo over its LAN SOAP API -- same
+    # deal as Kasa: no cloud account, no dependency, nothing leaves the LAN.
+    #
+    #   backend: wemo
+    #   settings:
+    #     host: 192.0.2.21
+    #     # OPTIONAL, AND USUALLY LEAVE IT OUT. A Wemo picks its HTTP port at
+    #     # boot -- 49153 is the usual answer, 49152/49154/49155 are the
+    #     # others -- so with no port set the daemon walks the candidates and
+    #     # remembers the one that answered. Pin it only if you know the
+    #     # device holds still, and understand what pinning buys you: a
+    #     # pinned port is never second-guessed, so if the plug moves, you
+    #     # get "the port you named is not answering" rather than a silent
+    #     # recovery.
+    #     port: 49153
+    #     timeout_s: 5
+    #     boards: [1]
+    #
+    # `alias` is accepted but the device's own friendly name wins where it
+    # has one: the plug knows what it was actually named and the config only
+    # knows what somebody typed.
+    #
+    # NOT REPORTED BY THIS BACKEND, deliberately: `on_time_s` and `rssi` come
+    # back null. Kasa carries both inside the one reply it already makes;
+    # Wemo needs a separate round trip for each, to a device whose small HTTP
+    # server has been measured refusing connections outright while still
+    # answering SSDP (docs/FINDINGS.md sec. 47). Null means "this backend
+    # does not report it" -- a zero on-time would read as "just switched on".
     #
     # The `shell` backend runs your own commands instead, for any plug this
     # project will never support -- a Zigbee bridge, a relay board, a PDU with

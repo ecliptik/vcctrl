@@ -33,6 +33,7 @@ import re
 import sys
 import threading
 import time
+import urllib.error
 from importlib.machinery import SourceFileLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -6291,7 +6292,7 @@ def test_the_daemon_takes_its_constants_from_config():
         check("power cycle duration comes from config",
               m.POWER_CYCLE_OFF_S == 3.5, m.POWER_CYCLE_OFF_S)
         check("the plug host comes from config",
-              m.kasa_host() == "203.0.113.7", m.kasa_host())
+              m.power_host() == "203.0.113.7", m.power_host())
         check("the plug PORT comes from config -- it was buried in "
               "kasa_send() as a literal 9999", m.kasa_port() == 9998,
               m.kasa_port())
@@ -6375,8 +6376,8 @@ def test_the_suite_does_not_read_the_operators_config():
           (vcctrld.CFG.source or "").endswith("test-config.yaml"),
           vcctrld.CFG.source)
     check("the test config names NO power host, which is what keeps the "
-          "suite off the real plug", vcctrld.kasa_host() is None,
-          vcctrld.kasa_host())
+          "suite off the real plug", vcctrld.power_host() is None,
+          vcctrld.power_host())
 
     raw = open(os.path.join(HERE, "test-config.yaml")).read()
     check("and it names no routable address at all",
@@ -6557,6 +6558,186 @@ def test_shell_power_backend_never_invents_off():
     except IOError as exc:
         missing = "state_cmd" in str(exc)
     check("an unconfigured command names which one is missing", missing)
+
+
+def test_wemo_power_backend_reads_the_states_the_device_actually_sends():
+    """The third power implementation, and every reply shape that is not 0/1.
+
+    Written against the four things measured on a real Insight (firmware
+    WeMo_WW_2.00.11532.PVT-OWRT-Insight, 2026-09-01 -- docs/FINDINGS.md sec.
+    47), because each of them is a plausible reading that produces a WRONG
+    answer about mains rather than an error:
+
+      `8`               relay closed, load under the standby threshold. A
+                        powered, idling machine. Read as False it reports a
+                        running target as off.
+      `1|1788297732|..` the state pipe-joined onto the Insight counters. Read
+                        whole it matches neither "0" nor "1" and the plug
+                        looks unreachable.
+      `Error`           the answer to setting the state it is ALREADY in --
+                        a no-op that `cycle` hits every time it starts from
+                        off.
+      wrong namespace   a reply to an `insight:1` call arriving in a
+                        `metainfo:1` envelope. Parsed by namespace it is
+                        empty; parsed by local tag name it is fine.
+    """
+    print("\nwemo power backend")
+    m = vcctrld
+
+    for raw, want, why in ((None, None, "nothing at all"),
+                           ("0", False, "0 -> off"),
+                           ("1", True, "1 -> on"),
+                           ("8", True, "8 -> ON, not off and not unknown"),
+                           ("1|1788297732|0|0", True, "state pipe-joined"),
+                           ("0|1788297732|0|0", False, "off, pipe-joined"),
+                           ("Error", None, "Error -> unknown, NOT off"),
+                           ("", None, "empty -> unknown, NOT off")):
+        check("BinaryState %s" % why, m.wemo_on(raw) is want, (raw, want))
+
+    # The namespace really is wrong on the wire; this is the reply verbatim.
+    xml = ('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+           '<s:Body><u:GetInsightParamsResponse '
+           'xmlns:u="urn:Belkin:service:metainfo:1">'
+           '<InsightParams>0|1788297732|0</InsightParams>'
+           '</u:GetInsightParamsResponse></s:Body></s:Envelope>')
+    check("a tag is found through a prefix, whatever the prefix claims",
+          m._wemo_tag(xml, "InsightParams") == "0|1788297732|0",
+          m._wemo_tag(xml, "InsightParams"))
+    check("and an absent tag is None, not an empty string",
+          m._wemo_tag(xml, "BinaryState") is None)
+
+    # ---- the port walk. Note 1: the device picks its port at boot.
+    m._WEMO_PORT.clear()
+    seen = []
+
+    def only(good):
+        def call(port):
+            seen.append(port)
+            if port != good:
+                raise OSError("refused")
+            return "<BinaryState>1</BinaryState>"
+        return call
+
+    m.wemo_call("host-a", only(49154))
+    check("the walk starts at the usual port and keeps going",
+          seen == [49153, 49152, 49154], seen)
+    check("and the port that answered is remembered",
+          m._WEMO_PORT.get("host-a") == 49154, m._WEMO_PORT)
+    del seen[:]
+    m.wemo_call("host-a", only(49154))
+    check("so the next call goes straight there", seen == [49154], seen)
+
+    del seen[:]
+    m.wemo_call("host-a", only(49153))
+    check("and when it moves, the remembered port is tried first and then "
+          "the walk resumes", seen == [49154, 49153], seen)
+
+    # A CONFIGURED PORT IS NOT SECOND-GUESSED: one attempt, then the fault.
+    del seen[:]
+    failed = False
+    try:
+        m.wemo_call("host-b", only(49153), port=49999)
+    except OSError:
+        failed = True
+    check("a pinned port is tried once and its failure is the answer",
+          failed and seen == [49999], (failed, seen))
+
+    # An HTTP error is a real answer from a real device: it ends the walk
+    # rather than being reported as three more ports that did not answer.
+    del seen[:]
+
+    def five_hundred(port):
+        seen.append(port)
+        raise urllib.error.HTTPError("u", 500, "boom", {}, None)
+
+    m._WEMO_PORT.clear()
+    raised = None
+    try:
+        m.wemo_call("host-c", five_hundred)
+    except urllib.error.HTTPError as exc:
+        raised = exc
+    check("an HTTP error stops the walk at the port that gave it",
+          raised is not None and seen == [49153], (raised, seen))
+    check("and that port is recorded as the device's",
+          m._WEMO_PORT.get("host-c") == 49153, m._WEMO_PORT)
+
+    # ---- the backend itself, over a fake transport.
+    replies = {}
+    sent = []
+
+    def fake_soap(host, service, path, action, body="", port=None, timeout=5.0):
+        sent.append((action, body))
+        return replies[action]
+
+    real_soap, real_setup = m.wemo_soap, m.wemo_setup_xml
+    m.WemoPower._IDENT.clear()
+    try:
+        m.wemo_soap = fake_soap
+        m.wemo_setup_xml = lambda *a, **kw: (
+            "<friendlyName>bench plug</friendlyName>"
+            "<modelName>Insight</modelName>"
+            "<firmwareVersion>WeMo_WW_0.00.0</firmwareVersion>")
+        b = m.WemoPower({"host": "plug.invalid"})
+
+        replies["GetBinaryState"] = "<BinaryState>8</BinaryState>"
+        st = b.state()
+        check("state() reads 8 as on", st["on"] is True, st)
+        check("identity comes from setup.xml", st["alias"] == "bench plug", st)
+        check("on_time_s is null, not 0 -- 0 would mean 'just switched on'",
+              st["on_time_s"] is None, st)
+        check("rssi is null: this backend does not report it",
+              st["rssi"] is None, st)
+
+        replies["GetBinaryState"] = "<Something>else</Something>"
+        st = b.state()
+        check("an unreadable reply is None, NOT off", st["on"] is None, st)
+        check("and it says what it got", "BinaryState" in (st["reason"] or ""),
+              st)
+
+        # setup.xml failing must not fail the relay read.
+        m.WemoPower._IDENT.clear()
+        m.wemo_setup_xml = lambda *a, **kw: (_ for _ in ()).throw(
+            OSError("no route"))
+        replies["GetBinaryState"] = "<BinaryState>1</BinaryState>"
+        st = b.state()
+        check("a plug whose identity cannot be fetched still reports its relay",
+              st["on"] is True and st["alias"] is None, st)
+
+        # set(): the echo, the Error no-op, and a real refusal.
+        del sent[:]
+        replies["SetBinaryState"] = "<BinaryState>1</BinaryState>"
+        check("set(True) accepts the echoed state", b.set(True) == 0)
+        check("and asks for 1", sent[-1] == ("SetBinaryState",
+                                             "<BinaryState>1</BinaryState>"),
+              sent[-1])
+
+        replies["SetBinaryState"] = "<BinaryState>Error</BinaryState>"
+        replies["GetBinaryState"] = "<BinaryState>0</BinaryState>"
+        check("'Error' plus a relay that already reads off is a no-op, not a "
+              "failure -- cycle starts here every time", b.set(False) == 0)
+
+        replies["GetBinaryState"] = "<BinaryState>1</BinaryState>"
+        refused = False
+        try:
+            b.set(False)
+        except IOError as exc:
+            refused = "relay then read" in str(exc)
+        check("but 'Error' with the relay still on is a real failure", refused)
+    finally:
+        m.wemo_soap, m.wemo_setup_xml = real_soap, real_setup
+        m.WemoPower._IDENT.clear()
+        m._WEMO_PORT.clear()
+
+    check("and the registry knows the name, so a config can select it",
+          m.POWER_BACKENDS.get("wemo") is m.WemoPower,
+          sorted(m.POWER_BACKENDS))
+    check("every power backend name resolves to a class",
+          all(c is m.PowerCapability
+              for c in m.PowerCapability.BACKENDS.values()),
+          m.PowerCapability.BACKENDS)
+    check("the registry's names are exactly the protocols that exist",
+          set(m.PowerCapability.BACKENDS) == set(m.POWER_BACKENDS),
+          (sorted(m.PowerCapability.BACKENDS), sorted(m.POWER_BACKENDS)))
 
 
 def test_static_board_backend_says_it_was_asserted():
