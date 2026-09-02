@@ -1719,11 +1719,12 @@ documenting the hazard and the 180s self-clearing timeout. A
 even starts) is the closest thing to a real fix and isn't implemented —
 flagged here rather than built, same sign-off reasoning as sec. 18-19.
 
-## 21. The multi-profile daemon (`gateway2000`/`modernpc`): known gaps — OPEN, WORKAROUND KNOWN
+## 21. The multi-profile daemon (`gateway2000`/`modernpc`): known gaps — PARTLY FIXED 2026-09-02
 
-See `docs/PROFILES.md` for the architecture this section assumes. Four
-specific things worth checking before trusting this further, none of
-them blocking today's actual use:
+See `docs/PROFILES.md` for the architecture this section assumes. Three
+specific things still worth checking before trusting this further, none
+of them blocking today's actual use; two more that used to be here were
+found and closed in the same review that found the rest of this section.
 
 **Non-video capabilities aren't profile-fresh yet, and it hasn't been
 tested because it hasn't needed to be.** `AudioCapability`/
@@ -1751,15 +1752,62 @@ it has not been deliberately stress-tested since (both profiles' video
 was when it actually browned out). Don't assume this is settled just
 because it's been quiet.
 
-**No regression test exists for the class of bug that broke the web UI
-live in production twice in one afternoon** (`registries[None]` alias
-missing after Phase D named the primary, commit `386eaef`; `wsURL()`'s
-TLS-bypass branch dropping the profile prefix, commit `3ca61dd`). Both
-were caught by hand, live, after deploying — not by `tests/test_core.py`,
-which has no test that constructs a `WebCapability`/loads `kvm.html`
-with a NAMED (non-`None`) primary profile in the mix. A profile-naming
-change anywhere in this path has no safety net today beyond a human
-reloading the page.
+### FIXED 2026-09-02: CFG was never bound per profile, and eight endpoints never carried the prefix at all
+
+A live review of `gateway2000`/`modernpc` found two more bugs in the same
+family as the two `386eaef`/`3ca61dd` already fixed here, both a request
+resolving against the WRONG profile's state:
+
+**`self.registry` was bound per web request; `CFG` was not.** Every
+`CFG.optional(...)`/`CFG.default(...)` read reached from inside a
+request — `configured_targets()`, `_configured_keyboards()`, any
+capability's own request-time code that reads `CFG` rather than the
+`settings` it captured at `start()` — resolved against whichever
+profile's config a previous request had left bound on that THREAD, not
+the profile the `/p/<name>/` prefix named. Measured live: `GET
+/p/modernpc/state.json` reported `gateway2000`'s two-board `targets`
+list. Fixed in `daemon/vcweb.py`'s `Handler._route_profile()` (now also
+binds `vcctrld.py`'s `_CFG_CTX`, handed in from `_start_web()` alongside
+the existing `registries` dict) — confirmed live afterward:
+`/p/modernpc/state.json` now reports `targets: []`, `/state.json`'s own
+is unchanged.
+
+**Eight `kvm.html` requests were hard-coded absolute paths, never
+routed through `apiPath()`**: `/keymap.json`, `/timeline.json`,
+`/frame.jpg`, `/shot.jpg`, `/lastgood.jpg`, `/buffer.avi`, `/pulled`,
+`/cam.mjpg` — a client omission, not a server one; `_route_profile()`
+already stripped any `/p/<name>/` prefix generically. CAPTURE, the scrub
+bar and screenshots on `modernpc` all showed `gateway2000`'s ring. Fixed
+by routing all twelve call sites through `apiPath()`.
+
+**`shot`'s duplicate-frame rejection applied the ANALOG rule to a
+digital source.** `VideoCapability._select()` treats a byte-identical
+frame as evidence of a settle/no-lock artifact — true for analog
+capture (sampling noise means real content never repeats exactly),
+false for HDMI, where a genuinely static picture legitimately repeats
+forever. `vcctrl_shot profile=modernpc` refused a perfectly healthy
+locked desktop with "every frame in the window was a duplicate".
+`0b8a051` already fixed the analog/digital distinction for the STATUS
+label; this was the same rule still live in the shot judgement itself.
+Fixed by branching on `self.ANALOG` in `_select()` — every frame in the
+window is now a live candidate on a digital source, and `_is_picture`'s
+flat-frame floor is what still catches a genuinely blank capture.
+
+Three new tests guard these:
+`test_web_request_binds_cfg_to_its_own_profile` builds a two-profile
+`WebCapability` the way `_start_web()` does and asserts a capability's
+own request-time code sees the right config for the request in flight
+(this would also have caught a `registries[None]`-shaped regression, the
+first of the two bugs this section already named, since a missing entry
+there 500s the same request);
+`test_page_never_bypasses_the_profile_prefix` statically scans
+`kvm.html` for a bare literal reaching one of the eight endpoints
+outside `apiPath(...)`; `test_a_digital_sources_duplicates_are_not_a_no_signal`
+exercises `_select()` on both `ANALOG` settings. None of the three loads
+`kvm.html` in an actual browser and drives it end to end — that fuller
+integration test (constructing a fake registry, rendering the page,
+and asserting on live WebSocket/fetch traffic) is still not written,
+and is the one thing from this paragraph that remains open.
 
 **`vcctrl-macintosh.yaml`/`profile-kinds/rgb2hdmi-usb4vc.yaml` are
 entirely unmeasured.** No RGB2HDMI board has ever been wired to this

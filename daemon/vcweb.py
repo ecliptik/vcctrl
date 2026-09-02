@@ -555,6 +555,24 @@ class Handler(BaseHTTPRequestHandler):
             profile = name
             path = "/" + tail
         self.cap._route_ctx.profile = profile
+        # BIND CFG TO THIS PROFILE TOO, not just `self.registry` above.
+        # Before this, every `CFG.optional(...)`/`CFG.default(...)` read
+        # reached during a web request -- `configured_targets()`,
+        # `_configured_keyboards()`, anything a capability's own
+        # request-time code reads off CFG rather than off `self.settings`
+        # captured at start() -- resolved against whichever profile's
+        # config happened to be bound on this THREAD last, which on a
+        # reused keep-alive connection could be a previous request's
+        # profile, and on a fresh thread was always the primary's. Measured
+        # live 2026-09-02: `/p/modernpc/state.json` reported gateway2000's
+        # `targets` list. `self.cap._cfg_ctx` is None for a WebCapability
+        # built without profile awareness (every existing test), so this is
+        # a no-op there -- exactly `self.registry`'s own fallback shape.
+        if self.cap._cfg_ctx is not None:
+            cfg, error = self.cap._profile_configs.get(profile, (None, None))
+            if cfg is not None:
+                self.cap._cfg_ctx.cfg = cfg
+                self.cap._cfg_ctx.error = error
         self.path = path + (("?" + query) if query else "")
         return True
 
@@ -1136,7 +1154,8 @@ class WebCapability(object):
         "note", "note_set",
     ])
 
-    def __init__(self, registries, bind, port, tls_port=0, cert=None, key=None):
+    def __init__(self, registries, bind, port, tls_port=0, cert=None, key=None,
+                 profile_configs=None, cfg_ctx=None):
         # DICT, keyed by profile name (None = the primary/default profile,
         # matching vcctrld.py's own Instance.name convention) -- Phase C.
         # A caller passing a single Registry-like object (not a dict) gets
@@ -1155,6 +1174,20 @@ class WebCapability(object):
         # explicit registry parameter would touch most of this class for
         # no behavioral gain.
         self._route_ctx = threading.local()
+        # PROFILE NAME -> (Config, load-error), the same keying as
+        # `_registries` (None = primary). Lets `Handler._route_profile()`
+        # bind `CFG` -- vcctrld.py's per-thread config proxy -- to THIS
+        # request's own profile, not just `self.registry`. `cfg_ctx` is
+        # vcctrld.py's `_CFG_CTX` object itself (a `threading.local`
+        # subclass instance): setting `.cfg`/`.error` on it from here needs
+        # no import of vcctrld (which already imports this module, so the
+        # reverse import would be circular) -- it is just attribute access
+        # on an object the caller handed in. Both default to None/empty for
+        # a caller that builds a WebCapability directly (every existing
+        # test, and any future single-profile embedding), which leaves this
+        # class's behavior toward CFG exactly what it always was: nothing.
+        self._profile_configs = profile_configs or {}
+        self._cfg_ctx = cfg_ctx
         self.bind = bind
         self.port = port
         self.tls_port = tls_port

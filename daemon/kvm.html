@@ -3077,13 +3077,15 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // exists to solve. Two profiles is little enough to hand-maintain; revisit
 // if a `vcctrl profiles`-shaped endpoint gets added to vcweb.py itself.
 //
-// NOT wired through this yet: /timeline.json, /keymap.json, /shot.jpg,
-// /lastgood.jpg, /frame.jpg, /buffer.avi, /pulled and the second camera's
-// own endpoints -- those keep addressing the PRIMARY instance regardless of
-// which profile is selected. Video (ws/mjpeg/wsaudio) and the live command
-// loop (/cmd, /state.json, /events) are what a profile switch actually
-// needs to do to be useful, and are what this covers; the rest is a later
-// pass, not an oversight.
+// EVERY request below now goes through apiPath(): /timeline.json,
+// /keymap.json, /shot.jpg, /lastgood.jpg, /frame.jpg, /buffer.avi,
+// /pulled and the second camera's own endpoints were, until 2026-09-02,
+// hard-coded absolute paths that kept addressing the PRIMARY instance
+// regardless of which profile was selected -- CAPTURE, the scrub bar and
+// screenshots all showed gateway2000's ring while modernpc was selected.
+// The server side already routed any path under /p/<name>/ correctly
+// (Handler._route_profile() strips the prefix generically, not by a list
+// of known routes); this was purely a client omission.
 const PROFILES = [
   {id: '', label: 'gateway2000'},
   {id: '/p/modernpc', label: 'modernpc'},
@@ -4119,7 +4121,7 @@ let keymap = null;
 async function loadKeymap() {
   if (keymap) return true;
   try {
-    const r = await fetch('/keymap.json');
+    const r = await fetch(apiPath('/keymap.json'));
     const j = await r.json();
     if (!j || !j.ok || !j.keymap) return false;
     keymap = j.keymap;
@@ -4850,7 +4852,7 @@ async function paintGet() {
     // THE BYTES COME OVER /pulled, NOT THROUGH JSON. Rebuilding a 10 MB file
     // out of base64 in a phone browser is a lot of work to arrive at what a
     // Content-Disposition does for free.
-    a.href = '/pulled?name=' + encodeURIComponent(f.name);
+    a.href = apiPath('/pulled?name=' + encodeURIComponent(f.name));
     a.setAttribute('download', f.name);
     a.textContent = 'Save';
     row.append(a);
@@ -6168,7 +6170,7 @@ async function enterReview() {
   $('scrubpos').textContent = 'reading the capture…';
   let j;
   try {
-    j = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
+    j = await (await fetch(apiPath('/timeline.json'), {cache: 'no-store'})).json();
   } catch (e) { note('capture: ' + e); exitReview(); return; }
   if (!j || !j.frames || !j.frames.length) {
     note('the capture is empty');
@@ -6343,7 +6345,7 @@ async function seekIdx(i) {
     + ' · frame ' + (tlAt + 1) + '/' + f.length + ' · seq ' + k.seq
     + (k.gap_ms != null ? ' · +' + k.gap_ms.toFixed(0) + 'ms' : '');
   const img = $('review');
-  img.src = '/frame.jpg?seq=' + k.seq;
+  img.src = apiPath('/frame.jpg?seq=' + k.seq);
   img.style.display = '';
   seekWant = k.seq;
   // The reviewer's frame sits ON TOP of the live one, so hide the stale
@@ -6395,7 +6397,7 @@ $('scrubtipimg').addEventListener('error', () => {
 async function refreshTimeline() {
   let j;
   try {
-    j = await (await fetch('/timeline.json', {cache: 'no-store'})).json();
+    j = await (await fetch(apiPath('/timeline.json'), {cache: 'no-store'})).json();
   } catch (e) { note('capture: ' + e); return; }
   if (!j || !j.frames || !j.frames.length) {
     note('the capture is empty');
@@ -6459,7 +6461,7 @@ function showTip(k, cx) {
     + (k.gap_ms != null ? '  +' + k.gap_ms.toFixed(0) + 'ms' : '');
   if (k.seq !== tipSeq) {
     tipSeq = k.seq;
-    $('scrubtipimg').src = '/frame.jpg?seq=' + k.seq;
+    $('scrubtipimg').src = apiPath('/frame.jpg?seq=' + k.seq);
   }
 }
 function hideTip() { $('scrubtip').hidden = true; tipSeq = null; }
@@ -6690,7 +6692,7 @@ async function saveCapture() {
     tick = setInterval(showElapsed, 250);
     const q = (bufFrom != null && bufTo != null)
       ? '?from=' + bufFrom + '&to=' + bufTo : '';
-    const r = await fetch('/buffer.avi' + q, {cache: 'no-store'});
+    const r = await fetch(apiPath('/buffer.avi' + q), {cache: 'no-store'});
     if (!r.ok) {
       let why = 'HTTP ' + r.status;
       try { why = (await r.json()).error || why; } catch (e) {}
@@ -6749,7 +6751,7 @@ async function snapshot(why) {
   try {
     if (reviewing && tl && tl.frames[tlAt]) {
       const k = tl.frames[tlAt];
-      const r = await fetch('/frame.jpg?seq=' + k.seq);
+      const r = await fetch(apiPath('/frame.jpg?seq=' + k.seq));
       if (!r.ok) { note('that frame is no longer in the capture'); return; }
       blob = await r.blob();
       // Named by how far back it is, because "the frame 4.2 seconds before it
@@ -6760,7 +6762,7 @@ async function snapshot(why) {
     } else if (staleBlob) {
       blob = staleBlob; label = 'lastframe';
     } else {
-      const r = await fetch('/shot.jpg');
+      const r = await fetch(apiPath('/shot.jpg'));
       if (!r.ok) { note('no picture to save'); return; }
       blob = await r.blob();
     }
@@ -6789,7 +6791,7 @@ async function showStale() {
   if (Date.now() - staleAt > 5000) {
     staleAt = Date.now();
     try {
-      const r = await fetch('/lastgood.jpg?t=' + staleAt);
+      const r = await fetch(apiPath('/lastgood.jpg?t=' + staleAt));
       if (r.ok) {
         const age = Number(r.headers.get('X-Frame-Age'));
         staleBlob = await r.blob();
@@ -8868,7 +8870,7 @@ $('opt-worklabel').onchange = () => {
 // declaration's comment for why.)
 function applyCameraVisibility() {
   $('camoverlay').hidden = $('camswap').hidden = !showCamera || reviewing;
-  $('camimg').src = showCamera ? '/cam.mjpg?fps=8' : '';
+  $('camimg').src = showCamera ? apiPath('/cam.mjpg?fps=8') : '';
   // Same reason enterReview() clears it: turning the camera off must not
   // leave #scroll shrunk into the corner with nothing filling the big area.
   if (!showCamera) document.body.classList.remove('cam-swapped');
@@ -8894,7 +8896,7 @@ applyCameraVisibility();
 function restartCamera() {
   if (!showCamera) return;
   $('camimg').src = '';
-  $('camimg').src = '/cam.mjpg?fps=8&_=' + Date.now();
+  $('camimg').src = apiPath('/cam.mjpg?fps=8&_=' + Date.now());
 }
 $('opt-camera').checked = showCamera;
 $('opt-camera').onchange = () => {

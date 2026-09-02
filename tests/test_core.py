@@ -972,6 +972,205 @@ def test_uniform_frame_is_not_picture():
           v._is_picture(scene()) and not v._is_picture(const(0)))
 
 
+def test_a_digital_sources_duplicates_are_not_a_no_signal():
+    """The duplicate-hash rejection in _select() is an ANALOG rule.
+
+    Real analog capture never repeats a frame byte-for-byte -- sampling
+    noise differs every time -- so a digest match there is reliable
+    evidence of a settle/no-lock frame. HDMI has no such noise floor: a
+    genuinely static, fully-connected picture sits byte-identical for as
+    long as nothing on screen changes, and applying the analog rule to it
+    means `shot` refuses a perfectly healthy static screen with "every
+    frame in the window was a duplicate".
+
+    Caught live 2026-09-02 against modernpc's (`analog: false`) locked
+    desktop: `vcctrl_shot profile=modernpc` refused on exactly this
+    ground while `/frame.jpg?seq=` (which does no judgement) served the
+    same frame fine. `_is_picture`'s flat-frame check is untouched by
+    this -- a genuinely blank digital capture (all-one-value) must still
+    be rejected, which the second half of this test asserts.
+    """
+    print("\ndigital duplicates are not no-signal")
+    import io
+    from PIL import Image
+
+    def const(v):
+        b = io.BytesIO()
+        Image.new("RGB", (640, 480), (v, v, v)).save(b, "JPEG", quality=90)
+        return b.getvalue()
+
+    def scene(seed):
+        im = Image.new("RGB", (640, 480), (2, 2, 2))
+        for x in range(40, 240):
+            for y in range(40, 60):
+                im.putpixel((x, y), (seed, seed, seed))
+        b = io.BytesIO()
+        im.save(b, "JPEG", quality=90)
+        return b.getvalue()
+
+    same = scene(90)
+    items = [(0.0, 1, same), (1.0, 2, same), (2.0, 3, same)]
+
+    analog = vcctrld.VideoCapability(None, vcctrld.Bus())
+    analog.ANALOG = True
+    best, _mean, reason = analog._select(items)
+    check("an analog source still rejects an all-duplicate window",
+          best is None and reason == "every frame in the window was a duplicate",
+          reason)
+
+    digital = vcctrld.VideoCapability(None, vcctrld.Bus())
+    digital.ANALOG = False
+    best, mean, live = digital._select(items)
+    check("a digital source accepts the SAME all-duplicate window",
+          best is not None, live)
+    check("and reports every one of them as a live candidate",
+          live == len(items), live)
+
+    # Control: a genuinely blank digital capture is still not a picture --
+    # this fix must not also swallow the flat-frame floor.
+    blank = [(0.0, 1, const(7)), (1.0, 2, const(7))]
+    digital2 = vcctrld.VideoCapability(None, vcctrld.Bus())
+    digital2.ANALOG = False
+    best, _mean, reason = digital2._select(blank)
+    check("control: a digital source with no signal is still rejected",
+          best is None and "uniform constant" in (reason or ""), reason)
+
+
+def test_web_request_binds_cfg_to_its_own_profile():
+    """A `/p/<name>/` request must resolve `CFG.*` reads to THAT profile's
+    config for the request in flight, not whichever profile a previous
+    request left bound on the same kept-alive thread, and not always the
+    primary's.
+
+    Measured live 2026-09-02: `/p/modernpc/state.json` reported
+    gateway2000's `targets` list, because `Handler._route_profile()` bound
+    `self.registry` per request but left vcctrld.py's `CFG` proxy pointed
+    at whatever a previous request had left it at. This builds a
+    `WebCapability` the same way `_start_web()` does -- a `registries`
+    dict and a parallel `profile_configs` dict, both keyed by profile
+    name, plus the shared config-context object both are meant to steer --
+    and checks that a capability's own request-time code sees the RIGHT
+    config for the request currently being served.
+    """
+    print("\nCFG is bound per profile, not per thread")
+    import json
+    import sys as _sys
+    import urllib.request
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    class Cfg(object):
+        def __init__(self, label):
+            self.label = label
+
+    class CtxLike(object):
+        cfg = None
+        error = None
+
+    ctx = CtxLike()
+    seen = []
+
+    class NoteCap(object):
+        def execute(self, req):
+            seen.append(ctx.cfg.label if ctx.cfg else None)
+            return {"ok": True}
+
+    registries = {None: NoteCap(), "modernpc": NoteCap()}
+    configs = {None: (Cfg("gateway2000"), None), "modernpc": (Cfg("modernpc"), None)}
+    web = vcweb.WebCapability(registries, "127.0.0.1", 0,
+                              profile_configs=configs, cfg_ctx=ctx)
+    web.start()
+    port = web.httpd.server_address[1]
+
+    def post(path):
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d%s" % (port, path),
+            data=json.dumps({"cmd": "note"}).encode(), method="POST")
+        return urllib.request.urlopen(req, timeout=5).read()
+
+    try:
+        post("/cmd")
+        post("/p/modernpc/cmd")
+        post("/cmd")
+    finally:
+        try:
+            web.httpd.shutdown()
+        except Exception:
+            pass
+
+    check("an unprefixed request sees the primary's config",
+          seen[0] == "gateway2000", seen)
+    check("a /p/modernpc/ request sees modernpc's config, not the primary's",
+          seen[1] == "modernpc", seen)
+    check("and the NEXT unprefixed request is not left on modernpc's config",
+          seen[2] == "gateway2000", seen)
+
+    # Control: a WebCapability built without profile_configs/cfg_ctx (every
+    # existing caller, including every other test in this file) must be
+    # completely unaffected -- this is the backward-compatibility floor the
+    # feature is built on, not just an unexercised code path.
+    plain_seen = []
+
+    class PlainNoteCap(object):
+        def execute(self, req):
+            plain_seen.append("called")
+            return {"ok": True}
+
+    plain = vcweb.WebCapability(PlainNoteCap(), "127.0.0.1", 0)
+    plain.start()
+    pport = plain.httpd.server_address[1]
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/cmd" % pport,
+            data=json.dumps({"cmd": "note"}).encode(), method="POST")
+        urllib.request.urlopen(req, timeout=5).read()
+    finally:
+        try:
+            plain.httpd.shutdown()
+        except Exception:
+            pass
+    check("a profile-unaware WebCapability still serves requests normally",
+          plain_seen == ["called"], plain_seen)
+
+
+def test_page_never_bypasses_the_profile_prefix():
+    """Every fetch/img-src/href of the eight endpoints a profile switch must
+    reach goes through apiPath(), not a bare absolute path.
+
+    The cheap half of the regression OPEN-FAULTS Sec. 21 asked for: a
+    static scan of the page's own literals. It cannot prove the SERVER
+    routes them correctly (test_web_request_binds_cfg_to_its_own_profile
+    and the live /pulled route test cover that end), but it is exactly
+    the class of regression that shipped silently before -- eight call
+    sites hard-coding an absolute path while every other request on the
+    page already went through apiPath() -- and a future edit reintroducing
+    one of them now fails here instead of shipping unnoticed.
+    """
+    print("\nthe page does not bypass the profile prefix")
+    import re
+
+    page = os.path.join(HERE, os.pardir, "daemon", "kvm.html")
+    with open(page, encoding="utf-8") as f:
+        h = f.read()
+
+    endpoints = ("keymap.json", "timeline.json", "frame.jpg", "shot.jpg",
+                "lastgood.jpg", "buffer.avi", "pulled", "cam.mjpg")
+    bad = []
+    for name in endpoints:
+        # Single/double quote only -- a backtick before the name is a
+        # markdown-style code span inside a `//` comment (e.g. "So
+        # `/keymap.json` publishes..."), not a string literal, and this
+        # file uses '...' + var concatenation for every one of these
+        # eight paths rather than a template literal.
+        for m in re.finditer(r"""['"]/%s""" % re.escape(name), h):
+            start = max(0, m.start() - 12)
+            if "apiPath(" not in h[start:m.start()]:
+                line = h.count("\n", 0, m.start()) + 1
+                bad.append("%s:%d" % (name, line))
+    check("no bare literal reaches one of the eight profile-scoped endpoints",
+          not bad, bad)
+
+
 def test_websocket_accept_vector():
     """The RFC 6455 handshake, checked against the RFC's own test vector.
 

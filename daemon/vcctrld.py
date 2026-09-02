@@ -4138,14 +4138,31 @@ class VideoCapability(Capability):
         claim was measured on 8 fps bursts and needed rechecking at the rate it
         actually runs: 90 frames of a static mode-12h console gave 90 distinct
         hashes, 0 repeated. The assumption holds at full rate.
+
+        NONE OF THAT HOLDS ON A DIGITAL SOURCE (`self.ANALOG` False, see
+        start()'s own comment on the setting). HDMI has no sampling noise
+        floor -- a genuinely static, fully-connected picture sits
+        byte-identical for as long as nothing on screen changes, so a
+        digest match there is evidence of a still picture, not evidence of
+        no signal. Commit 0b8a051 already fixed this for the STATUS label
+        (`frozen` vs `no signal`); this method still applied the analog
+        rule to the shot judgement itself, which is what made `shot`
+        refuse a perfectly healthy static digital screen with "every frame
+        in the window was a duplicate" -- caught live 2026-09-02 against
+        modernpc's locked desktop. On a digital source every frame in the
+        window is a live candidate; `_is_picture`'s flat-frame check below
+        (MIN_RANGE) is still what catches a genuinely blank capture.
         """
-        digests = {}
-        for t, _sq, f in items:
-            digests.setdefault(hashlib.md5(f).hexdigest(), []).append((t, f))
-        live = [tf for group in digests.values() if len(group) == 1
-                for tf in group]
-        if not live:
-            return None, None, "every frame in the window was a duplicate"
+        if self.ANALOG:
+            digests = {}
+            for t, _sq, f in items:
+                digests.setdefault(hashlib.md5(f).hexdigest(), []).append((t, f))
+            live = [tf for group in digests.values() if len(group) == 1
+                    for tf in group]
+            if not live:
+                return None, None, "every frame in the window was a duplicate"
+        else:
+            live = [(t, f) for t, _sq, f in items]
         try:
             from PIL import Image, ImageStat
         except ImportError:
@@ -10396,6 +10413,15 @@ def _start_web(built):
     # while the web UI was already broken for everyone.
     registries = {inst.name: inst.registry for inst in built}
     registries[None] = primary.registry
+    # SAME KEYING, for `CFG` this time -- see vcweb.py's own comment on
+    # `_profile_configs`/`_cfg_ctx` for why a web request needs this at
+    # all: `self.registry` was already bound per profile, but a `CFG.xxx`
+    # read reached from inside a request (configured_targets(),
+    # _configured_keyboards(), ...) was not, and reported whichever
+    # profile's config a previous request (or none) had left bound on that
+    # thread.
+    configs = {inst.name: (inst.cfg, inst.error) for inst in built}
+    configs[None] = (primary.cfg, primary.error)
     with _profile_scope(primary.cfg, primary.error):
         bind = CFG.default("daemon.web.bind", "127.0.0.1")
         port = int(CFG.default("daemon.web.port", 8080))
@@ -10404,7 +10430,8 @@ def _start_web(built):
     try:
         import vcweb
         web = vcweb.WebCapability(registries, bind, port, tls_port=tls_port,
-                                  cert=cert, key=key)
+                                  cert=cert, key=key,
+                                  profile_configs=configs, cfg_ctx=_CFG_CTX)
         web.start()
     except Exception as exc:
         sys.stderr.write("capability web failed to start: %s: %s\n"
