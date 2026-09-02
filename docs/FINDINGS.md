@@ -2825,3 +2825,77 @@ device from this repo, so the write path — `on`, `off`, `cycle`, and the
 `Error`-means-already-in-that-state handling — is exercised only by
 `tests/test_core.py::test_wemo_power_backend_reads_the_states_the_device_actually_sends`
 over a fake transport. Every read above is real; nothing about real mains is.
+
+## 48. The hid-gadget mouse is proven against `modernpc`, and software H.264 fits on the Pi 5  [measured 2026-09-02]
+
+Two measurements taken while reviewing the multi-profile web KVM, filed
+here because both settle a question the next piece of work depends on.
+
+### The relative HID mouse reaches `modernpc` and is acted on
+
+Nothing had recorded a cursor moving on `modernpc` from the daemon --
+FINDINGS #44's "10-second mouse square" was raw `/dev/hidg1` writes with a
+laptop as the host, not `vcctrld` against the real target. Conditions: one
+`vcctrld` process serving both profiles (build `7dffed77`, the tree at
+commit `6895cdc`), gadget `vcctrl-hid-km` bound to `1000480000.usb` with
+`/sys/class/udc/1000480000.usb/state` reading `configured` and
+`current_speed` `high-speed` (a host had enumerated it); `modernpc`'s HDMI
+capture at 1920x1080, `analog: false`; modernpc's display blanked -- every
+frame in the ring a flat 7/7/7 grey, 41,109 bytes per JPEG.
+
+One `vcctrl_mouse_move dx=60 dy=0 profile=modernpc` over MCP (event seq 169,
+`ok: true`, 40.1 ms). Within about seven seconds the ring went from
+`video.locked` to a `video.frozen` event and the next raw frame was a lock
+screen (photo wallpaper, a clock reading 9:41 AM), 166,035 bytes -- extrema
+0..255 against the previous frame's 7..7, difference bounding box the full
+1920x1080. A display that wakes on a HID mouse report is a host that
+received and acted on that report. **The daemon-to-target mouse path works.**
+
+What this does NOT show: clicks, drags, the wheel, or anything about
+pointer precision -- one report, one wake-up. And the web page was not
+involved at all: `daemon/kvm.html` has never forwarded pointer events
+(`git log -S requestPointerLock -- daemon/kvm.html` and `-S "post('mouse_move'"`
+both come back empty across the whole history), so "the mouse does not
+work from the browser" is the absence of a feature, not a regression.
+
+Two side findings from the same session, both real:
+
+- `vcctrl_shot profile=modernpc` refused with "no picture: every frame in
+  the window was a duplicate" on that flat-black screen. Duplicate frames
+  are only evidence of no signal on an ANALOG capture (commit `0b8a051`
+  fixed exactly this for the status line); the shot judgement still
+  applies the analog rule to a digital source. `/frame.jpg?seq=` returned
+  the frame fine.
+- `/p/modernpc/state.json` reports `targets` as gateway2000's two boards.
+  `Handler._route_profile()` binds `self.registry` per request but not the
+  `CFG` proxy, so `configured_targets()` (and any other `CFG.optional`
+  read on a web-request thread) resolves against the primary's config
+  whatever the `/p/<name>/` prefix said.
+
+### Software H.264 on this Pi 5, synthetic source
+
+The Pi 5 has no hardware H.264 encoder (`v4l2-ctl --list-devices` shows
+`rpi-hevc-dec` and `pispbe` only; the `h264_v4l2m2m` entry ffmpeg lists is
+a wrapper with no device behind it on this board). So H.264 for the live
+view means `libx264`, and the question was whether that fits beside the
+daemon. Conditions: Raspberry Pi 5 Model B Rev 1.0, 4 cores, governor
+`performance`, `vcctrld` running and idle-ish (load 0.26), everything
+under `nice -n 19`; the source was `testsrc2` at 1920x1080/30fps encoded
+once to an MJPEG file at `-q:v 4` (180 frames, 16.2 MB, ~90 KB a frame --
+a LOW-ENTROPY synthetic picture, so every figure below is a best case, not
+a desktop). `speed=` as ffmpeg reports it, one run each:
+
+    MJPEG decode only, 1080p                                   6.46x realtime
+    decode + libx264 ultrafast/zerolatency, 1080p, 2 threads   2.97x
+    decode + libx264 ultrafast/zerolatency, 1080p, 4 threads   3.37x
+    decode + scale to 1280x720 + libx264, 2 threads            4.77x
+
+Read as cores: about 0.15 of a core to decode 1080p MJPEG, and roughly two
+thirds of a core to decode-and-encode it at 30 fps on two threads. Real
+desktop content (text, wallpaper, video) will cost more -- budget one to
+one-and-a-half cores at 1080p30 and measure again on the real dongle
+before trusting it, because FINDINGS #46's "under a millisecond" figure
+for the primary's PS/2 timing was measured against modernpc-shaped I/O, not
+against an encoder. Bandwidth today for comparison: that lock screen at
+30 fps is ~40 Mbit/s of MJPEG; a 1080p desktop at x264 ultrafast sits
+at 2-4 Mbit/s.
