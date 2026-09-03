@@ -177,7 +177,7 @@ def _profile_thread(target, name=None, daemon=True):
     profile whose capability spawned it. Every `CFG.xxx` read on that thread
     then answers for the primary profile, silently and correctly-looking.
 
-    MEASURED, not reasoned (2026-09-02, docs/FINDINGS.md sec. 48): a second
+    MEASURED, not reasoned (2026-09-02, docs/FINDINGS.md sec. 54): a second
     profile's `PowerCapability` heartbeat resolved `power_host()` to the
     PRIMARY's plug address. With a primary that has no plug the second
     profile's plug was never polled at all; with one that does, the second
@@ -3403,6 +3403,8 @@ class PowerCapability(Capability):
         if not st:
             return {"host": cfg_host, "alias": None, "model": None,
                     "on": None, "power_mw": None,
+                    "on_time_s": None, "load_on_s": None,
+                    "standby_threshold_mw": None,
                     "age_s": None, "stale": None,
                     "reason": "the plug has not answered since the daemon started",
                     "board_match": board_match, "board_reason": board_reason}
@@ -3423,6 +3425,18 @@ class PowerCapability(Capability):
                 # now. `age_s` is right there for anyone who wants the last
                 # known value with its age; this field means "now".
                 "power_mw": None if unreachable else st.get("power_mw"),
+                # SAME NULLING RULE, SAME REASON, for both of these. Which
+                # one (if either) a backend fills is a hardware fact -- see
+                # KasaPower/KlapPower's `on_time_s` (relay-on seconds) versus
+                # WemoPower's `load_on_s` (seconds actually drawing above
+                # `standby_threshold_mw`, a DIFFERENT quantity the Insight is
+                # the only backend that has). Never merged into one field:
+                # that would put two different measurements under one name,
+                # exactly the mislabelling this file keeps getting bitten by.
+                "on_time_s": None if unreachable else st.get("on_time_s"),
+                "load_on_s": None if unreachable else st.get("load_on_s"),
+                "standby_threshold_mw":
+                    None if unreachable else st.get("standby_threshold_mw"),
                 "age_s": age,
                 "stale": unreachable or age > self.STALE_S,
                 "reason": self._fail,

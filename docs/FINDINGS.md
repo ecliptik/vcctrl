@@ -2856,6 +2856,40 @@ switch itself off. This is precisely the case `PowerCapability`'s tri-state
 `on` and its `reason` exist for — "could not ask" and "the machine is off" are
 opposite facts that must never share a JSON value.
 
+### The energy meter shipped with the read-path gap still open, and closed later than the code
+
+Written up here after the fact — the code landed same-day (commit
+`213c592`), but the measurement belongs in this file per CLAUDE.md's own
+rule and it was left in the commit message instead. Filed late rather than
+never.
+
+`WemoPower.state()` gained `power_mw` and `standby_threshold_mw` from
+`insight:1#GetInsightParams`, and `load_on_s` beside them — deliberately
+**not** folded into `on_time_s`. A 90 s sample taken with the relay closed
+throughout held that field at 0 the whole time; had it been relay-on
+seconds it would have read 90. It counts seconds the *load* spent above
+`standby_threshold_mw`, which had never happened on this plug. Kasa's
+`on_time_s` is relay-on seconds — a different quantity — so merging them
+would have published "powered for 0 s" about a machine whose mains had
+been on for a day, and the two now have separate keys.
+
+`power_mw` is null, never 0, on any model without a meter — a Wemo Switch
+has no measuring hardware, and 0 mW there would read as "plugged in and
+drawing nothing", a finding rather than a gap. The Kasa EP10 on this rig
+gets the same key, always null, with the gap named rather than left as an
+absence: `feature: TIM` (timer only), both emeter namespaces answer
+`err_code -1, "module not support"`.
+
+**The gap this left open:** every reading taken while writing the meter
+code was 0 mW into an outlet with nothing drawing. The plumbing was
+proven — the field parses, the null/zero distinction holds, `snapshot()`
+carries it under the same staleness rule as `on` — and the *quantity* was
+not: nothing had confirmed field 7 tracks a real load, or that the device's
+own `8` (below threshold) versus `1` (above it) actually tracks the
+transition. Sec. 53 is what closed it, the same day the plug was moved onto
+a real machine: relay on, 750 mW, state `1`. That is the first non-zero
+reading this backend has ever produced.
+
 ## 48. The hid-gadget mouse is proven against `modernpc`, and software H.264 fits on the Pi 5  [measured 2026-09-02]
 
 Two measurements taken while reviewing the multi-profile web KVM, filed
@@ -3209,7 +3243,7 @@ ping/pong liveness check would catch this the way a write-only check
 cannot) rather than relying on the proxy's own timeout, which this
 daemon does not control and has not measured the duration of.
 
-## 48. A capability's own thread reads the PRIMARY profile's config, whichever profile the capability belongs to  [measured 2026-09-02]
+## 54. A capability's own thread reads the PRIMARY profile's config, whichever profile the capability belongs to  [measured 2026-09-02]
 
 Found while answering "can we configure a different power backend per host?".
 The answer in the config file is yes; the answer at runtime was no, for the one
@@ -3271,7 +3305,7 @@ same hazard applies to any of them that reaches a `CFG` read indirectly, and
 the fix for each is one call: spawn with `_profile_thread` instead of
 `threading.Thread`.
 
-## 49. A KLAP backend written without a KLAP device, and what its tests are worth  [written 2026-09-02, NOT measured]
+## 55. A KLAP backend written without a KLAP device, and what its tests are worth  [written 2026-09-02, NOT measured]
 
 Filed under findings because the *absence* of a measurement is the finding, and
 because a passing test suite here means less than it looks like.
@@ -3343,3 +3377,46 @@ state keyed carelessly is exactly how two profiles end up sharing one plug. A
 test now drives two hosts through one backend and requires opposite relay
 states, separate identities, separate ports and separate sessions. It is
 invisible on a rig with one plug, which is the only rig this has ever run on.
+
+## 53. gateway2000's power backend moved from Kasa to Wemo, and the empty-outlet gap in sec. 47 is closed  [measured 2026-09-02]
+
+The g2k's smart plug was physically swapped: Kasa EP10 (`.46`) out, the rig's
+own Wemo Insight (sec. 47) in. `capabilities.power.backend` changed from
+`kasa-legacy` to `wemo` in the operator's live `vcctrl.yaml` (untracked, not
+this entry -- see that file for the real host).
+
+**The port-pinning trap was real, not theoretical.** `wemo_call()` only walks
+`WEMO_PORTS` (49152-49155) when `port` is absent; a `port:` key carried over
+from the Kasa entry (9999, meaningless to Wemo's SOAP-over-HTTP transport)
+would have been honoured as a pin per the "a configured port is never
+second-guessed" contract and produced a flat "not answering" instead of a
+real reading. Confirmed by reading `wemo_call`'s own logic before editing,
+not by hitting the failure first. The `port:` key was deleted, not edited.
+
+**Sec. 47/48's open gap -- every prior draw reading was 0 mW into an empty
+outlet, so the plumbing was proven and the quantity was not -- is now
+closed.** Sequence, this session, against the real device (`model: "Insight"`,
+`alias: "RaspberryPi"` -- confirming sec. 47's note that the plug's own
+onboard name is a leftover, unrelated to what it now feeds):
+
+  1. Before power-on: `on: false`, `power_mw: 0`.
+  2. `vcctrl_power on`: `on: true`, `power_mw: 750`. Real load, not the
+     standby-threshold "on, 0 mW" case sec. 47 also describes.
+  3. +15s: video capture still `state: "frozen"` -- early POST, no stable
+     VGA mode yet, not a fault (see rig hazard: analog "frozen" is the
+     no-repeat-without-noise case, but only once a signal is presented).
+  4. +35s: video `state: "locked"` (0 decode errors across 1000+ samples),
+     `vcctrl_verify_input` returns `verified: true` ("the target acknowledged
+     a keystroke"), and the operator independently confirmed the machine
+     physically powered on. Video, keyboard/PS2, and mains control all
+     verified end to end on the new backend.
+
+Deployed via a targeted `scp` of `vcctrl.yaml` alone to `/opt/vcctrl/`, not a
+full `pi/deploy.sh` -- a full deploy would have shipped every other pending
+daemon change (the sec. 54 CFG-thread-scope fix, the kasa rename, KLAP) in
+the same motion as a config-only change nobody had asked to ship yet. The
+old config was preserved as a timestamped `.bak` on the Pi, not overwritten.
+
+NOT verified: `cycle`, and the Insight's energy-meter reading over a longer
+run (30 real minutes is what sec. 47 needed to catch the HTTP-drops-while-
+SSDP-answers behavior -- this was a single clean on/read/on sequence).

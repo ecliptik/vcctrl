@@ -81,7 +81,7 @@ is why this section exists.
 
 ## The harness, and how it has been wrong
 
-**`FINDINGS.md`** — 49 sections, measured rather than reasoned. The recurring
+**`FINDINGS.md`** — 55 sections, measured rather than reasoned. The recurring
 shape is worth knowing before you read any of it:
 
 > A check that returns the reassuring answer when it is broken.

@@ -305,7 +305,7 @@ capabilities:
     # UNVERIFIED AGAINST HARDWARE: no KLAP device has ever been on this rig.
     # The implementation is tested against a fake device written from the same
     # reading of the protocol, which proves the two halves agree and cannot
-    # prove the reading is right. Expect to debug it. docs/FINDINGS.md sec. 49.
+    # prove the reading is right. Expect to debug it. docs/FINDINGS.md sec. 55.
     #
     # The `shell` backend runs your own commands instead, for any plug this
     # project will never support -- a Zigbee bridge, a relay board, a PDU with

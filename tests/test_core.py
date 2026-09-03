@@ -6996,7 +6996,7 @@ class FakeKlapDevice(object):
     that a dead session is re-handshaken, and that a wrong credential is
     reported as a credential fault. It CANNOT catch a misreading of the real
     protocol -- both sides would be wrong together and agree perfectly. No KLAP
-    device has ever been on this rig. See docs/FINDINGS.md sec. 49.
+    device has ever been on this rig. See docs/FINDINGS.md sec. 55.
     """
 
     def __init__(self, username, password, on=False, model="KP125M",
@@ -7240,7 +7240,7 @@ def test_a_capabilitys_own_thread_keeps_its_profiles_config():
     the profile that capability belongs to. Every `CFG.xxx` on that thread then
     answers for the primary, silently, and looking entirely correct.
 
-    Measured before the fix (docs/FINDINGS.md sec. 48): with a primary that has
+    Measured before the fix (docs/FINDINGS.md sec. 54): with a primary that has
     no plug, a second profile's plug was never polled at all -- `_refresh()`
     gates on `if host:` and `power_host()` returned None. With a primary that
     HAS one, the second profile's real relay reading was stamped with the
