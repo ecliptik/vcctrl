@@ -2987,28 +2987,34 @@
              normal behaviour. The LNK lamp already says which transport is in
              use, so nothing is lost by not being able to force it. -->
 
-        <!-- UNLIKE THAT ONE, THIS CONTROL HAS A COST ON THE OTHER END. H.264
-             is not a second, equally-cheap way to deliver the same bytes --
-             choosing it asks the Pi to run an encoder (H264Sidecar, daemon/
-             vcctrld.py; up to ~2/3 of a core, FINDINGS #48) that mjpeg never
-             costs. "Automatic" already skips it the moment the daemon
-             refuses (currently throttled) or WebCodecs cannot configure
-             from what arrives, so this exists for the one thing automatic
-             fallback cannot know on its own: that THIS viewer would rather
-             not spend the Pi's CPU at all, on a rig with only one of it to
-             share. -->
+        <!-- UNLIKE THAT ONE, THIS CONTROL HAS A COST ON THE OTHER END, AND
+             DEFAULTS OFF BECAUSE OF IT. H.264 is not a second, equally-cheap
+             way to deliver the same bytes -- choosing it asks the Pi to run
+             an encoder (H264Sidecar, daemon/vcctrld.py) that mjpeg never
+             costs. Measured live against modernpc's real capture, 2026-09-02
+             (docs/FINDINGS.md #51): ~0.84 of a core SUSTAINED even against
+             an almost-static picture, temperature climbing from 37.8C to
+             43.3C over 75s, and -- on THIS rig's already-marginal hub-backfed
+             power path (OPEN-FAULTS #21) -- a real, measured undervoltage
+             event during that same test. So: off by default, so a local
+             session (where mjpeg's own bandwidth is free) never pays that
+             cost unasked, and a deliberate switch for the case it actually
+             buys something -- a slow remote link, where mjpeg's ~40 Mbit/s
+             is the thing actually worth spending Pi CPU to avoid. -->
         <div class="row" style="margin-bottom:4px; margin-top:10px">
           <span id="transportsellabel" style="flex:1 1 auto">Video transport</span>
           <select id="transportsel" aria-labelledby="transportsellabel"
-                  title="H.264 costs Pi CPU (an encoder runs only while a viewer wants it); mjpeg costs none">
-            <option value="auto">Automatic (H.264 when it works)</option>
-            <option value="mjpeg">MJPEG only</option>
+                  title="H.264 costs real Pi CPU and heat (an encoder runs only while switched on); mjpeg costs none">
+            <option value="mjpeg">MJPEG (default -- costs the Pi nothing)</option>
+            <option value="h264">H.264 -- lower bandwidth, costs Pi CPU</option>
           </select>
         </div>
         <div class="hint" style="margin-left:0">The LNK lamp says which one a
-          tab actually ended up on. Automatic falls back to mjpeg on its own
-          -- refused (the Pi is currently throttled), a browser that cannot
-          decode what arrived, or no frame in 4s -- without asking again.</div>
+          tab actually ended up on. Turning H.264 on still falls back to
+          mjpeg by itself if it cannot actually deliver -- refused (the Pi is
+          currently throttled), a browser that cannot decode what arrived,
+          or no frame in 4s -- it does not ask again until you switch it
+          back on.</div>
       </div>
     </details>
 
@@ -3919,12 +3925,18 @@ async function checkPort() {
 // SAME canvas (`cv`) the ws-jpeg tier already draws to with
 // ctx.drawImage(bmp,...) -- no createImageBitmap step, because a
 // VideoDecoder's output already is one.
+// OFF BY DEFAULT -- an absent/unrecognised stored value means mjpeg, not
+// h264. This inverts the FIRST version's own default (missing key ==
+// 'auto' == try h264): measured cost (FINDINGS #51, the settings hint
+// above) says a local session should never pay for an encoder nobody
+// asked to run, so silence has to mean the free transport, not the
+// expensive one.
 function wantH264() {
   if (typeof VideoDecoder === 'undefined') return false;
-  const pref = localStorage.getItem('vcctrl.transport') || 'auto';
-  return pref !== 'mjpeg';
+  return localStorage.getItem('vcctrl.transport') === 'h264';
 }
-$('transportsel').value = localStorage.getItem('vcctrl.transport') || 'auto';
+$('transportsel').value =
+  localStorage.getItem('vcctrl.transport') === 'h264' ? 'h264' : 'mjpeg';
 $('transportsel').onchange = () => {
   localStorage.setItem('vcctrl.transport', $('transportsel').value);
   restart();     // reconnect now, under the new choice, rather than on
