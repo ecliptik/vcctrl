@@ -3124,3 +3124,87 @@ against a real `vcgencmd get_throttled` reading rather than a
 monkeypatched one. Also open: this was checked against a BLANK source:
 whether a real, changing desktop encodes and decodes cleanly at
 sustained motion is a different question a static frame cannot answer.
+
+## 52. H.264's real cost on THIS Pi 5: ~0.84 of a core against a near-static picture, and it tripped a real undervoltage event  [measured 2026-09-02]
+
+The number FINDINGS #51 left open. Measured against the real,
+deployed `H264Sidecar`, real modernpc HDMI capture (1920x1080/30fps,
+`state: frozen` -- an almost-static locked/blank screen, the worst-case
+DIRECTION for this measurement: a busy real desktop should cost MORE, not
+less, so this is closer to a floor than a ceiling), no browser involved
+(a raw WebSocket client held the connection open so the daemon-side cost
+could be isolated from anything decode-side).
+
+    baseline (idle, no h264 viewer)     temp 37.8C   throttled 0x0   arm 2.4GHz
+    ~15s into the encode                temp 39.5C
+    ~30s into the encode                temp 41.7C   throttled 0x50000 (NEW)
+    ~75s, connection ended              temp 43.3C (peak observed)
+    ~30s after the encoder was killed   temp 40.6C, cooling; arm back to 2.4GHz
+
+CPU, read from the encoder process's own `/proc/<pid>/stat` utime+stime
+deltas (not `ps`'s lifetime-averaged figure): 839 jiffies over a 10s
+window, 921 jiffies over a second 10s window later in the same run --
+**0.84-0.92 of a core, sustained**, spread across ~22 threads (`-tune
+zerolatency`'s forced sliced threading, same mechanism FINDINGS #51's own
+AU-splitting bug came from). Higher than FINDINGS #48's own synthetic-
+content estimate (~2/3 of a core) despite this content having LESS
+entropy, not more -- the difference is plausibly real HDMI capture noise
+(a genuinely static analog-to-digital chain is never bit-identical the
+way a synthetic testsrc frame is) costing real encode work a mathematically
+flat frame would not, but that is a hypothesis, not something this
+measurement isolates.
+
+**The undervoltage.** `throttled` went from `0x0` to `0x50000` (bits 16 +
+18: under-voltage and throttling HAVE occurred since boot -- the "ever"
+bits, not "currently" -- see LedsCapability's own three-state discipline
+for why that distinction is load-bearing) during this run, and
+`dmesg -T` names it directly: two real, timestamped events inside the
+test window --
+
+    17:31:33  hwmon hwmon3: Undervoltage detected!
+    17:31:35  hwmon hwmon3: Voltage normalised
+    17:31:45  hwmon hwmon3: Undervoltage detected!
+    17:31:47  hwmon hwmon3: Voltage normalised
+
+Not a simulation and not inferred from the `throttled` bitfield alone.
+This is the SAME hub-backfed power path OPEN-FAULTS #21 already names as
+having brought the whole rig down once under full combined load
+(2026-09-01) -- this session's own WP4 gadget rebuild (two more USB
+functions on the same gadget modernpc's HID depends on) had ALREADY put
+that link into an unstable state before this test ran (see the session's
+own live troubleshooting, not yet filed as its own numbered finding at
+the time of this entry), so this measurement cannot cleanly separate
+"H.264 alone costs this much power" from "H.264 on top of an
+already-stressed gadget/power configuration costs this much" -- both are
+true facts about THIS rig in THIS state, and only the first generalizes.
+
+**What this settles**: H.264 is not free, on this specific Pi 5, in this
+specific power configuration -- it is a real, sustained ~0.85-of-a-core
+cost and a real thermal one, and on a rig already close to its power
+margin it can be the push that trips a brownout. That is the direct
+reason `daemon/kvm.html`'s transport selector now defaults to `mjpeg`
+(commit b15d446): a local session, where mjpeg's own bandwidth is free,
+should never pay this cost unasked -- H.264 is an opt-in switch for the
+case it actually helps (a slow remote link, where mjpeg's ~40 Mbit/s is
+the more expensive thing).
+
+**Also found, not yet fixed**: after the measurement WebSocket client
+disconnected, `H264Sidecar` did not release the encoder promptly --
+`viewers` stayed at 1 and the ffmpeg process kept running for what looked
+like 20-40s past the client's own clean exit, continuing to draw the cost
+described above with no viewer benefiting from it, before eventually
+clearing on its own. This connection went through `tailscaled`'s own
+loopback proxy (the direct-TLS-port path, same as the browser's own
+`wsURL()`; see `daemon/kvm.html`'s own comment on why that port is used),
+and the daemon's write-side stall detection (`STALL_S`, `_ws_pump` in
+`daemon/vcweb.py`) checks whether a WRITE succeeds, not whether the real
+remote peer is still there -- if the proxy leg keeps accepting bytes into
+its own buffer after the outer connection is gone, `sendall()` looks
+successful from this side regardless. It DID eventually clear (a proxy-
+side idle timeout is the likely mechanism, not this daemon's own logic),
+so this is a bounded delay rather than a permanent leak, but it means
+"encoder off" can lag "viewer gone" by tens of seconds on a connection
+that dies uncleanly -- worth a proper fix (a server-initiated WS
+ping/pong liveness check would catch this the way a write-only check
+cannot) rather than relying on the proxy's own timeout, which this
+daemon does not control and has not measured the duration of.
