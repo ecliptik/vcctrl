@@ -501,10 +501,23 @@
        sides reads as a floating card that failed to line up with anything;
        these are the phone's four bottom panels and they are one object seen
        four ways, so they take the full width and match each other exactly. */
+    /* CLEARS #worklabelbar, NOT JUST #tabs. That bar sits in normal flow
+       directly above #tabs (the last flex-column sibling before it, since
+       #cmdbar is either display:none or -- right here -- taken out of flow
+       entirely), so this floating panel's own anchor point, unadjusted, sits
+       exactly where #worklabelbar's text already is: reported live as the
+       status line ("Idle", or a real vcctrl_note) sitting UNDER the open
+       command bar. --worklabel-h is 0px when the bar is off (its default),
+       so nothing moves for anyone who has never turned it on -- see
+       measureBars() and applyWorklabelVisibility() for where it is kept
+       current. openPop()'s own `tabbed` branch needs the identical fix for
+       the same reason; see its comment for why the two expressions must
+       stay the same one rather than two numbers arrived at separately. */
     body #cmdbar.open {
       display:flex; position:fixed; z-index:60;
       left:0; right:0;
-      bottom:calc(var(--tabs-h, 47px) + var(--panel-gap));
+      bottom:calc(var(--tabs-h, 47px) + var(--worklabel-h, 0px)
+                  + var(--panel-gap));
       border:1px solid var(--rule); border-radius:9px;
       box-shadow:0 12px 30px rgba(0,0,0,.36);
       padding:8px; border-bottom:1px solid var(--rule);
@@ -3174,6 +3187,15 @@
        without a deliberate yes. What stays is the fact you cannot get from
        anywhere else: which socket these buttons switch. -->
   <div class="hint" id="plugid" style="margin:9px 0 0">—</div>
+  <!-- DRAW AND ON-TIME, hidden by default and filled in by showPower() only
+       when there is something real to say -- an unmetered Kasa, or a plug
+       that has never answered, leaves this exactly as absent as it was
+       before this row existed rather than showing a blank or a fabricated
+       0. SAME WORDING AS THE STATUS PAGE (statsRows()'s own 'draw'/'on
+       for'/'drawing for' rows), because this and Status read the same
+       snapshot and a reader who checks both must never be given two
+       different sentences about one number. -->
+  <div class="hint" id="plugmeter" style="margin:2px 0 0" hidden>—</div>
 </div>
 
 <!-- A copy on the daemon host's own disk, mounted onto the gadget LUN --
@@ -5655,6 +5677,20 @@ for (let i=0;i<=9;i++) { CODE['Digit'+i]=''+i; CODE['Numpad'+i]='kp'+i; }
 let armed = false;
 const pressed = new Set();
 
+// UNDEFINED, NOT A REJECTED PROMISE -- iOS has never implemented Pointer
+// Lock, in any browser there, because they are all WebKit under Apple's own
+// engine rule. `$('stage').requestPointerLock` is missing entirely, so
+// CALLING it throws a synchronous TypeError before a Promise even exists to
+// `.catch()`. Reported live: "grab" is how a phone arms the keyboard (see
+// setArmed()'s own comment, "which is how a phone arms") -- an entirely
+// routine tap -- and it took the whole page's script down, because a
+// `.catch()` that never gets attached defends against nothing. Checked once,
+// used at both call sites below; the silent-failure INTENT those already
+// state ("leaves the mouse half unavailable... not a bug to surface") was
+// always right, it just needed a feature check in front of it rather than
+// error handling behind a call that cannot make one.
+const CAN_POINTER_LOCK = !!$('stage').requestPointerLock;
+
 // Click the screen to capture, a chord to let go -- the VNC/VirtualBox model.
 // Capture deliberately does NOT end on blur or on clicking elsewhere: a
 // keyboard that silently stops being captured is worse than one that needs an
@@ -5721,11 +5757,13 @@ function setArmed(v) {
     // MOUSE, TOO -- ONE BUTTON FOR BOTH, per the operator: a separate Mouse
     // control was one button too many for what is, in practice, always
     // wanted together. Best-effort: Pointer Lock needs a user gesture,
-    // which this click already is, but a touch device or a browser that
-    // simply refuses leaves the mouse half silently unavailable while
-    // keyboard capture still works -- .catch() is that silence, not a bug
-    // to surface, since the MOS lamp already says whether it is reachable.
-    $('stage').requestPointerLock().catch(() => {});
+    // which this click already is, but a browser that simply refuses (or,
+    // on iOS, never implemented the API at all -- see CAN_POINTER_LOCK's own
+    // comment) leaves the mouse half silently unavailable while keyboard
+    // capture still works -- the guard and the `.catch()` together are that
+    // silence, not a bug to surface, since the MOS lamp already says
+    // whether it is reachable.
+    if (CAN_POINTER_LOCK) $('stage').requestPointerLock().catch(() => {});
     hint('keyboard and mouse grabbed, Ctrl + Alt + Shift releases');
     addLine(new Date(), 'ui', 'keyboard and mouse grabbed, Ctrl+Alt+Shift releases'
             + (document.activeElement === ghost ? '' : ' (focus refused)'),
@@ -5869,7 +5907,14 @@ $('stage').addEventListener('pointerdown', e => {
     // itself a user gesture, which is what a new lock request needs; the
     // click that asks for it is spent asking, not forwarded as a mouse_down
     // (the request is async, so there is nothing yet to forward it as).
-    $('stage').requestPointerLock().catch(() => {});
+    //
+    // CAN_POINTER_LOCK GUARDS THIS ONE TOO, and it is the more dangerous of
+    // the two calls without it: `armed` is routinely true on a phone (see
+    // its own comment, "which is how a phone arms"), which means EVERY tap
+    // on the picture -- ordinary SCREEN/TYPE use, not just Grab -- reached
+    // this branch and threw on iOS, taking the rest of the page's script
+    // with it. See CAN_POINTER_LOCK's own comment for the reported case.
+    if (CAN_POINTER_LOCK) $('stage').requestPointerLock().catch(() => {});
     return;
   }
   e.preventDefault();
@@ -6575,7 +6620,12 @@ function openPop(name) {
     // two pixels of border and rounding that no amount of care in the
     // arithmetic would have removed, because the arithmetic was the problem.
     // Handing CSS the identical calc() makes them equal by construction.
-    el.style.bottom = 'calc(var(--tabs-h, 47px) + var(--panel-gap))';
+    //
+    // +--worklabel-h, same as #cmdbar.open's own CSS rule and for the same
+    // reason (see its comment): without it, Sound/Power/Disk floated at the
+    // exact spot #worklabelbar's text sits in normal flow, and covered it.
+    el.style.bottom =
+      'calc(var(--tabs-h, 47px) + var(--worklabel-h, 0px) + var(--panel-gap))';
     return;
   }
   el.style.right = '';
@@ -6640,6 +6690,15 @@ function measureBars() {
   const tb = $('tabs');
   st.setProperty('--tabs-h', (tb && getComputedStyle(tb).display !== 'none'
     ? Math.round(tb.getBoundingClientRect().height) : 0) + 'px');
+  // SAME PATTERN, SAME REASON, and 0px is the right idle value: the bar is
+  // off by default (applyWorklabelVisibility()), so a page that has never
+  // touched the setting gets exactly the old geometry. #cmdbar.open's own
+  // CSS rule and openPop()'s `tabbed` branch both add this in, so a phone
+  // with the status bar on gets its floating panels pushed clear of it
+  // instead of drawn over it.
+  const wl = $('worklabelbar');
+  st.setProperty('--worklabel-h', (wl && getComputedStyle(wl).display !== 'none'
+    ? Math.round(wl.getBoundingClientRect().height) : 0) + 'px');
   st.setProperty('--bar-top', Math.max(0, Math.round(top)) + 'px');
   st.setProperty('--bar-bottom',
                  Math.max(0, Math.round(window.innerHeight - bot)) + 'px');
@@ -8091,6 +8150,35 @@ let powerNow = {}, boardNow = {};
 // actually fitted. Falls back to the generic word only when nothing is known
 // -- the same rule the plug wording already follows below.
 const targetName = () => boardNow.target || boardNow.name || 'the target';
+// ONE SOURCE FOR BOTH SURFACES. Status (statsRows(), below) and the POWER
+// tab (showPower(), right here) render the same two facts off the same
+// /state.json snapshot -- a reader who checks both must never be handed two
+// different sentences about one number, so both call this rather than each
+// formatting pw.power_mw/on_time_s/load_on_s in its own words.
+function powerMeterLines(pw) {
+  const lines = [];
+  // NULL, NOT ZERO, MEANS "THIS PLUG HAS NO METER" -- same rule the daemon
+  // itself uses (see PowerCapability.snapshot()) -- so an unmetered Kasa
+  // simply has no line here rather than a false "0.00 W".
+  if (pw.power_mw != null)
+    lines.push({label: 'draw', value: (pw.power_mw / 1000).toFixed(2) + ' W'});
+  // `on_time_s` (relay-on seconds, Kasa/Klap) and `load_on_s` (seconds
+  // actually drawing above standby, Wemo Insight) are DIFFERENT quantities
+  // -- see the daemon's own comment on why they are never merged into one
+  // field -- so each gets its own label rather than one generic "uptime"
+  // that would claim more precision than the reading behind it has. Gated
+  // on `on === true`: neither counter has a defined meaning once the relay
+  // is open, and no backend here reports how long it has been OFF.
+  if (pw.on === true && pw.on_time_s != null)
+    lines.push({label: 'on for', value: fmtAge(pw.on_time_s)});
+  else if (pw.on === true && pw.load_on_s != null)
+    lines.push({label: 'drawing for', value: fmtAge(pw.load_on_s),
+      title: 'seconds spent above the standby threshold'
+        + (pw.standby_threshold_mw != null
+           ? ' (' + (pw.standby_threshold_mw / 1000).toFixed(0) + ' W)' : '')
+        + ' -- not relay-on time, which this plug does not report'});
+  return lines;
+}
 function showPower(p) {
   powerNow = p || {};
   // TRI-STATE. `on: null` means the last refresh failed -- "the machine is
@@ -8107,6 +8195,15 @@ function showPower(p) {
     : 'Cannot tell: ' + (powerNow.reason || 'the plug is not answering'));
   $('plugid').textContent =
     powerNow.alias ? '"' + powerNow.alias + '"' : 'plug identity unknown';
+  // Own line, own hidden state -- see #plugmeter's own HTML comment. A tap
+  // target's worth of vertical space is not spent on an em dash for a plug
+  // that has nothing to say (unmetered, off, or never answered).
+  const lines = powerMeterLines(powerNow), pm = $('plugmeter');
+  pm.hidden = !lines.length;
+  if (lines.length) {
+    pm.textContent = lines.map(l => l.label + ': ' + l.value).join(' · ');
+    pm.title = lines.map(l => l.title).filter(Boolean).join(' — ');
+  }
 }
 // Everything in the rig table comes from the daemon, and some of it comes
 // from ffmpeg and from a device's own name string. Neither is a place to
@@ -8614,25 +8711,10 @@ function statsRows(j) {
        .filter(Boolean).join(' · ') || '—');
   if (pw.on == null) kv('state', pw.reason || 'plug not answering', 'unk');
   else kv('state', pw.on ? 'on' : 'off');
-  // NULL, NOT ZERO, MEANS "THIS PLUG HAS NO METER" -- same rule the daemon
-  // itself uses (see PowerCapability.snapshot()) -- so an unmetered Kasa
-  // just omits the row rather than showing a false "0.00 W".
-  if (pw.power_mw != null) kv('draw', (pw.power_mw / 1000).toFixed(2) + ' W');
-  // `on_time_s` (relay-on seconds, Kasa/Klap) and `load_on_s` (seconds
-  // actually drawing above standby, Wemo Insight) are DIFFERENT quantities
-  // -- see the daemon's own comment on why they are never merged into one
-  // field -- so each gets its own label rather than one generic "uptime"
-  // that would claim more precision than the reading behind it has. Gated
-  // on `on === true`: neither counter has a defined meaning once the relay
-  // is open, and no backend here reports how long it has been OFF.
-  if (pw.on === true && pw.on_time_s != null)
-    kv('on for', fmtAge(pw.on_time_s));
-  else if (pw.on === true && pw.load_on_s != null)
-    kv('drawing for', fmtAge(pw.load_on_s), '',
-       'seconds spent above the standby threshold'
-       + (pw.standby_threshold_mw != null
-          ? ' (' + (pw.standby_threshold_mw / 1000).toFixed(0) + ' W)' : '')
-       + ' -- not relay-on time, which this plug does not report');
+  // powerMeterLines() (above showPower()) is the ONE place that decides
+  // what these two facts say -- Status and the POWER tab must never show
+  // two different sentences about one number.
+  for (const l of powerMeterLines(pw)) kv(l.label, l.value, '', l.title);
   kv('read', pw.stale ? 'not answering'
        : pw.age_s != null ? fmtAge(pw.age_s) + ' ago' : '—',
      pw.stale ? 'warn' : '');
@@ -9927,6 +10009,12 @@ if (autoTheme) autoPick();
 let showWorklabel = localStorage.getItem('vcctrl.worklabel') === '1';
 function applyWorklabelVisibility() {
   $('worklabelbar').style.display = showWorklabel ? '' : 'none';
+  // Re-measure on every change, not just on resize: --worklabel-h (see
+  // measureBars()) is what keeps the floating TYPE/Sound/Power/Disk panels
+  // off this bar, and toggling the setting is exactly the moment that
+  // height goes from 0 to something or back -- the one case a resize
+  // listener alone would never catch.
+  measureBars();
 }
 applyWorklabelVisibility();
 $('opt-worklabel').checked = showWorklabel;
