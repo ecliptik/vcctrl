@@ -3270,3 +3270,76 @@ audit, and their callees were not traced. They are unaudited, not cleared. The
 same hazard applies to any of them that reaches a `CFG` read indirectly, and
 the fix for each is one call: spawn with `_profile_thread` instead of
 `threading.Thread`.
+
+## 49. A KLAP backend written without a KLAP device, and what its tests are worth  [written 2026-09-02, NOT measured]
+
+Filed under findings because the *absence* of a measurement is the finding, and
+because a passing test suite here means less than it looks like.
+
+`kasa-legacy` became `kasa` and a `kasa-klap` backend was added, on request.
+TP-Link's two LAN protocol generations share nothing: port 9999 with an XOR
+autokey cipher, versus port 80 with AES-128-CBC, a seed exchange, a per-request
+sequence number, and a TP-Link account whose credentials the plug checks
+locally. A device speaks one or the other and they cannot negotiate, which is
+why they are two backends rather than one that probes.
+
+### The rename could have cost the rig its power control, quietly
+
+The registry refuses an unknown backend name — correct behaviour, and exactly
+what makes a rename dangerous here. `kasa-legacy` is the value in the
+operator's live `vcctrl.yaml`. Had the old spelling simply been dropped,
+nothing would have failed at edit time; the daemon would have come up at the
+next restart with no power capability at all, and it would have been found by
+whoever next needed to reboot the target. So `kasa-legacy` is kept as a
+permanent alias that prints one line saying it has been renamed.
+
+### What the KLAP tests prove, and what they cannot
+
+No KLAP device has ever been on this rig — the plug here is an EP10 speaking
+port 9999 — so there is nothing to point the new backend at. It is tested
+against a fake device implemented in the test file, which reuses the same
+`KlapSession` the backend uses.
+
+That is worth being precise about, because "31 checks pass" invites the wrong
+conclusion:
+
+**It does establish** that the two halves agree; that the sequence number
+advances once per request and never repeats; that a session the device forgets
+is re-handshaken rather than retried into a permanent failure; that a
+credential mismatch is reported as a credential fault rather than as an
+unreachable plug; that `password_env` is read from the environment and names
+itself when unset; and that an unmetered model reports a null draw rather
+than 0.
+
+**It cannot establish** that the protocol is implemented correctly. Both sides
+were written from one reading of it, so a misreading makes them wrong together
+and agreeing perfectly — a port inherits the premise of its source. The
+handshake could have the seeds the wrong way round, the IV could be assembled
+wrongly, the signature could cover the wrong bytes, and every one of those
+tests would still pass.
+
+Two specifics worth carrying to whoever first runs this against real hardware:
+
+- **The sequence number is signed.** It is read from the last four bytes of a
+  SHA-256 derivation, so roughly half of all sessions start with the high bit
+  set. Read unsigned it still counts up, but from a number the device does not
+  agree with, and every request in that session is rejected. A bug that fires
+  on half of all handshakes and none of the others is one that gets called
+  "flaky hardware".
+- **The response signature is not verified.** The first 32 bytes of a reply are
+  the device's signature over the ciphertext. Checking it would be strictly
+  better and is deliberately absent: with no real device, a rejection could not
+  be told from a misunderstanding of the scheme, and a check that refuses valid
+  traffic is worse than an absent one. A tampered body still fails to decrypt
+  to valid padding or JSON. Close this the day real hardware exists.
+
+### Per-host targets were already the design, and now they are tested
+
+The operator's actual ask was several plugs of the same kind on different
+machines. That was always the shape — the backend is the protocol, the host is
+settings — but the caches these backends keep for good reasons (a Wemo's
+discovered port and identity, a KLAP session) are module-level, and module-level
+state keyed carelessly is exactly how two profiles end up sharing one plug. A
+test now drives two hosts through one backend and requires opposite relay
+states, separate identities, separate ports and separate sessions. It is
+invisible on a rig with one plug, which is the only rig this has ever run on.

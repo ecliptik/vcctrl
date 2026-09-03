@@ -203,7 +203,16 @@ capabilities:
       boards_with_channel: [1]
 
   power:
-    backend: kasa-legacy          # kasa-legacy | wemo | shell | none
+    # `kasa` is TP-Link's ORIGINAL LAN protocol -- port 9999, no account, no
+    # dependency -- and it is what most Kasa plugs on a home LAN speak. It was
+    # called `kasa-legacy` until 2026-09-02; THAT SPELLING STILL WORKS and
+    # always will, it just prints a one-line note saying it has been renamed.
+    #
+    # `kasa-klap` is the OTHER generation: port 80, AES, and it requires a
+    # TP-Link account. Newer Kasa firmware and the whole Tapo line speak it. A
+    # plug speaks one or the other and they cannot negotiate, so this is a
+    # choice about the device in your hand, not a preference. See below.
+    backend: kasa                 # kasa | kasa-klap | wemo | shell | none
     settings:
       host: 192.0.2.20
       port: 9999
@@ -272,6 +281,31 @@ capabilities:
     # strength would be another round trip to a device whose small HTTP server
     # has been measured refusing connections outright while still answering
     # SSDP (docs/FINDINGS.md sec. 47).
+    #
+    # The `kasa-klap` backend, for a plug that answers on port 80 rather
+    # than 9999:
+    #
+    #   backend: kasa-klap
+    #   settings:
+    #     host: 192.0.2.22
+    #     username: you@example.com
+    #     # NEVER A LITERAL PASSWORD. This names an environment variable in
+    #     # the daemon's environment, the same rule `control.fileserver`
+    #     # already follows -- a password written here is a credential in a
+    #     # file that every deploy copies to the Pi. A plain `password:` key
+    #     # is accepted as a fallback and is the worse option.
+    #     password_env: VCCTRL_KLAP_PASSWORD
+    #     boards: [1]
+    #
+    # The credentials are a TP-Link ACCOUNT's, checked by the plug on the LAN
+    # -- nothing is sent to TP-Link and the plug needs no internet -- but the
+    # account has to exist. That is the real cost of this protocol generation,
+    # and the reason `kasa` above is still worth having where it works.
+    #
+    # UNVERIFIED AGAINST HARDWARE: no KLAP device has ever been on this rig.
+    # The implementation is tested against a fake device written from the same
+    # reading of the protocol, which proves the two halves agree and cannot
+    # prove the reading is right. Expect to debug it. docs/FINDINGS.md sec. 49.
     #
     # The `shell` backend runs your own commands instead, for any plug this
     # project will never support -- a Zigbee bridge, a relay board, a PDU with

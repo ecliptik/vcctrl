@@ -66,7 +66,7 @@ capabilities:
 
   power:
     backend: none
-    # NOT kasa-legacy pointed at gateway2000's own plug. docs/
+    # NOT `kasa` pointed at gateway2000's own plug. docs/
     # BOARD-IDENTITY.md sec. 5 calls this "WRONG TARGET" in capital
     # letters for exactly this reason: with the Mac board installed,
     # cycling "the" plug still cuts power to the GATEWAY, a machine
@@ -76,7 +76,7 @@ capabilities:
     # BOARD-IDENTITY.md sec. 5) -- `none` here is the same protection by
     # construction: a profile with no power capability at all cannot
     # accidentally power-cycle the wrong machine, board-scoped or not.
-    # If this board ever gets its OWN dedicated plug, wire kasa-legacy
+    # If this board ever gets its OWN dedicated plug, wire `kasa`
     # with a boards: list naming ONLY this board_id, never omit it.
 
   audio:

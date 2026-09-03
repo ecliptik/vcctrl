@@ -26,8 +26,11 @@ test fails that test, reported as a failure and not counted as passed. Under
 `python3` nothing changes.
 """
 
+import base64
 import builtins
+import hashlib
 import importlib.util
+import json
 import os
 import re
 import sys
@@ -6940,6 +6943,293 @@ def test_shell_power_backend_never_invents_off():
     except IOError as exc:
         missing = "state_cmd" in str(exc)
     check("an unconfigured command names which one is missing", missing)
+
+
+def test_kasa_legacy_still_selects_the_kasa_backend():
+    """The rename must not be able to take the rig's power control with it.
+
+    `kasa-legacy` is the value written in the operator's live vcctrl.yaml. The
+    registry REFUSES an unknown backend name -- which is the right behaviour,
+    and is exactly why dropping the old spelling would be quiet and expensive:
+    nothing fails at edit time, the daemon simply comes up next restart with no
+    power capability, and it is found by whoever next needs to reboot the
+    target.
+    """
+    print("\nkasa-legacy keeps working")
+    m = vcctrld
+
+    check("`kasa` is a real backend", m.POWER_BACKENDS.get("kasa")
+          is m.KasaPower, sorted(m.POWER_BACKENDS))
+    check("and `kasa-legacy` selects the SAME class, not a copy",
+          m.POWER_BACKENDS.get("kasa-legacy") is m.KasaPower)
+    check("the alias resolves to the new name",
+          m._backend_alias("kasa-legacy") == "kasa")
+    check("a current name is returned unchanged",
+          m._backend_alias("wemo") == "wemo")
+    check("the default backend name is the new spelling",
+          m.PowerCapability.DEFAULT_BACKEND_NAME == "kasa",
+          m.PowerCapability.DEFAULT_BACKEND_NAME)
+    check("and the default is a name the registry accepts",
+          m.PowerCapability.DEFAULT_BACKEND_NAME in m.PowerCapability.BACKENDS)
+
+    # End to end: the old spelling has to produce a working protocol object,
+    # not merely resolve in a dict.
+    cap = m.PowerCapability(None)
+    cap.backend_name = "kasa-legacy"
+    cap.settings = {"host": "plug.invalid"}
+    check("the old spelling builds the right protocol object",
+          isinstance(cap._protocol(), m.KasaPower),
+          type(cap._protocol()).__name__)
+
+    check("every registry name resolves to a backend",
+          set(m.PowerCapability.BACKENDS) == set(m.POWER_BACKENDS),
+          (sorted(m.PowerCapability.BACKENDS), sorted(m.POWER_BACKENDS)))
+
+
+class FakeKlapDevice(object):
+    """A KLAP plug, for driving KasaKlapPower without one.
+
+    WHAT THIS CANNOT PROVE, stated where someone will read it before trusting a
+    passing run: it is written from the same understanding of the protocol as
+    the code it tests, and it reuses `KlapSession` for the device side. So it
+    demonstrates that the two halves agree, that the sequence number advances,
+    that a dead session is re-handshaken, and that a wrong credential is
+    reported as a credential fault. It CANNOT catch a misreading of the real
+    protocol -- both sides would be wrong together and agree perfectly. No KLAP
+    device has ever been on this rig. See docs/FINDINGS.md sec. 49.
+    """
+
+    def __init__(self, username, password, on=False, model="KP125M",
+                 power_mw=None):
+        self.auth = vcctrld.klap_auth_hash(username, password)
+        self.on = on
+        self.model = model
+        self.power_mw = power_mw
+        self.sessions = {}
+        self.handshakes = 0
+        self.seqs = []
+        self.kill_session_once = False
+
+    def post(self, path, body, cookie=None, query=""):
+        if path == vcctrld.KLAP_HANDSHAKE1:
+            self.handshakes += 1
+            local, remote = body, os.urandom(16)
+            server_hash = hashlib.sha256(local + remote + self.auth).digest()
+            cid = "TP_SESSIONID=fake%d" % self.handshakes
+            self.sessions[cid] = vcctrld.KlapSession(local, remote, self.auth,
+                                                     cid)
+            return remote + server_hash, cid + "; TIMEOUT=1440"
+        if path == vcctrld.KLAP_HANDSHAKE2:
+            return b"", ""
+        sess = self.sessions[cookie]
+        seq = int(query.split("=")[1])
+        self.seqs.append(seq)
+        if self.kill_session_once:
+            # What a rebooted plug does: the cookie stops being known.
+            self.kill_session_once = False
+            del self.sessions[cookie]
+            raise IOError("session gone")
+        req = json.loads(sess.decrypt(body, seq))
+        return sess.seal(seq, json.dumps(self._dispatch(req)).encode()), ""
+
+    def _dispatch(self, req):
+        method = req.get("method")
+        if method == "get_device_info":
+            return {"error_code": 0, "result": {
+                "device_on": self.on, "model": self.model, "on_time": 4242,
+                "rssi": -47,
+                "nickname": base64.b64encode(b"bench plug").decode()}}
+        if method == "set_device_info":
+            self.on = bool(req["params"]["device_on"])
+            return {"error_code": 0}
+        if method == "get_energy_usage":
+            if self.power_mw is None:
+                return {"error_code": -1001}
+            return {"error_code": 0,
+                    "result": {"current_power": self.power_mw}}
+        return {"error_code": -1002}
+
+
+def test_klap_backend_against_a_fake_device():
+    """KLAP end to end, with every failure mode that is not a network fault.
+
+    Read FakeKlapDevice's docstring first: this proves the two halves of an
+    unverified protocol implementation agree, not that the implementation is
+    right.
+    """
+    print("\nkasa-klap backend")
+    m = vcctrld
+
+    def wire(dev, settings):
+        b = m.KasaKlapPower(settings)
+        b._post = lambda path, body, cookie=None, query="": dev.post(
+            path, body, cookie, query)
+        return b
+
+    m.KasaKlapPower._SESSIONS.clear()
+    try:
+        dev = FakeKlapDevice("me@example.com", "hunter2", on=False,
+                             power_mw=45500)
+        b = wire(dev, {"host": "klap-a", "username": "me@example.com",
+                       "password": "hunter2"})
+
+        st = b.state()
+        check("the relay reads through the encrypted channel",
+              st["on"] is False, st)
+        check("the nickname is base64-decoded", st["alias"] == "bench plug", st)
+        check("on_time_s is relay-on seconds, as Kasa reports them",
+              st["on_time_s"] == 4242, st)
+        check("a metered model reports its draw", st["power_mw"] == 45500, st)
+
+        check("set turns it on", b.set(True) == 0)
+        check("and the device agrees", dev.on is True)
+        check("the read after it sees the change", b.state()["on"] is True)
+
+        check("one handshake served every one of those calls",
+              dev.handshakes == 1, dev.handshakes)
+        check("and the sequence number advanced once per request, never "
+              "repeating", len(dev.seqs) == len(set(dev.seqs))
+              and dev.seqs == sorted(dev.seqs), dev.seqs)
+
+        # A plug with no meter must not report 0 W.
+        m.KasaKlapPower._SESSIONS.clear()
+        bare = FakeKlapDevice("me@example.com", "hunter2", on=True,
+                              model="KP125", power_mw=None)
+        st = wire(bare, {"host": "klap-b", "username": "me@example.com",
+                         "password": "hunter2"}).state()
+        check("an unmetered model reports null draw, NOT 0",
+              st["power_mw"] is None, st)
+        check("and still reports its relay", st["on"] is True, st)
+
+        # A session the device forgot: re-handshake once, transparently.
+        m.KasaKlapPower._SESSIONS.clear()
+        dev2 = FakeKlapDevice("me@example.com", "hunter2", on=True)
+        b2 = wire(dev2, {"host": "klap-c", "username": "me@example.com",
+                         "password": "hunter2"})
+        b2.state()
+        dev2.kill_session_once = True
+        st = b2.state()
+        check("a session the plug forgot is re-handshaken, not retried",
+              st["on"] is True and dev2.handshakes == 2, dev2.handshakes)
+
+        # WRONG CREDENTIALS ARE NOT A NETWORK FAULT.
+        m.KasaKlapPower._SESSIONS.clear()
+        dev3 = FakeKlapDevice("me@example.com", "hunter2")
+        bad = wire(dev3, {"host": "klap-d", "username": "me@example.com",
+                          "password": "wrong"})
+        msg = ""
+        try:
+            bad.state()
+        except IOError as exc:
+            msg = str(exc)
+        check("a credential mismatch says so, rather than reporting the plug "
+              "unreachable", "credential" in msg.lower(), msg)
+
+        # An unset password_env must name the variable, not fail obscurely.
+        m.KasaKlapPower._SESSIONS.clear()
+        msg = ""
+        try:
+            m.KasaKlapPower({"host": "klap-e", "username": "u",
+                             "password_env": "VCCTRL_NO_SUCH_VAR"})._credentials()
+        except IOError as exc:
+            msg = str(exc)
+        check("an unset password_env names the variable",
+              "VCCTRL_NO_SUCH_VAR" in msg, msg)
+
+        os.environ["VCCTRL_TEST_KLAP_PW"] = "hunter2"
+        try:
+            m.KasaKlapPower._SESSIONS.clear()
+            dev4 = FakeKlapDevice("me@example.com", "hunter2", on=True)
+            env_b = wire(dev4, {"host": "klap-f", "username": "me@example.com",
+                                "password_env": "VCCTRL_TEST_KLAP_PW"})
+            check("password_env is read from the environment",
+                  env_b.state()["on"] is True)
+        finally:
+            os.environ.pop("VCCTRL_TEST_KLAP_PW", None)
+    finally:
+        m.KasaKlapPower._SESSIONS.clear()
+
+
+def test_two_hosts_on_one_backend_do_not_share_a_target():
+    """Two plugs, one backend, different machines -- the operator's own case.
+
+    The backend is a PROTOCOL, and the target is settings. Nothing about
+    choosing `wemo` twice may make two profiles point at one plug: the caches
+    these backends keep for good reasons (a Wemo's discovered port, its
+    identity, a KLAP session's sequence number) are all module-level, so they
+    are exactly the kind of state that leaks between hosts if keyed carelessly.
+    That is the failure this test exists for, and it is invisible on a rig with
+    one plug.
+    """
+    print("\ntwo hosts, one backend")
+    m = vcctrld
+
+    asked = []
+
+    def fake_soap(host, service, path, action, body="", port=None, timeout=5.0):
+        asked.append((host, action))
+        return "<BinaryState>%d</BinaryState>" % (1 if host == "wemo-a" else 0)
+
+    real_soap, real_setup = m.wemo_soap, m.wemo_setup_xml
+    m.WemoPower._IDENT.clear()
+    m._WEMO_PORT.clear()
+    try:
+        m.wemo_soap = fake_soap
+        m.wemo_setup_xml = lambda host, *a, **kw: (
+            "<friendlyName>%s</friendlyName><modelName>Socket</modelName>"
+            % ("target A" if host == "wemo-a" else "target B"))
+
+        a = m.WemoPower({"host": "wemo-a"}).state()
+        b = m.WemoPower({"host": "wemo-b"}).state()
+
+        check("plug A reports its own relay", a["on"] is True, a)
+        check("plug B reports its own, opposite, relay", b["on"] is False, b)
+        check("and each carries its OWN identity, not the first one cached",
+              (a["alias"], b["alias"]) == ("target A", "target B"),
+              (a["alias"], b["alias"]))
+        check("both hosts were actually contacted",
+              set(h for h, _ in asked) == set(["wemo-a", "wemo-b"]), asked)
+    finally:
+        m.wemo_soap, m.wemo_setup_xml = real_soap, real_setup
+        m.WemoPower._IDENT.clear()
+        m._WEMO_PORT.clear()
+
+    # The port cache, keyed by host: two plugs on different ports must not
+    # teach each other the wrong one.
+    m._WEMO_PORT.clear()
+
+    def only(good):
+        def call(port):
+            if port != good:
+                raise OSError("refused")
+            return "ok"
+        return call
+
+    m.wemo_call("wemo-a", only(49152))
+    m.wemo_call("wemo-b", only(49154))
+    check("each host remembers its own port",
+          (m._WEMO_PORT.get("wemo-a"), m._WEMO_PORT.get("wemo-b"))
+          == (49152, 49154), dict(m._WEMO_PORT))
+    m._WEMO_PORT.clear()
+
+    # And a KLAP session belongs to one host.
+    m.KasaKlapPower._SESSIONS.clear()
+    try:
+        d1 = FakeKlapDevice("u", "p", on=True)
+        d2 = FakeKlapDevice("u", "p", on=False)
+        for dev, host in ((d1, "klap-a"), (d2, "klap-b")):
+            bk = m.KasaKlapPower({"host": host, "username": "u",
+                                  "password": "p"})
+            bk._post = (lambda dv: lambda path, body, cookie=None, query="":
+                        dv.post(path, body, cookie, query))(dev)
+            got = bk.state()
+            check("klap %s reports its own relay" % host,
+                  got["on"] is (host == "klap-a"), got)
+        check("and each host got its own session",
+              set(m.KasaKlapPower._SESSIONS) == set(["klap-a", "klap-b"]),
+              sorted(m.KasaKlapPower._SESSIONS))
+    finally:
+        m.KasaKlapPower._SESSIONS.clear()
 
 
 def test_a_capabilitys_own_thread_keeps_its_profiles_config():

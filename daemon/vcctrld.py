@@ -989,6 +989,140 @@ def wemo_on(raw):
     return None
 
 
+# ---------------------------------------------------------------- klap transport
+#
+# TP-Link's second-generation LAN protocol, on port 80. Newer Kasa firmware and
+# the whole Tapo line speak it, and it shares NOTHING with the port-9999
+# protocol above: different port, different framing, real cryptography, and it
+# requires the credentials of a TP-Link cloud account -- checked locally, but
+# the account has to exist. A plug speaks one or the other, and they cannot
+# negotiate; that is why `kasa` and `kasa-klap` are separate backends rather
+# than one that tries both.
+#
+# HOW THE SESSION IS ESTABLISHED, since none of it is guessable from the wire:
+#
+#   auth_hash = sha256(sha1(username) + sha1(password))
+#   handshake1  POST /app/handshake1, body = 16 random bytes (local_seed).
+#               Reply = remote_seed (16 bytes) + server_hash (32), and a
+#               TP_SESSIONID cookie that every later request must carry.
+#               server_hash must equal sha256(local_seed + remote_seed +
+#               auth_hash) -- that is the device proving it holds the same
+#               credential, and a mismatch means WRONG CREDENTIALS, not a
+#               network fault. They are worth telling apart: one is fixed in a
+#               config file and the other by looking at a cable.
+#   handshake2  POST /app/handshake2, body = sha256(remote_seed + local_seed +
+#               auth_hash). That is us proving the same thing back.
+#
+# Then every request is AES-128-CBC with keys derived from the same three
+# values, and a sequence number that increments per request and appears both
+# in the IV and in the query string. A signature prefix covers the sequence and
+# the ciphertext.
+#
+# THE DEPENDENCY IS DELIBERATE AND ISOLATED. `cryptography` is imported inside
+# the class, not at module scope: this daemon runs rigs that will never own a
+# KLAP plug, and an ImportError at the top would take down input, video, audio
+# and LEDs on a machine whose only sin was not installing a crypto library for
+# a power backend it does not use. Selecting `kasa-klap` without it gives a
+# message naming the package; selecting anything else never touches it.
+#
+# NOT VERIFIED AGAINST HARDWARE. No KLAP device has ever been on this rig -- the
+# plug here is an EP10 speaking the port-9999 protocol, and there is nothing to
+# point this at. The tests exercise it against a fake device written from the
+# same understanding of the protocol as the code, which proves the two halves
+# agree and CANNOT catch a misreading of the real thing: a port inherits the
+# premise of its source. Treat this as untested code that is expected to work,
+# and the first person with a real KLAP plug should expect to debug it.
+
+
+KLAP_HANDSHAKE1 = "/app/handshake1"
+KLAP_HANDSHAKE2 = "/app/handshake2"
+KLAP_REQUEST = "/app/request"
+
+
+def klap_auth_hash(username, password):
+    """sha256(sha1(user) + sha1(pass)) -- the credential, never sent as such."""
+    return hashlib.sha256(
+        hashlib.sha1((username or "").encode()).digest()
+        + hashlib.sha1((password or "").encode()).digest()).digest()
+
+
+def _klap_derive(prefix, local_seed, remote_seed, auth_hash):
+    return hashlib.sha256(prefix + local_seed + remote_seed + auth_hash).digest()
+
+
+class KlapSession(object):
+    """One handshaken KLAP session: the keys, and the sequence number.
+
+    The sequence number is STATE, and that is the whole reason this is an
+    object rather than a function. It increments per request and the device
+    tracks it; replaying or skipping one invalidates the session, which is why
+    a session cannot be rebuilt per call the way the Kasa and Wemo backends
+    rebuild their protocol objects.
+    """
+
+    def __init__(self, local_seed, remote_seed, auth_hash, cookie):
+        self.cookie = cookie
+        self.key = _klap_derive(b"lsk", local_seed, remote_seed, auth_hash)[:16]
+        ivseq = _klap_derive(b"iv", local_seed, remote_seed, auth_hash)
+        self.iv = ivseq[:12]
+        # Signed, big-endian, from the LAST FOUR BYTES -- and signed matters:
+        # the derivation is a hash, so roughly half of all sessions start with
+        # the high bit set. Read unsigned it would still count up, but from a
+        # number the device does not agree with, and every request in that
+        # session would be rejected. A bug that fires on half of all
+        # handshakes and none of the others is the kind that gets called
+        # "flaky hardware".
+        self.seq = int.from_bytes(ivseq[-4:], "big", signed=True)
+        self.sig = _klap_derive(b"ldk", local_seed, remote_seed, auth_hash)[:28]
+
+    def _cipher(self, seq):
+        from cryptography.hazmat.primitives.ciphers import (
+            Cipher, algorithms, modes)
+        return Cipher(algorithms.AES(self.key),
+                      modes.CBC(self.iv + seq.to_bytes(4, "big", signed=True)))
+
+    def seal(self, seq, payload):
+        """signature + ciphertext for one payload at one sequence number.
+
+        Separate from `encrypt` because the device seals its REPLY at the same
+        sequence number the request used, so the operation is not "the next
+        message" -- it is "this message, at this number". Keeping one
+        implementation for both directions is also what lets a test drive the
+        device side without writing a second encryptor to disagree with this
+        one.
+        """
+        from cryptography.hazmat.primitives import padding
+        pad = padding.PKCS7(128).padder()
+        enc = self._cipher(seq).encryptor()
+        ct = enc.update(pad.update(payload) + pad.finalize()) + enc.finalize()
+        sig = hashlib.sha256(
+            self.sig + seq.to_bytes(4, "big", signed=True) + ct).digest()
+        return sig + ct
+
+    def encrypt(self, payload):
+        """-> (body, seq) for the NEXT message, advancing the sequence."""
+        self.seq += 1
+        return self.seal(self.seq, payload), self.seq
+
+    def decrypt(self, body, seq):
+        """The plaintext of a sealed message.
+
+        THE SIGNATURE IS NOT CHECKED, and that is a known gap rather than an
+        oversight. The first 32 bytes are the device's signature over the
+        ciphertext; verifying it would be strictly better, and it is left out
+        because nothing here has ever been run against a real KLAP device, so
+        a rejection could not be told from a misunderstanding of the scheme --
+        and a check that refuses valid traffic is worse than an absent one. A
+        tampered body still fails: it will not decrypt to valid padding or to
+        JSON. Close this the day real hardware is available.
+        """
+        from cryptography.hazmat.primitives import padding
+        dec = self._cipher(seq).decryptor()
+        plain = dec.update(body[32:]) + dec.finalize()
+        unpad = padding.PKCS7(128).unpadder()
+        return unpad.update(plain) + unpad.finalize()
+
+
 # --------------------------------------------------------------- power backends
 #
 # Three real implementations, not one plus an interface. An interface with a
@@ -1005,10 +1139,22 @@ def wemo_on(raw):
 # mentioned it.
 
 
-class KasaLegacyPower(object):
-    """TP-Link's pre-KLAP LAN protocol. No cloud account, no dependency."""
+class KasaPower(object):
+    """TP-Link's original LAN protocol. No cloud account, no dependency.
 
-    name = "kasa-legacy"
+    NAMED FOR THE PROTOCOL GENERATION, not for being old: port 9999 with the
+    XOR-autokey cipher above. `kasa-klap` below is the other generation, and
+    they are different wire protocols on different ports -- not versions of
+    one thing that could negotiate.
+
+    Plain `kasa` is this one because it is what a Kasa plug on a home LAN
+    usually speaks; the EP10 on this rig does. That is a bet on the installed
+    base and it is worth knowing it is a bet: if TP-Link ever makes KLAP
+    universal, `kasa` becomes the name of the unusual case. The config value
+    `kasa-legacy` still selects this and always will -- see POWER_BACKENDS.
+    """
+
+    name = "kasa"
 
     def __init__(self, settings):
         self.settings = settings or {}
@@ -1207,6 +1353,176 @@ class WemoPower(object):
                       "read %r" % ("on" if on else "off", got, st.get("on")))
 
 
+class KasaKlapPower(object):
+    """TP-Link KLAP on port 80: newer Kasa firmware and the Tapo line.
+
+    Needs a TP-Link account's credentials. They are checked by the device on
+    the LAN and never leave it, but the account must exist -- there is no
+    "local only" mode, which is the real cost of this generation and the reason
+    `kasa` above is still worth having.
+
+    THE PASSWORD IS NAMED, NOT WRITTEN. `password_env` gives the name of an
+    environment variable, matching what `control.fileserver` already does in
+    this config; a literal in vcctrl.yaml would be a credential in a file that
+    gets copied to the Pi by every deploy. `password` is accepted too, because
+    refusing it outright would just push someone to put it in the environment
+    of a wrapper script where nothing documents it -- but it is second.
+    """
+
+    name = "kasa-klap"
+
+    # Sessions are keyed by host and survive across the short-lived backend
+    # objects `_protocol()` builds, because a KLAP session carries a sequence
+    # number the device tracks. Rebuilding it per call would re-handshake on
+    # every poll -- two extra round trips a minute, and a device that may well
+    # rate-limit them.
+    _SESSIONS = {}
+
+    def __init__(self, settings):
+        self.settings = settings or {}
+
+    def host(self):
+        return self.settings.get("host") or power_host()
+
+    def _timeout(self):
+        return float(self.settings.get("timeout_s", 5.0))
+
+    def _credentials(self):
+        user = self.settings.get("username")
+        env = self.settings.get("password_env")
+        pw = os.environ.get(env) if env else None
+        if env and pw is None:
+            raise IOError(
+                "power backend 'kasa-klap' has password_env=%r and that "
+                "variable is not set in the daemon's environment" % (env,))
+        if pw is None:
+            pw = self.settings.get("password")
+        if not user or pw is None:
+            raise IOError(
+                "power backend 'kasa-klap' needs `username` and either "
+                "`password_env` (preferred) or `password` in "
+                "capabilities.power.settings")
+        return user, pw
+
+    def _post(self, path, body, cookie=None, query=""):
+        req = urllib.request.Request(
+            "http://%s%s%s" % (self.host(), path, query), data=body,
+            headers={"Content-Type": "application/octet-stream"})
+        if cookie:
+            req.add_header("Cookie", cookie)
+        with contextlib.closing(
+                urllib.request.urlopen(req, timeout=self._timeout())) as r:
+            return r.read(), r.headers.get("Set-Cookie") or ""
+
+    def _handshake(self):
+        try:
+            import cryptography       # noqa: F401
+        except ImportError:
+            raise IOError(
+                "power backend 'kasa-klap' needs the `cryptography` package "
+                "(pip install cryptography); the `kasa` backend needs no "
+                "dependency but only speaks the older port-9999 protocol")
+        user, pw = self._credentials()
+        auth = klap_auth_hash(user, pw)
+        local_seed = os.urandom(16)
+        reply, setcookie = self._post(KLAP_HANDSHAKE1, local_seed)
+        if len(reply) < 48:
+            raise IOError("klap handshake1 returned %d bytes, expected 48"
+                          % len(reply))
+        remote_seed, server_hash = reply[:16], reply[16:48]
+        expect = hashlib.sha256(local_seed + remote_seed + auth).digest()
+        if server_hash != expect:
+            # A CREDENTIAL FAULT, and it must not be reported as a network one.
+            # The device answered, on time, with a well-formed reply -- it is
+            # simply holding a different account's hash. Someone told "the plug
+            # is unreachable" checks cables; someone told this checks the
+            # config.
+            raise IOError(
+                "klap handshake1 rejected the credentials for %s -- the plug "
+                "answered but holds a different TP-Link account's hash "
+                "(username %r)" % (self.host(), user))
+        cookie = setcookie.split(";")[0] if setcookie else None
+        self._post(KLAP_HANDSHAKE2,
+                   hashlib.sha256(remote_seed + local_seed + auth).digest(),
+                   cookie=cookie)
+        return KlapSession(local_seed, remote_seed, auth, cookie)
+
+    def _session(self):
+        sess = self._SESSIONS.get(self.host())
+        if sess is None:
+            sess = self._SESSIONS[self.host()] = self._handshake()
+        return sess
+
+    def _call(self, method, params=None):
+        payload = {"method": method}
+        if params is not None:
+            payload["params"] = params
+        blob = json.dumps(payload).encode()
+        for attempt in (1, 2):
+            sess = self._session()
+            try:
+                body, seq = sess.encrypt(blob)
+                reply, _ = self._post(KLAP_REQUEST, body, cookie=sess.cookie,
+                                      query="?seq=%d" % seq)
+                return json.loads(sess.decrypt(reply, seq))
+            except Exception:
+                # ONE retry, and only by throwing the session away. A KLAP
+                # session dies from the device's side -- it reboots, it times
+                # the cookie out, it loses track of the sequence number -- and
+                # every one of those looks like a transport error here. Retry
+                # WITHOUT re-handshaking would replay a sequence number the
+                # device has already rejected and fail identically forever.
+                self._SESSIONS.pop(self.host(), None)
+                if attempt == 2:
+                    raise
+
+    def state(self):
+        info = (self._call("get_device_info") or {}).get("result") or {}
+        on = info.get("device_on")
+        # `nickname` is base64 in this protocol, unlike every other field.
+        alias = info.get("nickname")
+        if alias:
+            try:
+                alias = base64.b64decode(alias).decode("utf-8", "replace")
+            except Exception:
+                alias = None
+        return {"on": None if on is None else bool(on),
+                "alias": alias or self.settings.get("alias"),
+                "model": info.get("model"),
+                # Relay-on seconds, and the same quantity Kasa's `on_time`
+                # carries -- unlike the Wemo Insight's load-on counter. See
+                # WemoPower.state() for why that distinction has its own key.
+                "on_time_s": info.get("on_time"),
+                "rssi": info.get("rssi"),
+                "power_mw": self._draw(),
+                "reason": None if on is not None else
+                          ("get_device_info answered without `device_on`")}
+
+    def _draw(self):
+        """Live draw in mW on a metered model, None everywhere else.
+
+        Same rule as the Wemo: NEVER 0 for "no meter". A plug without energy
+        monitoring answers this method with an error, and a zero here would
+        read as "plugged in and drawing nothing", which is a finding rather
+        than a gap.
+        """
+        if self.settings.get("meter") is False:
+            return None
+        try:
+            usage = (self._call("get_energy_usage") or {}).get("result") or {}
+        except Exception:
+            return None
+        mw = usage.get("current_power")
+        return None if mw is None else int(mw)
+
+    def set(self, on):
+        resp = self._call("set_device_info", {"device_on": bool(on)}) or {}
+        err = resp.get("error_code")
+        if err not in (0, None):
+            raise IOError("klap set_device_info error_code=%s" % err)
+        return 0
+
+
 class ShellPower(object):
     """Run the operator's own commands.
 
@@ -1262,8 +1578,43 @@ class ShellPower(object):
         return 0
 
 
-POWER_BACKENDS = {"kasa-legacy": KasaLegacyPower, "wemo": WemoPower,
+# THE CONFIG NAMES. One of them is an alias rather than a backend.
+#
+# `kasa-legacy` was this project's original name for the port-9999 protocol,
+# and it is the value written in the operator's live vcctrl.yaml. Dropping it
+# would not produce a gentle failure: the registry REFUSES an unknown backend
+# name -- correct behaviour, and here it would mean the rig quietly loses power
+# control at the next daemon restart, discovered whenever someone next needed
+# to reboot the target. So it keeps working, permanently, and `_backend_alias`
+# says so once on stderr instead of leaving the config silently misdescribing
+# itself.
+POWER_BACKENDS = {"kasa": KasaPower,
+                  "kasa-legacy": KasaPower,     # deprecated spelling of `kasa`
+                  "kasa-klap": KasaKlapPower,
+                  "wemo": WemoPower,
                   "shell": ShellPower}
+
+# Config value -> what it actually selects.
+POWER_BACKEND_ALIASES = {"kasa-legacy": "kasa"}
+
+_ALIAS_WARNED = set()
+
+
+def _backend_alias(name):
+    """The real backend name for a config value, noting a deprecated spelling.
+
+    Once per name per process. This is consulted from `_protocol()`, which runs
+    on every power call and on every 60 s heartbeat; warning each time would
+    bury the journal under a message about a config that is working fine.
+    """
+    real = POWER_BACKEND_ALIASES.get(name)
+    if real and name not in _ALIAS_WARNED:
+        _ALIAS_WARNED.add(name)
+        sys.stderr.write(
+            "config: capabilities.power.backend: %r is the old spelling of "
+            "%r and still works. Rename it when convenient -- it selects the "
+            "same protocol.\n" % (name, real))
+    return real or name
 
 
 HID_KBD_DEVICE = CFG.default("capabilities.input.settings.hid_keyboard_device",
@@ -2018,8 +2369,8 @@ class Capability(object):
     DEFAULT_BACKEND = None
 
     # The NAME of that default. Separate from the class because several
-    # backends share one class -- power's kasa-legacy, wemo and shell are the
-    # same capability with a different protocol object -- so the class cannot say
+    # backends share one class -- power's kasa, wemo and shell are the same
+    # capability with a different protocol object -- so the class cannot say
     # which one was chosen. Reporting the class's own name here is what broke
     # power on the rig: `backend_name` came back as "power", and the protocol
     # lookup for "power" found nothing.
@@ -2915,8 +3266,8 @@ class PowerCapability(Capability):
     """
 
     name = "power"
-    BACKENDS = {"kasa-legacy": None, "wemo": None,
-                "shell": None}                        # filled in below
+    BACKENDS = {"kasa": None, "kasa-legacy": None, "kasa-klap": None,
+                "wemo": None, "shell": None}          # filled in below
 
     # Mains control is the most consequential thing this rig can do, and the
     # event bus is in MEMORY. A daemon restart erases it -- and a restart is
@@ -2958,7 +3309,8 @@ class PowerCapability(Capability):
         next call rather than at the next daemon restart -- these objects hold
         no connection and cost nothing to make.
         """
-        impl = POWER_BACKENDS.get(self.backend_name or "kasa-legacy")
+        impl = POWER_BACKENDS.get(
+            _backend_alias(self.backend_name or "kasa"))
         if impl is None:
             raise IOError("power backend %r is not implemented"
                           % (self.backend_name,))
@@ -6752,7 +7104,7 @@ def _cap_settings(name):
 # than written out, so adding a protocol cannot leave the registry behind.
 PowerCapability.BACKENDS = {k: PowerCapability for k in POWER_BACKENDS}
 PowerCapability.DEFAULT_BACKEND = PowerCapability
-PowerCapability.DEFAULT_BACKEND_NAME = "kasa-legacy"
+PowerCapability.DEFAULT_BACKEND_NAME = "kasa"
 
 # Board identity has two genuinely different implementations, below.
 BoardCapability.BACKENDS = {"usb4vc-runfile": BoardCapability,
