@@ -2793,14 +2793,10 @@ just flaky under load". Do not carry either sentence forward as fact.
   a device with this availability record, to fill a field no consumer reads,
   is the wrong trade. Null means "this backend does not report it"; a zero
   on-time would have read as "just switched on".
-- **`SetBinaryState` answering `Error` is not necessarily a failure.** This
-  device is documented to answer that word when asked for the state it is
-  already in — a no-op that `power cycle` walks into every time it starts
-  from off. The backend does not trust the word in either direction: it reads
-  the relay back and lets the hardware settle it. *That specific
-  already-in-state case has not been reproduced on this rig* — nothing was
-  switched — so it is handled defensively rather than confirmed, and the
-  read-back is what makes the handling safe either way.
+- **A `SetBinaryState` reply is not trusted in either direction.** The
+  backend reads the relay back rather than believing the word it got. See the
+  next section for what a redundant set actually answers here, and why that
+  read-back is not the part that saved it.
 
 ### The read path, proven through the backend and not just by hand
 
@@ -2818,13 +2814,47 @@ unavailable fields null rather than zero, and the port walk settling on 49153
 and remembering it. (`alias` is the plug's own friendly name, which on this
 device is a leftover label and not a description of what it feeds.)
 
-### Not measured, and worth saying so
+### A redundant write answers in the read path's dialect, and that is what saved it
 
-**No switching was performed.** `SetBinaryState` has never been sent to this
-device from this repo, so the write path — `on`, `off`, `cycle`, and the
-`Error`-means-already-in-that-state handling — is exercised only by
-`tests/test_core.py::test_wemo_power_backend_reads_the_states_the_device_actually_sends`
-over a fake transport. Every read above is real; nothing about real mains is.
+Written the day after, on 2026-09-02. The operator had switched the plug on
+from the app; asked to turn it on, the backend sent `SetBinaryState(1)` to a
+plug **already on**. It returned success. What came back:
+
+```
+<u:SetBinaryStateResponse xmlns:u="urn:Belkin:service:basicevent:1">
+<BinaryState>8|1788395720|0|0|0|1209600|9|0|0|0</BinaryState>
+<CountdownEndTime>0</CountdownEndTime>
+<deviceCurrentTime>1788395732</deviceCurrentTime>
+```
+
+**The state pipe-joined onto the Insight counters, and `8` rather than `1` —
+on a WRITE reply.** Quirks 2 and 3 above were found on reads and written up as
+facts about reads. Both fired here at once, and either one missing turns a plug
+that did exactly what was asked into a raised `IOError`. Generalise it: on this
+device the reply *dialect* is a property of the device, not of the call, and a
+defence scoped to "reads" is scoped to the wrong thing.
+
+**A correction to the previous version of this section.** It said this device
+"is documented to answer the literal word `Error`" when set to the state it is
+already in. That was carried in from general Wemo lore, not measured, and it is
+**not** what this device does — it answers as above. The handling is unchanged
+and still correct, because it never depended on the word; but the claim was
+stated as a property of the device when it was hearsay, which is the failure
+this file exists to catch. `Error` is still handled, now labelled as untested.
+
+**Still not measured:** a real state *change*. `off`, a genuine `on`, and
+`cycle` against real mains have never run from this repo. The redundant set
+above exercised the transport and the reply parsing, and changed nothing.
+
+### The relay outlives the control channel
+
+Worth stating because it is the natural fear on reading the outage above, and
+it is wrong: the 17.5-minute outage was the plug's **HTTP server**, not its
+relay. Mains stayed exactly as it was throughout, and the state read back
+unchanged either side. A wedged Wemo cannot be asked or commanded; it does not
+switch itself off. This is precisely the case `PowerCapability`'s tri-state
+`on` and its `reason` exist for — "could not ask" and "the machine is off" are
+opposite facts that must never share a JSON value.
 
 ## 48. The hid-gadget mouse is proven against `modernpc`, and software H.264 fits on the Pi 5  [measured 2026-09-02]
 

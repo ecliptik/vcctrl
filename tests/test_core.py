@@ -7093,6 +7093,22 @@ def test_wemo_power_backend_reads_the_states_the_device_actually_sends():
                                              "<BinaryState>1</BinaryState>"),
               sent[-1])
 
+        # THE REPLY A REAL REDUNDANT SET ANSWERED, verbatim (2026-09-01,
+        # `SetBinaryState(1)` against a plug already on): the state pipe-joined
+        # onto the Insight counters, and 8 rather than 1, on a WRITE. Both
+        # quirks were found on READS and written up as facts about reads. Miss
+        # either and a plug that did exactly what was asked raises instead.
+        replies["SetBinaryState"] = ("<BinaryState>8|1788395720|0|0|0|1209600"
+                                     "|9|0|0|0</BinaryState>")
+        check("a redundant set answering `8|<counters>` is success, not a "
+              "failure -- measured, and it is what `cycle` meets on a plug "
+              "that is already on", b.set(True) == 0)
+
+        # `Error` is HEARSAY, not measured on this rig: other firmwares are
+        # reported to answer it when set to the state they are already in.
+        # Handled anyway, because the read-back never depended on the word --
+        # which is the whole point of not trusting the reply in either
+        # direction.
         replies["SetBinaryState"] = "<BinaryState>Error</BinaryState>"
         replies["GetBinaryState"] = "<BinaryState>0</BinaryState>"
         check("'Error' plus a relay that already reads off is a no-op, not a "

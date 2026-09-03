@@ -1057,16 +1057,24 @@ class WemoPower(object):
                                    % (1 if on else 0)), "BinaryState")
         if wemo_on(got) is bool(on):
             return 0
-        # ANYTHING ELSE IS NOT YET A FAILURE. This device answers the literal
-        # word `Error` where the state should be when it is ALREADY in the
-        # state asked for -- a no-op, not a fault, and `cycle` walks into it
-        # every time it starts from off. Raising on the word would abort a
-        # power cycle at its first step and report a working plug as broken.
+        # ANYTHING ELSE IS NOT YET A FAILURE, so read the relay back and let
+        # the hardware settle it rather than trusting the reply's word. One
+        # request, on the unhappy path only, and it is the only thing here that
+        # can tell "it was already in that state" from "it refused to switch".
         #
-        # So the reply is not trusted in either direction: read the relay back
-        # and let the hardware settle it. That read is the only thing here that
-        # can distinguish "already off" from "refused to switch", and it costs
-        # one request on the unhappy path only.
+        # WHAT A REDUNDANT SET ACTUALLY ANSWERS, measured 2026-09-01 on the
+        # Insight: `SetBinaryState(1)` against a plug already on came back
+        # `<BinaryState>8|1788395720|0|0|0|1209600|9|0|0|0</BinaryState>` -- the
+        # state pipe-joined onto the Insight counters, on a WRITE reply, where
+        # notes 2 and 3 above were written expecting them only on reads. Both
+        # defences fired at once and this returned success on the line above:
+        # without the pipe-split, or without 8 meaning on, a plug that did
+        # exactly what was asked would have raised.
+        #
+        # OTHER FIRMWARES ARE REPORTED TO ANSWER THE LITERAL WORD `Error` in
+        # that same case. NOT OBSERVED HERE, and carried as hearsay on purpose
+        # rather than as a property of the device -- the read-back covers it
+        # either way, which is why it does not need to be true to be handled.
         st = self.state()
         if st.get("on") is bool(on):
             return 0
