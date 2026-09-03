@@ -113,6 +113,13 @@ the path is known.
    `off_seconds` controls the dwell; the call blocks for the full duration.
    Refused by the daemon itself if the installed board isn't one the
    configured plug is declared to control.
+3. On a metered plug, `vcctrl_power_state()`'s `power_mw` is a real load
+   reading that reaches the target without going through video capture at
+   all -- worth checking alongside `vcctrl_video_state`/`vcctrl_verify_input`
+   after a power-on or cycle, since it tells "the relay is closed" (`on`)
+   apart from "the machine is actually drawing current" (`power_mw`), which
+   a wedged power switch or a dead PSU can pull apart. Null, always, on an
+   unmetered plug -- never a fabricated 0.
 
 ## Typing text and pressing keys
 

@@ -694,7 +694,21 @@ def vcctrl_power_state() -> dict:
     knowing which board is seated. `board_match` (added alongside the
     board-scoped power fix) says whether a WRITE to this plug would be
     honoured right now for the installed board; null when the board is
-    unknown."""
+    unknown.
+
+    ON A METERED PLUG (a Wemo Insight, currently -- not the rig's Kasa
+    EP10, which has no energy-monitoring hardware at all), `power_mw` is
+    the live draw and answers a DIFFERENT question from `on`: `on` says the
+    relay is closed, `power_mw` says whether the machine on the other end
+    is actually pulling current. They come apart exactly when it matters --
+    wedged at its own power switch, a cable out, a PSU that never came up --
+    and `power_mw` is the one signal here that reaches the target without
+    going through video capture at all. Null, always, on an unmetered
+    backend -- never 0, which would be indistinguishable from "plugged in
+    and drawing nothing." `load_on_s` beside it is seconds spent above the
+    plug's own standby threshold, NOT relay-on time -- see the daemon's own
+    PowerCapability.snapshot() for why the two are never merged into one
+    field."""
     return _run_vcctrl(["power", "state"])
 
 
