@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Builds the USB HID keyboard+mouse+absolute-pointer gadget, and a mass
-# storage function with one removable LUN, on the Pi's own USB-C port
+# Builds the USB HID keyboard+mouse gadget on the Pi's own USB-C port
 # (dwc2 in peripheral mode) via configfs. Independent of vcctrld on purpose --
 # same reasoning as USB4VC's own SPI/STM32 setup: vcctrld only ever talks to
 # whatever kernel interface already exists (uinput there, /dev/hidg* here),
@@ -23,11 +22,9 @@ modprobe libcomposite
 
 if [ -d "$G" ]; then
     echo "" > "$G/UDC" 2>/dev/null || true
-    rm -f "$G"/configs/c.1/hid.keyboard "$G"/configs/c.1/hid.mouse \
-        "$G"/configs/c.1/hid.mouse_abs "$G"/configs/c.1/mass_storage.usb0
+    rm -f "$G"/configs/c.1/hid.keyboard "$G"/configs/c.1/hid.mouse
     rmdir "$G"/configs/c.1/strings/0x409 "$G"/configs/c.1 \
         "$G"/functions/hid.keyboard "$G"/functions/hid.mouse \
-        "$G"/functions/hid.mouse_abs "$G"/functions/mass_storage.usb0 \
         "$G"/strings/0x409 2>/dev/null || true
     rmdir "$G" 2>/dev/null || true
 fi
@@ -82,34 +79,8 @@ echo 1 > functions/hid.mouse/subclass
 echo 4 > functions/hid.mouse/report_length
 printf '\x05\x01\x09\x02\xa1\x01\x09\x01\xa1\x00\x05\x09\x19\x01\x29\x03\x15\x00\x25\x01\x95\x03\x75\x01\x81\x02\x95\x01\x75\x05\x81\x03\x05\x01\x09\x30\x09\x31\x09\x38\x15\x81\x25\x7f\x75\x08\x95\x03\x81\x06\xc0\xc0' > functions/hid.mouse/report_desc
 
-# --- absolute pointer: buttons + X/Y as 0..32767 + a relative wheel, one
-# 6-byte report (1 button byte, 2 X, 2 Y, 1 wheel) -- the same shape QEMU's
-# usb-tablet uses, which is what makes an absolute HID mouse interoperable
-# without a driver: every OS this rig targets (Windows, Linux, macOS) already
-# has generic support for exactly this descriptor shape. NOT boot-protocol
-# (protocol/subclass 0) -- absolute position has no boot-protocol
-# equivalent, and nothing here needs the BIOS/bootloader mouse path the
-# keyboard's boot protocol exists for.
-mkdir -p functions/hid.mouse_abs
-echo 0 > functions/hid.mouse_abs/protocol
-echo 0 > functions/hid.mouse_abs/subclass
-echo 6 > functions/hid.mouse_abs/report_length
-printf '\x05\x01\x09\x02\xa1\x01\x09\x01\xa1\x00\x05\x09\x19\x01\x29\x03\x15\x00\x25\x01\x95\x03\x75\x01\x81\x02\x95\x01\x75\x05\x81\x03\x05\x01\x09\x30\x09\x31\x16\x00\x00\x26\xff\x7f\x75\x10\x95\x02\x81\x02\x09\x38\x15\x81\x25\x7f\x75\x08\x95\x01\x81\x06\xc0\xc0' > functions/hid.mouse_abs/report_desc
-
-# --- mass storage: one removable LUN, no backing file yet. "Mount" is a
-# later configfs write to lun.0/file (see MsdCapability in vcctrld.py) --
-# present from boot, exactly like the two HID functions above, so attaching
-# or ejecting a disk image is never a USB re-enumeration once this script
-# has run once. removable=1 so the host (modernpc) treats an empty LUN as
-# "no medium" rather than an I/O error, the same as a real card reader with
-# nothing inserted.
-mkdir -p functions/mass_storage.usb0/lun.0
-echo 1 > functions/mass_storage.usb0/lun.0/removable
-
 ln -sf "$G/functions/hid.keyboard" configs/c.1/hid.keyboard
 ln -sf "$G/functions/hid.mouse" configs/c.1/hid.mouse
-ln -sf "$G/functions/hid.mouse_abs" configs/c.1/hid.mouse_abs
-ln -sf "$G/functions/mass_storage.usb0" configs/c.1/mass_storage.usb0
 
 # The UDC can take a moment to enumerate right after boot even though dwc2
 # itself probed at kernel init -- sysfs population and this script's own
@@ -129,8 +100,8 @@ fi
 echo "$UDC_NAME" > UDC
 
 for _ in 1 2 3 4 5; do
-    [ -e /dev/hidg0 ] && [ -e /dev/hidg1 ] && [ -e /dev/hidg2 ] && exit 0
+    [ -e /dev/hidg0 ] && [ -e /dev/hidg1 ] && exit 0
     sleep 0.5
 done
-echo "vcctrl-hid-gadget-setup: bound to UDC $UDC_NAME but /dev/hidg0 / /dev/hidg1 / /dev/hidg2 did not all appear" >&2
+echo "vcctrl-hid-gadget-setup: bound to UDC $UDC_NAME but /dev/hidg0 / /dev/hidg1 did not appear" >&2
 exit 1

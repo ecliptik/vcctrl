@@ -79,15 +79,16 @@ capabilities:
       hid_mouse_device: /dev/hidg1
       pace_s: 0.012
 
-  # The mass-storage LUN on the SAME gadget the input block above uses --
-  # present from boot with no file assigned (pi/files/
-  # vcctrl-hid-gadget-setup.sh), so mount/eject are configfs writes, never
-  # a re-enumeration. EXPLICIT, same reasoning as every `none` below: an
-  # absent `backend:` key falls back to trying MsdCapability anyway (see
-  # its own class docstring), and gateway2000 shares no USB port with this
-  # gadget at all -- gateway2000's own vcctrl.yaml sets this to `none`.
+  # PAUSED, 2026-09-02: the gadget was rolled back to keyboard+mouse only
+  # (pi/files/vcctrl-hid-gadget-setup.sh reverted to fe15c51 -- no
+  # mass_storage.usb0, no hid.mouse_abs) after the rebuild that added them
+  # left the real rig's link intermittently unattached for hours -- see
+  # OPEN-FAULTS #21 and docs/FINDINGS.md #52. MsdCapability's code is
+  # untouched and ready the day a gadget carries this function again;
+  # `none` here keeps a fresh profile of this kind honest about what a
+  # keyboard+mouse-only gadget actually offers.
   msd:
-    backend: usb-gadget-msd        # usb-gadget-msd | none
+    backend: none                  # usb-gadget-msd | none
 
   # No `leds:` block -- `none` is the default the moment this key is set to
   # it, and there is no PS/2 return channel over a generic HID gadget at

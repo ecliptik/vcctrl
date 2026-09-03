@@ -31,14 +31,15 @@ capabilities:
       hid_mouse_device: /dev/hidg1
       pace_s: 0.012
 
-  # The mass-storage LUN on the SAME gadget `input` above uses -- present
-  # from boot with no file assigned (pi/files/vcctrl-hid-gadget-setup.sh),
-  # so mount/eject never re-enumerate. Defaults (lun_dir/image_dir) match
-  # that script and daemon.state_dir; only worth overriding for a SECOND
-  # hdmi-usb profile sharing one gadget, which this rig's own comment above
-  # already says it does not have hardware for today.
+  # NONE FOR NOW: pi/files/vcctrl-hid-gadget-setup.sh was rolled back to
+  # keyboard+mouse only, 2026-09-02 (OPEN-FAULTS #21, docs/FINDINGS.md #52
+  # -- the mass-storage/absolute-pointer rebuild left the real rig's link
+  # intermittently unattached for hours). MsdCapability itself is
+  # untouched -- flip this to usb-gadget-msd, with a matching mass_storage
+  # function restored to the gadget script, once that instability is
+  # understood and the rebuild is worth trying again.
   msd:
-    backend: usb-gadget-msd        # usb-gadget-msd | none
+    backend: none                  # usb-gadget-msd | none
 
   video:
     backend: v4l2-ffmpeg
