@@ -169,6 +169,36 @@ class _CFGProxy(object):
 CFG = _CFGProxy()
 
 
+def _profile_thread(target, name=None, daemon=True):
+    """A thread that keeps the profile scope of whoever started it.
+
+    `_ProfileConfigContext` is a threading.local, so a freshly spawned thread
+    re-runs its `__init__` and binds `_PRIMARY_CFG` -- NOT the config of the
+    profile whose capability spawned it. Every `CFG.xxx` read on that thread
+    then answers for the primary profile, silently and correctly-looking.
+
+    MEASURED, not reasoned (2026-09-02, docs/FINDINGS.md sec. 48): a second
+    profile's `PowerCapability` heartbeat resolved `power_host()` to the
+    PRIMARY's plug address. With a primary that has no plug the second
+    profile's plug was never polled at all; with one that does, the second
+    profile's real relay reading got stamped with the primary's address and
+    `snapshot()` published it -- a true reading under another machine's name,
+    on the capability whose whole job is knowing which machine it is talking
+    about.
+
+    So: capture the caller's binding HERE, on the caller's thread, and rebind
+    it inside the new one. Callers that never had a second profile are
+    unaffected -- they capture the primary and rebind the primary.
+    """
+    cfg, error = _CFG_CTX.cfg, _CFG_CTX.error
+
+    def run():
+        with _profile_scope(cfg, error):
+            target()
+
+    return threading.Thread(target=run, name=name, daemon=daemon)
+
+
 @contextlib.contextmanager
 def _profile_scope(cfg, error=None):
     """Bind `cfg` (and its load error, if any) to CFG for the life of this
@@ -2937,8 +2967,12 @@ class PowerCapability(Capability):
     def start(self):
         # Off the main thread: the plug is on the LAN and a dead plug must not
         # delay or fail daemon startup.
-        threading.Thread(target=self._heartbeat, name="power-id",
-                         daemon=True).start()
+        #
+        # _profile_thread, NOT threading.Thread: this capability may belong to
+        # a profile that is not the primary, and a bare thread would read the
+        # PRIMARY's plug address for the rest of the daemon's life. See that
+        # helper for what was measured.
+        _profile_thread(self._heartbeat, name="power-id").start()
 
     def _heartbeat(self):
         while True:

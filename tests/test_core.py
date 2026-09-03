@@ -6942,6 +6942,98 @@ def test_shell_power_backend_never_invents_off():
     check("an unconfigured command names which one is missing", missing)
 
 
+def test_a_capabilitys_own_thread_keeps_its_profiles_config():
+    """A second profile's power heartbeat must not read the PRIMARY's plug.
+
+    `_ProfileConfigContext` is a threading.local, so a thread a capability
+    spawns re-runs its `__init__` and binds `_PRIMARY_CFG` -- not the config of
+    the profile that capability belongs to. Every `CFG.xxx` on that thread then
+    answers for the primary, silently, and looking entirely correct.
+
+    Measured before the fix (docs/FINDINGS.md sec. 48): with a primary that has
+    no plug, a second profile's plug was never polled at all -- `_refresh()`
+    gates on `if host:` and `power_host()` returned None. With a primary that
+    HAS one, the second profile's real relay reading was stamped with the
+    primary's address and `snapshot()` published it: a true reading under
+    another machine's name, from the one capability whose entire safety story
+    is knowing which machine it is talking about.
+
+    THE CONTROL IS THE POINT. The last two checks re-run the whole thing with
+    the fix removed and require the OLD behaviour back. Without them this test
+    passes just as happily against code where `_profile_thread` does nothing at
+    all, and a guard that cannot fail is the recurring shape in this file.
+    """
+    print("\nprofile scope survives a capability's own thread")
+    m = vcctrld
+    v = _vcconfig()
+
+    primary = v.Config({"version": 1, "capabilities": {"power": {
+        "backend": "kasa-legacy",
+        "settings": {"host": "plug-PRIMARY", "boards": [1]}}}},
+        source="<primary>")
+    second = v.Config({"version": 1, "capabilities": {"power": {
+        "backend": "wemo",
+        "settings": {"host": "plug-SECOND", "boards": [1]}}}},
+        source="<second>")
+
+    class FakePlug(object):
+        def __init__(self, settings):
+            self.settings = settings
+
+        def state(self):
+            return {"on": True, "alias": "second-target", "model": "Insight",
+                    "power_mw": 45500, "on_time_s": None, "rssi": None}
+
+    def run(spawn):
+        """Build a SECOND-profile power capability and let it refresh once."""
+        cap = m.PowerCapability(None)
+        cap.backend_name = "wemo"
+        cap.settings = {"host": "plug-SECOND"}
+        # _build_instance() calls start() inside the profile's scope; so here.
+        with m._profile_scope(second):
+            t = spawn(cap._refresh)
+            t.start()
+            t.join(5)
+        with m._profile_scope(second):
+            return cap, cap.snapshot()
+
+    real_backends = dict(m.POWER_BACKENDS)
+    real_board = m.installed_board_id
+    real_primary_cfg = m._PRIMARY_CFG
+    try:
+        m.POWER_BACKENDS["wemo"] = FakePlug
+        m.installed_board_id = lambda: 1
+        # THE MODULE GLOBAL, not `_CFG_CTX.cfg`. `_ProfileConfigContext` is a
+        # threading.local whose __init__ reads this global when a thread first
+        # touches it, so binding the local on THIS thread never reaches a
+        # spawned one -- which is the very mechanism under test. Setting the
+        # local instead made the control produce the OTHER failure mode: the
+        # suite's own config names no plug, so the spawned thread saw None,
+        # `_refresh` never polled, and the mislabelling this test is about
+        # could not arise. The control passed for the wrong reason and the
+        # test would have been meaningless.
+        m._PRIMARY_CFG = primary
+
+        cap, snap = run(lambda fn: m._profile_thread(fn, name="t"))
+        check("the second profile's plug actually got polled",
+              (cap._seen or {}).get("alias") == "second-target", cap._seen)
+        check("and the reading is labelled with ITS host, not the primary's",
+              snap.get("host") == "plug-SECOND", snap.get("host"))
+
+        # CONTROL: put the old bare thread back and require the bug to return.
+        cap, snap = run(lambda fn: threading.Thread(target=fn, daemon=True))
+        check("control: a bare thread reads the PRIMARY's host",
+              snap.get("host") == "plug-PRIMARY", snap.get("host"))
+        check("control: which is exactly the mislabelling, so the check above "
+              "is capable of failing", snap.get("host") != "plug-SECOND",
+              snap.get("host"))
+    finally:
+        m.POWER_BACKENDS.clear()
+        m.POWER_BACKENDS.update(real_backends)
+        m.installed_board_id = real_board
+        m._PRIMARY_CFG = real_primary_cfg
+
+
 def test_wemo_power_backend_reads_the_states_the_device_actually_sends():
     """The third power implementation, and every reply shape that is not 0/1.
 

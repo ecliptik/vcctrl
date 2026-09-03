@@ -3208,3 +3208,65 @@ that dies uncleanly -- worth a proper fix (a server-initiated WS
 ping/pong liveness check would catch this the way a write-only check
 cannot) rather than relying on the proxy's own timeout, which this
 daemon does not control and has not measured the duration of.
+
+## 48. A capability's own thread reads the PRIMARY profile's config, whichever profile the capability belongs to  [measured 2026-09-02]
+
+Found while answering "can we configure a different power backend per host?".
+The answer in the config file is yes; the answer at runtime was no, for the one
+capability that most needs it.
+
+`CFG` is not a config object, it is a proxy over `_ProfileConfigContext`, a
+**`threading.local`** — that is how one vcctrld process serves several
+profiles without threading a `cfg` parameter through every call site.
+`_profile_scope()` binds it, and the daemon binds it in three places: where an
+instance is built, on each connection-serving thread, and on each accept loop.
+
+**A thread a capability spawns for itself is not one of those three.** A
+`threading.local` does not inherit across a `threading.Thread(...)` boundary,
+so the new thread re-runs `__init__` and binds `_PRIMARY_CFG`. Every `CFG.xxx`
+on it then answers for the primary profile — silently, and looking entirely
+correct.
+
+`PowerCapability.start()` spawns exactly such a thread for its 60 s heartbeat,
+and `_refresh()` calls `power_host()` on it.
+
+### Measured, both failure modes
+
+Probe: a `PowerCapability` belonging to a second profile whose config names
+`plug-SECOND`, with a stub protocol object, started the way `_build_instance()
+starts it — `start()` called inside `_profile_scope(second)`.
+
+| primary's config | what happened |
+|---|---|
+| no plug configured | `power_host()` → `None` on the heartbeat thread, `_refresh()` gates on `if host:`, and **the second profile's plug is never polled at all**. `snapshot()` reports "has not answered since the daemon started", forever. |
+| `plug-PRIMARY` configured | the right plug is read — `_protocol()` uses `self.settings`, which the registry sets per profile — but `_remember()` stamps it with `plug-PRIMARY`, and `snapshot()` prefers `_seen_host`, so **`/state.json` publishes a true relay reading under another machine's address**. |
+
+The second is the worse one. Nothing errors, nothing is stale, the reading is
+genuinely current — and the `host` field beside it names a different machine,
+on the capability whose entire safety story (docs/BOARD-IDENTITY.md sec. 5) is
+knowing which machine it is talking about.
+
+### The fix, and the control that makes the test worth having
+
+`_profile_thread()` captures the caller's binding on the caller's thread and
+rebinds it inside the new one. A rig with one profile captures the primary and
+rebinds the primary, so nothing changes for it.
+
+The regression test re-runs the whole scenario with the fix removed and
+requires the old behaviour back. That control earned its place immediately: the
+first version of it patched `_CFG_CTX.cfg` on the test's own thread, which —
+being thread-local — never reached the spawned thread, so the control produced
+the *never-polled* mode instead of the *mislabelled* mode and failed. Patching
+the module-level `_PRIMARY_CFG` is what a spawned thread actually reads. A
+control that passes for the wrong reason is the recurring shape this file
+exists to record, and it very nearly happened inside the test written to
+prevent it.
+
+### What was NOT checked
+
+Five other long-lived worker threads exist (`LedsCapability._poll` and four
+`_watchdog`s). None reads `CFG` **in its own body** — that is a grep, not an
+audit, and their callees were not traced. They are unaudited, not cleared. The
+same hazard applies to any of them that reaches a `CFG` read indirectly, and
+the fix for each is one call: spawn with `_profile_thread` instead of
+`threading.Thread`.
