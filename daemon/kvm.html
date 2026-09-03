@@ -1271,6 +1271,11 @@
     display:flex; align-items:center; gap:8px;
     font:600 var(--t-data)/1 var(--sans); letter-spacing:0; padding:0 9px;
   }
+  /* SAME FIGHT AS #filebtn's OWN RULE FURTHER DOWN, same fix, found the same
+     way: setting `hidden` on #profilebtn (2026-09-02, modernpc paused) did
+     nothing, because the rule right above is equal-or-higher specificity and
+     wins on source order over the UA [hidden] rule. */
+  #profilebtn[hidden] { display:none; }
   #cmdbar button > .bl, #zoombtn > .bl, #profilebtn > .bl, .lbtn > .bl {
     flex:none; white-space:nowrap;
   }
@@ -2479,7 +2484,16 @@
             title="How the picture is sized"><span class="bi">🖥️</span><span id="zoomlabel">Fit to Screen</span><span class="caret dn" aria-hidden="true"></span></button>
     <!-- Fit to Screen acts on the PICTURE; the three to its right open panels
          about the rig. The rule is where that changes. -->
-    <span class="sep" aria-hidden="true">|</span>
+    <!-- HIDDEN, NOT REMOVED, 2026-09-02: modernpc is paused server-side
+         (OPEN-FAULTS #21 -- its config was renamed .yaml.disabled, not
+         deleted, pending a power-hardware fix) and the operator asked for
+         the switcher off the strip while only gateway2000 is in use. This
+         sep -- the one BEFORE the profile group -- is what's hidden, not
+         the one after it (line ~2528 below), so the strip still gets
+         exactly one divider between Fit to Screen and Power/Board/etc.
+         Un-hide this span and #profilebtn together, and un-comment
+         PROFILES' modernpc entry below, to bring it back. -->
+    <span class="sep" aria-hidden="true" hidden>|</span>
     <!-- A DELIBERATELY SEPARATE, SELF-CONTAINED CONTROL -- not built on
          openPop()/closePop()/the shared #pop-* popmenu system those use.
          That system keys per-menu CSS positioning by name and wires up
@@ -2493,7 +2507,7 @@
          collide with a system that has no idea it exists.
     -->
     <button id="profilebtn" aria-haspopup="true" aria-expanded="false"
-            title="Which target this page controls">
+            title="Which target this page controls" hidden>
       <span class="bi">🎯</span><span id="profilelabel">gateway2000</span><span class="caret dn" aria-hidden="true"></span>
     </button>
     <!-- .pop .popmenu, THE SAME CLASSES #pop-zoom USES -- shares its panel
@@ -3343,7 +3357,13 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // of known routes); this was purely a client omission.
 const PROFILES = [
   {id: '', label: 'gateway2000'},
-  {id: '/p/modernpc', label: 'modernpc'},
+  // modernpc commented out, not deleted, alongside #profilebtn's own
+  // `hidden` (2026-09-02) -- see the HTML comment there. Leaving it out of
+  // this array (rather than just hiding the button) also makes the
+  // existing PROFILE_BASE fallback below self-correct anyone whose
+  // localStorage still says '/p/modernpc' from before back to gateway2000,
+  // and makes switchProfile() itself refuse the id, not just the button.
+  // {id: '/p/modernpc', label: 'modernpc'},
 ];
 let PROFILE_BASE = localStorage.getItem('vcctrl.profile') || '';
 if (!PROFILES.some(p => p.id === PROFILE_BASE)) PROFILE_BASE = '';
@@ -8594,6 +8614,25 @@ function statsRows(j) {
        .filter(Boolean).join(' · ') || '—');
   if (pw.on == null) kv('state', pw.reason || 'plug not answering', 'unk');
   else kv('state', pw.on ? 'on' : 'off');
+  // NULL, NOT ZERO, MEANS "THIS PLUG HAS NO METER" -- same rule the daemon
+  // itself uses (see PowerCapability.snapshot()) -- so an unmetered Kasa
+  // just omits the row rather than showing a false "0.00 W".
+  if (pw.power_mw != null) kv('draw', (pw.power_mw / 1000).toFixed(2) + ' W');
+  // `on_time_s` (relay-on seconds, Kasa/Klap) and `load_on_s` (seconds
+  // actually drawing above standby, Wemo Insight) are DIFFERENT quantities
+  // -- see the daemon's own comment on why they are never merged into one
+  // field -- so each gets its own label rather than one generic "uptime"
+  // that would claim more precision than the reading behind it has. Gated
+  // on `on === true`: neither counter has a defined meaning once the relay
+  // is open, and no backend here reports how long it has been OFF.
+  if (pw.on === true && pw.on_time_s != null)
+    kv('on for', fmtAge(pw.on_time_s));
+  else if (pw.on === true && pw.load_on_s != null)
+    kv('drawing for', fmtAge(pw.load_on_s), '',
+       'seconds spent above the standby threshold'
+       + (pw.standby_threshold_mw != null
+          ? ' (' + (pw.standby_threshold_mw / 1000).toFixed(0) + ' W)' : '')
+       + ' -- not relay-on time, which this plug does not report');
   kv('read', pw.stale ? 'not answering'
        : pw.age_s != null ? fmtAge(pw.age_s) + ' ago' : '—',
      pw.stale ? 'warn' : '');
