@@ -243,17 +243,35 @@ capabilities:
     #     port: 49153
     #     timeout_s: 5
     #     boards: [1]
+    #     # Insight models only: read the energy meter alongside the relay.
+    #     # On by default where the model has one. Set false to buy back the
+    #     # second round trip on a plug that keeps going unreachable.
+    #     meter: true
     #
     # `alias` is accepted but the device's own friendly name wins where it
     # has one: the plug knows what it was actually named and the config only
     # knows what somebody typed.
     #
+    # ON AN INSIGHT you also get `power_mw` -- what the attached machine is
+    # actually drawing. That is not a nicer `on`: `on` says the relay is
+    # closed, `power_mw` says whether anything on the other end is pulling
+    # current, and they come apart exactly when it matters. Null, never zero,
+    # where the model has no meter -- a Wemo Switch has no measuring hardware,
+    # and 0 mW would read as "plugged in and drawing nothing", which is a
+    # finding rather than a gap. The Kasa EP10 is the same story from the
+    # other protocol: `feature: TIM`, no emeter module.
+    #
+    # `load_on_s` beside it is the Insight's own counter and is NOT relay-on
+    # time -- it counts seconds the LOAD spent above `standby_threshold_mw`.
+    # Measured 2026-09-02: it held 0 across 90 s with the relay closed
+    # throughout. Kasa's `on_time_s` is relay-on seconds, so the two are not
+    # the same quantity and do not share a key.
+    #
     # NOT REPORTED BY THIS BACKEND, deliberately: `on_time_s` and `rssi` come
-    # back null. Kasa carries both inside the one reply it already makes;
-    # Wemo needs a separate round trip for each, to a device whose small HTTP
-    # server has been measured refusing connections outright while still
-    # answering SSDP (docs/FINDINGS.md sec. 47). Null means "this backend
-    # does not report it" -- a zero on-time would read as "just switched on".
+    # back null. No Wemo call reports relay-on seconds at all, and the signal
+    # strength would be another round trip to a device whose small HTTP server
+    # has been measured refusing connections outright while still answering
+    # SSDP (docs/FINDINGS.md sec. 47).
     #
     # The `shell` backend runs your own commands instead, for any plug this
     # project will never support -- a Zigbee bridge, a relay board, a PDU with

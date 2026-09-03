@@ -7062,19 +7062,74 @@ def test_wemo_power_backend_reads_the_states_the_device_actually_sends():
         b = m.WemoPower({"host": "plug.invalid"})
 
         replies["GetBinaryState"] = "<BinaryState>8</BinaryState>"
+        replies["GetInsightParams"] = ("<InsightParams>8|1788395720|0|0|0|"
+                                       "1209600|9|45500|0|0|8000"
+                                       "</InsightParams>")
         st = b.state()
         check("state() reads 8 as on", st["on"] is True, st)
         check("identity comes from setup.xml", st["alias"] == "bench plug", st)
-        check("on_time_s is null, not 0 -- 0 would mean 'just switched on'",
-              st["on_time_s"] is None, st)
+        check("the draw comes back in mW", st["power_mw"] == 45500, st)
+        check("and the threshold that explains an 8 comes with it",
+              st["standby_threshold_mw"] == 8000, st)
         check("rssi is null: this backend does not report it",
               st["rssi"] is None, st)
+
+        # THE FIELD THAT IS NOT WHAT IT LOOKS LIKE. Measured 2026-09-02: field
+        # 2 held 0 across a 90 s sample with the relay closed throughout, so it
+        # counts LOAD-on seconds, not relay-on seconds. Kasa's `on_time_s` is
+        # relay-on seconds. Merging them would publish "powered for 0 s" about
+        # a machine that had been on mains for a day.
+        check("load_on_s carries the Insight's own counter",
+              st["load_on_s"] == 0, st)
+        check("and on_time_s stays null rather than borrowing it -- the two "
+              "are different quantities", st["on_time_s"] is None, st)
+
+        # No meter, no invented zero.
+        m.WemoPower._IDENT.clear()
+        m.wemo_setup_xml = lambda *a, **kw: (
+            "<friendlyName>bench plug</friendlyName>"
+            "<modelName>Socket</modelName>")
+        st = b.state()
+        check("an unmetered model reports null draw, NOT 0 -- 0 would mean "
+              "'plugged in and drawing nothing'", st["power_mw"] is None, st)
+        m.WemoPower._IDENT.clear()
+        m.wemo_setup_xml = lambda *a, **kw: (
+            "<friendlyName>bench plug</friendlyName>"
+            "<modelName>Insight</modelName>"
+            "<firmwareVersion>WeMo_WW_0.00.0</firmwareVersion>")
+
+        # A short field list is a firmware this does not know. Say nothing
+        # rather than index into it and publish a guess as a wattage.
+        replies["GetInsightParams"] = "<InsightParams>8|1788395720|0</InsightParams>"
+        st = b.state()
+        check("a truncated InsightParams yields null, not a misread field",
+              st["power_mw"] is None and st["load_on_s"] is None, st)
+        replies["GetInsightParams"] = ("<InsightParams>8|1788395720|0|0|0|"
+                                       "1209600|9|45500|0|0|8000"
+                                       "</InsightParams>")
+
+        # `meter: false` buys back the second round trip on a flaky plug.
+        off = m.WemoPower({"host": "plug.invalid", "meter": False})
+        st = off.state()
+        check("meter: false skips the meter call and nulls its fields",
+              st["power_mw"] is None and st["on"] is True, st)
 
         replies["GetBinaryState"] = "<Something>else</Something>"
         st = b.state()
         check("an unreadable reply is None, NOT off", st["on"] is None, st)
         check("and it says what it got", "BinaryState" in (st["reason"] or ""),
               st)
+
+        # The meter failing must not fail the relay read either: it is a
+        # second request to a device that goes unreachable for minutes, and
+        # mains state is the answer people need during exactly that outage.
+        broke = dict(replies)
+        replies["GetBinaryState"] = "<BinaryState>1</BinaryState>"
+        del replies["GetInsightParams"]
+        st = b.state()
+        check("a meter call that fails still yields the relay state",
+              st["on"] is True and st["power_mw"] is None, st)
+        replies.update(broke)
 
         # setup.xml failing must not fail the relay read.
         m.WemoPower._IDENT.clear()

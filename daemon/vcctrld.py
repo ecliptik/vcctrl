@@ -778,7 +778,20 @@ def power_state(host):
             "alias": info.get("alias"),
             "model": info.get("model"),
             "on_time_s": info.get("on_time"),
-            "rssi": info.get("rssi")}
+            "rssi": info.get("rssi"),
+            # ALWAYS None HERE, and the gap is named rather than left as an
+            # absence. Energy metering is a per-model hardware fact that
+            # `get_sysinfo` reports in `feature`: this rig's EP10 says `TIM`
+            # (timer only) and answers both emeter namespaces with
+            # `err_code -1, "module not support"` (measured 2026-09-02), so
+            # there is nothing to read. A METERED MODEL -- HS110, KP115,
+            # KP125M, which say `TIM:ENE` -- would answer
+            # `{"emeter": {"get_realtime": {}}}` and could fill this, and
+            # nobody has written that because no such plug has been on this
+            # rig. That is a missing feature with a known shape, not a
+            # property of the protocol. See WemoPower.state() for what the
+            # field is for.
+            "power_mw": None}
 
 
 def power_set(host, on):
@@ -1006,11 +1019,72 @@ class WemoPower(object):
     def _timeout(self):
         return float(self.settings.get("timeout_s", 5.0))
 
-    def _soap(self, action, body=""):
-        return wemo_soap(self.host(), "basicevent:1",
-                         "/upnp/control/basicevent1", action, body,
+    def _soap(self, action, body="", service="basicevent:1",
+              path="/upnp/control/basicevent1"):
+        return wemo_soap(self.host(), service, path, action, body,
                          port=self.settings.get("port"),
                          timeout=self._timeout())
+
+    def _meter(self):
+        """The Insight energy meter, or {} where there is not one.
+
+        SEPARATE CALL, SEPARATE FAILURE. This is a second round trip, to a
+        device that goes unreachable for minutes at a stretch (note 4 above),
+        so it must not be able to take the relay reading down with it: the
+        machine's mains state is the answer people need in an outage, and the
+        wattage is the answer they would like.
+
+        GATED ON THE MODEL, because the meter is a hardware fact. Only the
+        Insight has one; a Wemo Switch or Mini answers this call with a fault
+        and would spend the round trip to learn that every single poll. `meter:
+        false` in settings turns it off on an Insight too, for a rig that would
+        rather not pay the second request at all.
+        """
+        if self.settings.get("meter") is False:
+            return {}
+        if "insight" not in (self._ident().get("model") or "").lower():
+            return {}
+        try:
+            raw = _wemo_tag(self._soap("GetInsightParams", "",
+                                       "insight:1", "/upnp/control/insight1"),
+                            "InsightParams")
+        except Exception:
+            return {}
+        # `state|lastchange|onfor|ontoday|ontotal|timespan|avgpower|
+        #  currentpower|todaymw|totalmw|threshold`. Read POSITIONALLY and
+        # defensively: a short list is a firmware answering a shape this does
+        # not know, and guessing at it would be worse than saying nothing.
+        f = (raw or "").split("|")
+        if len(f) < 8:
+            return {}
+
+        def num(i, cast):
+            try:
+                return cast(f[i])
+            except (ValueError, TypeError):
+                return None
+
+        return {"power_mw": num(7, lambda v: int(float(v))),
+                # NOT `on_time_s`, and that distinction was measured rather
+                # than assumed. Field 2 held 0 across a 90 s sample taken with
+                # the relay CLOSED the whole time (2026-09-02) -- so it is not
+                # counting relay-on seconds, or it would have read 90. It is
+                # the Insight's LOAD-on counter: time the attached machine
+                # spent drawing above `standby_threshold_mw`, which had never
+                # happened on this plug.
+                #
+                # Kasa's `on_time` is relay-on seconds. Putting this in the
+                # same field would have published "powered for 0 s" about a
+                # machine whose mains had been on for a day, in a key another
+                # backend fills with a different quantity -- so it gets its own
+                # name and `on_time_s` stays null, which is what "this backend
+                # does not report it" is for.
+                "load_on_s": num(2, int),
+                # The reason a running machine reads `1` and an idle outlet
+                # reads `8`: the device compares the draw above against this.
+                # Carried so a reader can check that arithmetic rather than
+                # take note 2 on faith.
+                "standby_threshold_mw": num(10, lambda v: int(float(v)))}
 
     def _ident(self):
         host = self.host()
@@ -1030,22 +1104,43 @@ class WemoPower(object):
         raw = _wemo_tag(xml, "BinaryState")
         on = wemo_on(raw)
         ident = self._ident()
+        meter = self._meter()
         return {"on": on,
                 # The device's own name wins over the configured one: `alias`
                 # in the config is a label somebody typed, and the plug knows
                 # what it was actually named.
                 "alias": ident.get("alias") or self.settings.get("alias"),
                 "model": ident.get("model"),
-                # BOTH null ON PURPOSE, and null is the honest answer rather
-                # than a gap. Kasa carries them for free inside the one
-                # `get_sysinfo` it already makes; Wemo does not. An Insight's
-                # on-time counter is behind `insight:1#GetInsightParams` and
-                # the signal strength behind another call again -- two more
-                # round trips per poll, to a device measured refusing
-                # connections under load, to fill two fields that nothing in
-                # this repo reads. Zero would be a lie meaning "just switched
-                # on"; None means "this backend does not report it".
+                # THE DRAW, WHERE THE HARDWARE HAS A METER. This is not a nicer
+                # `on`: it answers a different question. `on` says the relay is
+                # closed; `power_mw` says whether anything on the other end is
+                # actually pulling current, and those come apart exactly when
+                # it matters -- a machine wedged at its own power switch, a
+                # cable out, a PSU that did not come up. It is the one witness
+                # of target state on this rig that does not route through video
+                # capture, which is worth something given how much of
+                # docs/FINDINGS.md is about video lying.
+                #
+                # NULL, NEVER ZERO, WHERE THERE IS NO METER: a Wemo Switch has
+                # no measuring hardware and 0 mW would read as "plugged in and
+                # drawing nothing", which is a finding rather than a gap. The
+                # Kasa EP10 on this rig is the same story from the other
+                # protocol -- `feature: TIM`, and both emeter namespaces answer
+                # "module not support" (measured 2026-09-02).
+                "power_mw": meter.get("power_mw"),
+                "standby_threshold_mw": meter.get("standby_threshold_mw"),
+                # HOW LONG THE LOAD HAS BEEN DRAWING, not how long the relay
+                # has been closed -- see `_meter`. The two come apart on
+                # exactly the plug this was written against.
+                "load_on_s": meter.get("load_on_s"),
+                # NULL EVEN ON A METERED INSIGHT: no Wemo call reports relay-on
+                # seconds, and the counter that looks like it is measuring
+                # something else. Filling it from `load_on_s` would put two
+                # different quantities in one key across backends.
                 "on_time_s": None,
+                # No LAN call reports it. Kasa gets it free inside the one
+                # `get_sysinfo` it already makes; here it would be another
+                # round trip to a flaky device for a field nothing reads.
                 "rssi": None,
                 "reason": None if on is not None else
                           ("the plug answered without a usable BinaryState "
@@ -1120,6 +1215,10 @@ class ShellPower(object):
         on = True if word == "on" else False if word == "off" else None
         return {"on": on, "alias": self.settings.get("alias"),
                 "model": "shell", "on_time_s": None, "rssi": None,
+                # No shape to read one out of: `state_cmd` promises the word
+                # `on` or `off` and nothing else. A rig that can measure its
+                # own draw already has somewhere better to put the number.
+                "power_mw": None,
                 "reason": None if on is not None else
                           ("state_cmd printed %r, which is neither 'on' nor "
                            "'off'" % word[:40])}
@@ -2917,7 +3016,8 @@ class PowerCapability(Capability):
         st, t = self._seen, self._seen_t
         if not st:
             return {"host": cfg_host, "alias": None, "model": None,
-                    "on": None, "age_s": None, "stale": None,
+                    "on": None, "power_mw": None,
+                    "age_s": None, "stale": None,
                     "reason": "the plug has not answered since the daemon started",
                     "board_match": board_match, "board_reason": board_reason}
         age = round(time.time() - t, 1)
@@ -2930,6 +3030,13 @@ class PowerCapability(Capability):
         return {"host": self._seen_host or cfg_host,
                 "alias": st.get("alias"), "model": st.get("model"),
                 "on": None if unreachable else st.get("on"),
+                # SAME NULLING RULE AS `on`, for the same reason. A wattage
+                # from the last successful poll is a reading about a moment
+                # that has passed, and a stale 45 W presented as current is a
+                # worse lie than no number -- it says the machine is running
+                # now. `age_s` is right there for anyone who wants the last
+                # known value with its age; this field means "now".
+                "power_mw": None if unreachable else st.get("power_mw"),
                 "age_s": age,
                 "stale": unreachable or age > self.STALE_S,
                 "reason": self._fail,
