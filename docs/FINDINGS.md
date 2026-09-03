@@ -3099,9 +3099,9 @@ throttled.
 
 **UPDATE, same day, after deploying to the real Pi 5**: the pipeline
 itself now IS confirmed against real hardware -- a real browser (Chromium/
-Playwright) loaded the real deployed page over the tailnet
-(`https://usb4vc.example.ts.net/`, real TLS, real `tailscale serve`
-proxy), selected the `modernpc` profile, and `connectH264()` connected,
+Playwright) loaded the real deployed page over the tailnet (the rig's own
+MagicDNS name, real TLS, real `tailscale serve` proxy), selected the
+`modernpc` profile, and `connectH264()` connected,
 configured a `VideoDecoder`, and settled on `xport: 'h264'` with no
 fallback -- against the REAL `H264Sidecar` transcoding modernpc's REAL
 HDMI capture ring on the Pi 5 itself, not a dev-host stand-in. The
