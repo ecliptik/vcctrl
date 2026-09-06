@@ -207,3 +207,17 @@ One sentence, e.g. `vcctrl_note("running a dinspect hardware re-scan for a
 peer session, target rebooting")`. Not gated by the input lock and touches
 no hardware, so there's no reason to skip it even for a read-only or
 diagnostic sequence.
+
+**When a driving sequence needs the operator's go-ahead (a power/reboot/
+swap action, or anything else genuinely their call), don't just ask in
+plain text and sit idle.** A rig-driving session runs long with waits
+between turns, so a prose question can sit unseen for a while. Call
+`PushNotification` (pushes to the operator's phone if Remote Control is
+connected) alongside `AskUserQuestion` (the actual interactive yes/no
+prompt) rather than either alone -- the operator's own instruction,
+2026-09-03: *"ask it in a way so remote control sees it and sends an
+alert to the claude mobile app, this way I can get pinged and you're not
+just sitting there waiting for me to manually check this session."* A
+plain "Go ahead?" in text gets seen late and lacks the interactive
+yes/no UI a real `AskUserQuestion` prompt gives -- that gap is exactly
+what prompted this note.
