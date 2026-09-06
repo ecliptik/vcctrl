@@ -159,10 +159,47 @@ Steps 1-2 are the operator's. Everything from 3 is the harness's.
    instead (mode list, `lfb_addr`, VRAM, the engine's detect probes) and says
    UNKNOWN rather than guessing when the log is thin. If its verdict disagrees
    with what was fitted, that is the finding.
-6. **Run `vcctrl-uvconfig`.** It backs up the current driver first, runs
-   uvconfig, and stops rather than guessing if a screen appears. It reboots
-   afterwards, because uvconfig generates a driver that only loads at
-   TSR-load time. Rehearsed end to end on the ViRGE.
+
+   **This read is provisional until step 6 has run -- a stale driver can make
+   it genuinely ambiguous, not just imprecise.** Live case, 2026-09-03,
+   Cirrus->ViRGE: before UVCONFIG was re-run, `cardid` came back LOW
+   CONFIDENCE with `total_vram=1024 KB` (the *previous* card's figure) and
+   its own top signature match was "Cirrus (onboard)" (4/5=80%) narrowly
+   ahead of ViRGE (6/8=75%) -- both `s3_probe` and `cirrus_bug` fired at
+   once. A fresh `dinspect` read agreed with the physical swap even at this
+   stage (direct chipset probe, not through UniVBE), so the two witnesses
+   can disagree here, and neither should be trusted alone before step 6.
+   **Re-run cardid after step 6/7**, against a fresh cell's log -- the same
+   run that came back ambiguous pre-UVCONFIG read 8/8 ViRGE, Cirrus 0/5,
+   `total_vram=4096 KB`, immediately after.
+6. **Run UVCONFIG. `bin/vcctrl-uvconfig` no longer does this itself, and
+   that is by design, not a regression to route around** (SUPERSEDED
+   2026-09-03; text below described an earlier, more automated version).
+   UVCONFIG.EXE only renders correctly in text mode (`MODE03`); this rig's
+   VGA capture stick only locks onto mode 12h. The instant the machine
+   switches to text mode, the harness is completely blind to the screen for
+   the whole interactive portion -- exactly the six-hour-incident shape this
+   procedure exists to prevent, so the tool refuses to start it rather than
+   drive it blind. **This step needs a human physically at the machine:**
+
+       C:\VGACAP\MODE03          (text mode -- capture goes blind, expected)
+       C:\UNIVBE\UVCONFIG.EXE    (read what it prints: chip detected, any
+                                   withheld modes -- the Mach64-CT case
+                                   below is the reason this line matters)
+       C:\VGACAP\MODE12          (restores capture)
+       Ctrl-Alt-Delete            (the harness can do this part --
+                                   AUTOEXEC loads the new config on boot)
+
+   Afterward, `vcctrl-uvconfig --verify` prints `FIND`-based greps to run
+   against a fresh cell's SDL log (`oem_string`, the expected mode ID,
+   `LFB-decision`, `total_vram`) rather than checking anything itself --
+   `total_vram` there identifies the card *through the shim* (2048 KB
+   Mach64, 4096 KB ViRGE), a different number and a different attestation
+   layer from `cardid`'s own direct `vram=` reading in step 5, and both are
+   worth checking, not just one.
+
+   The paragraph below (pre-2026-09-03 behaviour) still applies to what the
+   *operator* watches for while running UVCONFIG by hand:
 
    If it stops with a screen showing, **that is the swap path working as
    intended**, not a failure: drive it by hand from the captured frame. A
@@ -188,12 +225,41 @@ Steps 1-2 are the operator's. Everything from 3 is the harness's.
    a stuck menu.
 7. **Reboot if required** (pending the answer above), then confirm the prompt
    via RDYPULSE.
-8. **Run RB as the anchor**, with `--collect`. Not because it should match --
-   it should not, see above -- but because RB is the sweep with the most
-   banked history, so its shape is the most interpretable.
+8. ~~Run RB as the anchor, with `--collect`.~~ **SUPERSEDED 2026-09-03: not a
+   default step any more** -- see the operator decision below. Identity
+   witnesses (dinspect + cardid, both fresh, both after step 6) are the
+   card-swap validation; a full sweep is now something a *benchmark*
+   decides to run, not something a *swap* requires.
 9. **Do not bank the numbers against the ViRGE matrix.** A swap starts a new
    column. Say so explicitly when handing results to the analysis session, or
    the comparison will be made by default.
+
+### Card swaps are the expensive step; CPU swaps are not -- OPERATOR DECISION 2026-09-03
+
+A card swap needs a physical operator (steps 1 and 4's UVCONFIG run --
+`bin/vcctrl-uvconfig` refuses to drive UVCONFIG itself, see that tool's own
+docstring and `docs/DINSPECT-SYSINFO.md`'s sibling skill for why) and a full
+identity re-confirmation. A CPU swap is a plain hardware swap with no driver
+state to regenerate -- nothing downstream of it needs UVCONFIG re-run.
+
+**So: running a full sweep (RB or any other) on every card swap by default
+was over-testing.** *"Card swaps should be relatively lightweight, not full
+regression tests every time"* -- the operator's own words, 2026-09-03,
+after a full RB anchor sweep ran to validate a ViRGE swap that a fresh
+dinspect + cardid read (see step 3's note above -- re-run both AFTER step 6,
+not before) had already validated on its own. Step 8 above is retired as a
+default; run a sweep when a *benchmark* calls for one, not as a swap
+formality.
+
+**Structure a multi-CPU campaign around the card, not the other way round.**
+A card swap is the outer, expensive loop (one UVCONFIG run, one identity
+re-check); a CPU swap is the cheap, inner loop. For a campaign that needs
+several CPUs times several cards, swap the card ONCE, confirm identity ONCE,
+then run every CPU's cell/sweep against that same card before touching the
+card again -- e.g. ViRGE + {POD-83, Am5x86-133, DX2-66, DX2-50}, then swap to
+Mach64 + the same four CPUs, then Cirrus + the same four. That is one
+UVCONFIG run per card (three total) instead of one per card/CPU pair
+(twelve), for the same coverage.
 
 ## Open questions for the operator
 
