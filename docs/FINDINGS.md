@@ -3420,3 +3420,44 @@ old config was preserved as a timestamped `.bak` on the Pi, not overwritten.
 NOT verified: `cycle`, and the Insight's energy-meter reading over a longer
 run (30 real minutes is what sec. 47 needed to catch the HTTP-drops-while-
 SSDP-answers behavior -- this was a single clean on/read/on sequence).
+
+## 56. `pace_s: 0.04` (sec. 43) reduces the typing-corruption hazard, it does not close it  [measured 2026-09-04]
+
+A 12-cell dossage benchmark confirmation campaign (3 video cards x 4 CPU
+tiers) ran entirely on top of the sec. 43 fix, and the same corruption
+signature it was supposed to have fixed recurred twice more during the
+campaign -- once on a Mach64+Am5x86-133 log fetch and once on a
+Mach64+486DX2-66 log fetch, both well after `pace_s` had been at `0.04` for
+the whole session, both diagnosed the same way as sec. 43: a truncated
+command visible on screen (`C:\MTCP\VCCHK.B`, `C:\MTCP\VCLIST`) where a
+file-transfer job appeared stalled.
+
+**The Am5x86-133 occurrence does not fit the sec. 43 theory on its own.**
+Sec. 43's mechanism is specifically CPU-speed-dependent -- a slower BIOS
+keyboard ISR has less headroom between keystrokes -- and an Am5x86 at
+133MHz is the fastest CPU in this rig's rotation, not the slowest. Either
+the pace bump has moved the failure threshold rather than removed it (so
+it now takes an unusually bad scheduling moment on a fast CPU to reproduce,
+where it used to take an ordinary one on a slow CPU), or a second,
+not-yet-isolated factor also contributes. Neither is confirmed; this entry
+records that the fast-CPU recurrence happened, not why.
+
+**What did work, both times: the daemon did not need a human to catch it.**
+Unlike the first, pre-fix occurrence in sec. 43 (which needed the pace
+bump as an active fix), both recurrences here were caught by the transfer
+job's own watchdog -- it detected that the expected file/DIR listing never
+arrived, declared it could not trust the prompt's state, aborted rather
+than typing blind, and recovered the machine to the menu default on its
+own. A plain retry of the identical call then succeeded cleanly both
+times, no further intervention needed.
+
+### Not yet fixed properly
+
+`pace_s: 0.04` stays the rig's setting -- it is still strictly better than
+`0.012`, just not sufficient on its own. Treat any long typed command
+during a file-transfer job as capable of corrupting on any CPU tier,
+including the fastest one installed, and rely on the watchdog's abort-and-
+recover behavior plus a retry rather than treating a single clean run as
+proof the hazard is gone. A real fix still wants the per-call/per-job
+`pace` override sec. 43 already found architecturally cheap and never
+wired up, this time tied to something other than "installed CPU is slow."
