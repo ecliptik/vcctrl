@@ -1,6 +1,10 @@
 # A web KVM for the g2k, and the daemon merge it implies
 
-**Branch:** `webkvm`. **Status:** plan only, nothing built. Written 2026-08-19.
+**Branch:** `webkvm` (merged). **Status:** shipped — this design became
+`daemon/kvm.html` and `daemon/vcweb.py`, the web KVM in the README's feature
+list. Written 2026-08-19, before any of it was built, and not corrected for
+drift since; read it as the original design rationale, not a spec of the
+current code.
 
 The goal, in the operator's words: *see the VGA output, use the keyboard and
 mouse, send/receive files and power on/off just like the Claude Code harness
@@ -719,9 +723,10 @@ same keyboard with a few keys missing.
   table it cannot tell a reboot from a chord, so chords are held rather than
   sent unwarned.
 - **Chords are ordered in the daemon**, not the browser. See
-  `docs/CLI-PARITY.md` sec. 5a: the page used to sort modifiers to the front
-  and the CLI did not, so `vcctrl combo delete ctrl alt` was quietly a
-  different command from the same chord built in the page.
+  `docs/CLI-PARITY.md`'s "Parity is not only..." section: the page used to
+  sort modifiers to the front and the CLI did not, so `vcctrl combo delete
+  ctrl alt` was quietly a different command from the same chord built in
+  the page.
 - **Which layout is the daemon's answer**, published as `board.keyboard` in
   `/state.json` and bound by a `keyboard:` word in `targets:`. See
   `docs/BOARD-IDENTITY.md` sec. 4.1. The page maps no board id to anything.

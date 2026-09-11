@@ -1,6 +1,6 @@
 # docs — what is here and which of it is current
 
-32 files, written over a campaign rather than designed. This says what each
+29 files, written over a campaign rather than designed. This says what each
 is for, and — more importantly — **which numbers in them have been retracted**,
 because several documents carry a live figure and a withdrawn one in the same
 section.
@@ -65,11 +65,11 @@ query nine hours in the future returning "No entries"; eight cells silently
 comparing a condition with itself; `verify_input` reporting a keystroke
 reached a target that had no power to receive it.
 
-- **`CLI-PARITY.md`** — the `vcctrl` verb surface and why each verb refuses.
-  **Sec. 5a is the one to read if you are adding anything both sides call:**
-  parity is not "the CLI can reach it", it is "both sides get the same thing
-  when they do". A chord ordered in the browser and not in the CLI was two
-  different commands with one name, and the verb count could not see it.
+- **`CLI-PARITY.md`** — the `vcctrl` verb surface against the web KVM's,
+  trimmed 2026-09-11 to what shipped and one lasting lesson: parity is not
+  "the CLI can reach it", it is "both sides get the same thing when they
+  do". A chord ordered in the browser and not in the CLI was two different
+  commands with one name, and the verb count could not see it.
 - **`MOUSE.md`**, **`TIMING-FIXES.md`** — input path and settling races.
 - **`MSD.md`** — USB mass storage: mounting a disk image onto a
   `hdmi-usb`-kind target over the same gadget as its keyboard/mouse.
@@ -125,13 +125,6 @@ margin.
 `BOARD-IDENTITY.md`, `VIDEO-SWAP.md`, `SOUND-PROFILES.md`,
 `PICOGUS-CONSOLIDATION.md`.
 
-## Plans
-
-**`PLAN-NEXT.md`** — items 2 and 3 are now done or half-done; item 1 (the
-capture regression) is **marked superseded**, because it stopped reproducing
-and its evidence table had a row that reported an instrument's state as the
-target's.
-
 ## History
 
 **`ORIGINAL-PLAN.md`** (in `docs/history/`) — the pre-build design document,
@@ -139,6 +132,16 @@ moved here 2026-09-11 and kept verbatim except for two identifier fixes. It
 predates
 the Pi 3→Pi 5 migration, the multi-profile architecture, the web KVM and
 the MCP server; read it as what was planned, not as current fact.
+
+**`PLAN-NEXT.md`** (in `docs/history/`) — moved here 2026-09-11. Items 2 and
+3 are done or half-done; item 1 (the capture regression) is **marked
+superseded**, because it stopped reproducing and its evidence table had a
+row that reported an instrument's state as the target's. See
+`lab/OPEN-FAULTS.md` for what is currently broken.
+
+**`HISTORY-MAP.txt`** (in `docs/history/`, not a `.md` file, so not in the
+index above) — the full old-to-new commit hash map, for anything citing a
+commit from before 2026-09-11 outside this repository.
 
 ---
 
@@ -161,8 +164,8 @@ measured 4.77 ms left a decision unmade.
 
 A second history rewrite (public-release identifier scrub, on top of
 2026-08-24's phase 7) gave every commit a new hash. Every citation in
-this directory was updated to match; `HISTORY-MAP.txt` (not a `.md` file,
-so not in the index above) is the full old-to-new map, for anything
-citing a commit from before that date outside this repository.
+this directory was updated to match; `docs/history/HISTORY-MAP.txt` is the
+full old-to-new map, for anything citing a commit from before that date
+outside this repository.
 
 # Planning docs live in internal/, which is gitignored. See CONTRIBUTING.md.

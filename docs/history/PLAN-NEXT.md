@@ -1,4 +1,9 @@
-# Three jobs, planned before starting any of them
+# Three jobs, planned before starting any of them (historical)
+
+**Moved to `docs/history/` 2026-09-11: superseded, kept verbatim for the
+record.** Item 1 is marked superseded below; item 2 is done; item 3 is
+half-done. Nothing here is a live plan — see `docs/lab/OPEN-FAULTS.md` for
+what is currently broken and worth checking before trusting a result.
 
 **See also `lab/OPEN-FAULTS.md`** -- the live register of what is still broken
 and what to check before trusting a result. Item 1 below is superseded; the

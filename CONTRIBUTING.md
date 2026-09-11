@@ -59,9 +59,9 @@ start rather than fall back to a built-in default if either is missing.
   once, before its first genuinely public audience (the repo was
   tailnet-gated until that point, so no outside clone needed
   reconciling), to remove a small number of identifiers a first pass had
-  missed. `docs/HISTORY-MAP.txt` maps every old hash to its current one,
-  for anything citing a pre-2026-09-11 commit from outside this
-  repository.
+  missed. `docs/history/HISTORY-MAP.txt` maps every old hash to its
+  current one, for anything citing a pre-2026-09-11 commit from outside
+  this repository.
 - **The docs-index guard**
   (`test_the_docs_index_cannot_rot_silently`) fails if you add a
   `docs/*.md` file without a matching backticked filename in

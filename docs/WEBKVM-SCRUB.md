@@ -1,6 +1,8 @@
 # Scrub buffer and recording
 
-**Branch:** `webkvm`. **Status:** plan only. Written 2026-08-19.
+**Branch:** `webkvm` (merged). **Status:** shipped — the scrub buffer and
+ring recording described here are built (`kvm.html`'s scrub-track UI, the
+CLI's `buffer`/`burst`/`pin`/`timeline` verbs). Written 2026-08-19.
 Companion to [WEBKVM.md](./WEBKVM.md) and
 [WEBKVM-AUDIO.md](./WEBKVM-AUDIO.md); their rules apply unchanged.
 

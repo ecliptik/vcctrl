@@ -212,9 +212,9 @@ def _run_vcctrl(args, timeout=60.0):
 # this for exactly this reason (`vcctrl keymap`, daemon/vcctrld.py `keymap()`
 # docstring: "the point is that there is ONE copy" -- the web KVM used to
 # carry its own transcription of the alias table, kept honest by a test that
-# compared the two files, and CLI-PARITY.md sec. 5a is the record of that
-# going wrong once already). This class is a THIRD reader of the same
-# published data, not a third copy of the policy.
+# compared the two files, and docs/CLI-PARITY.md's "Parity is not only..."
+# section is the record of that going wrong once already). This class is a
+# THIRD reader of the same published data, not a third copy of the policy.
 
 class Keymap(object):
     def __init__(self):
@@ -897,7 +897,7 @@ def vcctrl_record(since: str, from_seq: "int | None" = None,
     RING, not by the thing that asked for it -- a real capture on this rig
     was 94.5% the PREVIOUS cell's frames because the caller skipped this,
     and a confident wrong conclusion followed three cells later. See
-    docs/CLI-PARITY.md sec. 5.
+    docs/lab/FINDINGS.md sec. 36.
 
     `clip` takes only frames from calls made under this MCP session's own
     lock ownership instead of refusing on frames from someone else's run.

@@ -1,6 +1,8 @@
 # Audio for the web KVM
 
-**Branch:** `webkvm`. **Status:** plan only. Written 2026-08-19.
+**Branch:** `webkvm` (merged). **Status:** shipped — audio capture and
+playback are live in the web KVM. Written 2026-08-19, before any of it was
+built.
 Companion to [WEBKVM.md](./WEBKVM.md); its section numbers are referenced
 throughout and its rules apply unchanged.
 

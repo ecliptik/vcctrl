@@ -1,6 +1,8 @@
 # KVM interface — design direction
 
-**Branch:** `webkvm`. **Status:** plan. Written 2026-08-19.
+**Branch:** `webkvm` (merged). **Status:** shipped — the polish and
+visual-identity pass described here landed, including the theme system
+(`tools/themes.py`, `daemon/themes.css`). Written 2026-08-19.
 
 Brief, from the operator: *I like the overall look but it could use some
 polish.* Scope agreed: **polish plus a visual identity pass** — layout structure

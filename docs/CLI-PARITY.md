@@ -1,132 +1,31 @@
 # CLI/KVM parity: why, and what is left
 
-Written 2026-08-20. The operator's requirement: **vcctrl should be able to do
-everything the web KVM can**, so the benchmark and test harness can use it from
-scripts rather than a person driving a page.
+Written 2026-08-20, trimmed 2026-09-11 to the parts still worth reading —
+the build log behind them is in git history if you need it. The
+requirement: **vcctrl should be able to do everything the web KVM can**, so
+the benchmark and test harness can use it from scripts rather than a
+person driving a page.
 
-## 1. The gap, measured rather than assumed
+## The gap, and what shipped
 
-The webkvm session found it; this is the independent count. Parsing every
-`commands()` map in the daemon and every verb in `bin/vcctrl-client`:
+Parsing every `commands()` map in the daemon against every verb in
+`bin/vcctrl-client` found 26 capability commands, 6 with no CLI verb:
+`buffer`, `burst`, `frame`, `pin`, `timeline`, `verify_input`. Five of the
+six were the scrub buffer — built daemon-side, driveable only from
+`kvm.html`, which is backwards for a harness that runs unattended. The
+sixth, `verify_input`, is the only check that proves a keystroke reached
+the target rather than just describing the Pi's own end.
 
-    26 capability commands in the daemon
-     6 with no CLI verb
+All six shipped, plus `pi/deploy.sh --client` (a fast, restart-free path to
+update just the CLI). Proven against the live system: `timeline` (622
+frames, 31.9 s span), `buffer`, `pin on`/`off`, `frame <seq> --out` landing
+locally as a valid frame, `burst 5 --out-dir` writing five, `verify-input`
+returning 0 against the target, and `vcctrl record --out F.avi` producing a
+valid MJPEG AVI via the web KVM's own muxer.
 
-    buffer  burst  frame  pin  timeline  verify_input
+## Parity is not only "is there a verb" — 2026-08-25
 
-`mouse_click` and `mouse_move` look missing to a naive diff and are not —
-they are reachable as `mouse move` / `mouse click`. Five registry-level verbs
-(`status`, `caps`, `events`, `activity`, `lock`) the CLI already had.
-
-**Five of the six are the scrub buffer.** It was built daemon-side, correctly,
-and the only thing that could drive it was `kvm.html`. A sweep could not save
-the seconds before a crash, step back through what the screen did, or pin the
-ring while it looked. That is the wrong way round: **the CLI is the thing that
-runs unattended, and unattended is exactly when nobody is watching the screen
-at the moment it matters.**
-
-The sixth is worse in a quieter way. `verify_input` is the round trip that
-proves a keystroke reached the target — the only check that says anything
-about the far end of the wire, since every other input status describes the
-Pi's own end. A headless sweep could not assert its own input path before
-typing. It could only type and hope. After a day spent on a bug where every
-diagnostic was green and nothing was driven (FINDINGS sec. 29), that is the
-one to close first.
-
-## 2. Phase 0, which had to come first: `--out` means the caller's disk
-
-`bin/vcctrl` forwards to the Pi over ssh, so `--out` was a path **there**.
-Every frame-returning verb would have written its output onto the wrong
-machine, which makes the whole exercise useless to a VM-side harness.
-
-The failing case was merely confusing — an ENOENT that reads like a local
-permissions problem. **The succeeding case is the dangerous one**: a path that
-exists on both machines writes on the Pi and returns 0, and the caller reads
-whatever its own copy holds, possibly a frame from an earlier run. That is
-precisely the stale-frame failure `--out`'s two-valued contract was written to
-prevent, reappearing one host over where the contract cannot see it.
-
-Now: run to a temp path on the Pi, copy back, remove the remote copy, and
-rewrite the reported path so the JSON names where the file actually is.
-
-**The obvious cleaner design is deliberately not used.** Streaming bytes on
-stdout and letting the shell redirect is simpler, but the shell creates the
-target file *before* the command runs, so a failure leaves a zero-byte file
-behind. A file that looks like evidence and is not is the thing this system keeps
-producing.
-
-## 3. Exit codes carry the reading
-
-Settled with the operator. `shot --out` already worked this way, so this
-extends a precedent rather than inventing one.
-
-    0  the target answered
-    1  it did not          -- a real fault
-    2  could not look      -- no LED channel on this board, or unreadable
-    3  the tool itself failed
-
-`vcctrl verify-input || abort` is the intended use, and **2 is the reason the
-scheme needs four codes rather than two**. On a Macintosh over ADB there is no
-LED return channel at all; if that exited 1, every harness guarded that way
-would abort on working hardware. Same three-state discipline as the rest of
-the system.
-
-Note `--out` misapplied to a command now exits 3 rather than 2, so that 2
-means could-not-look unambiguously. Nothing branched on the old value.
-
-## 4. What shipped
-
-All six verbs, plus `pi/deploy.sh --client`.
-
-That deploy mode matters more than it looks. A full deploy runs `install.sh`,
-which restarts `vcctrld` and drops both uinput devices — a sweep cannot
-survive it and is not resumable. The client is a fresh process per invocation,
-so replacing the file needs no restart at all, for exactly the reason `--page`
-does not. **Making the safe path available is what stops the unsafe path being
-used out of impatience.** It syntax-checks before and after copying, because a
-client that cannot parse takes out every verb at once and would do so on the
-next call rather than at deploy time — so the deploy would look like it worked.
-
-Proven against the live system: `timeline` (622 frames, 31.9 s span), `buffer`,
-`pin on`/`off`, `frame <seq> --out` landing locally as a valid 640x480 frame,
-`burst 5 --out-dir` writing five, and **`verify-input` returning 0 against the
-Gateway** — the input path proven from a script for the first time.
-
-## 5. Phase B: done
-
-`vcctrl record --out F.avi [from_seq] [to_seq]`, on the webkvm session's
-`avi_mjpeg()` muxer. Proven against the live system:
-
-    frames 692 in the ring, written 1032, repeated 340, span 34.37 s
-    71,833,864 bytes landed on the CALLER's disk
-    ffprobe: mjpeg 640x480, nb_frames 1032, duration 34.40
-
-**`written` and `frames` are reported separately, and the note spells out
-why.** The muxer preserves timing by repeating a frame across a gap where the
-ring was thinned, so the file holds more frames than the ring did. Reporting
-`written` as "frames captured" would overstate what was observed — and the
-difference is *exactly the stalls*, which is the thing a crash investigation
-cares about most. 340 repeats here means about a third of the file is the
-screen not changing.
-
-It takes the pin for the copy and releases it in a `finally`. The muxer
-snapshots the ring under the lock in one `list()`, so the pin is belt on top
-of braces rather than the load-bearing part — but it costs nothing, and the
-daemon expires it after 300 s if the process dies holding it.
-
-Two-valued, verified: an impossible range returns 503, exits 1, and **removes
-a stale file that was there before**. A truncated AVI still opens, still
-plays, and still looks like a recording, so a half-written one is worse than
-none — the caller would read a copy that lost half its frames as evidence of
-what the screen did.
-
-It goes over HTTPS rather than the unix socket: the socket protocol is
-line-delimited JSON, and base64-ing 70 MB through it would work and would be
-a poor idea.
-
-## 5a. Parity is not only "is there a verb" — 2026-08-25
-
-The count in sec. 1 asks whether the CLI can *reach* every command. Building
+The count above asks whether the CLI can *reach* every command. Building
 the KVM's full on-screen keyboard turned up a second kind of gap it cannot
 see: **the same command behaving differently depending on which side called
 it.**
@@ -194,13 +93,13 @@ The finding is not that the sort was wrong. It is that "no caller does X" is
 a claim about a population, and a change that adds callers has to be checked
 against the population it leaves behind, not the one it found.
 
-**The generalisation, for the audit in sec. 6:** parity is not "both sides can
-call it". It is "both sides get the same thing when they do". Anywhere one
-caller normalises, validates or reorders before dispatch, that logic belongs
-under the dispatch — or the other caller is running a different command with
-the same name.
+**The generalisation:** parity is not "both sides can call it". It is "both
+sides get the same thing when they do". Anywhere one caller normalises,
+validates or reorders before dispatch, that logic belongs under the
+dispatch — or the other caller is running a different command with the
+same name.
 
-## 6. Still open
+## Still open
 
 Task-shaped verbs, built on the thin ones — `save-around <seq> --seconds 10`
 is the shape the harness will actually reach for. Deliberately not invented
@@ -208,7 +107,7 @@ ahead of seeing which ones get used.
 
 **And one audit worth doing cold rather than at the end of a long day:**
 sweep both sides for places where a key's ABSENCE is read as a value. Two
-turned up today within an hour of each other. The webkvm session's ring pin
+turned up within an hour of each other. The webkvm session's ring pin
 was correct code wired to nothing, so the save path walked the ring without
 holding it and eviction destroyed frames mid-copy. `write_frame` judged raw
 responses by `resp["picture"]`, which is *absent* on that path rather than

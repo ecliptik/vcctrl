@@ -1041,7 +1041,8 @@ restart, the ring age-eviction fix. Nothing separated them.
 
 If it returns: **try a reboot first.** That cheap experiment was never run,
 because the fault was assumed to be the capture stick latching. See
-`PLAN-NEXT.md`, which is marked superseded for exactly this reason.
+`docs/history/PLAN-NEXT.md`, which is marked superseded for exactly this
+reason.
 
 ---
 
