@@ -1,2 +1,16 @@
-# vcctrl, control host. The daemon host installs these via pi/install.sh.
+# vcctrl, control host. The daemon host installs its own deps via pi/install.sh.
 PyYAML>=5.1
+
+# Needed only by the harness (harness/vcctrl-cell, -sweep, -collect) and
+# bin/vcctrl_common.py's screen-text/pixel helpers -- lazy-imported, so
+# `vcctrl status`/`type`/`key`/etc. work without these. Found missing
+# entirely from this file on 2026-09-11: a fresh clone's harness use would
+# have failed on a bare `ModuleNotFoundError` with no indication these were
+# even optional-until-now dependencies.
+Pillow
+pytesseract
+
+# pytesseract is a wrapper around the `tesseract` SYSTEM BINARY, not a pure
+# Python OCR engine -- pip cannot install it. On Debian/Ubuntu:
+#   sudo apt install tesseract-ocr
+# on macOS: `brew install tesseract`.

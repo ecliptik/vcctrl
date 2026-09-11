@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """vcctrl-score-pump -- score a paired-arm PUMP run against a banked one.
 
+NOT GENERIC HARNESS TOOLING. This is a one-off analysis script for a single
+already-completed doskutsu Pi5-migration benchmarking campaign: the cell
+tags, the baseline directory, and the pass bands below are all specific to
+that one experiment's own pre-registered profile (docs/PI5-MIGRATION.md
+sec. 6a), not reusable defaults. Kept here as the record of exactly how
+that campaign's numbers were scored, not as a template for a new one --
+a new benchmarking campaign needs its own script with its own
+pre-registered bands, per docs/HARNESS-STANDARD.md.
+
 WRITTEN BEFORE THE RUN'S NUMBERS EXISTED. That is the point of it. The bands
 below come from the benchmarking session's profile sec. 3.2b and are recorded
 in docs/PI5-MIGRATION.md sec. 6a; a threshold chosen after seeing the result is

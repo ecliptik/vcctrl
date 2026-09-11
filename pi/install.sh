@@ -779,6 +779,40 @@ if ! python3 -c 'import yaml' >/dev/null 2>&1; then
     && echo "installed python3-yaml (required to read vcctrl.yaml)"
 fi
 
+# THE REST OF THE DAEMON'S REAL RUNTIME DEPENDENCIES. Found missing entirely
+# 2026-09-11, while checking whether a fresh clone could actually stand a
+# daemon up: this installer covered python3-yaml, systemd-coredump and (on
+# the hid-gadget path only) three disk-image tools, and nothing else -- yet
+# vcctrld.py imports evdev unconditionally (the usb4vc-uinput input backend)
+# and PIL in several capture/render paths, and shells out to ffmpeg for
+# every video/audio backend that exists. A rig missing any of these did not
+# fail at install time; it failed later, per-capability, in a way that read
+# as a hardware problem rather than a missing package.
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q ffmpeg \
+    && echo "installed ffmpeg (video/audio capture, all backends)"
+fi
+if ! python3 -c 'import evdev' >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-evdev \
+    && echo "installed python3-evdev (required by the usb4vc-uinput input backend)"
+fi
+if ! python3 -c 'import PIL' >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-pil \
+    && echo "installed python3-pil (image handling in the capture/render paths)"
+fi
+# python3-venv: needed by the MCP-server setup below (`python3 -m venv`),
+# which used to just fail with a bare traceback if this was absent rather
+# than naming what to install. NOT python3-cryptography: that import is
+# lazy, only reached by the `kasa-klap` power backend
+# (daemon/vcctrld.py's KasaKlapPower), so a rig using `kasa`/`wemo`/`shell`
+# has no need of it and this installer does not force it on them -- the
+# backend's own error message names the package if it's ever missing when
+# actually used.
+if ! python3 -c 'import venv' >/dev/null 2>&1; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv \
+    && echo "installed python3-venv (required by the MCP server's own setup)"
+fi
+
 # NO apt LINE FOR pyftpdlib. It is vendored under vendor/ and travels with the
 # checkout, so there is nothing to install and nothing that needs a network at
 # deploy time. An apt line here was written and removed deliberately: a deploy

@@ -109,7 +109,7 @@ sys.path.insert(0, BIN)
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, at_prompt, wait_for_prompt, set_lock_owner, get_lock_owner,
-    wait_video_locked, load_profile, target_env_name)
+    wait_video_locked, load_profile, target_env_name, default_incoming)
 
 _l = SourceFileLoader("sw", os.path.join(HERE, "vcctrl-sweep"))
 _s = importlib.util.spec_from_loader("sw", _l)
@@ -333,7 +333,14 @@ def write_hw_record(tag, hw, card, incoming=None):
     come by.
     """
     if incoming is None:
-        incoming = os.path.expanduser("~/doskutsu-netiter/incoming")
+        # THE PROFILE'S OWN NAME, not a hardcoded doskutsu path -- found
+        # 2026-09-11 still hardcoded here despite `default_incoming()`
+        # existing in vcctrl_common.py specifically to derive this from
+        # whichever profile is active, and despite this being the ONLY
+        # call site (below), which already has the loaded profile in
+        # scope. A second port's cells were silently looking for their
+        # hardware sidecar in doskutsu's own directory.
+        incoming = default_incoming(load_profile())
     if not os.path.isdir(incoming):
         return None
     path = os.path.join(incoming, "%s.HW" % tag)

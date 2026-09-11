@@ -2521,7 +2521,7 @@
     -->
     <button id="profilebtn" aria-haspopup="true" aria-expanded="false"
             title="Which target this page controls" hidden>
-      <span class="bi">🎯</span><span id="profilelabel">gateway2000</span><span class="caret dn" aria-hidden="true"></span>
+      <span class="bi">🎯</span><span id="profilelabel">default</span><span class="caret dn" aria-hidden="true"></span>
     </button>
     <!-- .pop .popmenu, THE SAME CLASSES #pop-zoom USES -- shares its panel
          chrome (background/border/radius/shadow) and its button styling
@@ -3378,7 +3378,14 @@ const img = $('mjpeg'), veil = $('veil'), ghost = $('ghost');
 // (Handler._route_profile() strips the prefix generically, not by a list
 // of known routes); this was purely a client omission.
 const PROFILES = [
-  {id: '', label: 'gateway2000'},
+  // 'default' is a placeholder label for whichever profile has no
+  // `id` prefix (vcctrld's "primary" profile, by config-search-path
+  // convention, not by anything structural -- see docs/PROFILES.md).
+  // A multi-profile rig edits this array by hand to name its own
+  // profiles, the same way the commented-out entry below is added back
+  // by hand; there is no dynamic /profiles endpoint (yet) to read this
+  // from.
+  {id: '', label: 'default'},
   // modernpc commented out, not deleted, alongside #profilebtn's own
   // `hidden` (2026-09-02) -- see the HTML comment there. Leaving it out of
   // this array (rather than just hiding the button) also makes the
