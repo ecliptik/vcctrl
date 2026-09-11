@@ -1,24 +1,20 @@
 # vcctrl
 
-Remote control of a real, physical retro/legacy machine — keyboard, mouse,
-screen, audio, power and file transfer — driven by a CLI, an MCP server (so
-an agent like Claude Code or Codex can operate it directly), or a browser
-KVM. Built for automated testing of software ports on hardware that
-predates automated testing: DOS boxes, classic Macs, and anything else you
-can wire up a capture device and an input path to.
+Remote control of a real, physical retro or legacy machine: keyboard,
+mouse, screen, audio, power and file transfer, driven by a CLI, an MCP
+server, or a browser KVM. It exists to let automated tests run against
+hardware that predates automation — DOS boxes, classic Macs, anything you
+can wire a capture device and an input path to.
 
-**[docs/HARNESS-STANDARD.md](./docs/HARNESS-STANDARD.md)** is the
-target-agnostic contract for running measured tests on it.
-**[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)** hooks an agent up to vcctrl
-directly over MCP. **[docs/SKILLS.md](./docs/SKILLS.md)** carries
-system/repo domain knowledge to any of those same agents as portable
-`SKILL.md` files. **[docs/PROFILES.md](./docs/PROFILES.md)** covers driving
-more than one target machine from one daemon.
+**[docs/HARNESS-STANDARD.md](./docs/HARNESS-STANDARD.md)** — the
+target-agnostic contract for running measured tests. **[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)**
+— connecting an agent over MCP. **[docs/SKILLS.md](./docs/SKILLS.md)** —
+portable domain knowledge as `SKILL.md` files. **[docs/PROFILES.md](./docs/PROFILES.md)**
+— driving more than one target from one daemon.
 
-## What it actually is
+## How it's built
 
-Three roles, usually three separate machines, connected over SSH/HTTP(S)
-and a physical wire:
+Three roles, usually three machines:
 
 ```
  control host                 daemon host (a Raspberry Pi)         target
@@ -31,62 +27,21 @@ and a physical wire:
                               the web KVM directly
 ```
 
-All timing-sensitive work (key dwell, event pacing, capture) happens on
-the daemon host, never on the control host — the whole point of the split
-is that network latency to the control host never enters the input path.
-A minimal setup runs the daemon and the control tools on the same box; the
-common one is a Pi doing the daemon's job and a separate dev machine (or
-your laptop) doing the control host's.
+All timing-sensitive work — key dwell, event pacing, capture — happens on
+the daemon host, never the control host: network latency to the control
+host must never enter the input path. A minimal setup runs both roles on
+one box; the common one is a Pi as the daemon and a laptop as control.
 
-## Hardware reference: what this project's own system actually runs
+## Hardware and configuration
 
-You do not need this exact hardware — `profile-kinds/` below covers three
-different shapes, and the `shell` power backend and `hid-gadget` input
-backend exist specifically so cheaper/different substitutes work. This is
-what one working, continuously-tested build looks like, so you have a
-concrete parts list to start from or diverge from on purpose:
-
-| role | what this system uses | notes |
-|---|---|---|
-| Daemon host | **Raspberry Pi 5** (4 GB), Debian 13 (Trixie) arm64 | A Pi 3B also worked (see `docs/lab/PI5-MIGRATION.md`) but is measurably slower under load; the Pi's own USB-C port doubles as the OTG connection for the `hid-gadget` input backend if you use that instead of USB4VC |
-| PS/2 input + board identity | **[USB4VC](https://github.com/dekuNukem/USB4VC)** HAT (STM32-based), with its swappable **IBM PC** protocol board (PS/2 keyboard+mouse) or **Lisa/Mac/ADB** protocol board | One USB4VC drives either target; the board is swapped by hand and identified over SPI at runtime (`docs/BOARD-IDENTITY.md`) |
-| Video + audio capture | A **MACROSILICON-chipset** USB2.0 VGA/HDMI-to-USB capture dongle (USB ID `1b80:e309`/similar, sold generically on Amazon/AliExpress/eBay as a "USB video capture card") | Locks onto both text-mode and low-res graphics modes; carries line-in audio on the same dongle. Pin it by `/dev/v4l/by-id/...`, never `/dev/videoN` — index drift across UVC devices is real (`docs/lab/FINDINGS.md` #44) |
-| Optional second camera | An **Innomaker U20CAM-1080p** UVC camera, pointed at the physical machine (not its video signal) — for a hardware-level view when the primary capture is dark or frozen | Genuinely optional; `capabilities.camera.backend` defaults to not-installed |
-| Mains power control | A **TP-Link Kasa** smart plug (works with both the legacy LAN protocol and the newer KLAP one) or a **Wemo Insight**, switched between systems over time | `shell` backend exists for a relay board, a Zigbee bridge, or a person with a switch |
-| Target boot media | A CF card + generic **USB CF card reader** (Genesys Logic chipset) on the daemon host, for pushing files onto/pulling logs off of a DOS target that has no other network path | Not needed once a NIC + FTP client is working on the target; see `docs/FILE-TRANSFER.md` |
-| Target machine(s) proven so far | A Gateway 2000-class 486/Pentium-era PC (PS/2, DOS 6.22) over USB4VC; a Linux box over HDMI capture + the Pi's own USB gadget port (no USB4VC needed for this shape) | A classic Macintosh over USB4VC's ADB board + RGB2HDMI capture is scaffolded (`profile-kinds/rgb2hdmi-usb4vc.yaml`) but unmeasured — no such hardware has run against this project's own system yet |
-
-### What every shape needs, generically
-
-`profile-kinds/*.yaml` documents three reusable hardware shapes in detail;
-pick the one closest to your target and use it as your starting config
-(`tools/new-profile.py --kind <kind>` scaffolds one). In all three:
-
-- **A Linux daemon host** with `/dev/uinput` (for USB4VC) or a USB
-  peripheral-capable port with `configfs`/`libcomposite` (for the
-  `hid-gadget` backend), root, and systemd.
-- **A capture device** that emits MJPEG natively at a fixed resolution —
-  any UVC device that does this over V4L2 works, not just the one above.
-- **Some way to cut power to the target on command** — a smart plug is the
-  common case; `backend: shell` runs your own on/off/state commands
-  instead, for a relay, a PDU, or a GPIO pin.
-- **ffmpeg** (with libx264 and libopus if you want the optional H.264
-  video transport and Opus audio side-stream) on the daemon host.
-- Python ≥ 3.7 on the daemon and control hosts; ≥ 3.10 if you run the MCP
-  server (`agent/`, needs `mcp>=2.0`).
-
-## Configuration by target type
-
-Three concrete setups, each mapped to one of the `profile-kinds/*.yaml`
-templates above. Scaffold any of them with
-`tools/new-profile.py --kind <kind> --name <yours>`, then fill in the
-`REPLACE_ME` placeholders it leaves — the snippets below show only the
-parts that make each shape what it is, not a complete config.
+Three shapes, each a `profile-kinds/*.yaml` template. Scaffold one with
+`tools/new-profile.py --kind <kind> --name <yours>` and fill in the
+`REPLACE_ME` placeholders — the YAML below shows only what makes each
+shape what it is, not a complete config.
 
 ### Retro PC — `vga-ps2`
 
-A DOS/Windows-era PC with a real PS/2 keyboard/mouse port and analog VGA
-out.
+A DOS/Windows-era PC with PS/2 keyboard/mouse and analog VGA out.
 
 **Hardware:** Raspberry Pi 5 · USB4VC HAT with its IBM PC protocol board ·
 a VGA-to-USB capture dongle · optional UVC camera pointed at the machine.
@@ -99,53 +54,46 @@ capabilities:
     backend: v4l2-ffmpeg
     settings:
       device: /dev/v4l/by-id/usb-MACROSILICON_xxxx-video-index0
-  camera:                       # optional; omit the block entirely if you
-    backend: none                # don't have this second camera
+  camera:
+    backend: none   # or v4l2-ffmpeg, if you have the second camera
 ```
 
 ### Classic Macintosh — `rgb2hdmi-usb4vc`
 
-A Mac with ADB keyboard/mouse and no native HDMI/VGA — capture goes
-through an RGB2HDMI board first. **Scaffolded but unmeasured**: no such
-hardware has run against this project's own system yet, so treat
-`profile-kinds/rgb2hdmi-usb4vc.yaml`'s values as a documented best guess,
-not a proven one.
+ADB keyboard/mouse, capture via an RGB2HDMI board. **Scaffolded but
+unmeasured** — no such hardware has run against this project's own build
+yet, so treat the template's values as a documented guess.
 
-**Hardware:** Raspberry Pi 5 · the same USB4VC HAT, with its Lisa/Mac/ADB
-protocol board swapped in instead of the IBM PC one · an RGB2HDMI board
-feeding an HDMI-to-USB capture dongle · optional UVC camera.
+**Hardware:** Raspberry Pi 5 · the same USB4VC HAT with its Lisa/Mac/ADB
+board instead of the IBM PC one · RGB2HDMI feeding an HDMI-to-USB capture
+dongle · optional UVC camera.
 
 ```yaml
 capabilities:
   input:
-    backend: usb4vc-uinput   # same backend as Retro PC -- the ADB board
-                              # swap is what changes, not this setting
+    backend: usb4vc-uinput   # same backend as Retro PC -- the board swap
+                              # is what changes, not this setting
   video:
     backend: v4l2-ffmpeg
     settings:
       device: /dev/v4l/by-id/usb-xxxx-video-index0   # the RGB2HDMI dongle
-  camera:
-    backend: none
 ```
 
 ### Modern PC — `hdmi-usb`
 
-Any machine with a real HDMI output and a spare USB port — no USB4VC
-involved. The Pi's own USB-C port acts as a USB keyboard+mouse gadget
-straight to the target.
+Any machine with HDMI out and a spare USB port. No USB4VC — the Pi's own
+USB-C port acts as a keyboard/mouse gadget straight to the target.
 
 **Hardware:** Raspberry Pi 5 · an **official Raspberry Pi USB3 hub**,
-its upstream port plugged into the target (the target sees the Pi as a
-plug-in keyboard/mouse through it) · the **official Raspberry Pi 5V/5A
-USB-C power supply plugged into the hub**, not the Pi directly — this
-feeds the Pi over the same cable the hub uses to reach it. Use the
+upstream port into the target (which then sees the Pi as a plug-in
+keyboard/mouse) · the **official Raspberry Pi power supply plugged into
+the hub**, not the Pi — it feeds the Pi over the same cable. Use the
 official pair specifically: an underpowered hub or charger here caused a
 real undervoltage brownout on this project's own hardware. · an HDMI
-capture dongle · optional UVC camera plugged straight into the Pi.
+capture dongle · optional UVC camera on the Pi directly.
 
-**A real caveat, not a hypothetical one:** driving capture, the HID
-gadget, and encoding all at once can push the Pi 5 into thermal/power
-throttling. Stick to one capture device per Pi for this shape.
+Driving capture, the HID gadget and encoding together can throttle a
+Pi 5 — one capture device per Pi for this shape.
 
 ```yaml
 capabilities:
@@ -158,19 +106,14 @@ capabilities:
     backend: v4l2-ffmpeg
     settings:
       device: /dev/v4l/by-id/usb-xxxx-video-index0
-      analog: false             # HDMI is digital -- see the file's own comment
-  camera:
-    backend: none
+      analog: false
 ```
 
-(`pi/files/vcctrl-hid-gadget-setup.sh` sets up the gadget itself; it needs
-`dtoverlay=dwc2,dr_mode=peripheral` added under `/boot/firmware/config.txt`'s
-`[pi5]` section and one reboot, done once per Pi regardless of how many
-`hdmi-usb` targets it eventually drives.)
+Needs `dtoverlay=dwc2,dr_mode=peripheral` under `/boot/firmware/config.txt`'s
+`[pi5]` section and one reboot — once per Pi, regardless of how many
+`hdmi-usb` targets it later drives.
 
-### Power control (all three)
-
-Optional, and the same setting regardless of target type:
+### Power (all three, optional)
 
 ```yaml
 capabilities:
@@ -180,55 +123,49 @@ capabilities:
       host: 192.0.2.20
 ```
 
-Both **TP-Link Kasa** generations are supported (`kasa` for the older LAN
-protocol, `kasa-klap` for newer firmware and the Tapo line) and so is
-**Wemo**. No plug at all is a supported answer too (`backend: none`, or
-just leave the block out) — you lose remote power-cycling, nothing else.
-`backend: shell` runs your own on/off/state commands instead, for a relay
-board, a PDU, or a GPIO pin.
+Both TP-Link Kasa generations and Wemo are supported. No plug at all is
+fine (`none`, or omit the block) — you lose remote power-cycling, nothing
+else. `shell` runs your own on/off/state commands for a relay, a PDU, or
+a GPIO pin.
+
+### What every shape needs, regardless
+
+A Linux daemon host (`/dev/uinput` for USB4VC, or a peripheral-capable USB
+port for `hid-gadget`), root and systemd; a capture device that emits
+MJPEG natively over V4L2; ffmpeg (with libx264/libopus for the optional
+H.264 transport and Opus audio); Python ≥ 3.7 (≥ 3.10 for the MCP server).
 
 ## Quickstart
 
-This gets a Pi from a blank OS install to answering `vcctrl status`. It
-assumes the USB4VC/PS/2 shape (`profile-kinds/vga-ps2.yaml`); swap in the
-HDMI/HID-gadget steps from `profile-kinds/hdmi-usb.yaml` if that's your
-target instead.
+**1. Flash the daemon host.** Raspberry Pi OS or Debian, arm64, Trixie
+(13)+, SSH enabled.
 
-**1. Flash the daemon host.** Raspberry Pi OS or plain Debian, arm64,
-Trixie (13) or newer, with SSH enabled. Note its hostname or IP.
-
-**2. Install USB4VC** on the Pi per [its own
-instructions](https://github.com/dekuNukem/USB4VC), then apply this
-repo's two local patches (needed on 64-bit userland and to publish board
-identity — see each file's own docstring for why):
+**2. Install [USB4VC](https://github.com/dekuNukem/USB4VC)**, then this
+repo's two local patches:
 
 ```sh
 python3 tools/patch-usb4vc-64bit.py --check   # then without --check to apply
 python3 tools/patch-usb4vc-board.py --check
 ```
 
-**3. Clone this repo on your control host** (your laptop, a dev VM —
-anywhere that can reach the Pi over SSH) and set up the config:
+**3. Clone and configure**, from the control host:
 
 ```sh
 git clone <this repo's URL> && cd vcctrl
 cp vcctrl.example.yaml vcctrl.yaml       # untracked, never commit this
-$EDITOR vcctrl.yaml                      # daemon_host, plug, devices --
-                                          # see the file's own comments
+$EDITOR vcctrl.yaml                      # daemon_host, plug, devices
 ```
 
-**4. Deploy the daemon:**
+**4. Deploy:**
 
 ```sh
 VCCTRL_HOST=<pi-hostname-or-ip> pi/deploy.sh
 ```
 
-(Or set `control.daemon_host` in `vcctrl.yaml` instead of the env var —
-either works, and `deploy.sh` refuses clearly if neither is set. It ships
-`daemon/ bin/ pi/ tools/ common/ harness/ vendor/ agent/` and your
-`vcctrl.yaml` if it exists, then runs `pi/install.sh` on the Pi over SSH.)
+(`control.daemon_host` in `vcctrl.yaml` works instead of the env var;
+`deploy.sh` refuses clearly if neither is set.)
 
-**5. Install the CLI on the control host** and confirm the daemon answers:
+**5. Install the CLI and confirm the daemon answers:**
 
 ```sh
 sudo cp bin/vcctrl-client /usr/local/bin/vcctrl   # or: pi/deploy.sh --client
@@ -242,26 +179,22 @@ vcctrl preflight            # one gate: caps, board, power, video, input
 vcctrl type 'CD \'
 vcctrl key enter
 vcctrl shot                 # a frame from the capture device, as a file
-vcctrl keymap                # key names, aliases, chord order
 ```
 
-**7. Connect an agent** (Claude Code, Codex, …) instead of typing verbs by
-hand — see the section right below.
+**7. Connect an agent** instead of typing verbs by hand — see below.
 
-**8. Making your own machine's profile**, once the above works against
-default settings: `tools/new-profile.py --kind <vga-ps2|hdmi-usb|rgb2hdmi-usb4vc> --name <yours>`
-scaffolds a complete `vcctrl-<yours>.yaml`; see `docs/PROFILES.md` for
-running more than one target off one daemon.
+**8. Scaffold your own profile** once the above works:
+`tools/new-profile.py --kind <vga-ps2|hdmi-usb|rgb2hdmi-usb4vc> --name <yours>`.
+See `docs/PROFILES.md` for running more than one target off one daemon.
 
 ## Connect an agent: skills vs. MCP
 
-Two different things, on purpose. **Skills** are portable knowledge --
-copying them into another repo costs nothing and grants nothing. **MCP**
-is real ability to drive physical hardware -- treat registering it as a
-hardware-access decision, not a documentation one, and never bake a system's
-real hostname into a tracked/committed file.
+**Skills** are portable knowledge — free to copy, grant nothing. **MCP**
+is real control of physical hardware — registering it is a hardware-access
+decision, not a documentation one; never commit a real hostname to get it
+working.
 
-**Skills** (Claude Code, Codex, Cursor, ...), no vcctrl checkout needed:
+**Skills** (Claude Code, Codex, Cursor — no checkout needed):
 
 ```sh
 npx skills add <this repo's URL> \
@@ -270,24 +203,16 @@ npx skills add <this repo's URL> \
   -s vcctrl-rig-hazards -s vcctrl-camera   # --agent codex for Codex
 ```
 
-Installs the four hardware-portable skills into `.agents/skills/`
-(symlinked into `.claude/skills/` for Claude Code). `--full-depth` is
-required -- there's no `SKILL.md` at the repo root. (Two more skills,
-`vcctrl-repo-conventions` and `vcctrl-webkvm-copy`, exist for contributing
-to *this* repo rather than driving a system; they're intentionally left out of
-the line above since they describe this repo's own conventions, not yours
-— see `docs/SKILLS.md` if you want them anyway.) See
-[docs/SKILLS.md](./docs/SKILLS.md) sec. 8 for the same-machine symlink
-alternative and sec. 5 for verifying a skill actually loaded (Claude Code
-needs a session restart for a brand-new directory; Codex picks it up
-live).
+Installs the four hardware-portable skills. Two more
+(`vcctrl-repo-conventions`, `vcctrl-webkvm-copy`) describe this repo's own
+conventions and are left out on purpose — see `docs/SKILLS.md` if you
+want them anyway.
 
-**MCP** (drives the real system):
+**MCP** (drives the real hardware):
 
 ```sh
 # daemon mode -- once deployed (docs/MCP-SERVER.md sec. 4), no local checkout
 claude mcp add --transport http vcctrl-mcp-daemon https://<your-daemon-host>/mcp
-codex mcp add vcctrl-mcp-daemon --url https://<your-daemon-host>/mcp
 
 # control mode -- needs a local clone + venv
 cd vcctrl
@@ -295,63 +220,48 @@ python3 -m venv agent/.venv && agent/.venv/bin/pip install -r agent/requirements
 claude mcp add vcctrl-mcp -- "$(pwd)/agent/.venv/bin/python3" "$(pwd)/agent/vcctrl_mcp.py"
 ```
 
-Restart the session afterward -- `/mcp` doesn't pick up a freshly
-registered server live. Full reasoning, the safety model (shared input
-lock, named `confirm=` arguments, board-scoped power), and Codex config-file
-syntax: [docs/MCP-SERVER.md](./docs/MCP-SERVER.md).
+Restart the session after registering — `/mcp` doesn't pick up a fresh
+server live. Full reasoning and the safety model: [docs/MCP-SERVER.md](./docs/MCP-SERVER.md).
 
 ## Layout
 
 ```
-bin/vcctrl              control-host CLI -- ssh's to the daemon, holds no logic
+bin/vcctrl              control-host CLI -- ssh's to the daemon, no logic itself
 bin/vcctrl-client       the real CLI; installed on the daemon host as /usr/local/bin/vcctrl
-bin/vcctrl-audio        one-off audio capture/level check from the control host
-bin/vcctrl-capcheck     one-off video capture/lock check from the control host
-bin/vcctrl-cardid       identifies the installed video card from an SDL3-DOS backend log
-bin/vcctrl-cfclean      clears a target's log directory before a run
-bin/vcctrl-uvconfig     drives UniVBE's video-mode configurator on the target
-daemon/vcctrld.py       input/video/audio/power/file server; owns the devices, listens on a socket
-daemon/vcweb.py         the private control web KVM
-daemon/vcweb_public.py  the optional public, read-only mirror
-daemon/kvm.html         the control KVM's page
-common/vcconfig.py      shared config-file loader (control host and daemon host both import it)
-agent/vcctrl_mcp.py     MCP server -- the CLI's tools, exposed to an MCP client
-harness/vcctrl-cell     runs one attempt of a target program, for automated test sweeps
-harness/vcctrl-sweep    orchestrates many cells into a named sweep
-harness/vcctrl-collect  pulls results/logs back from the target after a sweep
-profile-kinds/*.yaml    reusable hardware-shape templates (read by tools/new-profile.py only)
-pi/install.sh           systemd units, deps, udev/config.txt edits on the daemon host
-pi/deploy.sh            push from the control host and install (whole, or --page/--client/--mcp/--public/--hid-gadget/--profile <name>)
-vendor/                 third-party code this repo carries (see THIRD-PARTY.md)
-tests/                  the test suite -- pytest tests/, no hardware required
+bin/vcctrl-*            one-off diagnostics run from the control host (audio, capture, card ID)
+daemon/vcctrld.py       input/video/audio/power/file server; owns the devices
+daemon/vcweb.py         the control web KVM; daemon/vcweb_public.py is the read-only mirror
+common/vcconfig.py      shared config loader (both hosts import it)
+agent/vcctrl_mcp.py     MCP server exposing the CLI's tools
+harness/vcctrl-*        cell/sweep/collect -- automated test runs against a target
+profile-kinds/*.yaml    hardware-shape templates (tools/new-profile.py reads these)
+pi/install.sh           systemd units and setup on the daemon host
+pi/deploy.sh            push + install from the control host
+vendor/                 third-party code (see THIRD-PARTY.md)
+tests/                  pytest tests/ -- no hardware required
 ```
 
 ## Status, by target shape
 
 | shape | proven | notes |
 |---|---|---|
-| PS/2 DOS/Windows PC over USB4VC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, and the web KVM all proven on real hardware; see `docs/lab/FINDINGS.md` |
-| HDMI-out Linux box over the Pi's own USB gadget (`hdmi-usb`) | **working end to end** | no USB4VC required for this shape; multi-profile (one daemon, several targets) proven the same way |
-| Classic Macintosh over USB4VC's ADB board + RGB2HDMI (`rgb2hdmi-usb4vc`) | **scaffolded, unmeasured** | `profile-kinds/rgb2hdmi-usb4vc.yaml` and `vcctrl-macintosh.example.yaml` exist; no such hardware has run against this project's system yet |
+| Retro PC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, the web KVM — all on real hardware; `docs/lab/FINDINGS.md` |
+| Modern PC (`hdmi-usb`) | **working end to end** | no USB4VC needed; multi-profile (one daemon, several targets) proven the same way |
+| Classic Macintosh (`rgb2hdmi-usb4vc`) | **scaffolded, unmeasured** | templates exist; no such hardware has run against this project's own build yet |
 
-Known gaps, honestly: no hardware reset line yet for a target that ignores
-Ctrl-Alt-Del from within a program (GPIO to the reset header is the
-documented plan, not yet built); H.264 video transport and the on-screen
-keyboard's full per-key coverage are measured on exactly one board so far.
-See `docs/lab/OPEN-FAULTS.md` for the complete, current list of what's
-broken on this project's own system, and **`docs/KNOWN-LIMITATIONS.md` for
-what doesn't yet adapt to a different system's shape at all** — the DOS-side
-boot/BLASTER/mTCP contract, timing constants, the install prefix, and a
-handful of other things that are still literals in the source rather than
-a config choice, if you're bringing hardware different from the table
-above.
+Known gaps: no hardware reset line for a target that swallows
+Ctrl-Alt-Del (GPIO to the reset header is planned, not built); H.264
+transport and full on-screen-keyboard coverage are measured on one board
+so far. `docs/lab/OPEN-FAULTS.md` has the complete list of what's broken;
+**`docs/KNOWN-LIMITATIONS.md`** has what doesn't yet adapt to different
+hardware at all — the DOS-side boot contract, timing constants, install
+paths, and similar still-hardcoded pieces.
 
 ## Contributing
 
-See `CONTRIBUTING.md` for this repo's own working conventions (where
-planning drafts and measurements go, what a commit message should say).
-Run the test suite with `pytest tests/` -- no hardware required; it needs
-Python, PyYAML, node, a Chromium/Chrome binary, and ffmpeg.
+See `CONTRIBUTING.md` for this repo's conventions. Run the tests with
+`pytest tests/` — no hardware required; needs Python, PyYAML, node, a
+Chromium/Chrome binary, and ffmpeg.
 
 ## Licence
 
