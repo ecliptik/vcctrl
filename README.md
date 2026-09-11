@@ -156,10 +156,9 @@ capabilities:
 ```
 
 Needs `dtoverlay=dwc2,dr_mode=peripheral` under `/boot/firmware/config.txt`'s
-`[pi5]` section and one reboot — once per Pi, regardless of how many
-`hdmi-usb` targets it later drives.
+`[pi5]` section.
 
-### Power (all three, optional)
+### Power (optional)
 
 ```yaml
 capabilities:
@@ -169,9 +168,9 @@ capabilities:
       host: 192.0.2.20
 ```
 
-Both TP-Link Kasa generations and Wemo are supported, plus `shell` for
-your own on/off/state commands against a relay, a PDU, or a GPIO pin.
-Power control is optional — set `none`, or omit the block.
+TP-Link Kasa, Wemo, and shell-scripted relays/PDUs/GPIO are all
+supported — see [examples/vcctrl.example.yaml](./examples/vcctrl.example.yaml)
+for backend-specific settings.
 
 ### What every configuration needs
 
