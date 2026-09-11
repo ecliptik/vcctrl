@@ -19,6 +19,47 @@ target:
   configs: "CFGS"
   ftp_put: "C:\\MTCP\\PUT.BAT"
 
+  # The executable a single cell launches (harness/vcctrl-cell).
+  exe: "DOSKUTSU.EXE"
+
+  # Per-card config switching (harness/vcctrl-cell's --cfg). `default_cfg` is
+  # what a cell uses when --cfg is not passed; `cfg_dest` is the filename the
+  # engine itself reads. Both are null/absent for a port with no config-file
+  # switching mechanism -- inventing one here would make vcctrl-cell copy a
+  # file that means nothing on that target.
+  default_cfg: "OPL3.CFG"
+  cfg_dest: "DOSKUTSU.CFG"
+
+  # The command that resets the environment before a cell sets its own
+  # variables (harness/vcctrl-cell). Null/absent skips this step entirely --
+  # a port with no such command has nothing to call and nothing to gain by
+  # pretending to.
+  env_clear_cmd: "CALL CLRENV"
+
+  # Default TAS replay tape + PRNG seed a cell arms unless --set overrides
+  # them (harness/vcctrl-cell). Only used when `env.replay`/`env.seed` below
+  # are also set -- a port with no TAS-replay mechanism (dosags's own
+  # AutoPilot module drives itself, no external reel) declares neither pair.
+  default_replay: "QA.TAS"
+  default_seed: "12345"
+
+  # The unattended-sweep harness's own entry point (harness/vcctrl-sweep),
+  # typed as `<sweep_entry_cmd> <machine> <declared-hw...>`. Null/absent for
+  # a port with no sweep harness at all -- vcctrl-sweep already refuses for
+  # such a profile (no sweeps/machines section), this is just the command
+  # name for when one exists.
+  sweep_entry_cmd: "QA"
+
+  # Per-video-card overrides, found empirically and REQUIRED, not preferred
+  # (see harness/vcctrl-cell's own "PER-CARD DEFAULTS" section for the
+  # Mach64 story). Keyed by --card value; each entry maps a semantic key
+  # from `env:` below to the value that card needs. A card not listed here
+  # gets no override -- which is a real, checked finding for virge/cirrus,
+  # not an omission.
+  card_overrides:
+    mach64:
+      pin_native_mode: "0"
+
   # THE BOOT-PROFILE WITNESS. Which string proves which profile is DATA;
   # that a cell must verify its profile before its results are trusted is
   # the CHECK, and the check is not configurable. See
@@ -50,6 +91,12 @@ target:
   # See docs/OPEN-FAULTS.md sec. 15.
   profile_witness:
     variable: BLASTER
+    # THE VALUE, NOT JUST THE PRESENCE. PGSB and VIBRA both set BLASTER, with
+    # distinct strings read straight off g2k:AUTOEXEC.BAT -- presence alone
+    # cannot tell them apart (docs/OPEN-FAULTS.md sec 15). Null/absent here
+    # would fall back to a presence-only check, which is enough for a port
+    # with only one BLASTER-setting profile to distinguish from NET.
+    value: "A220 I7 D3 P330 T3"
     proves: "NOT the NET profile (a sound profile is loaded)"
     direction: one-way
 
@@ -62,6 +109,10 @@ target:
     log_tag: DOSKUTSU_LOG_TAG
     pin_native_mode: DOSKUTSU_PIN_NATIVE_MODE
     shot_ticks: DOSKUTSU_SHOT_TICKS
+    # Harness-side, not engine-side: keeps the console in mode 12h between
+    # cells so the capture stick never loses lock at a text-mode prompt.
+    # Consulted by the harness's own QA.BAT, not by DOSKUTSU.EXE itself.
+    capture_flag: DKTCAP
 
 timing:
   # TARGET physics: the CONFIG.SYS menu times out this long after the POST

@@ -63,6 +63,80 @@ def cfg_get(path, fallback=None):
         return fallback
 
 
+# THE HARNESS PROFILE. One file per software project (doskutsu, dosags, ...),
+# describing the facts about that program and its DOS target -- working
+# directory, executable name, the env-var names it consults, its boot-profile
+# witness -- so harness/vcctrl-sweep, -cell and -collect stay one script each
+# instead of a per-project fork. Located through vcctrl.yaml's
+# `harness.profile`, so a checkout with no config falls back to the doskutsu
+# profile beside this file.
+#
+# THIS USED TO BE THREE COPIES, and one of them had a real bug for as long as
+# it existed: vcctrl-collect's own `_profile_path()` called `cfg_get` without
+# ever importing it, so `harness.profile` was silently ignored by that script
+# while vcctrl-sweep -- which imports the same function correctly -- honoured
+# it. A broad `except Exception` around the lookup swallowed the resulting
+# NameError and returned the fallback, which is exactly why it went
+# unnoticed: the two scripts agreed on this rig, where both paths happen to
+# resolve to the same file, and would have silently disagreed on any rig
+# whose config pointed `harness.profile` elsewhere. One shared function
+# cannot go stale in only one of its copies.
+def profile_path():
+    p = cfg_get("harness.profile", "") or ""
+    root = os.path.dirname(HERE)
+    if p and not os.path.isabs(p):
+        p = os.path.join(root, p)
+    return p or os.path.join(root, "profiles", "doskutsu.yaml")
+
+
+def load_profile(require_sweeps=False):
+    """The active harness profile as a dict.
+
+    Every profile must declare `target` -- the facts a single-cell run needs
+    (working directory, executable, env-var names, optional per-card/config/
+    boot-witness sections). `require_sweeps=True` additionally demands
+    `sweeps`/`machines`, for the sweep-oriented tools and named-sweep
+    collection; a profile with no unattended-sweep harness yet (dosags, as of
+    2026-09) legitimately omits those and should refuse ONLY when something
+    actually tries to run a named sweep against it, not on every use.
+
+    Raises with the path in the message: a runner that cannot find its
+    profile must say which one it looked for, or the operator debugs the
+    wrong file.
+    """
+    path = profile_path()
+    try:
+        import yaml
+    except ImportError:
+        raise SystemExit(
+            "REFUSED: PyYAML is needed to read %s (apt install python3-yaml)"
+            % path)
+    try:
+        with open(path) as f:
+            d = yaml.safe_load(f) or {}
+    except OSError as exc:
+        raise SystemExit("REFUSED: cannot read the harness profile %s: %s"
+                         % (path, exc))
+    if not d.get("target"):
+        raise SystemExit(
+            "REFUSED: %s has no `target` section -- it is not a harness profile"
+            % path)
+    if require_sweeps and (not d.get("sweeps") or not d.get("machines")):
+        raise SystemExit(
+            "REFUSED: %s has no sweeps/machines -- it has no unattended-sweep "
+            "harness configured yet, so there is no measured span to run "
+            "against and no defensible timeout." % path)
+    return d
+
+
+def target_env_name(profile, key):
+    """The DOS-side env var name for a semantic key (e.g. 'log_tag'), or
+    None if this profile's program does not implement (or does not have)
+    that lever yet. Never invent a name here -- a variable nothing on the
+    target reads is worse than not setting one."""
+    return ((profile.get("target") or {}).get("env") or {}).get(key)
+
+
 CALL_COST_S = 1.5
 
 # The CONFIG.SYS menu appears within a few seconds of the POST edge and times

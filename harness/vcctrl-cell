@@ -109,7 +109,7 @@ sys.path.insert(0, BIN)
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, at_prompt, wait_for_prompt, set_lock_owner, get_lock_owner,
-    wait_video_locked)
+    wait_video_locked, load_profile, target_env_name)
 
 _l = SourceFileLoader("sw", os.path.join(HERE, "vcctrl-sweep"))
 _s = importlib.util.spec_from_loader("sw", _l)
@@ -401,7 +401,7 @@ def main(argv):
         print(__doc__)
         return 2
     tag = argv[0].upper()
-    sets, ticks, cfg, shot_at, card = [], "30000", "OPL3.CFG", 45, None
+    sets, ticks, cfg, shot_at, card = [], "30000", None, 45, None
     forbid = []
     expect_log = []
     hw = STANDING_HW
@@ -426,6 +426,10 @@ def main(argv):
         else:
             i += 1
 
+    conf = load_profile()
+    target = conf.get("target") or {}
+    cfg = cfg or target.get("default_cfg")
+
     if not acquire():
         return 2
     try:
@@ -439,26 +443,57 @@ def main(argv):
             print("   recorded: %s" % rec)
         if take_lock(tag):
             print("   input lock held -- deploys refuse while this runs")
-        if wait_for_prompt(60) is None:
-            print("REFUSED: not at a prompt."); return 2
-        if not cmd("CD \\DOSKUTSU"):
-            print("REFUSED: could not reach C:\\DOSKUTSU"); return 2
+        target_dir = target.get("dir")
+        if not target_dir:
+            print("REFUSED: this profile declares no target.dir."); return 2
+        if not cmd("CD %s" % target_dir):
+            print("REFUSED: could not reach %s" % target_dir); return 2
 
         # Variables FIRST. If anything later prompts, it cannot eat a SET.
-        wanted = {"DOSKUTSU_TAS_REPLAY": "QA.TAS",
-                  "DOSKUTSU_TAS_PRNG_SEED": "12345",
-                  "DOSKUTSU_TAS_AUTO_EXIT_TICK": ticks,
-                  "DOSKUTSU_LOG_TAG": tag}
-        if card == "mach64":
-            wanted["DOSKUTSU_PIN_NATIVE_MODE"] = "0"
-            print("   card=mach64 -> pin stood down, 640x480 (REQUIRED)")
-        elif card in ("virge", "cirrus"):
-            print("   card=%s -> pin left engaged (its own mode captures)" % card)
-        elif card is None:
+        #
+        # Built from the active profile's env-name map, not hardcoded to
+        # doskutsu's own names: a semantic key only makes it into `wanted`
+        # when this profile actually declares BOTH the env-var name AND
+        # (for replay/seed) a default value to arm it with -- a port with
+        # no TAS-replay mechanism (dosags's own AutoPilot module drives
+        # itself, no external reel) declares neither, and those two entries
+        # are simply absent rather than set to a name from another project.
+        wanted = {}
+        log_tag_var = target_env_name(conf, "log_tag")
+        if log_tag_var:
+            wanted[log_tag_var] = tag
+        auto_exit_var = target_env_name(conf, "auto_exit_tick")
+        if auto_exit_var:
+            wanted[auto_exit_var] = ticks
+        replay_var = target_env_name(conf, "replay")
+        replay_default = target.get("default_replay")
+        if replay_var and replay_default:
+            wanted[replay_var] = replay_default
+        seed_var = target_env_name(conf, "seed")
+        seed_default = target.get("default_seed")
+        if seed_var and seed_default:
+            wanted[seed_var] = seed_default
+
+        if card is None:
             print("REFUSED: no --card given. Per-card defaults exist because")
             print("  the right mode is not the same on every card, and on the")
             print("  Mach64 the wrong one is a blind cell. Pass --card.")
             return 2
+        card_overrides = (target.get("card_overrides") or {}).get(card) or {}
+        if card_overrides:
+            for semantic_key, val in card_overrides.items():
+                var_name = target_env_name(conf, semantic_key)
+                if not var_name:
+                    print("REFUSED: the card override for %r references env "
+                          "key %r, which this profile does not declare."
+                          % (card, semantic_key))
+                    return 2
+                wanted[var_name] = val
+                print("   card=%s -> %s=%s (per-card override, REQUIRED per "
+                      "this profile)" % (card, var_name, val))
+        else:
+            print("   card=%s -> no per-card override declared for this "
+                  "profile" % card)
         for s in sets:
             k, _, v = s.partition("=")
             wanted[k.upper()] = v
@@ -500,16 +535,25 @@ def main(argv):
         # Enforced rather than documented, because "just leave the variable
         # unset" is what 512x384 looks like: it is the card's own preference
         # and reasserts itself the moment nobody is paying attention.
-        if card == "mach64" and wanted.get("DOSKUTSU_PIN_NATIVE_MODE") != "0":
-            print("   REFUSED: DOSKUTSU_PIN_NATIVE_MODE=%r would run this"
-                  % wanted.get("DOSKUTSU_PIN_NATIVE_MODE"))
-            print("   card at 512x384, which the capture stick cannot lock.")
-            print("   640x480 is required on the Mach64. Remove the override.")
-            return 2
+        for semantic_key, val in card_overrides.items():
+            var_name = target_env_name(conf, semantic_key)
+            if wanted.get(var_name) != val:
+                print("   REFUSED: --set %s=%r would run this cell without "
+                      "the required" % (var_name, wanted.get(var_name)))
+                print("   per-card override for %s (this profile requires "
+                      "%s=%s here). Remove the override." % (card, var_name, val))
+                return 2
 
-        print("-- clearing and setting environment --")
-        if not cmd("CALL CLRENV", 90):
-            print("REFUSED: CLRENV did not finish."); return 2
+        env_clear_cmd = target.get("env_clear_cmd")
+        if env_clear_cmd:
+            print("-- clearing and setting environment --")
+            if not cmd(env_clear_cmd, 90):
+                print("REFUSED: %s did not finish." % env_clear_cmd); return 2
+        else:
+            print("-- no env-clear command declared for this profile -- "
+                  "skipping bulk clear --")
+            print("   (only the forbidden-variable clears below and the "
+                  "wanted SETs run)")
 
         # CLRENV IS NOT ENOUGH, AND IT IS NOT CLOSE.
         #
@@ -536,14 +580,23 @@ def main(argv):
 
         # THEN the copy, with its prompt answered explicitly. Plain `> NUL`
         # hides the copy's output, not its question.
-        print("-- config, answering the overwrite prompt explicitly --")
-        vc("type", "COPY CFGS\\%s DOSKUTSU.CFG" % cfg)
-        vc("key", "enter")
-        time.sleep(2.0)
-        vc("key", "y")                 # answers the prompt if it appeared
-        vc("key", "enter")             # harmless extra Enter if it did not
-        if wait_for_prompt(60) is None:
-            print("REFUSED: no prompt after COPY."); return 2
+        cfg_dest = target.get("cfg_dest")
+        if cfg:
+            if not cfg_dest:
+                print("REFUSED: --cfg %s was requested but this profile "
+                      "declares no target.cfg_dest." % cfg)
+                return 2
+            print("-- config, answering the overwrite prompt explicitly --")
+            vc("type", "COPY %s\\%s %s" % (target.get("configs"), cfg, cfg_dest))
+            vc("key", "enter")
+            time.sleep(2.0)
+            vc("key", "y")             # answers the prompt if it appeared
+            vc("key", "enter")         # harmless extra Enter if it did not
+            if wait_for_prompt(60) is None:
+                print("REFUSED: no prompt after COPY."); return 2
+        else:
+            print("-- no config-file switching declared for this profile -- "
+                  "skipping --")
 
         print("-- verifying the environment actually took --")
         shot, text = read_env_text()
@@ -714,95 +767,107 @@ def main(argv):
             #
             # So this is two things at once: a boot-profile guard, and the
             # control that makes every absence below meaningful.
-            print("   -- profile witness --")
-            cmd("CLS")
-            time.sleep(1.0)
-            cmd('SET | FIND /I "BLASTER" | FIND /C "="')
-            wv = None
-            for _try in range(20):
-                time.sleep(1.5)
-                _sh, t4 = read_env_text_raw()
-                if t4 is None:
-                    continue
-                wv = read_count(t4)
-                if wv is not None:
-                    break
-            if wv is None:
-                print("     BLASTER                          COULD NOT READ")
-                print("   REFUSED: could not establish which boot profile is")
-                print("   running. That is COULD NOT LOOK, not a pass.")
-                return 2
-            if wv == 0:
-                print("     BLASTER                          *** NOT SET ***")
-                print("   REFUSED: the machine is not on the sound profile.")
-                print("   Almost certainly still in NET from a collect or a")
-                print("   hand-run FTP session. sdl_init will fail and the cell")
-                print("   will die in seconds. Reboot to the menu default")
-                print("   (ctrl-alt-del, let the 5s timeout land on PGSB).")
-                return 1
+            witness = target.get("profile_witness") or {}
+            witness_var = witness.get("variable")
+            witness_value = witness.get("value")
+            witness_proves = witness.get("proves") or "(no `proves` text declared)"
+            pipeline_confirmed = False
 
-            # THE VALUE, NOT JUST THE PRESENCE (docs/OPEN-FAULTS.md sec 15).
-            #
-            # `count: 1` above proves SOME profile that sets BLASTER is
-            # loaded. It does not prove WHICH ONE -- PGSB and VIBRA both set
-            # it, with distinct strings read straight off g2k:AUTOEXEC.BAT:
-            #     :VIBRA  SET BLASTER=A220 I5 D1 H5 T6 P330
-            #     :PGSB   SET BLASTER=A220 I7 D3 P330 T3
-            # SAME TWO STRINGS AS daemon/vcctrld.py's TargetProfile.
-            # BLASTER_PROFILES -- that class maps a value obtained over a
-            # DIFFERENT, file-based channel (never OCR) to a profile name.
-            # This runs on the CONTROL host against a value this process OCRs
-            # live off the DOS prompt, so it cannot share that Python dict
-            # across the host boundary; if either set of strings ever changes
-            # (e.g. the SOUND-PROFILES.md profile merge), update BOTH.
-            # Every other sound profile (PGADLIB, PGGUS) sets no BLASTER at
-            # all and is already caught by the wv==0 refusal above -- VIBRA is
-            # the ONE profile that can masquerade as PGSB here, because a
-            # presence check cannot see past "yes, something is set".
-            #
-            # Same primitive as every other check on this path: a `FIND`
-            # pattern piped to `FIND /C "="`, read back as a single digit.
-            # Searching for PGSB's own value string (not merely the variable
-            # name) means the match itself is the discriminator -- VIBRA's
-            # differing string cannot satisfy it, so `count: 0` here means
-            # "this is some OTHER BLASTER-setting profile", almost certainly
-            # VIBRA, not "the read failed".
-            print("   -- confirming the VALUE, not just that BLASTER is set --")
-            cmd("CLS")
-            time.sleep(1.0)
-            cmd('SET | FIND /I "BLASTER=A220 I7 D3 P330 T3" | FIND /C "="')
-            pv = None
-            for _try in range(20):
-                time.sleep(1.5)
-                _sh, t5 = read_env_text_raw()
-                if t5 is None:
-                    continue
-                pv = read_count(t5)
-                if pv is not None:
-                    break
-            if pv is None:
-                print("     BLASTER value                    COULD NOT READ")
-                print("   REFUSED: BLASTER is set, but which profile set it")
-                print("   could not be confirmed. That is COULD NOT LOOK, not")
-                print("   a pass.")
-                return 2
-            if pv == 0:
-                print("     BLASTER value                    *** NOT PGSB'S STRING ***")
-                print("   REFUSED: BLASTER is set, but not to PGSB's own value.")
-                print("   The only other profile that sets BLASTER is VIBRA, and")
-                print("   this machine is almost certainly on it instead. Reboot")
-                print("   to the menu default (ctrl-alt-del, let the 5s timeout")
-                print("   land on PGSB).")
-                return 1
-            print("     BLASTER                          set (profile is PGSB, "
-                  "value confirmed)")
+            if not witness_var:
+                print("   -- no profile witness declared for this profile -- "
+                      "skipping --")
+                print("   (this profile has no boot-menu profile-switching "
+                      "to verify yet)")
+            else:
+                print("   -- profile witness (%s) --" % witness_var)
+                cmd("CLS")
+                time.sleep(1.0)
+                cmd('SET | FIND /I "%s" | FIND /C "="' % witness_var)
+                wv = None
+                for _try in range(20):
+                    time.sleep(1.5)
+                    _sh, t4 = read_env_text_raw()
+                    if t4 is None:
+                        continue
+                    wv = read_count(t4)
+                    if wv is not None:
+                        break
+                if wv is None:
+                    print("     %-32s COULD NOT READ" % witness_var)
+                    print("   REFUSED: could not establish which boot profile is")
+                    print("   running. That is COULD NOT LOOK, not a pass.")
+                    return 2
+                if wv == 0:
+                    print("     %-32s *** NOT SET ***" % witness_var)
+                    print("   REFUSED: this profile's witness is absent, so its")
+                    print("   declared guarantee does not hold: %s" % witness_proves)
+                    return 1
 
+                # THE VALUE, NOT JUST THE PRESENCE (docs/OPEN-FAULTS.md sec 15).
+                #
+                # Presence alone proves SOME profile that sets this variable is
+                # loaded, not WHICH ONE -- doskutsu's own PGSB and VIBRA both
+                # set BLASTER, with distinct strings read straight off
+                # g2k:AUTOEXEC.BAT (SAME TWO STRINGS AS daemon/vcctrld.py's
+                # TargetProfile.BLASTER_PROFILES; that class maps a value read
+                # over a DIFFERENT, file-based channel to a profile name -- this
+                # runs on the control host against a value OCR'd live off the
+                # DOS prompt, so it cannot share that Python dict across the
+                # host boundary, and if either set of strings ever changes,
+                # update BOTH). `witness_value`, when a profile declares one,
+                # is the value-level discriminator; a profile with only one
+                # profile that sets its witness variable at all can leave it
+                # unset and get a presence-only check.
+                if witness_value:
+                    print("   -- confirming the VALUE, not just that %s is set --"
+                          % witness_var)
+                    cmd("CLS")
+                    time.sleep(1.0)
+                    cmd('SET | FIND /I "%s=%s" | FIND /C "="'
+                        % (witness_var, witness_value))
+                    pv = None
+                    for _try in range(20):
+                        time.sleep(1.5)
+                        _sh, t5 = read_env_text_raw()
+                        if t5 is None:
+                            continue
+                        pv = read_count(t5)
+                        if pv is not None:
+                            break
+                    if pv is None:
+                        print("     %s value                    COULD NOT READ"
+                              % witness_var)
+                        print("   REFUSED: %s is set, but which profile set it"
+                              % witness_var)
+                        print("   could not be confirmed. That is COULD NOT LOOK, "
+                              "not a pass.")
+                        return 2
+                    if pv == 0:
+                        print("     %s value                    *** UNEXPECTED "
+                              "VALUE ***" % witness_var)
+                        print("   REFUSED: %s is set, but not to the expected "
+                              "value." % witness_var)
+                        print("   %s" % witness_proves)
+                        return 1
+                    print("     %-32s set (value confirmed)" % witness_var)
+                else:
+                    print("     %-32s set (presence only -- no value check "
+                          "declared)" % witness_var)
+                pipeline_confirmed = True
 
             if forbidden:
                 # The witness above returned 1 through this exact pipeline, so
-                # a 0 here is a real absence and not a broken instrument.
-                print("   -- and %d that must be ABSENT"
-                      " (pipeline proven by BLASTER above) --" % len(forbidden))
+                # a 0 here is a real absence and not a broken instrument --
+                # PROVIDED a witness was actually declared and ran.
+                if pipeline_confirmed:
+                    print("   -- and %d that must be ABSENT"
+                          " (pipeline proven by the profile witness above) --"
+                          % len(forbidden))
+                else:
+                    print("   -- and %d that must be ABSENT"
+                          " (no profile witness declared -- a COULD NOT READ"
+                          " below refuses rather than assumes the pipeline) --"
+                          % len(forbidden))
                 # ASKED POSITIVELY, WITH NO VARIABLE EXPANSION ANYWHERE.
                 #
                 # The obvious design -- and the one a peer proposed -- is to
@@ -860,7 +925,12 @@ def main(argv):
                     print("   REFUSED: %d forbidden variable(s) are set: %s"
                           % (len(bad), " ".join(bad)))
                     print("   This cell would be measuring something other than")
-                    print("   what it claims. CLRENV should have cleared it.")
+                    if env_clear_cmd:
+                        print("   what it claims. %s should have cleared it."
+                              % env_clear_cmd)
+                    else:
+                        print("   what it claims, and this profile declares no "
+                              "env-clear command to have cleared it.")
                     return 1
                 if unreadable:
                     print("   REFUSED: could not read %d forbidden variable(s)"
@@ -892,9 +962,13 @@ def main(argv):
             # in NET, so it is a witness to the whole boot path rather than a
             # declaration about it. Checked with the same count primitive, and
             # unreadable REFUSES.
+        exe = target.get("exe")
+        if not exe:
+            print("REFUSED: this profile declares no target.exe -- nothing "
+                  "to launch."); return 2
         print("-- launch --")
         t0 = time.time()
-        vc("type", "DOSKUTSU.EXE")
+        vc("type", exe)
         vc("key", "enter")
         time.sleep(12)
         if at_prompt():
