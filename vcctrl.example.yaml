@@ -346,12 +346,14 @@ capabilities:
 
   # A SECOND, independent camera pointed at the physical target rather than
   # its captured video signal -- optional, unlike `video`/`audio` above which
-  # every rig has. Defaults to `none` here on purpose: an absent `backend:`
-  # key does NOT mean disabled in this schema (see Registry._resolve_backend
-  # in daemon/vcctrld.py) -- it falls back to the default backend below, so a
-  # rig with no second camera that left this block out entirely would still
-  # spin ffmpeg against /dev/video0 forever. Set `backend: v4l2-ffmpeg` and
-  # fill in the real by-id device only on a rig that actually has one.
+  # every rig has. Leaving this whole block out, or `backend: none`, are now
+  # the SAME safe answer (Registry._resolve_backend in daemon/vcctrld.py: as
+  # of 2026-09-11, `CameraCapability.DEFAULT_BACKEND_NAME` is `None`, so an
+  # absent key means "not installed" rather than a guess at /dev/video0).
+  # `backend: none` stays written out below anyway, because a real setting
+  # beats an implicit one for anyone reading this file. Set
+  # `backend: v4l2-ffmpeg` and fill in the real by-id device only on a rig
+  # that actually has this camera.
   camera:
     backend: none                 # v4l2-ffmpeg | none
     settings:

@@ -7117,8 +7117,15 @@ def _cap_settings(name):
 # silently falling back to the default. Derived from POWER_BACKENDS rather
 # than written out, so adding a protocol cannot leave the registry behind.
 PowerCapability.BACKENDS = {k: PowerCapability for k in POWER_BACKENDS}
-PowerCapability.DEFAULT_BACKEND = PowerCapability
-PowerCapability.DEFAULT_BACKEND_NAME = "kasa"
+# NO DEFAULT BRAND: an absent `capabilities.power.backend` used to mean
+# "kasa", which is a specific product this rig happens to use, not a safe
+# assumption about anyone else's smart plug. An unconfigured rig now gets
+# "not configured" (Registry._resolve_backend's `DEFAULT_BACKEND_NAME is
+# None` branch) instead of a KasaPower instance trying to reach hardware
+# that was never installed. `backend: kasa` (or `kasa-klap`/`wemo`/`shell`)
+# opts in explicitly, same as before.
+PowerCapability.DEFAULT_BACKEND = None
+PowerCapability.DEFAULT_BACKEND_NAME = None
 
 # Board identity has two genuinely different implementations, below.
 BoardCapability.BACKENDS = {"usb4vc-runfile": BoardCapability,
@@ -11008,20 +11015,27 @@ AudioCapability.BACKENDS = {"alsa-ffmpeg": AudioCapability}
 AudioCapability.DEFAULT_BACKEND = AudioCapability
 AudioCapability.DEFAULT_BACKEND_NAME = 'alsa-ffmpeg'
 CameraCapability.BACKENDS = {"v4l2-ffmpeg": CameraCapability}
-CameraCapability.DEFAULT_BACKEND = CameraCapability
-CameraCapability.DEFAULT_BACKEND_NAME = 'v4l2-ffmpeg'
-# SAME SHAPE AS CAMERA ABOVE, same reason -- DEFAULT_BACKEND/_NAME name what
-# gets reported if the fallback path is ever taken (an absent `backend:` key
-# resolves to `cls` regardless of these two, see Registry._resolve_backend),
-# not whether it is safe to leave a profile silent about msd. It is not: a
-# profile sharing no USB port with modernpc's gadget (gateway2000) needs an
-# EXPLICIT `backend: none`, or an absent key gives it working-looking msd_*
-# commands aimed at hardware it has no relationship to. See every
-# profile-kind template and vcctrl.yaml/vcctrl-modernpc.yaml for the lines
-# that actually do the disabling.
+CameraCapability.DEFAULT_BACKEND = None
+# NO DEFAULT: a second UVC room camera is genuinely optional hardware most
+# rigs do not have. An absent `backend:` key now means "not installed"
+# (Registry._resolve_backend's `DEFAULT_BACKEND_NAME is None` branch),
+# never a guess at `/dev/video0`. A rig that has this camera opts in with
+# `backend: v4l2-ffmpeg` and a `settings.device`, same as before.
+CameraCapability.DEFAULT_BACKEND_NAME = None
+# UPDATED 2026-09-11: an absent `backend:` key used to resolve to `cls`
+# regardless of DEFAULT_BACKEND/_NAME (see the comment this replaced, still
+# true of any OTHER capability whose DEFAULT_BACKEND_NAME names a real
+# backend). It no longer does for msd specifically, for exactly the risk
+# this comment already named: a profile sharing no USB port with modernpc's
+# gadget (gateway2000) needs an EXPLICIT `backend: none`, or an absent key
+# gave it working-looking msd_* commands aimed at hardware it has no
+# relationship to. `DEFAULT_BACKEND_NAME = None` below makes "absent" and
+# "none" the same safe answer, so a profile no longer NEEDS to remember the
+# explicit line -- though vcctrl.yaml/vcctrl-modernpc.yaml still carry it,
+# since a real setting beats an implicit one for anyone reading the file.
 MsdCapability.BACKENDS = {"usb-gadget-msd": MsdCapability}
-MsdCapability.DEFAULT_BACKEND = MsdCapability
-MsdCapability.DEFAULT_BACKEND_NAME = 'usb-gadget-msd'
+MsdCapability.DEFAULT_BACKEND = None
+MsdCapability.DEFAULT_BACKEND_NAME = None
 
 FilesCapability.BACKENDS = {"mtcp-ftp": FilesCapability}
 FilesCapability.DEFAULT_BACKEND = FilesCapability
@@ -11289,6 +11303,25 @@ class Registry(object):
         """
         want = CFG.optional("capabilities.%s.backend" % cls.name)
         if want is vcconfig.ABSENT:
+            # NO DEFAULT_BACKEND_NAME MEANS NO GUESS. Added 2026-09-11:
+            # some capabilities (a second UVC room camera, mains power) name
+            # hardware this rig happens to have -- a Kasa plug, a
+            # `/dev/video0` UVC stick -- and defaulting them ON when the key
+            # is simply absent means a stranger's fresh clone comes up
+            # claiming to control a plug or a camera that was never
+            # installed. Explicit opt-in only, same "not configured" answer
+            # `backend: none` already gives, for the same reason: silently
+            # working against the wrong (or no) hardware is worse than a
+            # clearly refused capability. A capability that DOES have a safe,
+            # unconditionally-correct default (only one real backend exists,
+            # and it needs no hardware assumption beyond what its own
+            # `settings.device` etc. already requires explicitly) keeps
+            # naming one via DEFAULT_BACKEND_NAME as before.
+            if cls.DEFAULT_BACKEND_NAME is None:
+                return _DISABLED, None, (
+                    "no capabilities.%s.backend configured, and this "
+                    "capability has no default -- explicit opt-in only"
+                    % cls.name)
             return ((cls.DEFAULT_BACKEND or cls),
                     cls.DEFAULT_BACKEND_NAME, None)
         if want is vcconfig.NONE or want == "none":
