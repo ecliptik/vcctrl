@@ -30,7 +30,7 @@ harness physically cannot cross it, which is the right place.
 ## 1. The capture device now vanishes, and that is NORMAL
 
 Swapping sticks means `/dev/video0` disappears and reappears while the daemon
-is running. This is new: on the old rig the stick was permanent.
+is running. This is new: on the old system the stick was permanent.
 
 **Verified in the code, not assumed:** `_watchdog` respawns on an exponential
 backoff capped at 30 s and **never gives up** — `if self.running: self._acquire()`
@@ -46,7 +46,7 @@ device are different facts and the page says the same thing about both:
 | stick plugged, will not open | fault — wrong node, busy, dead | "No signal" |
 | stick open, source dark | target off or asleep | "No signal" |
 
-The first is not a fault at all, and telling the operator their rig is broken
+The first is not a fault at all, and telling the operator their system is broken
 while they are holding the cable is the kind of small lie that trains people
 to ignore the status line.
 

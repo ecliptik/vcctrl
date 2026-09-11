@@ -1,6 +1,6 @@
 # Open faults, and what to do about them
 
-> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+> This document is one project's record of its own physical system -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this system implements.
 
 `FINDINGS.md` records what happened. **This file is the forward-looking half:
 what is still broken, what is worked around rather than fixed, and what to
@@ -70,7 +70,7 @@ Three arms together for the first time, daemon 519329:
 
     real-frame decode stress   ~2,900 decodes/s, ~790/s FAILING on the
                                GENUINE short frame the hardware emitted,
-                               interleaved with good frames at the rig's ratio
+                               interleaved with good frames at the system's ratio
     inputload                  4 threads, uinput + LED reads
     2 browser-shaped tabs      video + audio ws, /state.json, /shot.jpg,
                                reviewing tab on /timeline.json
@@ -256,7 +256,7 @@ question, but it is no longer "no data".
 **A zero reading only counts with a LIVE SOURCE.** With the target off the
 stick emits well-formed JPEG for its no-lock constant, so there is nothing
 malformed to count and a clean counter means nothing. **Zero after a week of
-real sessions kills the hypothesis; zero on a dark rig is an artifact.**
+real sessions kills the hypothesis; zero on a dark system is an artifact.**
 
 ### The abort of 2026-08-24 had a mechanism, and the fix for it was inert
 
@@ -288,7 +288,7 @@ that was there. So for three days:
   worse fault than the one being fixed, and it was introduced by the fix.
 
 The commit was never deployed (eight cells were uncollected), which is the
-only reason the listener bug was not also observed on the rig.
+only reason the listener bug was not also observed on the system.
 
 **Both halves are now in the right place, and both are covered by tests that
 were checked against the broken code first.** `test_core.py` asserts the
@@ -521,7 +521,7 @@ Moving the line makes `_proven_epoch` stay `None` — and the old gate skipped
 its check entirely when it was `None`. Fixing the gate alone leaves the first
 sample setting a real epoch, which matches and passes. **A half-fix reproduces
 the phantom's exact signature**, so anyone verifying this by observing that
-the symptom is gone can be looking at an unchanged rig. Check both halves.
+the symptom is gone can be looking at an unchanged system. Check both halves.
 
 **The invariant that now makes them unable to disagree: `available: true`
 implies `changes >= 1`.** It is asserted directly, with a positive control, so
@@ -555,7 +555,7 @@ sends them looking for something to press.
 #### AND PROOF OF LIVENESS IS NOT PROOF OF ACCURACY — measured 2026-08-24
 
 **The gate above is necessary and it is NOT sufficient.** Measured on the live
-rig, with the target booted and the channel showing `changes: 8` — proven,
+system, with the target booted and the channel showing `changes: 8` — proven,
 available, publishing:
 
     nodes (caps,num,scroll)   target caps, READ OFF THE SCREEN
@@ -649,7 +649,7 @@ Reaching for "refresh, then press" before the instrumented sitting establishes
 how long a refresh lasts would be the same mistake with a fresher number.
 
 **THE SCREEN IS THE ONLY DIRECT WITNESS OF THE TARGET'S LOCK STATE.** Everything
-else on this rig is an inference from a node two things can write.
+else on this system is an inference from a node two things can write.
 
 **AND A ROUND TRIP APPEARS TO REFRESH THE VALUES, NOT ONLY PROVE THEM.**
 Independently reproduced after the 20:48 deploy. `verify_input` reported
@@ -925,7 +925,7 @@ to run at all.
 ## 5. A new websocket streams at 20 fps until told otherwise  — BY DESIGN, KNOW IT
 
 A page intending 8 fps still pulls 20 fps of ~35 KB frames on connect.
-Harmless on an idle rig; **during a 150 s timed cell it is ~700 KB/s of
+Harmless on an idle system; **during a 150 s timed cell it is ~700 KB/s of
 unbudgeted work on the machine doing the measuring.**
 
 **Do not attach a streaming client during a cell, and do not leave a KVM tab
@@ -962,7 +962,7 @@ reversible.
 A passive splitter halves the drive into two loads. **It ATTENUATES rather
 than DISTORTS** — identical geometry, no added noise — which is the difference
 between a splitter you can live with and one that quietly corrupts what the
-rig sees.
+system sees.
 
 ### What it does NOT cost — checked, not assumed
 
@@ -1107,9 +1107,9 @@ not exist anywhere.
 that the polls now start from a screen known to be readable.
 
 **Not yet exercised against a live transition.** It returns `True` in 60 ms
-against the healthy rig, and the unlocked and unreachable paths are covered by
+against the healthy system, and the unlocked and unreachable paths are covered by
 `test_wait_video_locked_reports_which_of_three_things_happened` with invented
-rigs — including a well-formed reply carrying no `state` field, which must be
+systems — including a well-formed reply carrying no `state` field, which must be
 `None` rather than `False`. **The real proof is the next cell that exits a game
 into text mode**, and until one has, this is fixed in the sense that the code is
 right, not in the sense that the fault has been observed to go away.
@@ -1384,7 +1384,7 @@ right up until somebody boots `PGADLIB` and gets a cell that says `PGSB`.
 
 **Not yet fixed and not yet urgent**, but every fps figure this week rests on a
 profile assertion that was never made. **Which BLASTER string belongs to which
-block needs a boot of each profile to establish** — that is real rig time and
+block needs a boot of each profile to establish** — that is real system time and
 has not been spent.
 
 ### FIXED IN CODE 2026-08-25, NOT YET PROVEN ON HARDWARE
@@ -1398,7 +1398,7 @@ rather than the bare variable name:
 Same primitive as every other check on this path — a pattern piped to
 `FIND /C "="`, read back as a single OCR-friendly digit — so this closes the
 gap without ever asking the console to read an arbitrary alphanumeric string
-(which this rig's own OCR cannot do reliably). `count: 0` here means BLASTER
+(which this system's own OCR cannot do reliably). `count: 0` here means BLASTER
 is set to something OTHER than PGSB's string — almost certainly VIBRA, the
 only other profile that sets it — and the cell now REFUSES rather than
 printing "profile is PGSB" on the strength of presence alone.
@@ -1512,8 +1512,8 @@ the other 2 pre-existing and unrelated) is unaffected.
 
 **Not yet proven on real hardware.** This closes the mechanism the live
 failure demonstrated (continuing past a leg that cannot prove the prompt is
-clean), verified against `FakeTarget`, not against the rig -- the operator
-has held further rig time pending this fix, so the next real `D1B`-shaped
+clean), verified against `FakeTarget`, not against the system -- the operator
+has held further system time pending this fix, so the next real `D1B`-shaped
 retry is the actual proof.
 
 **How to recognize the hazard this fix removes, if it or something like it
@@ -1550,7 +1550,7 @@ daemon).
 **UPDATE, same day, real-browser attempt: NOT REPRODUCED under the
 conditions tried.** Live headless-chromium session (CDP, not the
 synthetic-page test harness) against the actual deployed daemon at
-the rig's tailnet host, three sequences: (1) fresh load,
+the system's tailnet host, three sequences: (1) fresh load,
 default fit mode -- canvas measured 842.0x632.0 against a 994x652
 `#scroll` box, which is exactly what `applyZoom()`'s own math predicts
 (994-20)x(652-20) fitted to a 640x480 source, height-constrained, matches
@@ -1618,7 +1618,7 @@ Measured 2026-08-26: an MCP-mode session's input lock (`mcp:<host>:<pid>`)
 sat held for 2.3+ hours. `vcctrld`'s own log showed the story plainly —
 that owner issued a normal power-off, then never called anything again; a
 killed/crashed MCP client process, not a live session doing work. Nobody
-else on the rig (three other live peer sessions, checked directly) held it
+else on the system (three other live peer sessions, checked directly) held it
 either.
 
 **Root cause, not a bug in the sense of wrong code, but a real gap:** the
@@ -1779,7 +1779,7 @@ this risk before it happened). Real undervoltage events, real full
 power loss requiring a physical re-seat — not a simulation. Clean for
 17+ hours afterward under normal/idle-ish use (`vcgencmd get_throttled`
 reads `0x0`, no `dmesg` undervoltage lines), so this reads as
-load-triggered rather than a baseline inability to sustain the rig, but
+load-triggered rather than a baseline inability to sustain the system, but
 it has not been deliberately stress-tested since (both profiles' video
 + audio + camera + HID gadget all active at once, sustained, the way it
 was when it actually browned out). Don't assume this is settled just
@@ -1844,7 +1844,7 @@ and is the one thing from this paragraph that remains open.
 
 **`vcctrl-macintosh.example.yaml`/`profile-kinds/rgb2hdmi-usb4vc.yaml` are
 entirely unmeasured.** No RGB2HDMI board has ever been wired to this
-rig; the config is a scaffolded placeholder grounded in
+system; the config is a scaffolded placeholder grounded in
 `docs/BOARD-IDENTITY.md`'s existing ADB findings, not in anything run
 against real hardware. Treat every value in it as a guess until proven
 otherwise, the same discipline this file already asks for everywhere
@@ -1881,7 +1881,7 @@ capability's three-state answer -- the read-only half of WP2 item 6 in
 (item 3), and removing the per-profile systemd unit (item 4) -- and
 the hardware-groups mechanism section 1 of that plan describes (one
 active profile per group of profiles sharing exclusive hardware) is
-UNBUILT, since there is no second real usb4vc-kind profile on this rig
+UNBUILT, since there is no second real usb4vc-kind profile on this system
 to verify it against; `vcctrl-macintosh.example.yaml` still cannot coexist with
 `gateway2000` today (B11, unchanged).
 

@@ -13,7 +13,7 @@ Shipped in `d251a44`: `BoardCapability` in the daemon, `board` in
 and `tools/patch-usb4vc-board.py` as the local rpi_app patch with a `--check`
 mode that `pi/install.sh` runs so an upstream update cannot drop it silently.
 
-**Sec. 5's `power` design was wrong and is corrected below.** The rig has ONE
+**Sec. 5's `power` design was wrong and is corrected below.** The system has ONE
 Kasa plug with one machine connected at a time, so there is no board→plug table
 to build and nothing to refuse against. What remains is unobservable rather
 than enforceable: vcctrl can know which BOARD is installed and cannot know
@@ -31,7 +31,7 @@ share a JSON value — and the cache has a 60 s heartbeat, because without one
 `stale` latches true after the first idle hour and a permanently-set flag
 carries no information.
 
-The rig now has two targets: the Gateway 2000 over a USB4VC **IBM PC** board,
+The system now has two targets: the Gateway 2000 over a USB4VC **IBM PC** board,
 and a Macintosh Plus over a USB4VC **Lisa/Mac/ADB** board. One USB4VC, boards
 swapped by hand, so the installed board changes across a power cycle.
 
@@ -78,7 +78,7 @@ Three sources, in order, each degrading honestly.
 ### 3a. A status file, written by our local patch
 
 A small **local** modification to `/home/pi/usb4vc/rpi_app/usb4vc_ui.py` —
-not submitted upstream, carried as a patch on this rig — writing the board it
+not submitted upstream, carried as a patch on this system — writing the board it
 just read:
 
     /run/usb4vc/board.json
@@ -135,8 +135,8 @@ of `targets:` in `vcctrl.yaml`, else the built-in `BoardCapability.KEYBOARDS`.
 A configured `targets:` list **replaces** the built-in table wholesale, so a
 row with no `keyboard:` yields `null` — which means *this board is known and
 no layout has been declared for it*, not *use the default*. That is deliberate
-and it is the same rule `target` already follows: merging would let a rig that
-configures only board 1 inherit this rig's board 3.
+and it is the same rule `target` already follows: merging would let a system that
+configures only board 1 inherit this system's board 3.
 
 `null` is a first-class answer and the page draws no keyboard on it. It must
 not fall back to `pc-at-101`, because a Macintosh drawn as a PC is a picture

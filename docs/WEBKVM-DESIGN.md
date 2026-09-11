@@ -169,7 +169,7 @@ They earn it three times over:
 - **They are the real return channel.** The daemon reads them from
   `/sys/class/leds`; they are the non-video proof that a keystroke reached the
   machine. They are currently buried in a JSON field nobody opens.
-- **They are unmistakably this rig.** No other tool has them, because no other
+- **They are unmistakably this system.** No other tool has them, because no other
   tool is bridged to a PS/2 keyboard on a 1995 PC.
 - **They are honest about their own limits.** The LED level is a *retained*
   state — a powered-off host publishes nothing — so the lamps are drawn dim and
@@ -255,7 +255,7 @@ hundred others become a five-minute addition rather than a design exercise.
 
 The two monochromes are not base16 schemes and are authored by hand: a single
 hue ramp against near-black, phosphor-style. They are the honest ones for this
-rig — a P1 green or P3 amber CRT is what a machine of this vintage was actually
+system — a P1 green or P3 amber CRT is what a machine of this vintage was actually
 watched on.
 
 ### Three rules the themes must not break
@@ -274,7 +274,7 @@ universal one.
 
 This was originally simultaneous contrast: a cream surround makes the captured
 screen look darker and lower-contrast than it is, and judging whether a DOS
-screen is too dark is a thing people do on this rig. That is now an
+screen is too dark is a thing people do on this system. That is now an
 approximate guarantee rather than an exact one — the well stays close to black
 on every theme, but is no longer numerically identical across all of them.
 Deliberate trade-off, not a regression if a future reader finds the well isn't

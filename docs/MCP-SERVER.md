@@ -5,11 +5,11 @@ Written 2026-08-25, extended the same day with a second deployment mode.
 agent -- Claude Code, Codex, anything that speaks MCP -- can drive the real
 hardware directly: keyboard/mouse, video/audio capture, power, file
 transfer, and (control mode only, sec. 1) full harness workflows. Proven end to
-end on the real rig the same day it was built -- see the status table in
+end on the real system the same day it was built -- see the status table in
 sec. 6.
 
 **PC/DOS only for now.** The Mac Plus board is a real, physically-carriable
-target on this rig (`docs/BOARD-IDENTITY.md`) and every tool here behaves
+target on this system (`docs/BOARD-IDENTITY.md`) and every tool here behaves
 correctly per-board (three-valued supported/unsupported/unknown, never
 assumed) -- it has simply not been exercised against it yet, by operator
 direction.
@@ -106,7 +106,7 @@ the local filesystem, so the host-boundary machinery simply isn't needed.
   `docs/lab/FINDINGS.md` sec. 41 for the related `verify_input` fix this same
   work turned up.
 - **Every call is visible.** Nothing here routes around `vcctrl activity`
-  or the power audit log -- a human watching the rig sees `mcp:...` show up
+  or the power audit log -- a human watching the system sees `mcp:...` show up
   as a caller exactly like anyone else.
 - **daemon mode's network exposure is the one real tradeoff stdio doesn't
   have.** stdio has no listener at all -- it's a subprocess Claude Code
@@ -120,7 +120,7 @@ the local filesystem, so the host-boundary machinery simply isn't needed.
   compatibility" -- see `agent/vcctrl_mcp.py`'s `__main__`): the server only
   accepts requests whose `Host` header matches an allowlist
   (`VCCTRL_MCP_ALLOWED_HOSTS`, set automatically at install time to the
-  rig's own tailnet name).
+  system's own tailnet name).
 
 ## 4. Install and deploy
 
@@ -179,7 +179,7 @@ no local venv or checkout needed on the client side at all:
 claude mcp add --transport http vcctrl-mcp-daemon https://usb4vc.example.ts.net/mcp
 ```
 
-(substitute your rig's own tailnet hostname).
+(substitute your system's own tailnet hostname).
 
 **control mode**:
 
@@ -262,7 +262,7 @@ its stdin/stdout works: `agent/.venv/bin/python3 agent/vcctrl_mcp.py`.
 
 ## 6. Status, 2026-08-25
 
-Everything below was run against the real rig (board 1, the g2k), not
+Everything below was run against the real system (board 1, the g2k), not
 merely unit-tested:
 
 | capability | state |
@@ -286,6 +286,6 @@ Known gaps:
   so a sweep's manifest records hardware as "UNDECLARED" even when you know
   exactly what's fitted. Doesn't affect the run, just the record.
 - daemon mode's `vcctrl-mcp.service` runs as the `pi` user, following
-  `usb4vc.service`'s own precedent on this rig -- not verified against a
+  `usb4vc.service`'s own precedent on this system -- not verified against a
   Pi where that user doesn't exist or has different permissions; adjust
   `User=` in `pi/install.sh`'s `install_mcp()` if so.

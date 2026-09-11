@@ -5,7 +5,7 @@ whoever (human or agent) picks the work up next.
 
 ## What a profile is
 
-A **profile** is one target machine this rig can drive: its own input
+A **profile** is one target machine this system can drive: its own input
 backend, its own capture device, its own capability set. `gateway2000`
 (the original DOS/RetroPC target, VGA capture + PS/2 via USB4VC) and
 `modernpc` (a Linux server, HDMI capture + a USB HID gadget on the Pi's
@@ -43,7 +43,7 @@ exactly what that means in practice.
    HDMI capture + the Pi's own USB HID gadget), or
    `profile-kinds/rgb2hdmi-usb4vc.yaml` (a classic Macintosh over
    RGB2HDMI capture + USB4VC/ADB — unmeasured, no such hardware has run
-   against this rig yet; see `vcctrl-macintosh.example.yaml`, its placeholder
+   against this system yet; see `vcctrl-macintosh.example.yaml`, its placeholder
    scaffold).
 2. Run `tools/new-profile.py --kind <kind> --name <name>` to scaffold a
    complete, self-contained `vcctrl-<name>.yaml` (this is a

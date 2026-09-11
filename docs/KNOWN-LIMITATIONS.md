@@ -1,16 +1,16 @@
 # Known limitations, for a stranger with different hardware
 
-This lists what does NOT yet adapt to a different rig, separately from
+This lists what does NOT yet adapt to a different system, separately from
 `docs/OPEN-FAULTS.md` (which tracks bugs and workarounds on this project's
-own hardware). Everything here works correctly on this project's own rig;
-the limitation is that another rig's shape isn't yet a configuration
+own hardware). Everything here works correctly on this project's own system;
+the limitation is that another system's shape isn't yet a configuration
 choice, either because the value is still a literal in the code, or
 because the mechanism itself was designed against one specific setup.
 
 ## The DOS-side contract (the `vga-ps2` profile kind)
 
 A `vga-ps2`-kind target (PS/2 keyboard/mouse over USB4VC, the shape this
-project's own rig runs) needs the following facts about its DOS
+project's own system runs) needs the following facts about its DOS
 installation, and every one of them is currently a literal in
 `daemon/vcctrld.py` or `harness/*`, not a config key:
 
@@ -54,7 +54,7 @@ yet. This needs an actual abstraction (a `readiness: {kind, ...}` block in
 a profile) with at least a second implementation before it's a real
 choice rather than one hardcoded path.
 
-## Timing constants that are this rig's own physics, not configuration
+## Timing constants that are this system's own physics, not configuration
 
 `RegistryDriver`'s `BOOT_TIMEOUT_S`/`MENU_TIMEOUT_S`/`PROMPT_TIMEOUT_S`/
 `TRANSFER_TIMEOUT_S`/`RESEND_TIMEOUT_S` (`daemon/vcctrld.py`), the harness's
@@ -114,7 +114,7 @@ documented path today.
 ---
 
 None of the above is a security or identifier problem — everything on
-this list is a **generality** gap: a real rig can be built and driven
+this list is a **generality** gap: a real system can be built and driven
 today by editing the source in the specific places named, but cannot yet
 express the difference purely in `vcctrl.yaml` or a profile file the way
 the rest of this project's configuration already does. Turning each of

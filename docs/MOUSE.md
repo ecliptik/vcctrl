@@ -241,7 +241,7 @@ reports the same way a large `mouse_move` already is. The browser
 coalesces wheel events on the same 40ms timer as mouse_move.
 **Confirmed live against modernpc**: six `mouse_wheel dy=50` calls
 visibly scrolled a terminal window's content (FINDINGS #49). **Still
-unmeasured on PS/2** -- whether this rig's protocol carries a wheel
+unmeasured on PS/2** -- whether this system's protocol carries a wheel
 through to DOS at all, and what CTMOUSE does with one if it arrives --
 this sends the EV_REL event on that path too, but nothing has looked at
 a screen to confirm it does anything.
@@ -263,6 +263,6 @@ shown as a separate, non-functional control).
 - Whether any DOS program on the Gateway renders a cursor in mode 12h. If one
   does, it removes the need to start Windows for every mouse test.
 - The Macintosh side, entirely.
-- Whether this rig's PS/2 mouse protocol carries a scroll wheel through to
+- Whether this system's PS/2 mouse protocol carries a scroll wheel through to
   DOS at all, and what CTMOUSE does with one if so — unmeasured, see
   section 7.

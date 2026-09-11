@@ -6836,17 +6836,24 @@ def test_no_rig_identifiers_in_the_code():
     print("\nno rig identifiers in code")
     import subprocess
     root = os.path.join(HERE, os.pardir)
-    # DELIBERATELY NOT IN THIS LIST: `ecliptik`, and the commit author
-    # identities.
+    # DELIBERATELY NOT IN THIS LIST: `ecliptik` on its own, and the commit
+    # author identities.
     #
-    # `ecliptik` is the operator's own namespace -- forgejo.example.com, the
-    # org this repo is published under, and the domain in every commit's
-    # author trailer. The one tracked prose mention is docs/lab/FINDINGS.md
-    # naming a sibling repo as `ecliptik/g2k`. It stays: once the repo's own
-    # URL names that org, scrubbing one prose mention of it buys nothing, and
-    # unlike a LAN address or a plug alias it was never meant to be secret --
-    # it is the account this project is published under, in public, on
-    # purpose.
+    # `ecliptik` is the operator's own namespace -- the org this repo is
+    # published under (its own GitHub URL names it), and the domain in
+    # every commit's author trailer. The one tracked prose mention is
+    # docs/lab/FINDINGS.md naming a sibling repo as `ecliptik/g2k`. It
+    # stays: once the repo's own URL names that org, scrubbing one prose
+    # mention of it buys nothing, and unlike a LAN address or a plug alias
+    # it was never meant to be secret -- it is the account this project is
+    # published under, in public, on purpose.
+    #
+    # THE SELF-HOSTED FORGE'S HOSTNAME IS A DIFFERENT QUESTION, and IS in
+    # the list below: it says the operator runs a specific piece of
+    # infrastructure at that address, which is not implied by the account
+    # name the way the account name is implied by the repo's own URL.
+    # Decided 2026-09-11, distinctly from the `ecliptik`-stays decision
+    # above.
     #
     # Also not detectable here even if it were wanted: commit metadata. This
     # guard reads FILES and `git grep` searches BLOBS -- neither can see an
@@ -6884,6 +6891,15 @@ def test_no_rig_identifiers_in_the_code():
         "the lab subnet": "192" + r"\." + "168" + r"\." + "7" + r"\.",
         "the plug's MAC": "E0:" + "D3:" + "62",
         "the plug's alias": "Christmas" + " Tree",
+        # `ecliptik` ITSELF is deliberately not here -- see the comment
+        # below this dict for why the account name is a different question
+        # from the hostname. The self-hosted forge HOST is: naming that
+        # the operator runs Forgejo at this specific address is more
+        # specific infrastructure detail than "which account owns the
+        # public repo", and unlike the account name it is not implied by
+        # the repo's own public URL.
+        "the self-hosted forge hostname":
+            "forge" + "jo" + r"\." + "ecliptik" + r"\.com",
         "a hostname as an ssh default":
             ":-" + "usb4vc" + r"\}|" + '"VCCTRL_HOST", "' + "usb4vc" + '"',
         # A TAILNET IP, BY RANGE, NOT BY LITERAL -- found the hard way

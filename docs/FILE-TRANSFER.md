@@ -16,7 +16,7 @@ worked while skipping checks the standard path makes unskippable.
 leaves the machine in NET, **which no measured run may start from** — the ODI
 stack and packet driver are resident TSRs, and the standing rule is never load
 TSRs and measure in the same boot. A script that did not say would leave the
-rig in a state its author had not chosen.
+system in a state its author had not chosen.
 
 ## Getting a file back off the card
 
@@ -371,7 +371,7 @@ Named because a feature that works is the easiest thing to over-claim.
 ## Preconditions, and how to tell
 
 `VCGET.BAT`, `VCCHK.BAT` and `VCLIST.BAT` must be on the card. **They are
-generated per rig by `vcctrl file-bats`, not shipped**, so the address they
+generated per system by `vcctrl file-bats`, not shipped**, so the address they
 dial cannot drift from the one the daemon binds and the liveness check probes.
 
 **`VCLIST.BAT` is only needed for the download direction**, and a card without

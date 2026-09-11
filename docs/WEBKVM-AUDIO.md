@@ -65,7 +65,7 @@ mid-cell, and after this it touches no hardware at all.
 **The alternative considered and rejected:** ALSA's `dsnoop` plugin lets
 several readers share one capture device, which would avoid the shim
 altogether. Rejected because it puts the sharing policy in a config file
-nobody on this rig has ever edited, and because the ring buffer is wanted
+nobody on this system has ever edited, and because the ring buffer is wanted
 regardless -- it is what makes both the level query and the "save the last N
 seconds" idea (sec. 7) cheap. One owner, one policy, same shape as video.
 
@@ -241,7 +241,7 @@ property that makes `vcctrl-audio` special in the first place.
 ## 9. Built, not yet deployed  **[2026-08-19]**
 
 Everything below is written and unit-tested against synthetic signals. It has
-**not** run against the rig: taking `hw:1,0` needs a daemon restart, and that
+**not** run against the system: taking `hw:1,0` needs a daemon restart, and that
 drops the uinput devices for USB4VC's 0.75 s rescan, so it waits for a window.
 
 - `AudioCapability` — owns `hw:1,0`, byte-capped PCM ring, liveness watchdog
@@ -366,7 +366,7 @@ The page-size overhead of 20 ms pages is real but small: the 10 s / 128k
 test stream weighed 180,630 bytes ≈ 144 kbit/s on the wire, container
 included.
 
-**Deployed and measured live 2026-08-28** (conditions: the real rig
+**Deployed and measured live 2026-08-28** (conditions: the real system
 capturing its idle input, one WSS listener opened through the Tailscale
 funnel from the control host, first 8 frames examined): OpusHead, then
 OpusTags, then audio pages with advancing granules, averaging **338 bytes

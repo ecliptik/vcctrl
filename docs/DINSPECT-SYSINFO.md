@@ -1,7 +1,7 @@
 # dinspect / sysinfo — the one real measured run
 
 What `vcctrl_file_scan` / the KVM's **Re-scan hardware** button actually
-costs, and what a real report from this rig looks like. See
+costs, and what a real report from this system looks like. See
 `.agents/skills/vcctrl-dinspect-sysinfo` for the how-to; this document is the
 measurement, with its conditions, per this repo's own rule that a number
 without them is not a number anyone can trust later.
@@ -20,7 +20,7 @@ run costs."
   status-file`.
 - Boot profile the machine was in when the job started: **PGSB**
   (PicoGUS in Sound Blaster emulation mode) — this is what the CONFIG.SYS
-  menu's timeout lands on by default on this rig, which is what
+  menu's timeout lands on by default on this system, which is what
   `ScanJob._boot_to_default()` relies on and does not itself assert.
 - `vendor/dinspect.exe` as staged: 30162 bytes, sha256
   `7e6e089684621ba81ee7a771e2f8d9baa287d35d587dc2fe484d489d035a748f` —
@@ -49,7 +49,7 @@ this is what the daemon itself recorded while the run happened.
 | "proving NET" → "NET confirmed" | attest | 5.5s | `VCCHK.BAT`/FTP round trip that proves NET is up |
 | "NET confirmed" → "C:\XFER\OUT holds 22 files" | list | 5.3s | `VCLIST.BAT`: `DIR` piped to a file, FTP'd back |
 | listing → "SYSINFO.TXT came back the size the card says it is" | fetch→verify | 5.8s | `VCGET`/FTP fetch of the 567-byte report |
-| verified → "the machine booted" (return leg) | return | **38.1s** | the return-to-menu-default reboot — same order of magnitude as the first, reinforcing "~40s to boot" as this rig's real figure, not a one-off |
+| verified → "the machine booted" (return leg) | return | **38.1s** | the return-to-menu-default reboot — same order of magnitude as the first, reinforcing "~40s to boot" as this system's real figure, not a one-off |
 
 **Total: 160.98s (≈ 2m 41s), job start to finish, both reboots included.**
 

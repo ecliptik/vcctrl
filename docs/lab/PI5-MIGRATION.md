@@ -1,6 +1,6 @@
 # Migrating usb4vc from the Pi 3B to a Pi 5
 
-> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+> This document is one project's record of its own physical system -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this system implements.
 
 Written 2026-08-20, revised the same day once the hardware was in hand, and
 updated again once it was executed.
@@ -22,7 +22,7 @@ updated again once it was executed.
 The first SD card was **failing, not just unexpanded**: `mmc0: Card stuck being
 busy` four times and two read errors on first boot, which killed the firstboot
 resize partway and left the filesystem `clean with errors`. Replaced rather
-than repaired — this rig's output is measurements, and an hour saved is not
+than repaired — this system's output is measurements, and an hour saved is not
 worth building them on storage already known to drop writes.
 
 **The RPi.GPIO blocker never existed.** `python3-rpi-lgpio` was already
@@ -42,7 +42,7 @@ against the tight band.
 | Decision | Consequence |
 |---|---|
 | **Raspberry Pi OS Trixie Lite** (Debian 13, Python 3.13) | Not Bookworm. Newer than the Pi 3's 12/3.11 — see sec. 3a for the package deltas that actually matter |
-| **A second USB4VC board** | The board, GPIO, SPI, OLED and `rpi_app` are all provable in parallel with **zero risk to the running rig** |
+| **A second USB4VC board** | The board, GPIO, SPI, OLED and `rpi_app` are all provable in parallel with **zero risk to the running system** |
 | **Capture stick and CF reader move at cutover** | Only one set exists. Video/audio cannot be tested in parallel; they are the *last* thing proven, not the first |
 | **The Gateway moves to the Pi 5 early** | **This is the sharpest edge.** The moment the g2k's PS/2 lead moves, the Pi 3 stops being a working fallback — it keeps its SD card and its software, but it has nothing to drive. Rollback stops being "swap the Pi" and becomes "swap the Pi *and move the target back*" |
 | **`usb4vc-new` now, renamed to `usb4vc` at cutover** | The old node must be renamed FIRST to free the name (sec. 3c). Renaming is the cutover switch: everything pointing at `usb4vc` moves in one step |
@@ -77,7 +77,7 @@ module name is `rpi-lgpio`, the lgpio-backed shim — which reports `0.7.2` on
 purpose, to impersonate the API it replaces. That version string is why a
 casual check says "RPi.GPIO 0.7.2, this will break".
 
-**USB4VC has therefore been running through lgpio in production on this rig,
+**USB4VC has therefore been running through lgpio in production on this system,
 for as long as this image has existed.** The entire GPIO surface — 27
 `setup`, 16 `output`, 6 `input`, the pull configuration, the single
 `add_event_detect`, and three `spi.xfer` — is already exercised through the
@@ -122,7 +122,7 @@ fallback strategy, so it costs nothing extra.
 | Power | micro-USB, own supply | USB-C, wants 5V/5A | New PSU needed |
 | Cooling | passive | active required | Fan/heatsink needed |
 
-**Why the USB bus is the point.** Every peripheral on this rig currently
+**Why the USB bus is the point.** Every peripheral on this system currently
 shares one USB 2.0 bus behind the LAN9514 hub, *including the Ethernet
 controller*:
 
@@ -269,7 +269,7 @@ not be carried forward without a reason.
 
 ### 4.4 Take the console fix for free
 
-This rig spent today's session losing its ssh control path for minutes at a
+This system spent today's session losing its ssh control path for minutes at a
 time because `systemd-journald` blocked writing to `/dev/console`, which is
 `console=tty1` with `ixon` enabled — and the vcctrl virtual keyboard is a
 keyboard to *the Pi*, so a `Ctrl-S` aimed at the DOS box is XOFF on the Pi's
@@ -301,7 +301,7 @@ the new card, before anything else:
 2. **SPI clock rate.** `flash_fw.py` writes STM32 firmware over SPI. RP1's
    clock divisors differ from BCM2835's, so confirm `max_speed_hz` is actually
    honoured before flashing anything. Failure mode here is the worst on the
-   list: a half-flashed STM32 on the board that is the whole point of the rig.
+   list: a half-flashed STM32 on the board that is the whole point of the system.
    Test SPI *reads* first; do not flash as the first SPI operation.
 3. **`add_event_detect`.** Exactly one call. lgpio's debounce and
    callback-thread semantics differ from the original library's, and it cannot
@@ -310,10 +310,10 @@ the new card, before anything else:
    *fires*, do not infer it from the app starting.
 4. **Power.** Own supply today, so no back-powering concern through the HAT.
    Source a 27 W (5 V/5 A) USB-C PD adapter; a 5 V/3 A supply boots but limits
-   the USB current budget, and this rig runs three USB devices with a video
+   the USB current budget, and this system runs three USB devices with a video
    capture stick among them.
 5. **Tailnet identity.** `vcctrl-pi.example.ts.net` belongs to the *node*, not
-   the rig. It is baked into `pi/deploy.sh` defaults, the TLS cert, the
+   the system. It is baked into `pi/deploy.sh` defaults, the TLS cert, the
    `tailscale serve` config, the monitoring, and every bookmark. A new machine
    needs the old node removed and the name claimed, or all of that moves.
 6. **Thermals.** Passive today, active required on a Pi 5. Not optional under
@@ -332,11 +332,11 @@ hardware that is known good. Commit. The Pi 5 then inherits code that is
 already hardware-agnostic, and any later breakage has one candidate cause
 instead of two.
 
-**Phase 1 — Pi 5 base system, `usb4vc-new`, no rig impact.** Trixie Lite is
+**Phase 1 — Pi 5 base system, `usb4vc-new`, no system impact.** Trixie Lite is
 already imaged with a `claude` user and key. Bring up: apt package set per 3a
 (no pip), minimal `config.txt` per 4.3, console hardening per 4.4 *before*
 anything else writes to a console, tailscale join as `usb4vc-new`. Nothing here
-touches the running rig.
+touches the running system.
 
 **Phase 2 — the second USB4VC board, bench only.** Mechanical fit first (risk
 1) — this is the one that cannot be planned around. Then prove the board in
@@ -344,7 +344,7 @@ isolation: OLED lights (ssd1306 over SPI0 CE1), `rpi_app` starts from
 `/etc/rc.local`, SPI **reads** succeed. Check the new board's STM32 firmware
 version rather than assuming it matches the Pi 3's
 `PBFW_LISA_MAC_ADB_PBID3_V0_1_0.hex`, and **do not flash as the first SPI
-operation**. If any of this fails, stop — the running rig is untouched and
+operation**. If any of this fails, stop — the running system is untouched and
 nothing has been lost.
 
 **Phase 3 — move the Gateway. This is the commitment point.** PS/2 lead from
@@ -382,14 +382,14 @@ changed between them.
 > `per_loop_fps` is computed as `_flips * 500 / _reel_ticks` in **integer**
 > arithmetic (`main.cpp:1530`), so it truncates to 0.1 fps before anything
 > prints it. Four cells reading identically became a "repeatability floor".
-> **0.10 fps IS 10.3 flips**, and the rig's measured same-config pair spread,
+> **0.10 fps IS 10.3 flips**, and the system's measured same-config pair spread,
 > over seven independent pairs in the archive, is **0 to 16 flips**. See
 > `FINDINGS.md` §40, `T1-CONFIRM-RESULTS.md`, `HARNESS-STANDARD.md` 10.0e.
 >
 > **Phase 6 is an EQUIVALENCE test, so a too-tight floor fails the good case.**
 > Its question is "did the new machine move anything", and the stated rule —
 > *a difference smaller than 0.10 is not evidence* — reads as *a difference
-> LARGER than 0.10 IS evidence*. On a rig whose identical configurations
+> LARGER than 0.10 IS evidence*. On a system whose identical configurations
 > routinely differ by up to 16 flips, **a healthy Pi 5 will exceed 0.10 by
 > ordinary chance and phase 6 will report a regression that is not there.**
 > That is the opposite failure from the one this section was written to

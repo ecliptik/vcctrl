@@ -186,7 +186,7 @@ you rely on it.
 
 A recording running across a mode change gets a video stream that simply
 **stops delivering** while audio continues. That is correct behaviour on this
-rig and the file must represent it honestly: a gap, not a freeze-frame silently
+system and the file must represent it honestly: a gap, not a freeze-frame silently
 padded to look continuous. Wallclock timestamps give that for free, and it is
 worth asserting in a test, because "the picture froze for two minutes" and "the
 recorder padded two minutes of the last frame" are indistinguishable
@@ -244,7 +244,7 @@ needs `hw:1,0`.
 
 1. **Does `h264_v4l2m2m` actually work on this Pi's 32-bit userland at
    640x480?** The encoder node exists and ffmpeg lists it. That is a label, not
-   a measurement, and this rig has been bitten by exactly that distinction
+   a measurement, and this system has been bitten by exactly that distinction
    before. Test before building the UI on top of it.
 2. **How much does encoding cost while a sweep runs?** The structural argument
    that the Pi cannot perturb the g2k (WEBKVM sec. 11 q4) still holds -- no

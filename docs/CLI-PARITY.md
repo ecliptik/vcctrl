@@ -52,7 +52,7 @@ rewrite the reported path so the JSON names where the file actually is.
 **The obvious cleaner design is deliberately not used.** Streaming bytes on
 stdout and letting the shell redirect is simpler, but the shell creates the
 target file *before* the command runs, so a failure leaves a zero-byte file
-behind. A file that looks like evidence and is not is the thing this rig keeps
+behind. A file that looks like evidence and is not is the thing this system keeps
 producing.
 
 ## 3. Exit codes carry the reading
@@ -69,7 +69,7 @@ extends a precedent rather than inventing one.
 scheme needs four codes rather than two**. On a Macintosh over ADB there is no
 LED return channel at all; if that exited 1, every harness guarded that way
 would abort on working hardware. Same three-state discipline as the rest of
-the rig.
+the system.
 
 Note `--out` misapplied to a command now exits 3 rather than 2, so that 2
 means could-not-look unambiguously. Nothing branched on the old value.
@@ -87,7 +87,7 @@ used out of impatience.** It syntax-checks before and after copying, because a
 client that cannot parse takes out every verb at once and would do so on the
 next call rather than at deploy time — so the deploy would look like it worked.
 
-Proven against the live rig: `timeline` (622 frames, 31.9 s span), `buffer`,
+Proven against the live system: `timeline` (622 frames, 31.9 s span), `buffer`,
 `pin on`/`off`, `frame <seq> --out` landing locally as a valid 640x480 frame,
 `burst 5 --out-dir` writing five, and **`verify-input` returning 0 against the
 Gateway** — the input path proven from a script for the first time.
@@ -95,7 +95,7 @@ Gateway** — the input path proven from a script for the first time.
 ## 5. Phase B: done
 
 `vcctrl record --out F.avi [from_seq] [to_seq]`, on the webkvm session's
-`avi_mjpeg()` muxer. Proven against the live rig:
+`avi_mjpeg()` muxer. Proven against the live system:
 
     frames 692 in the ring, written 1032, repeated 340, span 34.37 s
     71,833,864 bytes landed on the CALLER's disk

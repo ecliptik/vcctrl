@@ -1,6 +1,6 @@
 # vcctrl -- findings from building it
 
-> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+> This document is one project's record of its own physical system -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this system implements.
 
 **This file records what happened. For what is still broken and what to
 check before trusting a result, see `OPEN-FAULTS.md`.**
@@ -491,7 +491,7 @@ output, so this creates an empty file and nothing else -- which is why the
 stray `CFG` was 0 bytes while `ADLIB` was 64. The size was the clue that it
 came from a REM rather than an ECHO. And because `CLRENV` is CALLed by every
 cell of every sweep, a file named `CFG` has been created before every
-measurement ever taken on this rig.
+measurement ever taken on this system.
 
 No arrow-shaped search would ever have found it. The general rule: **audit for
 the effect, not for the syntax you expect to cause it.**
@@ -543,7 +543,7 @@ full systemd user session -- dbus, pulseaudio, roughly twenty journal lines per
 call. The harness makes a call per keystroke. Measured 676 journal entries in
 one ten-minute window, written to an SD card, on a 920 MB Pi.
 
-So the rig's control plane generated enough logging to wedge the logger, which
+So the system's control plane generated enough logging to wedge the logger, which
 then blocked the control plane. Nothing was leaking and nothing was broken --
 the design simply did not scale to the rate the automation drove it at.
 
@@ -644,7 +644,7 @@ an argument to a number that had improved.
 **A partial improvement in a metric is not evidence that the fault is gone.**
 When someone reports that a symptom persists, the symptom outranks the fix.
 
-And the narrower one, worth stating because it generalises past this rig:
+And the narrower one, worth stating because it generalises past this system:
 **bound a resource in the units the resource is measured in.** The buffer holds
 keys. Anything counted in attempts, rounds, or iterations is a proxy for keys
 and will drift from it the moment the number of keys per attempt changes.
@@ -719,7 +719,7 @@ looking at the wrong lever.
 
 ### What this cost, and why
 
-The rig spent an evening on this, and the delay was not the defect. It was that
+The system spent an evening on this, and the delay was not the defect. It was that
 **every check available said the machine was fine**:
 
   - the cell reported success and exited 0
@@ -736,7 +736,7 @@ frame need not repeat. See sec. 22.
 The operator settled it in one sentence: **"I remember seeing the mach64 at
 640x480 in the KVM playing, so it was working."** That is a memory of the
 system in a working state, and it dated the regression to within a few hours
-when no instrument on the rig could. Twice tonight the decisive evidence came
+when no instrument on the system could. Twice tonight the decisive evidence came
 from the person in the room rather than from the harness -- the other being
 eight beeps across a room (sec. 20).
 
@@ -808,7 +808,7 @@ real fault out of the interface on the strength of a false frame.
 ## 23. The configurator that was never finished  [measured 2026-08-19]
 
 Six hours of investigation, three retracted theories, two falsely reported
-engine defects, and a rig left unusable. One cause, and it printed itself on
+engine defects, and a system left unusable. One cause, and it printed itself on
 the screen the moment the procedure was run properly:
 
 > **Note that the ATI Mach64-CT and Mach64-ET based boards do not support
@@ -853,7 +853,7 @@ mode 03h they are visible on the monitor but the stick cannot lock 70Hz.
 
 **There is no video mode in which the harness and the configurator can both see
 the screen.** So the answer was never a braver tool. Interactive configurators
-are operator work on this rig, permanently.
+are operator work on this system, permanently.
 
 ### The rule
 
@@ -909,7 +909,7 @@ anything, and the LED values are the last ones published, so they read plausible
 rather than absent. **The harness reports on its own side of a cable whose far
 end it cannot see.**
 
-Same family as the physical-layer limit: every instrument on this rig reports
+Same family as the physical-layer limit: every instrument on this system reports
 software state, so anything upstream of that -- a half-seated card, an unplugged
 lead, a marginal edge connector -- is invisible while all the greens stay green.
 
@@ -937,7 +937,7 @@ Lock -- was ruled out by a silence test rather than argued about, which is what
 made the result trustworthy.
 
 Conclusion: the machine has almost certainly always chirped on a warm reboot.
-It became audible because **the rig changed the workload**. Before the harness,
+It became audible because **the system changed the workload**. Before the harness,
 warm reboots were occasional; a sweep does dozens in an evening. A rare event at
 a new rate reads as a new event.
 
@@ -971,7 +971,7 @@ So it is **any warm start**, not the key combination -- which is a better
 characterisation than before. But "the machine always did this and automation
 made it audible" was **my inference from the change in rate**, not a measured
 fact, and it is contradicted by the person who has listened to this machine for
-far longer than the rig has existed.
+far longer than the system has existed.
 
 Retracting it, and noting why it was attractive: it explained the observation,
 required nothing to be wrong, and arrived the moment I had a story that fit.
@@ -1018,7 +1018,7 @@ Every one was proposed before anything constrained the search, and each looked
 sufficient at the time. The operator's method beat all three and it was not
 cleverer — it was **remove one thing and listen**. He also supplied the
 discriminating observation for free: *"the NIC isn't usually in the system"*,
-which is baseline knowledge no instrument on this rig holds and none of my
+which is baseline knowledge no instrument on this system holds and none of my
 reasoning could have reconstructed.
 
 ### What to do with it
@@ -1264,8 +1264,8 @@ Mid-session, `ssh <rig>` stopped answering for about three minutes. Not slow
 -- a bare TCP connect to port 22 completed and then sat there with no banner.
 Ping was fine. `https://vcctrl-pi.example.ts.net/state.json` was fine, and
 reported video capturing at 1.08M frames with a 26 ms frame age, audio
-capturing, no errors, lock free. Every reading available said the rig was
-healthy, and the rig *was* healthy. What had gone was the path used to drive
+capturing, no errors, lock free. Every reading available said the system was
+healthy, and the system *was* healthy. What had gone was the path used to drive
 it.
 
 ### The mechanism
@@ -2289,7 +2289,7 @@ which one binds before spending a binary change on it.**
 ### What it cost
 
 **The band became the confirming round's acceptance criterion** — 0.10 fps is
-10.3 flips, against a rig whose identically-configured pairs differ by up to 16.
+10.3 flips, against a system whose identically-configured pairs differ by up to 16.
 The test could not have reliably confirmed anything, and `ASM_BLIT`'s
 NOT-CONFIRMED is a property of the test rather than the lever.
 
@@ -2333,7 +2333,7 @@ show. It also completes a stock population:
 
 **The archive's `0 1 2 5 12 15 16` are same-config PAIRS. Two stock cells in the
 accumulated population differ by 31** — roughly double the figure now being
-quoted as "the rig's repeatability", including in this file above.
+quoted as "the system's repeatability", including in this file above.
 
 This is not a contradiction and the 16 is not retracted: range grows with `n`,
 and these two numbers are the two bands `HARNESS-STANDARD.md` 10.0 already
@@ -2452,7 +2452,7 @@ same multi-second window `_levels` already reads.
 
 Against synthetic sine tones, generated at the exact frequency each probe
 was tuned to, it worked and its own unit tests passed. Against real Passage
-music playing on the rig, at the same moment `_level` read `mean_db: -31.79,
+music playing on the system, at the same moment `_level` read `mean_db: -31.79,
 peak_db: -19.67` (unambiguous, loud, real music by every existing check),
 every one of the 8 bands read below -100 dB and `active_bands` was 0 —
 indistinguishable from the true silence reading at Passage's own (silent)
@@ -2490,7 +2490,7 @@ never tested for.
 
 ### Measured, after the fix, real Passage music vs. real silence
 
-Same rig, same moment discipline as sec. 11 (`_level` and `_spectrum` read
+Same system, same moment discipline as sec. 11 (`_level` and `_spectrum` read
 back to back, both against the live ring):
 
     real Passage gameplay:  mean -35.2 dB, peak -20.8 dB (from `_levels`)
@@ -2512,7 +2512,7 @@ implementation.
 `_prove_net()` (`daemon/vcctrld.py`) proves a `send_file`/`get_file` job's
 NET boot by typing one long command line — `type_line("C:\\MTCP\\VCCHK.BAT
 %s %s" % (...))`, ~40 characters — and waiting for the resulting file to
-arrive. On a Pentium OverDrive 83 this rig ran all day without a single
+arrive. On a Pentium OverDrive 83 this system ran all day without a single
 corrupted command. After a CPU swap to a 486DX2-50, the identical code path
 failed twice in a row: the target's screen showed `C:\MTCPp.` and then
 `C:\MTCP\VCCHKCE` where the real command should have been — characters
@@ -2551,21 +2551,21 @@ completed cleanly with no repeat of the corruption.
 ### Not yet fixed properly
 
 The fix is a global, rig-wide pace bump, not a per-board one — it makes
-every keystroke on this rig slower, including on faster boards where the
+every keystroke on this system slower, including on faster boards where the
 old pace was never a problem, and there is no code path that varies
 `pace_s` by which CPU is currently installed. `RegistryDriver`'s `pace`
 parameter already threads all the way from the daemon protocol layer
 (`req.get("pace")`) down to the input backend, so a per-call or per-job
 override is architecturally cheap — it just isn't wired to anything that
-knows the installed CPU's tier today. Whoever next swaps this rig's CPU
+knows the installed CPU's tier today. Whoever next swaps this system's CPU
 should expect to re-tune `pace_s` by hand rather than have it happen
-automatically, and should consider lowering it back down if the rig
+automatically, and should consider lowering it back down if the system
 returns to faster hardware, since a slower pace than necessary just makes
 every typed command take longer for no benefit.
 
 ## 44. Pi 5's USB-C port drives a real USB HID keyboard+mouse gadget  [measured 2026-09-01]
 
-This rig's own Pi 5 (`usb4vc`, kernel `6.18.39+rpt-rpi-2712`, plain Model B,
+This system's own Pi 5 (`usb4vc`, kernel `6.18.39+rpt-rpi-2712`, plain Model B,
 not a CM5) was tested as a second, independent keyboard/mouse source for a
 Linux server target (`modernpc`), using the SoC's own `dwc2` USB-C
 controller in peripheral/device mode -- a path that public reports as of
@@ -2590,11 +2590,11 @@ USB-A-to-USB-C cable back to the Pi -- meaning the Pi's own power now comes
 from the hub backfeeding VBUS on that same cable, not from a direct PD
 supply into the Pi's USB-C port. The two roles (power sink, gadget device)
 can't coexist on one physical connector, so this wiring choice is load-
-bearing for the whole rig, not just the new feature: if the hub can't
+bearing for the whole system, not just the new feature: if the hub can't
 sustain the Pi 5's current draw under full load, the harness Pi loses
 power, not just the gadget. `vcgencmd get_throttled` read `0x0` (no
 undervoltage) through this testing, but that was idle/light-load testing,
-not the rig's full working load (SPI to the STM32 board, VGA capture, the
+not the system's full working load (SPI to the STM32 board, VGA capture, the
 room camera, and the HID gadget all running at once).
 
 Reboot persistence was also checked, not assumed: after a clean reboot,
@@ -2613,12 +2613,12 @@ spike, independent of the daemon, to de-risk the hardware question before
 writing any capability code. No boot-time systemd unit exists either, so
 the gadget does not currently survive a reboot without manual
 intervention. And the power-path risk above has not been load-tested: it
-has only been observed idle, not under the rig's full concurrent load.
+has only been observed idle, not under the system's full concurrent load.
 
 ## 45. A capture chip's first frame after opening the device can be a stale "no signal" placeholder, even with a real signal present  [measured 2026-09-01]
 
 While validating a new HDMI capture dongle (MacroSilicon-chipset UVC
-device, same family as this rig's existing VGA capture stick) for the
+device, same family as this system's existing VGA capture stick) for the
 `modernpc` profile, a single `ffmpeg -frames:v 1` grab produced a solid
 black frame. A second grab taken exactly one minute later, from a fresh
 process, produced a byte-identical file (matching MD5). Two genuinely
@@ -2638,7 +2638,7 @@ brief resync window after a fresh open before it reflects the actual
 input, and a single-frame probe taken immediately on open cannot tell
 "no signal" apart from "hasn't resynced yet."
 
-This is the same hazard already named for this rig's VGA capture path (see
+This is the same hazard already named for this system's VGA capture path (see
 `black-frames-are-not-black-screens` in the operator's own notes) --
 recorded here specifically because it reproduced on a *different* capture
 chip being brought up for a *different* target, which means any future
@@ -2878,7 +2878,7 @@ been on for a day, and the two now have separate keys.
 
 `power_mw` is null, never 0, on any model without a meter — a Wemo Switch
 has no measuring hardware, and 0 mW there would read as "plugged in and
-drawing nothing", a finding rather than a gap. The Kasa EP10 on this rig
+drawing nothing", a finding rather than a gap. The Kasa EP10 on this system
 gets the same key, always null, with the gap named rather than left as an
 absence: `feature: TIM` (timer only), both emeter namespaces answer
 `err_code -1, "module not support"`.
@@ -3136,7 +3136,7 @@ throttled.
 
 **UPDATE, same day, after deploying to the real Pi 5**: the pipeline
 itself now IS confirmed against real hardware -- a real browser (Chromium/
-Playwright) loaded the real deployed page over the tailnet (the rig's own
+Playwright) loaded the real deployed page over the tailnet (the system's own
 MagicDNS name, real TLS, real `tailscale serve` proxy), selected the
 `modernpc` profile, and `connectH264()` connected,
 configured a `VideoDecoder`, and settled on `xport: 'h264'` with no
@@ -3205,7 +3205,7 @@ test window --
 
 Not a simulation and not inferred from the `throttled` bitfield alone.
 This is the SAME hub-backfed power path OPEN-FAULTS #21 already names as
-having brought the whole rig down once under full combined load
+having brought the whole system down once under full combined load
 (2026-09-01) -- this session's own WP4 gadget rebuild (two more USB
 functions on the same gadget modernpc's HID depends on) had ALREADY put
 that link into an unstable state before this test ran (see the session's
@@ -3213,11 +3213,11 @@ own live troubleshooting, not yet filed as its own numbered finding at
 the time of this entry), so this measurement cannot cleanly separate
 "H.264 alone costs this much power" from "H.264 on top of an
 already-stressed gadget/power configuration costs this much" -- both are
-true facts about THIS rig in THIS state, and only the first generalizes.
+true facts about THIS system in THIS state, and only the first generalizes.
 
 **What this settles**: H.264 is not free, on this specific Pi 5, in this
 specific power configuration -- it is a real, sustained ~0.85-of-a-core
-cost and a real thermal one, and on a rig already close to its power
+cost and a real thermal one, and on a system already close to its power
 margin it can be the push that trips a brownout. That is the direct
 reason `daemon/kvm.html`'s transport selector now defaults to `mjpeg`
 (commit ccf38e2): a local session, where mjpeg's own bandwidth is free,

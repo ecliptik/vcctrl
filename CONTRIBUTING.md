@@ -27,10 +27,10 @@ to argue with. Same value, different force.
 
 ## Two things that are not in the repo, and stay that way
 
-`vcctrl.yaml` is a rig's real configuration: untracked, holds working
-addresses and credentials, and **stays real** on a working rig. The
+`vcctrl.yaml` is a system's real configuration: untracked, holds working
+addresses and credentials, and **stays real** on a working system. The
 tracked template is `vcctrl.example.yaml`. Never "tidy" a live config into
-placeholders — that's how a rig stops answering.
+placeholders — that's how a system stops answering.
 
 `~/.config/vcctrl/secrets.env` (and, on the daemon host,
 `/etc/vcctrl/secrets.env`) hold the file-transfer credential named by
@@ -47,14 +47,14 @@ start rather than fall back to a built-in default if either is missing.
 - **The identifier guard**
   (`tests/test_core.py::test_no_rig_identifiers_in_the_code`) scans every
   tracked file for hostnames, addresses and credentials that belong in a
-  gitignored config instead. If you're adding your own rig's literals
+  gitignored config instead. If you're adding your own system's literals
   (rather than a category the guard should catch generically for
   everyone), put them in an untracked `~/.config/vcctrl/identifiers.txt`
   (one regex fragment per line; override the path with
-  `VCCTRL_IDENT_FILE`) rather than editing the test. `tools/scan-history.sh`
-  runs the same category checks against every blob, commit message and
-  tag in history, not just the current tree -- the guard above is
-  HEAD-only by design and cannot see what the history scanner can.
+  `VCCTRL_IDENT_FILE`) rather than editing the test. This guard is
+  HEAD-only by design (it reads `git ls-files`) -- it cannot see history,
+  so a value that was ever committed and later removed needs a separate
+  check before any rewrite that might expose it.
 - **Commit hashes changed on 2026-09-11.** This history was rewritten
   once, before its first genuinely public audience (the repo was
   tailnet-gated until that point, so no outside clone needed

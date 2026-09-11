@@ -293,7 +293,7 @@ The reboot detector arms **Caps Lock** because POST clears it (sec. 3). If the
 readiness COM also pulsed Caps Lock the two channels would alias, and the
 harness could not tell a reboot edge from a ready edge.
 
-**The COM should pulse Scroll Lock**, which nothing else in this rig uses. That
+**The COM should pulse Scroll Lock**, which nothing else in this system uses. That
 keeps three independent signals on one wire: NumLock (POST, set by BIOS), Caps
 Lock (reboot detector, harness-armed), Scroll Lock (DOS-ready, COM-driven).
 
@@ -397,20 +397,20 @@ it converts an assumption into a number if it ever blocks something.
 
 #### Two 8042 details to verify on hardware before trusting the COM
 
-Both fail quietly, and the first is specifically dangerous in this rig. Flagged
+Both fail quietly, and the first is specifically dangerous in this system. Flagged
 by the g2k session as things to check, **not** as established facts about this
 machine.
 
 1. **The keyboard ACKs each byte with `0xFA`.** Those acks must be read and
    discarded from `0x60`. If they are left sitting in the output buffer, the
-   BIOS `INT 09h` handler may take one for a scancode. **In this rig that means
+   BIOS `INT 09h` handler may take one for a scancode. **In this system that means
    a phantom keystroke landing in whatever the harness types next** -- a
    corrupted command rather than a clean error, arriving one line after the
    pulse. Exactly the failure shape that is hardest to attribute.
 2. **The BIOS may undo the pulse.** Shift/lock state lives in the BDA at
    `0040:0017`, and the BIOS re-derives the LEDs from it on keyboard activity.
    An LED set directly through the 8042 without updating the BDA can be reverted
-   at the next keypress -- and in this rig the next keypress is the harness's
+   at the next keypress -- and in this system the next keypress is the harness's
    own. For an **edge** signal that is harmless and arguably self-cleaning,
    which is all the readiness pulse needs. If the LED is ever wanted as
    **latched, readable state**, the BDA byte must be updated too.
@@ -557,7 +557,7 @@ boxes. A relay module with an opto on its input additionally gives a mechanical
 voltage of its own, so it cannot be wired backwards and does not care what it is
 switching.
 
-Prefer A only if a JetKVM is already in the rig and its UI is wanted. Otherwise
+Prefer A only if a JetKVM is already in the system and its UI is wanted. Otherwise
 B is the same capability for a fraction of the cost and complexity.
 
 #### Bonus: Power Good is a free state sensor
@@ -592,7 +592,7 @@ to +5 V and Pi GPIOs are 3.3 V and not 5 V tolerant. Use an isolator:
   audible, which is irrelevant for a reset. **This is the recommendation if the
   goal is "make it work without thinking about it".**
 - **N-channel MOSFET / NPN:** cheaper in parts count but shares ground with the
-  g2k, which is worse in a rig where the two boxes are separately powered.
+  g2k, which is worse in a system where the two boxes are separately powered.
 
 Pulse for ~200 ms, then release -- that is a button press.
 

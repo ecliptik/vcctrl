@@ -100,7 +100,7 @@ SAME rebuild as mass storage, per the operator's own reasoning: one
 re-enumeration for two features rather than two. **No daemon command uses
 it yet** — `machine.mouse: absolute` names a mode `mouse_abs` would drive,
 and nothing sends that command today (WP3/WP6 built the relative path
-only; both machines this rig runs are `mouse: relative`). Treat
+only; both machines this system runs are `mouse: relative`). Treat
 `/dev/hidg2` and the `hid.mouse_abs` function as present-but-unused until
 that command exists.
 

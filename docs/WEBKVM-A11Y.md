@@ -7,7 +7,7 @@ file rather than a build artifact).
 
 ## The review **[measured 2026-08-28, peer session `audit`]**
 
-Run against the live pages -- the rig's tailnet host on `:443` (full) and its
+Run against the live pages -- the system's tailnet host on `:443` (full) and its
 `:8091` read-only mirror -- with chromium (puppeteer-core) + axe-core 4.x
 (tags `wcag2a`/`wcag2aa`/`21a`/`21aa`/`best-practice`), plus manual
 geometry/contrast probes and eyeballed screenshots, at two viewports:

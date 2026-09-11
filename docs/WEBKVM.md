@@ -82,7 +82,7 @@ Confirmed by the `vcctrl` peer session, which owns the automation side:
 
 ---
 
-## 1. What the rig actually is  **[measured 2026-08-19]**
+## 1. What the system actually is  **[measured 2026-08-19]**
 
 Facts gathered off the Pi for this plan, because several of them change the
 design:
@@ -114,7 +114,7 @@ the WebRTC TODO; the MVP encodes nothing.
 So a 640x480 MJPEG frame of DOS text is about **5.5 KB**. At 30 fps that is
 **1.3 Mbit/s** -- two orders of magnitude inside the wifi budget. Game content
 will be larger, plausibly 20-30 KB, so ~6 Mbit/s. **Bandwidth is not a
-constraint on this rig**, which is the single strongest argument for shipping
+constraint on this system**, which is the single strongest argument for shipping
 raw MJPEG and not encoding anything.
 
 **Python 3.11.2, PIL 9.4.0.** No numpy, no websockets, no aiohttp. apt offers
@@ -221,7 +221,7 @@ needs to plug in, and nothing does yet.
 
 ### The one real cost, and how it is paid
 
-`vcctrld` is currently the most reliable thing in the rig, and the uinput
+`vcctrld` is currently the most reliable thing in the system, and the uinput
 devices are the reason. USB4VC only discovers input devices on its 0.75 s scan
 (PLAN sec. 2), so a daemon crash does not merely restart -- it drops the
 devices and silently loses the first keystrokes afterwards. **Folding a web
@@ -601,7 +601,7 @@ So "no frames" must be treated as **possibly correct and indefinite**:
   -- purely as a backstop against a wedge that somehow keeps the process alive,
   but it should be the rare path and not the normal one.
 
-  This is the same principle as everything else on this rig: **ask the system
+  This is the same principle as everything else on this system: **ask the system
   what is true rather than inferring it from a clock.** Respawning cannot
   manufacture a signal that is not arriving at the stick.
 - Never escalate a no-lock into an error state or a notification. It is a
@@ -706,7 +706,7 @@ the table to the full US PS/2 set.
 The panel is a **whole keyboard** now — F-row, the alphanumeric block in
 QWERTY with real key-unit widths, Space, the Ins/Home/PgUp · Del/End/PgDn
 cluster, the arrows, the locks, and a row of DOS chords — and it is **drawn
-from a layout table rather than typed into the markup**, because the rig has
+from a layout table rather than typed into the markup**, because the system has
 two protocol boards and an IBM PC board and a Lisa/Mac/ADB board are not the
 same keyboard with a few keys missing.
 
@@ -924,7 +924,7 @@ runs FIRST, before any positive control, so the witness has to report nothing
 before it is allowed to report something.
 
 **The witness must not paint the screen.** Scancodes are hex digits, and this
-rig has a standing finding that OCR does not read digits off this glass
+system has a standing finding that OCR does not read digits off this glass
 (`lab/OPEN-FAULTS.md`: counts read by size and by eye for exactly this reason; and
 at −38% amplitude it is worse). A misread nibble is a **wrong identity rather
 than a missing one**, which fills the table instead of leaving a hole. So the
@@ -940,9 +940,9 @@ apply it.
 #### The artifact: `KEYWIT03`, and it emits EVENTS, never verdicts
 
 Settled with the `vcctrl` session 2026-08-25 and tested in emulation before
-anything touched the rig. `dos/keywit.asm` writes `C:\XFER\OUT\KEYWIT.LOG`,
+anything touched the system. `dos/keywit.asm` writes `C:\XFER\OUT\KEYWIT.LOG`,
 CREATE/TRUNCATE — never append, because a stale file from an earlier run read
-as current is a failure this rig has already had.
+as current is a failure this system has already had.
 
     KEYWIT03<CR><LF>                 10 bytes
     SSSS AA CC LL TTTT<CR><LF>       20 bytes, fixed, one per EVENT
@@ -1134,14 +1134,14 @@ could not see.
 #### Two hazards that are not optional
 
 **The lock keys are measured deliberately and separately, never swept
-inline.** `lab/FINDINGS.md` sec. 3, and on this rig they are the harness's own
+inline.** `lab/FINDINGS.md` sec. 3, and on this system they are the harness's own
 signalling: Caps is the reboot detector, Scroll is `RDYPULSE`. A sweep that
 injects them in sequence fights the instrumentation while looking like a
 keyboard fault.
 
 **The instrument sits in the seam it measures.** `rdypulse.asm` says the
 mechanism out loud — a leftover `0xFA` ACK in the output buffer is taken for a
-scancode by INT 9, "which in this rig means a phantom keystroke landing in
+scancode by INT 9, "which in this system means a phantom keystroke landing in
 whatever the harness types next". That mechanism is why the witness is INT 16h
 rather than an INT 9 hook -- but the follow-up hook, if it is ever run against
 keys that came back silent, lives in exactly that seam. So a
@@ -1197,7 +1197,7 @@ measurement.
 
 - **`102nd` ARRIVES, scan 56.** 5.2b proposed it should be `unsupported`
   because a US layout does not physically have the key. That is right about
-  the keyboard and wrong about this rig: **the KVM is a virtual keyboard, so
+  the keyboard and wrong about this system: **the KVM is a virtual keyboard, so
   it can emit the scancode and the BIOS produces it.** The rule is dropped —
   it would have greyed a key that demonstrably works.
 - **`menu` is a real `arrives: false`**, not a `no-witness`. It is not
@@ -1315,7 +1315,7 @@ Counted by enumerating the `LAYOUTS` object rather than searching the file:
     daemon accepts             105 keycodes
 
 **All 83 the page can send now have a verdict, and so does every chord it
-ships.** The panel says so. Still open, none of it needing the rig:
+ships.** The panel says so. Still open, none of it needing the system:
 
 - **`leftmeta` / `rightmeta`** stay no-witness. The layout does not draw them
   and the pass covered the six it does — the right scope, said out loud so
@@ -1331,7 +1331,7 @@ ships.** The panel says so. Still open, none of it needing the rig:
 AUTOTYPE takes space-separated single buttons: no chord syntax, no hold syntax.
 So the emulator carried the entire 105-key design — format, arithmetic, the
 negative control, the keypad premise — and stops exactly at the boundary of
-held and combined keys. Everything after that had to be measured on the rig.
+held and combined keys. Everything after that had to be measured on the system.
 
 ### 5.3 What the browser cannot capture, in Firefox and Safari
 
@@ -1351,7 +1351,7 @@ be delivered to the g2k, however the page is written:
 Mitigations, all of which real KVMs use:
 
 1. **A macro bar** -- on-screen buttons for `Ctrl-Alt-Del`, `Alt-Tab`, `F11`,
-   `Esc`, and the DOS-specific ones this rig cares about. These go over the
+   `Esc`, and the DOS-specific ones this system cares about. These go over the
    wire as `combo`, which already exists and already works.
 2. **Sticky modifiers** -- click `Ctrl` to latch it, then press the letter.
    Covers every chord the browser eats, without a macro per combination.
@@ -1631,7 +1631,7 @@ it and can go first if the device is busy.
 2. **Is autorepeat generated downstream?** Same measurement. Gets a stuck key
    or a doubled key if guessed wrong (5.4).
 3. **Does the stick survive a long-lived open across mode changes?** Still
-   unknown -- every capture on this rig has been a fresh open, and the peer
+   unknown -- every capture on this system has been a fresh open, and the peer
    session cannot answer it either. **This remains the main technical risk in
    the plan.** Section 4.5 has the stress cases and the ten-second acceptance
    test. If the stick needs a reopen per transition the streamer still works,
@@ -1683,7 +1683,7 @@ it and can go first if the device is busy.
 ## 11.1 Two failure families, and the design rules that pre-empt them
 
 Added at the peer session's suggestion, and it is the most portable thing in
-this document. Between two sessions in one day this rig produced **six** timing
+this document. Between two sessions in one day this system produced **six** timing
 bugs, and every one of them belongs to one of two families:
 
 **1. A tuned interval standing in for a fact the system could be asked for.**

@@ -7,7 +7,7 @@ person.
 **Status:** in use, and still short of a second independent adopter. It
 lives in the vcctrl repository because vcctrl is its reference harness
 implementation (sec. 15), not because it is about vcctrl -- nothing in
-the normative text may assume a particular project or rig, and
+the normative text may assume a particular project or system, and
 project-specific requirements belong in a *profile* (sec. 12). It will
 move to a repository of its own when a second project adopts it.
 
@@ -1098,7 +1098,7 @@ comparison is being read against.
 In the originating project the within-session band was 0.0-0.1 on two
 separate occasions, while the same configuration measured a day apart
 differed by 0.85 -- over four times the profile's stated band. That figure
-is one rig's example, not a threshold to copy; what transfers is that the
+is one system's example, not a threshold to copy; what transfers is that the
 two bands differed by a factor nobody predicted. The cause was not
 established, and the operational rule does not need it: **an
 effect smaller than the across-session band cannot be attributed to
@@ -1159,7 +1159,7 @@ could not have failed. Both look like verdicts.
     two rounds' answers for B   differ by 10 counts
 
 Effect A passed and effect B failed. **Neither verdict carried
-information**: the test could not resolve 10 counts on a rig whose
+information**: the test could not resolve 10 counts on a system whose
 identical pairs differ by 16. Effect A is trustworthy because it is seven
 times the noise, which is a property of the effect and not of the band it
 was measured against.
@@ -1413,7 +1413,7 @@ move between repositories without dragging them along.
 
 ### 12.1 A derived value must not be presented as configuration
 
-A profile field invites editing. Some values are measurements of the rig
+A profile field invites editing. Some values are measurements of the system
 and belong there. Some are *derived* from two or more of them and do not.
 
 A keypress budget was published as an editable field. It was really the

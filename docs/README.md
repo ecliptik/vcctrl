@@ -7,7 +7,7 @@ section.
 
 **Layout, since 2026-09-11:** most files sit directly in `docs/`. `lab/`
 holds six documents specific to measuring this project's own physical
-rig — findings, open faults, hardware migrations and swaps — kept public
+system — findings, open faults, hardware migrations and swaps — kept public
 because they're the most honest record of what real hardware does, but
 clearly separated from target-agnostic reference. `history/` holds
 superseded planning documents, kept verbatim for the record. This index
@@ -18,7 +18,7 @@ name doesn't turn up in `docs/` directly.
 
 ## Start here
 
-**`KNOWN-LIMITATIONS.md`** — what does NOT yet adapt to a different rig's
+**`KNOWN-LIMITATIONS.md`** — what does NOT yet adapt to a different system's
 shape, separately from `OPEN-FAULTS.md`'s bugs-on-this-hardware register.
 **Read this if you're bringing your own hardware** — it's the honest list
 of what's still a literal in the source rather than a config choice.
@@ -60,12 +60,12 @@ Each answers the question the previous one raised.
 
 - **"±0.1 fps within-session repeatability"** — quoted all week, used as the
   T1 confirming round's acceptance band, and it is **integer truncation in the
-  metric** (`main.cpp:1530`), not measurement noise. The rig's real same-config
+  metric** (`main.cpp:1530`), not measurement noise. The system's real same-config
   pair spread is **0 to 16 flips**, and 0.1 fps is 10.3 flips — **narrower than
   the repeatability it was gating.** See `T1-CONFIRM-RESULTS.md` and
   `HARNESS-STANDARD.md` 10.0e. Express a band in counted units and check it
   against the archive before running.
-  **And do not quote the 16 as the rig's repeatability either** — it is a
+  **And do not quote the 16 as the system's repeatability either** — it is a
   *pair* spread. The accumulated stock population, nine cells over three
   sittings, spans **31 flips (0.30 fps)**, `ACC1` 2827 to `FRS1` 2858. Pair
   spread and population range are the two bands of `HARNESS-STANDARD.md` 10.0;
@@ -126,15 +126,15 @@ live in a profile rather than in the standard. Imported 2026-08-23 from the
 doskutsu campaign, where it was written; vcctrl is its reference harness
 implementation. **Read it before adding a measurement to anything here.**
 
-## Driving the rig from an agent directly
+## Driving the system from an agent directly
 
-**`SKILLS.md`** — the `.agents/skills/` layout: portable rig/repo knowledge
+**`SKILLS.md`** — the `.agents/skills/` layout: portable system/repo knowledge
 as skill files any coding agent can discover, and the multi-harness
 pointer scheme that keeps one canonical copy.
 
 **`MCP-SERVER.md`** — `agent/vcctrl_mcp.py`, 59 tools over MCP wrapping
 `bin/vcctrl` and the harness scripts, so Claude Code, Codex or any other
-MCP client can drive the rig without a person typing commands. Setup for
+MCP client can drive the system without a person typing commands. Setup for
 both clients, the safety model (shared lock, named confirmation, board-
 scoped power), and a status table of what's been proven live versus
 unit-tested only. PC/DOS only so far, by operator direction.

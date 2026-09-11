@@ -7,7 +7,7 @@ register says why.
 Written 2026-08-20 at the end of Round Q, for work that should be done fresh
 rather than at the end of a long session. Each section states what is
 **measured**, what is **guessed**, and what the first step is — because on
-this rig the expensive mistake is always a plausible mechanism acted on
+this system the expensive mistake is always a plausible mechanism acted on
 before it was tested.
 
 ---
@@ -208,7 +208,7 @@ correctly in every captured sample.
 **So the card is asked for two numbers only — how many files and how many
 bytes — and a count-and-total match over a tag's directory is the proof.**
 `parse_dir_summary()` and `classify_tag()` are tested against OCR captured
-from the rig, including `1 filets)` and `file<s)`.
+from the system, including `1 filets)` and `file<s)`.
 
 **What remains is one call**: issue `DIR LOGS\<TAG>\*.PPM`, hand the OCR to
 `parse_dir_summary()`, pass the result to `classify_tag()`. A `None` from the
@@ -298,7 +298,7 @@ is the answer to open question 1 below.
 ## Order
 
 1. **Capture regression** — the only one whose cost grows, and the only one
-   that needs the rig.
+   that needs the system.
 2. **`arm_leds`** — small, self-contained, testable without hardware, and it
    removes a workaround from every caller.
 3. **Cleanup** — needs answers to the four questions above before any code.

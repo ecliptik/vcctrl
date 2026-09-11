@@ -1,6 +1,6 @@
 # Collapsing the three PicoGUS boot profiles into one
 
-> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+> This document is one project's record of its own physical system -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this system implements.
 
 **Status: step 1 DONE and proven on hardware 2026-08-19. Steps 2 and 3 not
 started.** `SETMODE.BAT` is on the card and verified byte-identical.

@@ -106,7 +106,7 @@ procedurally correct, and unable to answer the question it gated.
 
 **What decides it is a bandwidth probe, not a round** — write 76,800 bytes to
 VRAM through the banked window and time it against a system-RAM memcpy of the
-same size. Source-side work, not rig work.
+same size. Source-side work, not system work.
 
 ## Loose ends, real and out of scope
 

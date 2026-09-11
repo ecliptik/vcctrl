@@ -11,7 +11,7 @@ can wire up a capture device and an input path to.
 target-agnostic contract for running measured tests on it.
 **[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)** hooks an agent up to vcctrl
 directly over MCP. **[docs/SKILLS.md](./docs/SKILLS.md)** carries
-rig/repo domain knowledge to any of those same agents as portable
+system/repo domain knowledge to any of those same agents as portable
 `SKILL.md` files. **[docs/PROFILES.md](./docs/PROFILES.md)** covers driving
 more than one target machine from one daemon.
 
@@ -38,7 +38,7 @@ A minimal setup runs the daemon and the control tools on the same box; the
 common one is a Pi doing the daemon's job and a separate dev machine (or
 your laptop) doing the control host's.
 
-## Hardware reference: what this project's own rig actually runs
+## Hardware reference: what this project's own system actually runs
 
 You do not need this exact hardware — `profile-kinds/` below covers three
 different shapes, and the `shell` power backend and `hid-gadget` input
@@ -46,15 +46,15 @@ backend exist specifically so cheaper/different substitutes work. This is
 what one working, continuously-tested build looks like, so you have a
 concrete parts list to start from or diverge from on purpose:
 
-| role | what this rig uses | notes |
+| role | what this system uses | notes |
 |---|---|---|
 | Daemon host | **Raspberry Pi 5** (4 GB), Debian 13 (Trixie) arm64 | A Pi 3B also worked (see `docs/lab/PI5-MIGRATION.md`) but is measurably slower under load; the Pi's own USB-C port doubles as the OTG connection for the `hid-gadget` input backend if you use that instead of USB4VC |
 | PS/2 input + board identity | **[USB4VC](https://github.com/dekuNukem/USB4VC)** HAT (STM32-based), with its swappable **IBM PC** protocol board (PS/2 keyboard+mouse) or **Lisa/Mac/ADB** protocol board | One USB4VC drives either target; the board is swapped by hand and identified over SPI at runtime (`docs/BOARD-IDENTITY.md`) |
 | Video + audio capture | A **MACROSILICON-chipset** USB2.0 VGA/HDMI-to-USB capture dongle (USB ID `1b80:e309`/similar, sold generically on Amazon/AliExpress/eBay as a "USB video capture card") | Locks onto both text-mode and low-res graphics modes; carries line-in audio on the same dongle. Pin it by `/dev/v4l/by-id/...`, never `/dev/videoN` — index drift across UVC devices is real (`docs/lab/FINDINGS.md` #44) |
 | Optional second camera | An **Innomaker U20CAM-1080p** UVC camera, pointed at the physical machine (not its video signal) — for a hardware-level view when the primary capture is dark or frozen | Genuinely optional; `capabilities.camera.backend` defaults to not-installed |
-| Mains power control | A **TP-Link Kasa** smart plug (works with both the legacy LAN protocol and the newer KLAP one) or a **Wemo Insight**, switched between rigs over time | `shell` backend exists for a relay board, a Zigbee bridge, or a person with a switch |
+| Mains power control | A **TP-Link Kasa** smart plug (works with both the legacy LAN protocol and the newer KLAP one) or a **Wemo Insight**, switched between systems over time | `shell` backend exists for a relay board, a Zigbee bridge, or a person with a switch |
 | Target boot media | A CF card + generic **USB CF card reader** (Genesys Logic chipset) on the daemon host, for pushing files onto/pulling logs off of a DOS target that has no other network path | Not needed once a NIC + FTP client is working on the target; see `docs/FILE-TRANSFER.md` |
-| Target machine(s) proven so far | A Gateway 2000-class 486/Pentium-era PC (PS/2, DOS 6.22) over USB4VC; a Linux box over HDMI capture + the Pi's own USB gadget port (no USB4VC needed for this shape) | A classic Macintosh over USB4VC's ADB board + RGB2HDMI capture is scaffolded (`profile-kinds/rgb2hdmi-usb4vc.yaml`) but unmeasured — no such hardware has run against this project's own rig yet |
+| Target machine(s) proven so far | A Gateway 2000-class 486/Pentium-era PC (PS/2, DOS 6.22) over USB4VC; a Linux box over HDMI capture + the Pi's own USB gadget port (no USB4VC needed for this shape) | A classic Macintosh over USB4VC's ADB board + RGB2HDMI capture is scaffolded (`profile-kinds/rgb2hdmi-usb4vc.yaml`) but unmeasured — no such hardware has run against this project's own system yet |
 
 ### What every shape needs, generically
 
@@ -107,7 +107,7 @@ capabilities:
 
 A Mac with ADB keyboard/mouse and no native HDMI/VGA — capture goes
 through an RGB2HDMI board first. **Scaffolded but unmeasured**: no such
-hardware has run against this project's own rig yet, so treat
+hardware has run against this project's own system yet, so treat
 `profile-kinds/rgb2hdmi-usb4vc.yaml`'s values as a documented best guess,
 not a proven one.
 
@@ -258,7 +258,7 @@ running more than one target off one daemon.
 Two different things, on purpose. **Skills** are portable knowledge --
 copying them into another repo costs nothing and grants nothing. **MCP**
 is real ability to drive physical hardware -- treat registering it as a
-hardware-access decision, not a documentation one, and never bake a rig's
+hardware-access decision, not a documentation one, and never bake a system's
 real hostname into a tracked/committed file.
 
 **Skills** (Claude Code, Codex, Cursor, ...), no vcctrl checkout needed:
@@ -274,7 +274,7 @@ Installs the four hardware-portable skills into `.agents/skills/`
 (symlinked into `.claude/skills/` for Claude Code). `--full-depth` is
 required -- there's no `SKILL.md` at the repo root. (Two more skills,
 `vcctrl-repo-conventions` and `vcctrl-webkvm-copy`, exist for contributing
-to *this* repo rather than driving a rig; they're intentionally left out of
+to *this* repo rather than driving a system; they're intentionally left out of
 the line above since they describe this repo's own conventions, not yours
 — see `docs/SKILLS.md` if you want them anyway.) See
 [docs/SKILLS.md](./docs/SKILLS.md) sec. 8 for the same-machine symlink
@@ -282,7 +282,7 @@ alternative and sec. 5 for verifying a skill actually loaded (Claude Code
 needs a session restart for a brand-new directory; Codex picks it up
 live).
 
-**MCP** (drives the real rig):
+**MCP** (drives the real system):
 
 ```sh
 # daemon mode -- once deployed (docs/MCP-SERVER.md sec. 4), no local checkout
@@ -332,15 +332,15 @@ tests/                  the test suite -- pytest tests/, no hardware required
 |---|---|---|
 | PS/2 DOS/Windows PC over USB4VC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, and the web KVM all proven on real hardware; see `docs/lab/FINDINGS.md` |
 | HDMI-out Linux box over the Pi's own USB gadget (`hdmi-usb`) | **working end to end** | no USB4VC required for this shape; multi-profile (one daemon, several targets) proven the same way |
-| Classic Macintosh over USB4VC's ADB board + RGB2HDMI (`rgb2hdmi-usb4vc`) | **scaffolded, unmeasured** | `profile-kinds/rgb2hdmi-usb4vc.yaml` and `vcctrl-macintosh.example.yaml` exist; no such hardware has run against this project's rig yet |
+| Classic Macintosh over USB4VC's ADB board + RGB2HDMI (`rgb2hdmi-usb4vc`) | **scaffolded, unmeasured** | `profile-kinds/rgb2hdmi-usb4vc.yaml` and `vcctrl-macintosh.example.yaml` exist; no such hardware has run against this project's system yet |
 
 Known gaps, honestly: no hardware reset line yet for a target that ignores
 Ctrl-Alt-Del from within a program (GPIO to the reset header is the
 documented plan, not yet built); H.264 video transport and the on-screen
 keyboard's full per-key coverage are measured on exactly one board so far.
 See `docs/lab/OPEN-FAULTS.md` for the complete, current list of what's
-broken on this project's own rig, and **`docs/KNOWN-LIMITATIONS.md` for
-what doesn't yet adapt to a different rig's shape at all** — the DOS-side
+broken on this project's own system, and **`docs/KNOWN-LIMITATIONS.md` for
+what doesn't yet adapt to a different system's shape at all** — the DOS-side
 boot/BLASTER/mTCP contract, timing constants, the install prefix, and a
 handful of other things that are still literals in the source rather than
 a config choice, if you're bringing hardware different from the table

@@ -1,6 +1,6 @@
 # Phase 0b: the other 82% of a Mach64 frame
 
-Measured 2026-08-21, same rig and same binary as Phase 0 (`49344b16b9e9`).
+Measured 2026-08-21, same system and same binary as Phase 0 (`49344b16b9e9`).
 Six `diag` cells on one daemon (425373, `NRestarts 0`). **Their fps does not
 enter the perf matrix** — Round R's 27.6 fps is the perf figure.
 

@@ -34,7 +34,7 @@ singles sum to.
     the pre-registered band   0.10 fps  =  10.3 flips
     same-config pair spread from the archive:  0 1 2 5 12 15 16 flips
 
-**The acceptance band is narrower than the rig's demonstrated repeatability.** A
+**The acceptance band is narrower than the system's demonstrated repeatability.** A
 test required to resolve 10.3 flips, on a machine whose identically-configured
 pairs differ by up to 16, cannot reliably confirm anything.
 

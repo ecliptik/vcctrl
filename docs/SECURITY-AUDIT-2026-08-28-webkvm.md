@@ -1,6 +1,6 @@
 # Web KVM security audit — 2026-08-28 (pre-release)
 
-> Rig identifiers are redacted in this file on purpose. The real hostname,
+> System identifiers are redacted in this file on purpose. The real hostname,
 > LAN addresses and plug alias live in the untracked `vcctrl.yaml`; this is a
 > tracked docs record and the identifier guard
 > (`tests/test_core.py::test_no_rig_identifiers_in_the_code`) scans every
@@ -17,7 +17,7 @@ read-only mirror on port 8091 (`vcweb_public.py`) and the private control KVM on
 
 Conditions: probed 2026-08-28 from a tailnet-connected host. No SSH to the Pi
 was available from the audit host, so `tailscale serve/funnel` state was
-inferred from public DNS (no public A record for the rig hostname) rather than
+inferred from public DNS (no public A record for the system hostname) rather than
 read from the box directly — worth a direct `tailscale funnel status` confirm
 before anything is made public.
 
@@ -50,7 +50,7 @@ load). The inline comment claimed "Read-only, tailnet-only, no secrets," but
 `ACAO: *` widened the reader from "anyone who can reach the tailnet host" to
 "**any origin's JavaScript running in a browser that can reach the tailnet
 host**." A random site opened in a tailnet-connected browser could `fetch()`
-this cross-origin and exfiltrate the rig's LAN topology.
+this cross-origin and exfiltrate the system's LAN topology.
 
 The `*` existed only for the page's cross-port reachability probe (`:443` page
 checking `:8443`). The page's normal same-origin polling needs no CORS, so

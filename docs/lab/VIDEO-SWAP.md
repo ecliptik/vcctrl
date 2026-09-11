@@ -1,6 +1,6 @@
 # Video card swaps: ViRGE, Mach64, Cirrus
 
-> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+> This document is one project's record of its own physical system -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this system implements.
 
 Written 2026-08-19. **Current card: S3 ViRGE/DX**, which is what every banked
 fps anchor was measured on. Mach64 and the onboard Cirrus are both in the
@@ -177,7 +177,7 @@ Steps 1-2 are the operator's. Everything from 3 is the harness's.
 6. **Run UVCONFIG. `bin/vcctrl-uvconfig` no longer does this itself, and
    that is by design, not a regression to route around** (SUPERSEDED
    2026-09-03; text below described an earlier, more automated version).
-   UVCONFIG.EXE only renders correctly in text mode (`MODE03`); this rig's
+   UVCONFIG.EXE only renders correctly in text mode (`MODE03`); this system's
    VGA capture stick only locks onto mode 12h. The instant the machine
    switches to text mode, the harness is completely blind to the screen for
    the whole interactive portion -- exactly the six-hour-incident shape this
@@ -359,7 +359,7 @@ settle it and costs one sweep.
 ## Cirrus result: GD-5434 (discrete PCI card, not the motherboard's onboard chip), UVCONFIG silent again
 
 Measured 2026-08-31, dossage project (a separate SDL3-DOS port, same physical
-rig as doskutsu). Card swapped in from the S3 ViRGE -- **not** "the onboard
+system as doskutsu). Card swapped in from the S3 ViRGE -- **not** "the onboard
 Cirrus" this doc's "Per-card unknowns" section originally flagged as unknown
 access; this is a distinct discrete GD-5434 PCI card, so the onboard-access
 question below remains genuinely open.

@@ -1,6 +1,6 @@
 # Sound profiles
 
-> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+> This document is one project's record of its own physical system -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this system implements.
 
 > ## OPERATOR DECISION 2026-08-19 (late): THE VIBRA COMES OUT
 >
@@ -27,7 +27,7 @@
 > removed a new POST chirp that had appeared that evening, alongside an Intel
 > NIC that dropped off the PCI bus for an hour with no software cause ever
 > found. Intermittent contact explains both, and it is invisible to every
-> diagnostic this rig has -- no log, no capture and no LED channel can see a
+> diagnostic this system has -- no log, no capture and no LED channel can see a
 > card that is electrically half-present.
 >
 > **Applies to:** anything that assumes the Vibra is present. `vcctrl-cell`
