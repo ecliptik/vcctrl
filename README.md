@@ -35,11 +35,40 @@ Three roles, usually three machines:
 
 ## Hardware and configuration
 
-Three configurations, each a [`profile-kinds/*.yaml`](./profile-kinds/)
-template. Scaffold one with
+vcctrl ships three templates, one per [`profile-kinds/*.yaml`](./profile-kinds/).
+Scaffold one with
 [`tools/new-profile.py`](./tools/new-profile.py) `--kind <kind> --name <yours>`
-and fill in the `REPLACE_ME` placeholders — the YAML below shows only
-what makes each one distinct, not a complete config.
+and fill in the `REPLACE_ME` placeholders, using the machines below as a
+reference — the YAML shown for each is only what makes it distinct, not a
+complete config.
+
+### Recommended hardware
+
+What this project actually runs on, across all three configurations:
+
+- **Raspberry Pi 5** (4 GB+) — the daemon host. One free USB port per
+  capture device; `hdmi-usb` also needs its USB-C port switched to
+  peripheral mode.
+- **[USB4VC](https://github.com/dekuNukem/USB4VC) HAT** — PS/2 or ADB
+  keyboard/mouse emulation, for `vga-ps2` and `rgb2hdmi-usb4vc`. Connects to
+  the Pi over GPIO, to the target over PS/2 or ADB.
+- **MacroSilicon-chipset (MS2109/MS2130) HDMI/VGA-to-USB capture dongle** —
+  plugs into a Pi USB port, presents as a UVC device emitting MJPEG
+  natively. This chipset is sold under many rebrands; any capture stick
+  with it works.
+- **RGB2HDMI board** (Classic Macintosh only) — sits between the Mac's
+  video output and the capture dongle above; the Mac has no HDMI/VGA of
+  its own.
+- **Official Raspberry Pi USB3 hub, with the official Raspberry Pi power
+  supply plugged into the hub** (Modern PC only) — the hub's upstream port
+  plugs into the target; the Pi draws power through the hub over that same
+  cable. Use the official pair specifically; an underpowered hub or
+  charger here caused a real brownout on this project's own hardware.
+- **TP-Link Kasa, Kasa KLAP, or Belkin Wemo smart plug** (optional, any
+  configuration) — remote power-cycling. Connects over the LAN, not USB.
+- **Any UVC webcam** (optional, any configuration) — a second, independent
+  view of the physical machine, for when the primary capture is dark or
+  frozen. Plugs into a Pi USB port; any webcam presenting as UVC works.
 
 ### Retro PC — `vga-ps2`
 
@@ -69,8 +98,8 @@ capabilities:
 ### Classic Macintosh — `rgb2hdmi-usb4vc`
 
 ADB keyboard/mouse, capture via an RGB2HDMI board. **Scaffolded but
-unmeasured** — no such hardware has run against this project's own build
-yet, so treat the template's values as a documented guess.
+unverified/untested** — no such hardware has run against this project's own
+build yet, so treat the template's values as a documented guess.
 
 **Hardware:**
 - **Raspberry Pi 5** — the daemon host.
@@ -95,7 +124,7 @@ capabilities:
 
 ### Modern PC — `hdmi-usb`
 
-Any machine with HDMI out and a spare USB port. No USB4VC — the Pi's own
+Any machine with HDMI out and a spare USB port. The Pi's own
 USB-C port presents itself as a USB keyboard and mouse straight to the
 target.
 
@@ -267,7 +296,7 @@ tests/                  pytest tests/ -- no hardware required
 |---|---|---|
 | Retro PC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, the web KVM — all on real hardware; [docs/lab/FINDINGS.md](./docs/lab/FINDINGS.md) |
 | Modern PC (`hdmi-usb`) | **working end to end** | no USB4VC needed; multi-profile (one daemon, several targets) proven the same way |
-| Classic Macintosh (`rgb2hdmi-usb4vc`) | **scaffolded, unmeasured** | templates exist; no such hardware has run against this project's own build yet |
+| Classic Macintosh (`rgb2hdmi-usb4vc`) | **scaffolded, unverified/untested** | templates exist; no such hardware has run against this project's own build yet |
 
 Known gaps: no hardware reset line for a target that swallows
 Ctrl-Alt-Del (GPIO to the reset header is planned, not built); H.264
