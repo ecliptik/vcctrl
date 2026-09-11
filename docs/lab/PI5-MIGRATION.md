@@ -1,5 +1,7 @@
 # Migrating usb4vc from the Pi 3B to a Pi 5
 
+> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+
 Written 2026-08-20, revised the same day once the hardware was in hand, and
 updated again once it was executed.
 

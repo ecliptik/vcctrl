@@ -2584,7 +2584,7 @@ def test_zoom_layout_in_a_browser():
     check("fit is not just the raw 640x480", (w, h) != (640.0, 480.0), (w, h))
     check("fit overflows neither axis", w <= W + 0.5 and h <= H + 0.5, (w, h))
     # A CHECK THAT DEPENDS ON THE BROWSER HONOURING --window-size, WHICH IS
-    # NOT GUARANTEED. Found 2026-09-11 (docs/OPEN-FAULTS.md #17's update):
+    # NOT GUARANTEED. Found 2026-09-11 (docs/lab/OPEN-FAULTS.md #17's update):
     # this test asks headless Chromium for 1580x900 and, on a sufficiently
     # different Chromium build, gets something else entirely -- W/H above
     # are already the ACTUAL delivered viewport, so "fit fills one axis
@@ -2601,7 +2601,7 @@ def test_zoom_layout_in_a_browser():
     if not window_size_honoured:
         print("  SKIP  fit/recentre checks: headless Chromium did not honour "
               "--window-size=1580,900 (delivered %.0fx%.0f) -- "
-              "docs/OPEN-FAULTS.md #17, not a kvm.html defect" % (W, H))
+              "docs/lab/OPEN-FAULTS.md #17, not a kvm.html defect" % (W, H))
     else:
         check("fit fills one axis exactly",
               abs(w - W) < 0.5 or abs(h - H) < 0.5, (w, h))
@@ -6841,7 +6841,7 @@ def test_no_rig_identifiers_in_the_code():
     #
     # `ecliptik` is the operator's own namespace -- forgejo.example.com, the
     # org this repo is published under, and the domain in every commit's
-    # author trailer. The one tracked prose mention is docs/FINDINGS.md
+    # author trailer. The one tracked prose mention is docs/lab/FINDINGS.md
     # naming a sibling repo as `ecliptik/g2k`. It stays: once the repo's own
     # URL names that org, scrubbing one prose mention of it buys nothing, and
     # unlike a LAN address or a plug alias it was never meant to be secret --
@@ -7120,7 +7120,7 @@ class FakeKlapDevice(object):
     that a dead session is re-handshaken, and that a wrong credential is
     reported as a credential fault. It CANNOT catch a misreading of the real
     protocol -- both sides would be wrong together and agree perfectly. No KLAP
-    device has ever been on this rig. See docs/FINDINGS.md sec. 55.
+    device has ever been on this rig. See docs/lab/FINDINGS.md sec. 55.
     """
 
     def __init__(self, username, password, on=False, model="KP125M",
@@ -7364,7 +7364,7 @@ def test_a_capabilitys_own_thread_keeps_its_profiles_config():
     the profile that capability belongs to. Every `CFG.xxx` on that thread then
     answers for the primary, silently, and looking entirely correct.
 
-    Measured before the fix (docs/FINDINGS.md sec. 54): with a primary that has
+    Measured before the fix (docs/lab/FINDINGS.md sec. 54): with a primary that has
     no plug, a second profile's plug was never polled at all -- `_refresh()`
     gates on `if host:` and `power_host()` returned None. With a primary that
     HAS one, the second profile's real relay reading was stamped with the
@@ -7452,7 +7452,7 @@ def test_wemo_power_backend_reads_the_states_the_device_actually_sends():
     """The third power implementation, and every reply shape that is not 0/1.
 
     Written against the four things measured on a real Insight (firmware
-    WeMo_WW_2.00.11532.PVT-OWRT-Insight, 2026-09-01 -- docs/FINDINGS.md sec.
+    WeMo_WW_2.00.11532.PVT-OWRT-Insight, 2026-09-01 -- docs/lab/FINDINGS.md sec.
     47), because each of them is a plausible reading that produces a WRONG
     answer about mains rather than an error:
 
@@ -13110,7 +13110,7 @@ def test_msd_capability_mount_eject_list_and_the_path_traversal_guard():
     LUN (lun.0/file, /cdrom, /ro as regular files) -- exercises the logic
     this class owns without needing the real gadget or root. The kernel's
     OWN part (a configfs write actually reaching /dev/hidg*-style behaviour)
-    is not this test's job; docs/FINDINGS.md carries that measurement once
+    is not this test's job; docs/lab/FINDINGS.md carries that measurement once
     it exists against real hardware, the same split VideoCapability's own
     tests already draw between "the daemon's logic" and "the stick".
     """

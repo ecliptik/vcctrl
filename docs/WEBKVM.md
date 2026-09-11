@@ -925,7 +925,7 @@ before it is allowed to report something.
 
 **The witness must not paint the screen.** Scancodes are hex digits, and this
 rig has a standing finding that OCR does not read digits off this glass
-(`OPEN-FAULTS.md`: counts read by size and by eye for exactly this reason; and
+(`lab/OPEN-FAULTS.md`: counts read by size and by eye for exactly this reason; and
 at −38% amplitude it is worse). A misread nibble is a **wrong identity rather
 than a missing one**, which fills the table instead of leaving a hole. So the
 probe appends to a file on the card and the file is fetched over `--from` and
@@ -1063,7 +1063,7 @@ of coverage that replaces the check.)*
 #### Sweep order, pinned rather than assumed
 
 The lock keys go **last** and their states are pinned and recorded. Two
-reasons, and only the first was previously written down: `FINDINGS.md` sec. 3
+reasons, and only the first was previously written down: `lab/FINDINGS.md` sec. 3
 says never send a lock key mid-sweep because they are the harness's own
 signalling; and, measured above, NumLock moves the AL column of all 16 keypad
 keys. The per-record `LL` makes a reordering visible rather than silently
@@ -1134,7 +1134,7 @@ could not see.
 #### Two hazards that are not optional
 
 **The lock keys are measured deliberately and separately, never swept
-inline.** `FINDINGS.md` sec. 3, and on this rig they are the harness's own
+inline.** `lab/FINDINGS.md` sec. 3, and on this rig they are the harness's own
 signalling: Caps is the reboot detector, Scroll is `RDYPULSE`. A sweep that
 injects them in sequence fights the instrumentation while looking like a
 keyboard fault.
@@ -1870,7 +1870,7 @@ does not quietly drop one:
   buttons (`:877`). Extending the key table for item 4 must not trip these.
 - **`ctrl-alt-del.target` stays masked.** The virtual keyboard is a keyboard to
   the Pi as well as to the g2k; without the mask, `vcctrl combo ctrl alt delete`
-  reboots the Pi. Found the hard way -- see `docs/FINDINGS.md`.
+  reboots the Pi. Found the hard way -- see `docs/lab/FINDINGS.md`.
 - **Keep the pacing semantics.** `DEFAULT_PACE_S = 0.012` exists because USB4VC
   drains one event per device per loop pass with a 5 ms idle sleep (`:772`,
   `:766`). Threading `serve()` must not let two clients interleave events on

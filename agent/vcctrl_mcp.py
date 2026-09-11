@@ -7,7 +7,7 @@ only for now (Mac Plus testing is deferred; see the note on JOBS and on
 TWO DEPLOYMENT MODES, same file, chosen by VCCTRL_MCP_ROLE. Named after
 vcctrl.yaml's own `control:`/`daemon:` sections, not after a specific board
 -- the daemon host has already changed hardware once
-(docs/PI5-MIGRATION.md), and a role called "pi" would be a lie the next
+(docs/lab/PI5-MIGRATION.md), and a role called "pi" would be a lie the next
 time it does.
 
   control (default) -- runs on the control host, stdio transport, shells
@@ -31,7 +31,7 @@ time it does.
     devices and the input lock -- today a crashed MCP layer means "the
     tools stop working"; built into vcctrld it would mean "input control
     stops working," a much bigger blast radius. The daemon host is a Pi 5
-    now (4GB RAM, docs/PI5-MIGRATION.md) -- the old Pi-3 memory-pressure
+    now (4GB RAM, docs/lab/PI5-MIGRATION.md) -- the old Pi-3 memory-pressure
     concern that shaped a lot of this project's caution does not apply to
     the dependency footprint; the coupling/stability risk is the real
     reason.

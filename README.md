@@ -48,9 +48,9 @@ concrete parts list to start from or diverge from on purpose:
 
 | role | what this rig uses | notes |
 |---|---|---|
-| Daemon host | **Raspberry Pi 5** (4 GB), Debian 13 (Trixie) arm64 | A Pi 3B also worked (see `docs/PI5-MIGRATION.md`) but is measurably slower under load; the Pi's own USB-C port doubles as the OTG connection for the `hid-gadget` input backend if you use that instead of USB4VC |
+| Daemon host | **Raspberry Pi 5** (4 GB), Debian 13 (Trixie) arm64 | A Pi 3B also worked (see `docs/lab/PI5-MIGRATION.md`) but is measurably slower under load; the Pi's own USB-C port doubles as the OTG connection for the `hid-gadget` input backend if you use that instead of USB4VC |
 | PS/2 input + board identity | **[USB4VC](https://github.com/dekuNukem/USB4VC)** HAT (STM32-based), with its swappable **IBM PC** protocol board (PS/2 keyboard+mouse) or **Lisa/Mac/ADB** protocol board | One USB4VC drives either target; the board is swapped by hand and identified over SPI at runtime (`docs/BOARD-IDENTITY.md`) |
-| Video + audio capture | A **MACROSILICON-chipset** USB2.0 VGA/HDMI-to-USB capture dongle (USB ID `1b80:e309`/similar, sold generically on Amazon/AliExpress/eBay as a "USB video capture card") | Locks onto both text-mode and low-res graphics modes; carries line-in audio on the same dongle. Pin it by `/dev/v4l/by-id/...`, never `/dev/videoN` — index drift across UVC devices is real (`docs/FINDINGS.md` #44) |
+| Video + audio capture | A **MACROSILICON-chipset** USB2.0 VGA/HDMI-to-USB capture dongle (USB ID `1b80:e309`/similar, sold generically on Amazon/AliExpress/eBay as a "USB video capture card") | Locks onto both text-mode and low-res graphics modes; carries line-in audio on the same dongle. Pin it by `/dev/v4l/by-id/...`, never `/dev/videoN` — index drift across UVC devices is real (`docs/lab/FINDINGS.md` #44) |
 | Optional second camera | An **Innomaker U20CAM-1080p** UVC camera, pointed at the physical machine (not its video signal) — for a hardware-level view when the primary capture is dark or frozen | Genuinely optional; `capabilities.camera.backend` defaults to not-installed |
 | Mains power control | A **TP-Link Kasa** smart plug (works with both the legacy LAN protocol and the newer KLAP one) or a **Wemo Insight**, switched between rigs over time | `shell` backend exists for a relay board, a Zigbee bridge, or a person with a switch |
 | Target boot media | A CF card + generic **USB CF card reader** (Genesys Logic chipset) on the daemon host, for pushing files onto/pulling logs off of a DOS target that has no other network path | Not needed once a NIC + FTP client is working on the target; see `docs/FILE-TRANSFER.md` |
@@ -218,7 +218,7 @@ tests/                  the test suite -- pytest tests/, no hardware required
 
 | shape | proven | notes |
 |---|---|---|
-| PS/2 DOS/Windows PC over USB4VC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, and the web KVM all proven on real hardware; see `docs/FINDINGS.md` |
+| PS/2 DOS/Windows PC over USB4VC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, and the web KVM all proven on real hardware; see `docs/lab/FINDINGS.md` |
 | HDMI-out Linux box over the Pi's own USB gadget (`hdmi-usb`) | **working end to end** | no USB4VC required for this shape; multi-profile (one daemon, several targets) proven the same way |
 | Classic Macintosh over USB4VC's ADB board + RGB2HDMI (`rgb2hdmi-usb4vc`) | **scaffolded, unmeasured** | `profile-kinds/rgb2hdmi-usb4vc.yaml` and `vcctrl-macintosh.example.yaml` exist; no such hardware has run against this project's rig yet |
 
@@ -226,7 +226,7 @@ Known gaps, honestly: no hardware reset line yet for a target that ignores
 Ctrl-Alt-Del from within a program (GPIO to the reset header is the
 documented plan, not yet built); H.264 video transport and the on-screen
 keyboard's full per-key coverage are measured on exactly one board so far.
-See `docs/OPEN-FAULTS.md` for the complete, current list.
+See `docs/lab/OPEN-FAULTS.md` for the complete, current list.
 
 ## Contributing
 

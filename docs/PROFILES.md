@@ -21,7 +21,7 @@ keeps a backward-compatible `/run/vcctrl.sock` alias alongside its own
 original design — `modernpc` first shipped as a second, independent
 `vcctrld` process (commit `24efb7e`) and was later folded into the
 primary's process (commits `7bdede9`, `3a973c6`) once a live
-measurement (`docs/FINDINGS.md` #46) showed sharing the process/GIL
+measurement (`docs/lab/FINDINGS.md` #46) showed sharing the process/GIL
 cost the primary's timing-sensitive PS/2 emission under a millisecond
 — safely inside the margin, not a real risk. Read that commit sequence
 if you need the reasoning, not just the result.
@@ -33,7 +33,7 @@ SPI bridge) is refused for any profile after the first to claim it
 (`main()`'s "EXCLUSIVE HARDWARE GUARD", `daemon/vcctrld.py`). Every
 other potential collision (two profiles pointed at the same camera or
 audio device, say) is prevented by the operator's own config discipline
-— see the "Not yet fixed properly" note in `OPEN-FAULTS.md` #21 for
+— see the "Not yet fixed properly" note in `lab/OPEN-FAULTS.md` #21 for
 exactly what that means in practice.
 
 ## How to add a new profile
@@ -52,13 +52,13 @@ exactly what that means in practice.
    runtime — see that directory's own comments for why: a deployed
    profile's config must stay fully self-evident on its own).
 3. Fill in the `REPLACE_ME` placeholders (device by-id paths especially
-   — always by-id, never `/dev/videoN`, see `docs/FINDINGS.md` #44's
+   — always by-id, never `/dev/videoN`, see `docs/lab/FINDINGS.md` #44's
    port-topology note on why index drift is a real hazard with three-
    plus UVC devices on one Pi) — including the `machine:` block's own
    `label`/`os`/`keyboard`, added 2026-09-02. `keyboard` matters most for
    an `hdmi-usb` profile: it has no protocol board and no `targets:` row,
    so `machine.keyboard` is the *only* place a layout can come from (see
-   `OPEN-FAULTS.md` #21's "modernpc had no keyboard layout at all").
+   `lab/OPEN-FAULTS.md` #21's "modernpc had no keyboard layout at all").
 4. Deploy: `pi/deploy.sh --profile <name>` (or `pi/install.sh
    --profile-only <name>` on the Pi directly). This is currently
    **transitional** — it installs a second systemd unit
@@ -102,14 +102,14 @@ One `vcctrld.service` on `usb4vc` serving both `gateway2000` and
 `modernpc`. `vcctrld-modernpc.service` (the old second-process unit) is
 gone. The VGA capture stick and the room camera were unplugged
 2026-09-01 to diagnose a real undervoltage event (see
-`docs/FINDINGS.md` #44's power-path caveat and `OPEN-FAULTS.md` #21) —
+`docs/lab/FINDINGS.md` #44's power-path caveat and `lab/OPEN-FAULTS.md` #21) —
 `gateway2000`'s own video/camera capabilities were still reporting
 `device_present: false` as of this writing. `modernpc` is fully working:
 HID-gadget keyboard/mouse, HDMI capture at its native 1920x1080
-(`docs/FINDINGS.md` region around commit `cc57c0e`), profile switching
+(`docs/lab/FINDINGS.md` region around commit `cc57c0e`), profile switching
 in the web UI confirmed live in both directions.
 
-See `OPEN-FAULTS.md` #21 for the specific things still worth watching
+See `lab/OPEN-FAULTS.md` #21 for the specific things still worth watching
 before trusting this further, and the commit range `fe15c51..3ca61dd`
 for the full, in-order history of how this was built, measured, and
 debugged.

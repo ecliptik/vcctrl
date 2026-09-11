@@ -1,5 +1,7 @@
 # Open faults, and what to do about them
 
+> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+
 `FINDINGS.md` records what happened. **This file is the forward-looking half:
 what is still broken, what is worked around rather than fixed, and what to
 check before trusting a result.** If you are picking this up cold, read this
@@ -1772,7 +1774,7 @@ would silently share `gateway2000`'s class-attribute value instead of
 its own. Nothing catches this at config time; it would just be wrong.
 
 **The hub-backfed power path had one confirmed brownout under full
-combined load, 2026-09-01** (`docs/FINDINGS.md` #44's own caveat named
+combined load, 2026-09-01** (`docs/lab/FINDINGS.md` #44's own caveat named
 this risk before it happened). Real undervoltage events, real full
 power loss requiring a physical re-seat — not a simulation. Clean for
 17+ hours afterward under normal/idle-ish use (`vcgencmd get_throttled`

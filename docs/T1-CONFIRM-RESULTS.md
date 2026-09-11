@@ -45,7 +45,7 @@ The band traces to a measurement artifact: `per_loop_fps` is computed as
 truncates to 0.1 fps before it is ever formatted. Four cells reading identically
 became a "±0.1 repeatability band", and that became the acceptance criterion.
 **The artifact was load-bearing in the round's design before anyone examined
-it.** See `HARNESS-STANDARD.md` 10.0b and 10.0e, and `FINDINGS.md` §40.
+it.** See `HARNESS-STANDARD.md` 10.0b and 10.0e, and `lab/FINDINGS.md` §40.
 
 **This is not hindsight.** The repeatability characterisation was completed and
 sent at 17:07, before `CS4A` had finished. The base rate predates the result it
@@ -107,6 +107,6 @@ refuted by one pass over runs already on disk. See `HARNESS-STANDARD.md` 10.0d.
 ## Provenance caveat
 
 **Do not use `started_rtc_local` for ordering or sitting membership** — it is
-corrupt. See `OPEN-FAULTS.md` §10. The in-log `[HH:MM:SS]` prefixes are the good
+corrupt. See `lab/OPEN-FAULTS.md` §10. The in-log `[HH:MM:SS]` prefixes are the good
 clock, and the archive comparison above was only buildable after abandoning the
 manifest field.

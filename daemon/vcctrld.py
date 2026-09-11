@@ -177,7 +177,7 @@ def _profile_thread(target, name=None, daemon=True):
     profile whose capability spawned it. Every `CFG.xxx` read on that thread
     then answers for the primary profile, silently and correctly-looking.
 
-    MEASURED, not reasoned (2026-09-02, docs/FINDINGS.md sec. 54): a second
+    MEASURED, not reasoned (2026-09-02, docs/lab/FINDINGS.md sec. 54): a second
     profile's `PowerCapability` heartbeat resolved `power_host()` to the
     PRIMARY's plug address. With a primary that has no plug the second
     profile's plug was never polled at all; with one that does, the second
@@ -842,7 +842,7 @@ def power_set(host, on):
 # FOUR THINGS ABOUT THIS PROTOCOL THAT READ AS BUGS AND ARE NOT. All four were
 # measured 2026-09-01 against a Wemo Insight running firmware
 # WeMo_WW_2.00.11532.PVT-OWRT-Insight, on a flat LAN with the daemon host; see
-# docs/FINDINGS.md sec. 47 for the readings and the conditions.
+# docs/lab/FINDINGS.md sec. 47 for the readings and the conditions.
 #
 # 1. THE PORT MOVES. The device picks its HTTP port at boot; 49153 is only the
 #    usual answer and 49152/49154/49155 are the others it takes. A literal here
@@ -1295,7 +1295,7 @@ class WemoPower(object):
                 # cable out, a PSU that did not come up. It is the one witness
                 # of target state on this rig that does not route through video
                 # capture, which is worth something given how much of
-                # docs/FINDINGS.md is about video lying.
+                # docs/lab/FINDINGS.md is about video lying.
                 #
                 # NULL, NEVER ZERO, WHERE THERE IS NO METER: a Wemo Switch has
                 # no measuring hardware and 0 mW would read as "plugged in and
@@ -3847,7 +3847,7 @@ class VideoCapability(Capability):
     wrong unit: frame size varies by an order of magnitude between a text
     console and a game screen, and an OOM takes the uinput devices with it.
 
-    NOT YET FIXED, LEFT AS A NOTE RATHER THAN A CHANGE (docs/FINDINGS.md #45):
+    NOT YET FIXED, LEFT AS A NOTE RATHER THAN A CHANGE (docs/lab/FINDINGS.md #45):
     the very first frame read after a v4l2 device is freshly opened can be a
     stale "locked, no source" placeholder even when a real signal is present
     -- measured on the SAME MacroSilicon chip family this class already
@@ -5479,7 +5479,7 @@ class AudioCapability(Capability):
     # The frequency-analysis constants and math now live in
     # common/audio_bands.py, shared with the control host (bin/, agent/) --
     # see that module's own comments for what each one means and how it was
-    # calibrated (docs/FINDINGS.md sec 42). These stay as class attributes
+    # calibrated (docs/lab/FINDINGS.md sec 42). These stay as class attributes
     # so existing call sites (and tests/test_core.py) don't need to change
     # what they reference.
     BAND_HZ = audio_bands.BAND_HZ
@@ -7638,7 +7638,7 @@ class TargetProfile(object):
     # absence is not evidence of any particular one of them.
     #
     # SAME TWO STRINGS ARE HARDCODED AGAIN in harness/vcctrl-cell's profile
-    # witness (docs/OPEN-FAULTS.md sec 15) -- that check runs on the CONTROL
+    # witness (docs/lab/OPEN-FAULTS.md sec 15) -- that check runs on the CONTROL
     # host against a value OCR'd live off the DOS prompt (never the file-based
     # channel this class assumes), so it cannot import this dict across the
     # host boundary. If either set of strings changes, update BOTH.
@@ -8673,7 +8673,7 @@ class TransferJob(NetJob):
             results.append(self._send_one(rec))
             # BOTH why VALUES STOP THE RUN, NOT ONLY "no-prompt" -- same
             # reasoning as PullJob's identical loop, and the same measured
-            # cause (docs/OPEN-FAULTS.md sec 16). at_prompt()/wait_prompt()
+            # cause (docs/lab/OPEN-FAULTS.md sec 16). at_prompt()/wait_prompt()
             # tests the BIOS ISR, not "DOS is at a clean prompt": a VCGET.BAT
             # command truncated by the keyboard buffer leaves DOS sitting on
             # an unfinished input line while the ISR stays responsive, which
@@ -8932,7 +8932,7 @@ class PullJob(NetJob):
             # times out with "no-return" means wait_prompt() found the BIOS
             # keyboard ISR alive -- which is NOT "DOS is at a clean prompt"
             # (wait_prompt's own docstring: "NOT is DOS at a prompt"). Measured
-            # 2026-08-25 (docs/OPEN-FAULTS.md sec 16): a VCCHK.BAT command
+            # 2026-08-25 (docs/lab/OPEN-FAULTS.md sec 16): a VCCHK.BAT command
             # truncated by the BIOS keyboard buffer leaves its Enter unsent,
             # so the ISR stays responsive (a "no-return" leg) while DOS is
             # still sitting on that unfinished input line. The NEXT file's

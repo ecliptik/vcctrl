@@ -108,7 +108,7 @@ as routine practice, not only once the primary capture already looks
 broken.** It costs one `curl`+`ffmpeg` call and is a genuinely independent
 witness -- different device, different mode/refresh constraints, not
 subject to the analog stick's lock-loss behavior at all. Live case,
-2026-08-31: running `UVCONFIG.EXE` (see `docs/VIDEO-SWAP.md`) made the VGA
+2026-08-31: running `UVCONFIG.EXE` (see `docs/lab/VIDEO-SWAP.md`) made the VGA
 capture stick lose lock mid-configuration (`vcctrl_video_state` read
 `state: "frozen"`, flat black, for 20+ seconds) -- indistinguishable, from
 the analog stick alone, between "stuck on an interactive menu neither the

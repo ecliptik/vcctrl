@@ -1,9 +1,18 @@
 # docs — what is here and which of it is current
 
-Twenty files, written over a campaign rather than designed. This says what each
+32 files, written over a campaign rather than designed. This says what each
 is for, and — more importantly — **which numbers in them have been retracted**,
 because several documents carry a live figure and a withdrawn one in the same
 section.
+
+**Layout, since 2026-09-11:** most files sit directly in `docs/`. `lab/`
+holds six documents specific to measuring this project's own physical
+rig — findings, open faults, hardware migrations and swaps — kept public
+because they're the most honest record of what real hardware does, but
+clearly separated from target-agnostic reference. `history/` holds
+superseded planning documents, kept verbatim for the record. This index
+still names every file by its bare filename below; check `lab/` first if a
+name doesn't turn up in `docs/` directly.
 
 ---
 

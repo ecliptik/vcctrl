@@ -1,6 +1,6 @@
 # Three jobs, planned before starting any of them
 
-**See also `OPEN-FAULTS.md`** -- the live register of what is still broken
+**See also `lab/OPEN-FAULTS.md`** -- the live register of what is still broken
 and what to check before trusting a result. Item 1 below is superseded; the
 register says why.
 

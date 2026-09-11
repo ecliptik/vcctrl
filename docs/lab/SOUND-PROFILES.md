@@ -1,5 +1,7 @@
 # Sound profiles
 
+> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+
 > ## OPERATOR DECISION 2026-08-19 (late): THE VIBRA COMES OUT
 >
 > **The standing hardware configuration is PicoGUS + video card + NIC. The

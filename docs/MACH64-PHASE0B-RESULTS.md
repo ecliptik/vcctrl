@@ -311,5 +311,5 @@ all three.
 
 **And the daemon did not fall over** — decoded as far as it could, raised,
 counted, kept the bytes, carried on, with two browser tabs driving
-`/timeline.json` through the same window. See `OPEN-FAULTS.md`: that is
+`/timeline.json` through the same window. See `lab/OPEN-FAULTS.md`: that is
 evidence **against** malformed frames causing the abort.

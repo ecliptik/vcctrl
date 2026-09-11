@@ -28,7 +28,7 @@ BAND_HZ = (100, 200, 400, 800, 1600, 3200, 6400, 12800)
 # in a 1-3 s request, long enough (11.7 Hz/bin) to resolve the lowest band's
 # ~70 Hz width into several bins rather than one. This replaced a per-band
 # Goertzel point-probe that read real Passage music as silent (measured
-# 2026-08-27, docs/FINDINGS.md sec 42): a multi-second Goertzel window has
+# 2026-08-27, docs/lab/FINDINGS.md sec 42): a multi-second Goertzel window has
 # sub-Hz resolution, so it was asking "is there energy at EXACTLY 800.000
 # Hz" rather than "how much energy is in 566-1131 Hz", and real music is
 # essentially never sitting on that exact point.
@@ -39,7 +39,7 @@ SPECTRUM_FFT_N = 4096
 # matters because digital silence reads as flat across every band (nothing
 # is louder than anything else), and without it that flatness would count
 # as "every band active" instead of "none". Calibrated against the REAL rig
-# (docs/FINDINGS.md sec 42, 2026-08-27), not assumed: real Passage music
+# (docs/lab/FINDINGS.md sec 42, 2026-08-27), not assumed: real Passage music
 # read active_bands 7/8 (band_db -39.5 to -79.2, only the 12.8 kHz band
 # excluded -- game audio genuinely has little content there) at the same
 # moment `_levels` read mean -35.2 dB; Passage's own silent title screen

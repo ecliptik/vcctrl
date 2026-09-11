@@ -184,7 +184,7 @@ second thing to drift. `C:\DOSKUTSU` holds `DOSKUTSU.EXE`, `CLRENV.BAT` and
 the `LOGS\` tree, and a fetch overwrites by name without asking.
 
 **Attests the profile positively.** A reboot into NET is confirmed by the
-packet driver answering, not by a missing `BLASTER` — see `OPEN-FAULTS.md`
+packet driver answering, not by a missing `BLASTER` — see `lab/OPEN-FAULTS.md`
 sec. 15 for why the sound witness cannot be run backwards.
 
 ## `GET.BAT` is the bootstrap, not the routine path

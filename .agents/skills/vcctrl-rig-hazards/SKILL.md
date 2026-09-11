@@ -6,7 +6,7 @@ description: Facts about the vcctrl rig (USB4VC PS/2 bridge, VGA capture stick, 
 # vcctrl rig hazards
 
 Each of these was found by measurement, cost real debugging time, and is not
-guessed at from the code — see `docs/FINDINGS.md` for the underlying
+guessed at from the code — see `docs/lab/FINDINGS.md` for the underlying
 evidence if you need it.
 
 **A black frame is not a black screen.** The capture stick emits flat-black
@@ -77,7 +77,7 @@ is actually plugged in. Don't treat board-scoping as machine-safety.
 **A working Ctrl-Alt-Del can take far longer to register than it looks
 like it should.** Measured 2026-08-26: three separate sends each produced a
 clean, correctly-timed Scroll Lock clear→set cycle (~11-12s apart, matching
-`docs/FINDINGS.md` sec. 7) — but the gap between *sending* the chord and
+`docs/lab/FINDINGS.md` sec. 7) — but the gap between *sending* the chord and
 the clear *starting* was as long as 85 seconds on a chord that worked fine.
 A short timeout reads a working chord as swallowed and resends into a reset
 already under way, which is a race the caller creates for itself, not a
@@ -150,7 +150,7 @@ was aimed at, and the *next* boot lands on the wrong profile — turning a
 job that would have self-recovered into one that reliably burns its whole
 180s waiting for a network stack that was never going to come up. Once a
 `vcctrl_get_file`/reboot job shows `running: true`, leave the target alone
-until it finishes on its own. See `docs/OPEN-FAULTS.md` sec. 20.
+until it finishes on its own. See `docs/lab/OPEN-FAULTS.md` sec. 20.
 
 Separately, `vcctrl_verify_input`'s LED round-trip can false-negative
 against a target that's genuinely receiving keystrokes: a game running in
@@ -170,7 +170,7 @@ code path had worked moments before on a faster CPU. Root cause:
 USB4VC bridge's own event-loop drain rate, not for how fast the target's
 BIOS keyboard ISR can service its hardware buffer between characters — a
 Pi-side constant standing in for a target-side, CPU-speed-dependent one.
-See `docs/FINDINGS.md` sec. 43 for the fix (a `pace_s` bump in the
+See `docs/lab/FINDINGS.md` sec. 43 for the fix (a `pace_s` bump in the
 *deployed* daemon config, not this repo's tracked copy) and why it isn't
 automatically re-tuned per installed CPU. **After any CPU swap, budget for
 re-tuning `pace_s` by hand** — a pace that was safe on the old CPU is not

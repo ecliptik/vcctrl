@@ -28,7 +28,7 @@ Chosen by `VCCTRL_MCP_ROLE`:
 
 Named after `vcctrl.yaml`'s own `control:`/`daemon:` sections, not after a
 specific board -- the daemon host has already changed hardware once
-(`docs/PI5-MIGRATION.md`), and a mode called "pi" would be a lie the next
+(`docs/lab/PI5-MIGRATION.md`), and a mode called "pi" would be a lie the next
 time it does.
 
 **Why not just build MCP into `vcctrld` itself**, which was the operator's
@@ -39,7 +39,7 @@ route. And a bug in the MCP-serving code must not be able to take down the
 process that owns the uinput devices and the input lock; today a crashed
 daemon-mode server means "the tools stop working," built into `vcctrld` it
 would mean "input control stops working." The daemon host is a Pi 5 now
-(4GB RAM, `docs/PI5-MIGRATION.md`) -- the old Pi-3 memory concern that
+(4GB RAM, `docs/lab/PI5-MIGRATION.md`) -- the old Pi-3 memory concern that
 shaped a lot of this project's caution does not apply to the dependency
 footprint; the coupling/stability risk is the real reason, decided with
 the operator 2026-08-25.
@@ -103,7 +103,7 @@ the local filesystem, so the host-boundary machinery simply isn't needed.
   -- with the Mac Plus installed it would still have cut the g2k's mains, a
   machine nobody asked about. Fixed daemon-side and deployed before any
   power tool shipped; see `docs/BOARD-IDENTITY.md` sec. 5 and
-  `docs/FINDINGS.md` sec. 41 for the related `verify_input` fix this same
+  `docs/lab/FINDINGS.md` sec. 41 for the related `verify_input` fix this same
   work turned up.
 - **Every call is visible.** Nothing here routes around `vcctrl activity`
   or the power audit log -- a human watching the rig sees `mcp:...` show up

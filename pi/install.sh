@@ -286,7 +286,7 @@ fi
 # install_hid_gadget(): the Pi's own USB-C port acting as a USB HID
 # keyboard+mouse gadget (dwc2 peripheral mode + configfs), for driving a
 # second, always-present target that has no PS/2 port for USB4VC to reach --
-# see docs/FINDINGS.md #44-45 for how this was validated. OPT-IN, not part
+# see docs/lab/FINDINGS.md #44-45 for how this was validated. OPT-IN, not part
 # of the unconditional full-install tail: unlike vcctrld itself, this needs
 # specific physical wiring (a powered hub feeding the Pi's USB-C both power
 # and data) that most deployments of this rig won't have, so a fresh install
@@ -657,7 +657,7 @@ UNIT
 # The virtual keyboard is a keyboard to THIS Pi as well as to the DOS box, so
 # systemd would act on chords meant for the target. Ctrl-Alt-Del is the one
 # that bites: without masking, `vcctrl combo ctrl alt delete` reboots the Pi.
-# Found the hard way -- see docs/FINDINGS.md.
+# Found the hard way -- see docs/lab/FINDINGS.md.
 sudo systemctl mask ctrl-alt-del.target
 
 # ---------------------------------------------------------------------------
@@ -676,7 +676,7 @@ FILES="$SRC/pi/files"
 # XOFF on the Pi's own console -- and a blocked console write stops journald
 # draining its socket, which blocks sshd, PAM and sudo behind it. Measured:
 # journald wedged in writev() on /dev/console, fd 41, every sample of a stall.
-# See docs/FINDINGS.md sec. 28.
+# See docs/lab/FINDINGS.md sec. 28.
 if [ -f "$FILES/journald.conf" ]; then
   sudo install -m 0644 "$FILES/journald.conf" /etc/systemd/journald.conf
   sudo systemctl restart systemd-journald || true
@@ -853,7 +853,7 @@ fi
 # every input event before it reaches the protocol board, so NOTHING is driven
 # -- no keystrokes, no mouse, no activity LEDs -- while SPI, the OLED and board
 # detection all keep working and make it look like a cable fault. Cost us most
-# of an afternoon on 2026-08-20. See docs/FINDINGS.md sec. 29.
+# of an afternoon on 2026-08-20. See docs/lab/FINDINGS.md sec. 29.
 if [ -f "$SRC/tools/patch-usb4vc-64bit.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_usb_scan.py ]; then
   sudo python3 "$SRC/tools/patch-usb4vc-64bit.py" --check || \
     echo "WARNING: 64-bit input_event patch is NOT applied. On this kernel that means no input reaches the target at all."

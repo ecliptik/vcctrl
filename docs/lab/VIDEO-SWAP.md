@@ -1,5 +1,7 @@
 # Video card swaps: ViRGE, Mach64, Cirrus
 
+> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+
 Written 2026-08-19. **Current card: S3 ViRGE/DX**, which is what every banked
 fps anchor was measured on. Mach64 and the onboard Cirrus are both in the
 parts pile and both untested under capture.

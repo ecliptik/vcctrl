@@ -1,5 +1,7 @@
 # vcctrl -- findings from building it
 
+> This document is one project's record of its own physical rig -- specific hardware, specific findings, not a general reference. See `docs/HARNESS-STANDARD.md` for the target-agnostic contract this rig implements.
+
 **This file records what happened. For what is still broken and what to
 check before trusting a result, see `OPEN-FAULTS.md`.**
 
