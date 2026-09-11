@@ -8,7 +8,7 @@ open.
     {"id": 3, "name": "Apple Lisa/Mac/ADB", "target": "Macintosh Plus",
      "source": "status-file", "stale": false, "reason": null}
 
-Shipped in `cee3836`: `BoardCapability` in the daemon, `board` in
+Shipped in `d251a44`: `BoardCapability` in the daemon, `board` in
 `/state.json`, `vcctrl board` in the CLI, a `board.changed` event on the bus,
 and `tools/patch-usb4vc-board.py` as the local rpi_app patch with a `--check`
 mode that `pi/install.sh` runs so an upstream update cannot drop it silently.

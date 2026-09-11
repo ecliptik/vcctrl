@@ -2862,7 +2862,7 @@ opposite facts that must never share a JSON value.
 ### The energy meter shipped with the read-path gap still open, and closed later than the code
 
 Written up here after the fact — the code landed same-day (commit
-`213c592`), but the measurement belongs in this file per CLAUDE.md's own
+`9ba76c7`), but the measurement belongs in this file per CLAUDE.md's own
 rule and it was left in the commit message instead. Filed late rather than
 never.
 
@@ -2904,7 +2904,7 @@ Nothing had recorded a cursor moving on `modernpc` from the daemon --
 FINDINGS #44's "10-second mouse square" was raw `/dev/hidg1` writes with a
 laptop as the host, not `vcctrld` against the real target. Conditions: one
 `vcctrld` process serving both profiles (build `7dffed77`, the tree at
-commit `6895cdc`), gadget `vcctrl-hid-km` bound to `1000480000.usb` with
+commit `7285fc0`), gadget `vcctrl-hid-km` bound to `1000480000.usb` with
 `/sys/class/udc/1000480000.usb/state` reading `configured` and
 `current_speed` `high-speed` (a host had enumerated it); `modernpc`'s HDMI
 capture at 1920x1080, `analog: false`; modernpc's display blanked -- every
@@ -2929,7 +2929,7 @@ Two side findings from the same session, both real:
 
 - `vcctrl_shot profile=modernpc` refused with "no picture: every frame in
   the window was a duplicate" on that flat-black screen. Duplicate frames
-  are only evidence of no signal on an ANALOG capture (commit `0b8a051`
+  are only evidence of no signal on an ANALOG capture (commit `a057114`
   fixed exactly this for the status line); the shot judgement still
   applies the analog rule to a digital source. `/frame.jpg?seq=` returned
   the frame fine.
@@ -2975,7 +2975,7 @@ after the operator reported clicks working but scrolling not, having tried
 it against `modernpc`'s live desktop.
 
 Six `vcctrl_mouse_wheel dy=50` calls (profile `modernpc`, build after commit
-`046d772`) were sent while a terminal window sat under the cursor on
+`431718e`) were sent while a terminal window sat under the cursor on
 modernpc's desktop, a Signal window also visible but not under the cursor.
 The next raw frame showed the terminal's visible boot-log content had
 scrolled to a different position; the Signal window's content did not
@@ -3220,7 +3220,7 @@ specific power configuration -- it is a real, sustained ~0.85-of-a-core
 cost and a real thermal one, and on a rig already close to its power
 margin it can be the push that trips a brownout. That is the direct
 reason `daemon/kvm.html`'s transport selector now defaults to `mjpeg`
-(commit b15d446): a local session, where mjpeg's own bandwidth is free,
+(commit ccf38e2): a local session, where mjpeg's own bandwidth is free,
 should never pay this cost unasked -- H.264 is an opt-in switch for the
 case it actually helps (a slow remote link, where mjpeg's ~40 Mbit/s is
 the more expensive thing).

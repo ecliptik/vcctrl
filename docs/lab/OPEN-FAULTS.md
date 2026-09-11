@@ -273,7 +273,7 @@ from under a thread that is still inside it.
 `wlock` never covered this. It serialises WRITERS against each other; the
 reader is neither a writer nor joined.
 
-**a2b318a wrote the right fix into the wrong function and nobody ran it.**
+**55130a3 wrote the right fix into the wrong function and nobody ran it.**
 The teardown — stop, join, then close — landed in `TLSServer.get_request`,
 which has no `reader` and no `self.lock`, and it removed the `sock.close()`
 that was there. So for three days:
@@ -293,7 +293,7 @@ only reason the listener bug was not also observed on the rig.
 **Both halves are now in the right place, and both are covered by tests that
 were checked against the broken code first.** `test_core.py` asserts the
 teardown ORDER against a real socketpair rather than the presence of a
-`join` — a source-text check for "join" passes against a2b318a, because the
+`join` — a source-text check for "join" passes against 55130a3, because the
 join was in the file the whole time.
 
 **The join closed the teardown race and left the larger one open** —
@@ -340,7 +340,7 @@ first that the connection really carried both directions — a socket nothing
 touched trivially has one owner. Against the two-thread version it reports
 "2 threads, 13 touches" and fails.
 
-**DEPLOYED 2026-08-24 19:06:44**, committed first as `07785e9` so the Pi is
+**DEPLOYED 2026-08-24 19:06:44**, committed first as `fdb3472` so the Pi is
 running code that exists in a commit.
 
 **VERIFIED ON HARDWARE, and the handshake one is the fix demonstrated rather
@@ -476,7 +476,7 @@ it is worse than either: **a value that belongs to NO epoch.** Nothing ever
 wrote it. It is the virtual keyboard's initial state, published in the same
 shape as a measurement, and no amount of re-reading it will improve it.
 (Distinction from the benchmarking session, which has since written it into
-the harness standard as 7.2.2f, `7a8037f`.)
+the harness standard as 7.2.2f, `f84d958`.)
 
 **So the requirement, for anything that maintains state by observing changes:**
 publish the transition count and the last-changed time BESIDE the value, and
@@ -1533,7 +1533,7 @@ Logged here as a TODO rather than investigated on the spot because a real
 hardware ABBA round was in progress at the time.
 
 **Not confirmed, but worth checking first given the timing:** `daemon/kvm.html`
-had two rounds of edits the same day this was reported -- `f2e84b8` added a
+had two rounds of edits the same day this was reported -- `108eb6f` added a
 10px `#scroll` padding that `applyZoom()`'s fit calculation is supposed to
 subtract, and this session's own popover-height fix (:not([hidden]) CSS
 specificity, plus `matchPopHeight()` measuring Sound/Power instead of
@@ -1763,7 +1763,7 @@ found and closed in the same review that found the rest of this section.
 tested because it hasn't needed to be.** `AudioCapability`/
 `CameraCapability`/`PowerCapability`'s own device/path class attributes,
 and `BoardCapability.FILE`, were left un-fixed by the single-process
-rewrite (`daemon/vcctrld.py`, commit `7bdede9`) — only `VideoCapability`
+rewrite (`daemon/vcctrld.py`, commit `c81cc25`) — only `VideoCapability`
 and `Devices`/`Registry.start_web()` got the "resolve fresh per profile"
 treatment `_profile_scope()` needs. This is safe TODAY only because
 `modernpc`'s config sets all four of those to `backend: none`, so the
@@ -1788,7 +1788,7 @@ because it's been quiet.
 ### FIXED 2026-09-02: CFG was never bound per profile, and eight endpoints never carried the prefix at all
 
 A live review of `gateway2000`/`modernpc` found two more bugs in the same
-family as the two `386eaef`/`3ca61dd` already fixed here, both a request
+family as the two `a0bc492`/`1320b88` already fixed here, both a request
 resolving against the WRONG profile's state:
 
 **`self.registry` was bound per web request; `CFG` was not.** Every
@@ -1820,7 +1820,7 @@ capture (sampling noise means real content never repeats exactly),
 false for HDMI, where a genuinely static picture legitimately repeats
 forever. `vcctrl_shot profile=modernpc` refused a perfectly healthy
 locked desktop with "every frame in the window was a duplicate".
-`0b8a051` already fixed the analog/digital distinction for the STATUS
+`a057114` already fixed the analog/digital distinction for the STATUS
 label; this was the same rule still live in the shot judgement itself.
 Fixed by branching on `self.ANALOG` in `_select()` — every frame in the
 window is now a live candidate on a digital source, and `_is_picture`'s

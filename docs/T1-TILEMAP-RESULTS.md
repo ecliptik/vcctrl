@@ -148,7 +148,7 @@ may be the largest win available.
 
 ## Prediction post-mortem
 
-A numeric prediction was pinned in this repo (`2f24eed`) **while the K cells
+A numeric prediction was pinned in this repo (`36f0db7`) **while the K cells
 were still running and no fps figure had reached the harness** — `per_loop_fps`
 only arrives at the NET-boot collect, so the pre-registration was enforced by
 the transport rather than by intent.

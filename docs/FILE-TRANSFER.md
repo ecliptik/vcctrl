@@ -310,7 +310,7 @@ the finder returned the FIRST case-insensitive match, the freshness guard
 correctly refused it as too old, and the fresh one two entries away was never
 looked at.
 
-Fixed in `452de9b`: the finder takes the **newest** match and there is one
+Fixed in `67e16ab`: the finder takes the **newest** match and there is one
 implementation of it (`_incoming_path` had the same bug, and it is what the
 sha comparison reads); the proof file and the `.CHK` copies are consumed
 rather than left; and **`type_line` no longer presses Caps Lock** — it reads,

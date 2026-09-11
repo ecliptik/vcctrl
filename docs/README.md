@@ -199,4 +199,12 @@ arm B.
 cannot distinguish bandwidth-bound from overhead-bound, which is how a cleanly
 measured 4.77 ms left a decision unmade.
 
-# Planning docs live in internal/, which is gitignored. See CLAUDE.md.
+## Commit hashes changed on 2026-09-11
+
+A second history rewrite (public-release identifier scrub, on top of
+2026-08-24's phase 7) gave every commit a new hash. Every citation in
+this directory was updated to match; `HISTORY-MAP.txt` (not a `.md` file,
+so not in the index above) is the full old-to-new map, for anything
+citing a commit from before that date outside this repository.
+
+# Planning docs live in internal/, which is gitignored. See CONTRIBUTING.md.

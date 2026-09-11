@@ -19,8 +19,8 @@ keeps a backward-compatible `/run/vcctrl.sock` alias alongside its own
 
 **One `vcctrld` process serves every profile.** This was NOT the
 original design — `modernpc` first shipped as a second, independent
-`vcctrld` process (commit `24efb7e`) and was later folded into the
-primary's process (commits `7bdede9`, `3a973c6`) once a live
+`vcctrld` process (commit `e53b5f3`) and was later folded into the
+primary's process (commits `c81cc25`, `17c23da`) once a live
 measurement (`docs/lab/FINDINGS.md` #46) showed sharing the process/GIL
 cost the primary's timing-sensitive PS/2 emission under a millisecond
 — safely inside the margin, not a real risk. Read that commit sequence
@@ -106,10 +106,10 @@ gone. The VGA capture stick and the room camera were unplugged
 `gateway2000`'s own video/camera capabilities were still reporting
 `device_present: false` as of this writing. `modernpc` is fully working:
 HID-gadget keyboard/mouse, HDMI capture at its native 1920x1080
-(`docs/lab/FINDINGS.md` region around commit `cc57c0e`), profile switching
+(`docs/lab/FINDINGS.md` region around commit `a618384`), profile switching
 in the web UI confirmed live in both directions.
 
 See `lab/OPEN-FAULTS.md` #21 for the specific things still worth watching
-before trusting this further, and the commit range `fe15c51..3ca61dd`
+before trusting this further, and the commit range `c185bd0..1320b88`
 for the full, in-order history of how this was built, measured, and
 debugged.

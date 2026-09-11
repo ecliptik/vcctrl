@@ -138,7 +138,7 @@ log file, where a marker appears any number of times, it met `count: 27` and
 outcome table that omits a third state, inside the instrument built to prevent
 that shape. Fixed to parse the whole token with per-digit confusion classes,
 still returning could-not-read for any unrecognised glyph rather than a
-plausible wrong number (`a12064d`).
+plausible wrong number (`de5dbfc`).
 
 **It refused loudly rather than guessing, which is the design working even as
 it failed.** A misread count would have attested a cell on a number nobody

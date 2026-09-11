@@ -1,7 +1,7 @@
 # The three timing bugs: what is fixed, what is proven, what is still open
 
 Written 2026-08-19, after measuring the LED channel exposed three bugs in
-`vcctrl-collect`. Code fixes landed in `6394fd9`. **Landing a fix and proving
+`vcctrl-collect`. Code fixes landed in `587f421`. **Landing a fix and proving
 it are different things**, and for this class of bug the difference matters
 more than usual: all three returned the correct answer in the first case
 anyone would try. A fix that is merely plausible is not obviously better than
