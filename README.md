@@ -169,12 +169,11 @@ capabilities:
       host: 192.0.2.20
 ```
 
-Both TP-Link Kasa generations and Wemo are supported. No plug at all is
-fine (`none`, or omit the block) — you lose remote power-cycling, nothing
-else. `shell` runs your own on/off/state commands for a relay, a PDU, or
-a GPIO pin.
+Both TP-Link Kasa generations and Wemo are supported, plus `shell` for
+your own on/off/state commands against a relay, a PDU, or a GPIO pin.
+Power control is optional — set `none`, or omit the block.
 
-### What every configuration needs, regardless
+### What every configuration needs
 
 A Linux daemon host (`/dev/uinput` for USB4VC, or a peripheral-capable USB
 port for `hid-gadget`), root and systemd; a capture device that emits
