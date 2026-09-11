@@ -18,13 +18,16 @@ This project was built agentically using [Claude Code](https://claude.com/claude
 ## How it works
 
 ```
-┌───────────────────────┐            ┌───────────────────────┐            ┌───────────────────────┐
-│      Control Host     │            │    Daemon Host (Pi)   │            │         Target        │
-├───────────────────────┤            ├───────────────────────┤            ├───────────────────────┤
-│ vcctrl CLI            │   ssh /    │ vcctrld.py            │ PS/2, USB, │ DOS / Macintosh /     │
-│ AI Agent, Skills/MCP  │   http ──► │ input/output, video,  │ HDMI   ──► │ Linux hardware        │
-│ Web Browser (KVM)     │            │ power, audio, files   │            │                       │
-└───────────────────────┘            └───────────────────────┘            └───────────────────────┘
+┌─────────────────────┐        ┌────────────────┐               ┌─────────────┐
+│     Control Host    │        │  Daemon Host   │               │    Target   │
+├─────────────────────┤        ├────────────────┤               ├─────────────┤
+│ - vcctrl CLI        │  ssh,  │ vcctrld.py     │ PS/2, Serial, │ - DOS       │
+│ - AI Agents         │  ◄──►  │ - Input/output │   ADB, USB,   │ - Macintosh │
+│ - Skills/MCP        │  http  │ - Video        │      ◄──►     │ - Linux     │
+│ - Web Browser (KVM) │        │ - Power        │   VGA, HDMI   │             │
+│                     │        │ - Audio        │               │             │
+│                     │        │ - Files        │               │             │
+└─────────────────────┘        └────────────────┘               └─────────────┘
 ```
 
 ## Hardware and configuration
