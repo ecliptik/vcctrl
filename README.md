@@ -75,6 +75,118 @@ pick the one closest to your target and use it as your starting config
 - Python ≥ 3.7 on the daemon and control hosts; ≥ 3.10 if you run the MCP
   server (`agent/`, needs `mcp>=2.0`).
 
+## Configuration by target type
+
+Three concrete setups, each mapped to one of the `profile-kinds/*.yaml`
+templates above. Scaffold any of them with
+`tools/new-profile.py --kind <kind> --name <yours>`, then fill in the
+`REPLACE_ME` placeholders it leaves — the snippets below show only the
+parts that make each shape what it is, not a complete config.
+
+### Retro PC — `vga-ps2`
+
+A DOS/Windows-era PC with a real PS/2 keyboard/mouse port and analog VGA
+out.
+
+**Hardware:** Raspberry Pi 5 · USB4VC HAT with its IBM PC protocol board ·
+a VGA-to-USB capture dongle · optional UVC camera pointed at the machine.
+
+```yaml
+capabilities:
+  input:
+    backend: usb4vc-uinput
+  video:
+    backend: v4l2-ffmpeg
+    settings:
+      device: /dev/v4l/by-id/usb-MACROSILICON_xxxx-video-index0
+  camera:                       # optional; omit the block entirely if you
+    backend: none                # don't have this second camera
+```
+
+### Classic Macintosh — `rgb2hdmi-usb4vc`
+
+A Mac with ADB keyboard/mouse and no native HDMI/VGA — capture goes
+through an RGB2HDMI board first. **Scaffolded but unmeasured**: no such
+hardware has run against this project's own rig yet, so treat
+`profile-kinds/rgb2hdmi-usb4vc.yaml`'s values as a documented best guess,
+not a proven one.
+
+**Hardware:** Raspberry Pi 5 · the same USB4VC HAT, with its Lisa/Mac/ADB
+protocol board swapped in instead of the IBM PC one · an RGB2HDMI board
+feeding an HDMI-to-USB capture dongle · optional UVC camera.
+
+```yaml
+capabilities:
+  input:
+    backend: usb4vc-uinput   # same backend as Retro PC -- the ADB board
+                              # swap is what changes, not this setting
+  video:
+    backend: v4l2-ffmpeg
+    settings:
+      device: /dev/v4l/by-id/usb-xxxx-video-index0   # the RGB2HDMI dongle
+  camera:
+    backend: none
+```
+
+### Modern PC — `hdmi-usb`
+
+Any machine with a real HDMI output and a spare USB port — no USB4VC
+involved. The Pi's own USB-C port acts as a USB keyboard+mouse gadget
+straight to the target.
+
+**Hardware:** Raspberry Pi 5 · an **official Raspberry Pi USB3 hub**,
+its upstream port plugged into the target (the target sees the Pi as a
+plug-in keyboard/mouse through it) · the **official Raspberry Pi 5V/5A
+USB-C power supply plugged into the hub**, not the Pi directly — this
+feeds the Pi over the same cable the hub uses to reach it. Use the
+official pair specifically: an underpowered hub or charger here caused a
+real undervoltage brownout on this project's own hardware. · an HDMI
+capture dongle · optional UVC camera plugged straight into the Pi.
+
+**A real caveat, not a hypothetical one:** driving capture, the HID
+gadget, and encoding all at once can push the Pi 5 into thermal/power
+throttling. Stick to one capture device per Pi for this shape.
+
+```yaml
+capabilities:
+  input:
+    backend: hid-gadget
+    settings:
+      hid_keyboard_device: /dev/hidg0
+      hid_mouse_device: /dev/hidg1
+  video:
+    backend: v4l2-ffmpeg
+    settings:
+      device: /dev/v4l/by-id/usb-xxxx-video-index0
+      analog: false             # HDMI is digital -- see the file's own comment
+  camera:
+    backend: none
+```
+
+(`pi/files/vcctrl-hid-gadget-setup.sh` sets up the gadget itself; it needs
+`dtoverlay=dwc2,dr_mode=peripheral` added under `/boot/firmware/config.txt`'s
+`[pi5]` section and one reboot, done once per Pi regardless of how many
+`hdmi-usb` targets it eventually drives.)
+
+### Power control (all three)
+
+Optional, and the same setting regardless of target type:
+
+```yaml
+capabilities:
+  power:
+    backend: kasa   # kasa | kasa-klap | wemo | shell | none
+    settings:
+      host: 192.0.2.20
+```
+
+Both **TP-Link Kasa** generations are supported (`kasa` for the older LAN
+protocol, `kasa-klap` for newer firmware and the Tapo line) and so is
+**Wemo**. No plug at all is a supported answer too (`backend: none`, or
+just leave the block out) — you lose remote power-cycling, nothing else.
+`backend: shell` runs your own on/off/state commands instead, for a relay
+board, a PDU, or a GPIO pin.
+
 ## Quickstart
 
 This gets a Pi from a blank OS install to answering `vcctrl status`. It
