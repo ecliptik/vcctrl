@@ -1,11 +1,11 @@
 # PROFILE KIND: rgb2hdmi-usb4vc
 #
-# A classic-Macintosh-shaped target (Mac Plus/ADB via USB4VC, RGB2HDMI ->
+# A classic-Macintosh configuration (Mac Plus/ADB via USB4VC, RGB2HDMI ->
 # HDMI-USB capture for video) -- PLACEHOLDER. Nothing in this repo has ever
 # run one; docs/BOARD-IDENTITY.md sec. 4-6 already documents the Mac
 # Plus/ADB board as board_id 3 in the EXISTING board-swap model (same
 # usb4vc-uinput bridge as gateway2000, physically swapped in), and this
-# kind template is that same known shape, scaffolded for the newer
+# kind template is that same known configuration, scaffolded for the newer
 # multi-profile machinery -- it asserts nothing new about the hardware.
 #
 # CREATION-TIME SCAFFOLDING ONLY -- see profile-kinds/vga-ps2.yaml's own

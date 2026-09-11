@@ -144,7 +144,7 @@ def ws_read(sock):
 # Env vars, not a YAML load: this is a standalone script with no other state,
 # and a second config loader in the same repo is a second place for "what did
 # the running process actually resolve" to disagree with a file on disk. See
-# vcctrl.example.yaml's `daemon.web_public` block for the documented meaning
+# examples/vcctrl.example.yaml's `daemon.web_public` block for the documented meaning
 # of each of these.
 
 UPSTREAM_PORT = int(os.environ.get("VCCTRL_WEB_PORT", "8080"))

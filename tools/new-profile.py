@@ -8,7 +8,7 @@ CREATION-TIME ONLY, BY DESIGN. This writes a COMPLETE, self-contained
 vcctrl-<name>.yaml -- the profile-kinds/<kind>.yaml template is read once,
 here, and never again. vcctrld itself never merges a profile's config
 against its kind at startup: a deployed profile's real settings must be
-fully visible in its own file, the same way vcctrl-modernpc.example.yaml
+fully visible in its own file, the same way examples/vcctrl-modernpc.example.yaml
 already is, not partly inherited from a template that could change out from
 under it later. See profile-kinds/vga-ps2.yaml's own comment for the fuller
 reasoning.

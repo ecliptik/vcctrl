@@ -263,7 +263,7 @@ class LockManager(object):
 
     Phase 3 (making the CLI/MCP profile-aware) is what makes this matter:
     there are now two independent daemon-side Arbiters (one per vcctrld
-    process, see vcctrl-modernpc.example.yaml's own comment on why it's a
+    process, see examples/vcctrl-modernpc.example.yaml's own comment on why it's a
     second process rather than a second target inside one), and a single
     shared LockManager would either acquire/release the WRONG daemon's lock
     for a profile-targeted call, or -- worse -- report a profile's commands
@@ -441,7 +441,7 @@ def _active_job_conflict(action_desc, profile=None):
 
     PRIMARY-ONLY, REGARDLESS OF `profile`: harness jobs (run_cell/run_sweep/
     collect) and file-transfer jobs only ever run against the primary
-    vcctrld instance -- vcctrl-modernpc.example.yaml's own capabilities.files
+    vcctrld instance -- examples/vcctrl-modernpc.example.yaml's own capabilities.files
     block says why (a real Linux box has its own networking; there is no
     packet-driver FTP path to modernpc at all). A sticky lock request against
     a NON-primary profile cannot collide with either, so this check is

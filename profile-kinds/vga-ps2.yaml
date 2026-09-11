@@ -3,7 +3,7 @@
 # A retro-PC target reached over its own real VGA output and PS/2-protocol
 # input, translated by the USB4VC/STM32 protocol board this rig was built
 # around. This is what the existing `gateway2000` profile already runs --
-# this file documents the SHAPE of that setup as a reusable starting point
+# this file documents the CONFIGURATION of that setup as a reusable starting point
 # for the NEXT board of the same kind, not a new mechanism.
 #
 # CREATION-TIME SCAFFOLDING ONLY. Nothing in vcconfig.py or vcctrld.py reads
@@ -11,7 +11,7 @@
 # it once, at authoring time, to WRITE a complete, self-contained
 # vcctrl-<name>.yaml (a real config file vcctrld actually loads, no
 # reference back here). A deployed profile's config must stay fully
-# self-evident on its own, the same discipline vcctrl-modernpc.example.yaml
+# self-evident on its own, the same discipline examples/vcctrl-modernpc.example.yaml
 # already follows for its own device paths -- a config whose real settings
 # partly live in a file it points at is a config that lies about itself the
 # moment this file changes.

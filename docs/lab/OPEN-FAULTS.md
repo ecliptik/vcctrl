@@ -1842,7 +1842,7 @@ integration test (constructing a fake registry, rendering the page,
 and asserting on live WebSocket/fetch traffic) is still not written,
 and is the one thing from this paragraph that remains open.
 
-**`vcctrl-macintosh.example.yaml`/`profile-kinds/rgb2hdmi-usb4vc.yaml` are
+**`examples/vcctrl-macintosh.example.yaml`/`profile-kinds/rgb2hdmi-usb4vc.yaml` are
 entirely unmeasured.** No RGB2HDMI board has ever been wired to this
 system; the config is a scaffolded placeholder grounded in
 `docs/BOARD-IDENTITY.md`'s existing ADB findings, not in anything run
@@ -1882,7 +1882,7 @@ capability's three-state answer -- the read-only half of WP2 item 6 in
 the hardware-groups mechanism section 1 of that plan describes (one
 active profile per group of profiles sharing exclusive hardware) is
 UNBUILT, since there is no second real usb4vc-kind profile on this system
-to verify it against; `vcctrl-macintosh.example.yaml` still cannot coexist with
+to verify it against; `examples/vcctrl-macintosh.example.yaml` still cannot coexist with
 `gateway2000` today (B11, unchanged).
 
 **Not yet fixed:** none of the above blocks `gateway2000`/`modernpc`

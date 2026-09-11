@@ -698,7 +698,7 @@ def load_config():
         _LEGACY_WARNED[0] = True
         sys.stderr.write(
             "config: %s is DEPRECATED and will be removed. Move its values "
-            "into vcctrl.yaml (see vcctrl.example.yaml); the YAML file wins "
+            "into vcctrl.yaml (see examples/vcctrl.example.yaml); the YAML file wins "
             "where both are set.\n" % CONFIG_PATH)
     return data
 
@@ -3498,7 +3498,7 @@ class PowerCapability(Capability):
             return {"ok": False, "error":
                     "no power host configured -- set "
                     "capabilities.power.settings.host in %s"
-                    % (CFG.source or "vcctrl.yaml (see vcctrl.example.yaml)")}
+                    % (CFG.source or "vcctrl.yaml (see examples/vcctrl.example.yaml)")}
         if action == "state":
             st = dict(self._protocol().state())
             self._remember(host, st)

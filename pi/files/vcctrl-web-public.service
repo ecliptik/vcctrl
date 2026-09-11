@@ -9,7 +9,7 @@ After=vcctrld.service
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 -u /opt/vcctrl/vcweb_public.py
-# See vcctrl.example.yaml's daemon.web_public block for what these mean and
+# See examples/vcctrl.example.yaml's daemon.web_public block for what these mean and
 # why they are env vars here rather than a second YAML load. upstream_port
 # MUST match the private daemon's own daemon.web.port.
 Environment=VCCTRL_PUBLIC_BIND=127.0.0.1

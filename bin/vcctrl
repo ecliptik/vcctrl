@@ -31,7 +31,7 @@ fi
 VCCTRL_HOST="${VCCTRL_HOST:-$(vc_cfg control.daemon_host "")}"
 if [ -z "$VCCTRL_HOST" ]; then
   echo "vcctrl: no daemon host configured." >&2
-  echo "  Set control.daemon_host in vcctrl.yaml (see vcctrl.example.yaml)," >&2
+  echo "  Set control.daemon_host in vcctrl.yaml (see examples/vcctrl.example.yaml)," >&2
   echo "  or export VCCTRL_HOST=<ssh-destination>." >&2
   exit 3
 fi

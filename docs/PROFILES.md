@@ -43,7 +43,7 @@ exactly what that means in practice.
    HDMI capture + the Pi's own USB HID gadget), or
    `profile-kinds/rgb2hdmi-usb4vc.yaml` (a classic Macintosh over
    RGB2HDMI capture + USB4VC/ADB — unmeasured, no such hardware has run
-   against this system yet; see `vcctrl-macintosh.example.yaml`, its placeholder
+   against this system yet; see `examples/vcctrl-macintosh.example.yaml`, its placeholder
    scaffold).
 2. Run `tools/new-profile.py --kind <kind> --name <name>` to scaffold a
    complete, self-contained `vcctrl-<name>.yaml` (this is a

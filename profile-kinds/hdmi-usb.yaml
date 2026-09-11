@@ -5,7 +5,7 @@
 # mode) -- no USB4VC, no SPI, no protocol board, because this kind of
 # target has a real USB port and needs none of that translation. This is
 # what the existing `modernpc` profile already runs; this file documents
-# the SHAPE of that setup for the next target of the same kind.
+# the CONFIGURATION of that setup for the next target of the same kind.
 #
 # CREATION-TIME SCAFFOLDING ONLY -- see profile-kinds/vga-ps2.yaml's own
 # comment on why nothing reads this file at daemon startup, ever.
@@ -68,7 +68,7 @@ capabilities:
 
   # Everything below is EXPLICITLY `none`, not omitted -- Registry.
   # _resolve_backend falls back to a capability's OWN class default on an
-  # absent key, not to `none` (see vcctrl-modernpc.example.yaml's own
+  # absent key, not to `none` (see examples/vcctrl-modernpc.example.yaml's own
   # comment on the live mistake this caught: an early draft that omitted
   # `camera` entirely started it against /dev/video0, the primary
   # instance's own room camera). Flip any of these to a real backend only

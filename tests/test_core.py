@@ -6616,7 +6616,7 @@ def test_the_example_config_matches_the_schema():
     would notice."""
     print("\nexample config")
     v = _vcconfig()
-    p = os.path.join(HERE, os.pardir, "vcctrl.example.yaml")
+    p = os.path.join(HERE, os.pardir, "examples", "vcctrl.example.yaml")
     check("the example exists", os.path.exists(p), p)
     if not os.path.exists(p):
         return
@@ -7804,7 +7804,7 @@ def test_every_backend_name_a_config_may_use_resolves():
     """
     print("\nbackend names resolve")
     v = _vcconfig()
-    example = os.path.join(HERE, os.pardir, "vcctrl.example.yaml")
+    example = os.path.join(HERE, os.pardir, "examples", "vcctrl.example.yaml")
     cfg = v.load(example)
     caps = cfg.optional("capabilities")
     check("control: the example configures some capabilities",
@@ -10061,6 +10061,13 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
         # profile-kinds/vga-ps2.yaml's own comment.
         "profile-kinds": "read once by tools/new-profile.py to scaffold a "
                          "new vcctrl-<name>.yaml; vcctrld never reads it",
+        # SAME REASONING AS profile-kinds ABOVE: these are templates a
+        # human or tools/new-profile.py copies FROM at authoring time (`cp
+        # examples/vcctrl.example.yaml vcctrl.yaml`), never files vcctrld
+        # or any control-host tool reads at runtime.
+        "examples": "templates to copy from when writing a real "
+                    "vcctrl.yaml/vcctrl-<name>.yaml; nothing reads them "
+                    "at runtime",
         # agent/ USED TO be listed here ("runs on the control host, nothing
         # about it belongs on the Pi") until the Pi-hosted MCP server
         # (2026-08-25) made half of that false -- it now ships and installs

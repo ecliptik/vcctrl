@@ -17,7 +17,7 @@ import time
 SOCKET_PATH = "/run/vcctrl.sock"
 
 # THE NAMING CONVENTION IS THE REGISTRY. A second vcctrld instance (see
-# vcctrl-modernpc.example.yaml) is just another process on this same host with
+# examples/vcctrl-modernpc.example.yaml) is just another process on this same host with
 # its own `daemon.socket` -- and every one shipped so far names that socket
 # /run/vcctrl-<profile>.sock (vcctrld-modernpc.service's own VCCTRL_CONFIG
 # comment). A separate registry FILE listing profiles would need updating by

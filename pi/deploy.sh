@@ -23,7 +23,7 @@ fi
 HOST="${VCCTRL_HOST:-$(vc_cfg control.daemon_host "")}"
 if [ -z "$HOST" ]; then
   echo "deploy: no daemon host configured. Set control.daemon_host in" >&2
-  echo "  vcctrl.yaml (see vcctrl.example.yaml) or export VCCTRL_HOST." >&2
+  echo "  vcctrl.yaml (see examples/vcctrl.example.yaml) or export VCCTRL_HOST." >&2
   exit 3
 fi
 # The daemon web base, for the busy guard and the hang explainer. An

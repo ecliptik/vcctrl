@@ -11,7 +11,7 @@
 Scope: the browser-facing KVM stack, in preparation for release of the public
 read-only mirror. Reviewed the code (`daemon/kvm.html`, `daemon/kvm-ro.html`,
 `daemon/vcweb.py`, `daemon/vcweb_public.py`, `pi/files/vcctrl-web-public.service`,
-`vcctrl.example.yaml`) and both live endpoints over the tailnet: the public
+`examples/vcctrl.example.yaml`) and both live endpoints over the tailnet: the public
 read-only mirror on port 8091 (`vcweb_public.py`) and the private control KVM on
 443 (`vcweb.py`).
 

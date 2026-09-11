@@ -82,7 +82,7 @@ thing a stranger adding a second target would trip on.
   unit files under `pi/files/` — not an install prefix, bindir, or
   service-user setting.
 - **`daemon.web.tls.provider: tailscale | files | none`** is validated in
-  `vcctrl.example.yaml` but only the `tailscale` path is actually wired
+  `examples/vcctrl.example.yaml` but only the `tailscale` path is actually wired
   into `pi/install.sh`; choosing `files` or `none` there doesn't change
   what the installer does.
 - **The HID gadget** (`pi/files/vcctrl-hid-gadget-setup.sh`) uses a fixed

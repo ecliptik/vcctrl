@@ -6,6 +6,11 @@ server, or a browser KVM. It exists to let automated tests run against
 hardware that predates automation — DOS boxes, classic Macs, anything you
 can wire a capture device and an input path to.
 
+This project was built agentically using [Claude Code](https://claude.com/claude-code),
+the same way as the DOS ports it drives real-hardware testing for
+([dossage](https://github.com/ecliptik/dossage),
+[doskutsu](https://github.com/ecliptik/doskutsu), and others).
+
 - **Web KVM** — live keyboard, mouse and video in the browser, streamed over WebSocket, no client software. [docs/WEBKVM.md](./docs/WEBKVM.md)
 - **File transfer** — push files to the target and pull results back over its own network stack. [docs/FILE-TRANSFER.md](./docs/FILE-TRANSFER.md)
 - **Automated test harness** — unattended, measured test runs against real hardware. [docs/HARNESS-STANDARD.md](./docs/HARNESS-STANDARD.md)
@@ -47,6 +52,8 @@ A DOS/Windows-era PC with PS/2 keyboard/mouse and analog VGA out.
 - **UVC camera** (optional) — pointed at the machine itself, for a
   hardware-level view when the primary capture is dark or frozen.
 
+Distinguishing settings, not a complete config — full example: [examples/vcctrl.example.yaml](./examples/vcctrl.example.yaml).
+
 ```yaml
 capabilities:
   input:
@@ -72,6 +79,8 @@ yet, so treat the template's values as a documented guess.
 - **RGB2HDMI board**, feeding an HDMI-to-USB capture dongle — the Mac has
   no HDMI/VGA of its own, so video goes through this first.
 - **UVC camera** (optional) — same purpose as Retro PC's.
+
+Distinguishing settings, not a complete config — full example: [examples/vcctrl-macintosh.example.yaml](./examples/vcctrl-macintosh.example.yaml).
 
 ```yaml
 capabilities:
@@ -103,6 +112,8 @@ target.
 
 Driving capture, keyboard/mouse emulation and encoding together can
 throttle a Pi 5 — one capture device per Pi for this configuration.
+
+Distinguishing settings, not a complete config — full example: [examples/vcctrl-modernpc.example.yaml](./examples/vcctrl-modernpc.example.yaml).
 
 ```yaml
 capabilities:
@@ -161,8 +172,8 @@ python3 tools/patch-usb4vc-board.py --check
 
 ```sh
 git clone <this repo's URL> && cd vcctrl
-cp vcctrl.example.yaml vcctrl.yaml       # untracked, never commit this
-$EDITOR vcctrl.yaml                      # daemon_host, plug, devices
+cp examples/vcctrl.example.yaml vcctrl.yaml   # untracked, never commit this
+$EDITOR vcctrl.yaml                           # daemon_host, plug, devices
 ```
 
 **4. Deploy:**

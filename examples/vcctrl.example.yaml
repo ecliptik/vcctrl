@@ -70,7 +70,7 @@ daemon:
   # physical rig, read in exactly one place) and NOT harness.profile
   # below (a target-SOFTWARE harness selection, unrelated). See
   # profile-kinds/*.yaml and tools/new-profile.py for scaffolding a new
-  # named profile of a given hardware shape.
+  # named profile of a given hardware configuration.
   profile_name: gateway2000
 
   # Where the USB4VC application lives, if you use one. These are read, never

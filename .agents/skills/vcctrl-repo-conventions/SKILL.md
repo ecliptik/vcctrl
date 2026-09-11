@@ -31,7 +31,7 @@ draft form.
 
 **`vcctrl.yaml` is the operator's real configuration and stays real.** It is
 untracked and holds working addresses; the tracked template is
-`vcctrl.example.yaml`. Never rewrite the live config into placeholders as
+`examples/vcctrl.example.yaml`. Never rewrite the live config into placeholders as
 part of a "cleanup" -- a scrub's job is history and the tracked tree, not the
 live config, and doing so breaks the rig, not just the repo.
 

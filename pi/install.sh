@@ -902,7 +902,7 @@ if [ -f "$SRC/vcctrl.yaml" ]; then
   echo "installed $PREFIX/vcctrl.yaml"
 else
   echo "no vcctrl.yaml shipped -- the daemon will run on built-in defaults."
-  echo "  cp vcctrl.example.yaml vcctrl.yaml and edit it to change that."
+  echo "  cp examples/vcctrl.example.yaml vcctrl.yaml and edit it to change that."
 fi
 
 # THE CAPTURE DEVICE DROP-IN IS A SECOND COPY, AND SECOND COPIES DRIFT.

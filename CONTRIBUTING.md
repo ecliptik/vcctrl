@@ -29,7 +29,7 @@ to argue with. Same value, different force.
 
 `vcctrl.yaml` is a system's real configuration: untracked, holds working
 addresses and credentials, and **stays real** on a working system. The
-tracked template is `vcctrl.example.yaml`. Never "tidy" a live config into
+tracked template is `examples/vcctrl.example.yaml`. Never "tidy" a live config into
 placeholders — that's how a system stops answering.
 
 `~/.config/vcctrl/secrets.env` (and, on the daemon host,

@@ -12,17 +12,15 @@ __pycache__/
 # disagree with the source that produces it.
 /tools/find/FIND.COM
 
-# The operator's real configuration. The tracked example is vcctrl.example.yaml.
+# The operator's real configuration. The tracked example is
+# examples/vcctrl.example.yaml.
 /vcctrl.yaml
-# Same reasoning, for the second vcctrld instance's config (the modernpc
-# profile). The tracked example is vcctrl-modernpc.example.yaml.
-/vcctrl-modernpc.yaml
-# Any other sibling profile: `vcctrl-<name>.yaml` is a live config vcctrld
-# will load as a running profile (discover_profiles() globs exactly this
-# shape); only a name ending `.example.yaml` is meant to be tracked.
+# Any sibling profile -- `vcctrl-<name>.yaml` is a live config vcctrld will
+# load as a running profile (discover_profiles() globs exactly this
+# pattern). No negation needed here (unlike before the example configs
+# moved to examples/): nothing this pattern matches at the repo root is
+# ever meant to be tracked.
 /vcctrl-*.yaml
-!/vcctrl.example.yaml
-!/vcctrl-*.example.yaml
 
 # This rig's real capture-device pin (by-id paths, ALSA card id). The
 # tracked example is pi/files/device-pin.conf.example.
