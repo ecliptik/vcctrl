@@ -51,7 +51,7 @@ sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, vc_json, at_prompt, ensure_powered, set_lock_owner, get_lock_owner,
     cfg_get, grab, VCCTRL_WEB, _daemon_alive, _daemon_host, _has_variance,
-    _grab_ffmpeg, load_profile, target_env_name)
+    _grab_ffmpeg, load_profile, target_env_name, profile_path)
 
 # THE PROFILE, not sweeps.json. Phase 6 moved the machine table and the
 # per-sweep budgets into profiles/<name>.yaml alongside the target facts they
@@ -66,6 +66,17 @@ from vcctrl_common import (  # noqa: E402
 # vcctrl_common.load_profile() for the strict variant; a profile with no
 # unattended-sweep harness (dosags, today) refuses here with a clear reason
 # rather than a bare KeyError further down.
+#
+# CONF is kept as a module attribute (not just a local inside _load_profile)
+# because test_core.py's own harness-profile regression test reads
+# vcctrl-sweep's CONF directly to confirm this runner resolves to a real
+# .yaml path rather than a stale sweeps.json -- an external, observable
+# contract this module has carried since the sweeps.json->profile migration,
+# not something to drop silently when the path lookup itself moved to
+# vcctrl_common.
+CONF = profile_path()
+
+
 def _load_profile():
     return load_profile(require_sweeps=True)
 
