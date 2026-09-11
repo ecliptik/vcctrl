@@ -51,51 +51,23 @@ sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, vc_json, at_prompt, ensure_powered, set_lock_owner, get_lock_owner,
     cfg_get, grab, VCCTRL_WEB, _daemon_alive, _daemon_host, _has_variance,
-    _grab_ffmpeg)
+    _grab_ffmpeg, load_profile, target_env_name)
 
 # THE PROFILE, not sweeps.json. Phase 6 moved the machine table and the
-# per-sweep budgets into profiles/doskutsu.yaml alongside the target facts they
+# per-sweep budgets into profiles/<name>.yaml alongside the target facts they
 # belong with -- the DOS working directory, the env-var names the program
 # consults, and the boot-profile witness. One file describing one target beats
 # a data file here and prose about the same target in three other places.
 #
 # Located through vcctrl.yaml's `harness.profile` so a different port points at
 # a different profile without editing the runner. Falls back to the doskutsu
-# profile beside this file, which is what a checkout with no config has.
-def _profile_path():
-    try:
-        p = cfg_get("harness.profile", "") or ""
-    except Exception:
-        p = ""
-    if p and not os.path.isabs(p):
-        p = os.path.join(os.path.dirname(HERE), p)
-    return p or os.path.join(os.path.dirname(HERE), "profiles", "doskutsu.yaml")
-
-
-CONF = _profile_path()
-
-
+# profile beside this file, which is what a checkout with no config has. This
+# runner always needs sweeps/machines -- it IS the sweep runner -- so it asks
+# vcctrl_common.load_profile() for the strict variant; a profile with no
+# unattended-sweep harness (dosags, today) refuses here with a clear reason
+# rather than a bare KeyError further down.
 def _load_profile():
-    """The profile as a dict. Raises with the path in the message: a runner that
-    cannot find its profile must say which one it looked for, or the operator
-    debugs the wrong file."""
-    try:
-        import yaml
-    except ImportError:
-        raise SystemExit(
-            "REFUSED: PyYAML is needed to read %s (apt install python3-yaml)"
-            % CONF)
-    try:
-        with open(CONF) as f:
-            d = yaml.safe_load(f) or {}
-    except OSError as exc:
-        raise SystemExit("REFUSED: cannot read the harness profile %s: %s"
-                         % (CONF, exc))
-    if not d.get("sweeps") or not d.get("machines"):
-        raise SystemExit(
-            "REFUSED: %s has no sweeps/machines -- it is not a harness profile"
-            % CONF)
-    return d
+    return load_profile(require_sweeps=True)
 
 # Screen must be still for this long before the runner will believe a sweep has
 # ended. During a cell the game renders continuously; at a prompt the screen is
@@ -372,25 +344,43 @@ def main(argv):
     if collect:
         spec_tags = spec.get("tags")
         if not spec_tags:
-            raise SystemExit("REFUSED: --collect but %s has no tags in sweeps.json." % sweep)
+            raise SystemExit("REFUSED: --collect but %s has no tags declared "
+                             "in the profile's sweeps section." % sweep)
         print("  will collect: %s" % " ".join(mach["tag"] + t for t in spec_tags))
 
     if dry:
         print("\n-- dry run, stopping before launch --")
         return 0
 
+    target = conf.get("target") or {}
+    target_dir = target.get("dir")
+    if not target_dir:
+        raise SystemExit("REFUSED: this profile declares no target.dir.")
+    entry_cmd = target.get("sweep_entry_cmd")
+    if not entry_cmd:
+        raise SystemExit(
+            "REFUSED: this profile has sweeps/machines but declares no "
+            "target.sweep_entry_cmd -- there is no command to launch the "
+            "sweep harness with.")
+    capture_flag = target_env_name(conf, "capture_flag")
+
     print("\n== launch ==")
-    vc("type", "CD \\DOSKUTSU"); vc("key", "enter"); time.sleep(1)
-    qa_line = ("QA %s %s" % (machine, declare)).rstrip()
+    vc("type", "CD %s" % target_dir); vc("key", "enter"); time.sleep(1)
+    qa_line = ("%s %s %s" % (entry_cmd, machine, declare)).rstrip()
     print("  declaring: %s" % (declare or "(nothing -- manifest will say UNDECLARED)"))
     vc("type", qa_line); vc("key", "enter"); time.sleep(3)
-    vc("type", "SET DKTCAP=1"); vc("key", "enter"); time.sleep(2)
+    if capture_flag:
+        vc("type", "SET %s=1" % capture_flag); vc("key", "enter"); time.sleep(2)
+    else:
+        print("  no capture-mode flag declared for this profile -- skipping")
     vc("type", "%s %s" % (sweep, machine)); vc("key", "enter")
     time.sleep(10)
 
     shot, mean = grab("sweep-banner")
     print("  banner captured: %s (brightness %.1f)" % (shot, mean or -1))
-    print("  CHECK THIS IMAGE for '[DKTCAP=1] capture session:' before trusting the run.")
+    if capture_flag:
+        print("  CHECK THIS IMAGE for '[%s=1] capture session:' before "
+              "trusting the run." % capture_flag)
 
     print("  pressing the PAUSE key -- from here the keyboard is OFF LIMITS")
     vc("key", "space")
@@ -433,7 +423,7 @@ def main(argv):
                 print("\n== COMPLETE after %.1f min ==" % (elapsed / 60))
                 grab("sweep-done")
                 if not collect:
-                    print("  logs are on the CF card under C:\\DOSKUTSU\\LOGS")
+                    print("  logs are on the CF card under %s\\LOGS" % target_dir)
                     print("  collect them with:  vcctrl-collect %s %s" % (sweep, machine))
                     return 0
                 # Hand off rather than reimplement. The collector reboots, and
