@@ -160,6 +160,14 @@ capture regression) is **marked superseded**, because it stopped reproducing
 and its evidence table had a row that reported an instrument's state as the
 target's.
 
+## History
+
+**`ORIGINAL-PLAN.md`** (in `docs/history/`) — the pre-build design document,
+moved here 2026-09-11 and kept verbatim except for two identifier fixes. It
+predates
+the Pi 3→Pi 5 migration, the multi-profile architecture, the web KVM and
+the MCP server; read it as what was planned, not as current fact.
+
 ---
 
 ## Three rules that came out of the campaign
