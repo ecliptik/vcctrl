@@ -36,8 +36,7 @@ vcctrl ships three templates, one per [`profile-kinds/*.yaml`](./profile-kinds/)
 Scaffold one with
 [`tools/new-profile.py`](./tools/new-profile.py) `--kind <kind> --name <yours>`
 and fill in the `REPLACE_ME` placeholders, using the machines below as a
-reference — the YAML shown for each is only what makes it distinct, not a
-complete config.
+reference.
 
 ### Recommended hardware
 
@@ -72,8 +71,7 @@ A DOS/Windows-era PC with PS/2 keyboard/mouse and analog VGA out.
 - **Raspberry Pi 5** — the daemon host.
 - **USB4VC HAT**, IBM PC protocol board — keyboard/mouse over PS/2.
 - **VGA-to-USB capture dongle** — video and (usually) audio.
-- **UVC camera** (optional) — pointed at the machine itself, for a
-  hardware-level view when the primary capture is dark or frozen.
+- **UVC camera** (optional) — pointed at the machine itself.
 
 Distinguishing settings, not a complete config — full example: [examples/vcctrl.example.yaml](./examples/vcctrl.example.yaml).
 
@@ -99,8 +97,7 @@ build yet, so treat the template's values as a documented guess.
 - **Raspberry Pi 5** — the daemon host.
 - **USB4VC HAT**, Lisa/Mac/ADB protocol board — the same HAT as Retro PC,
   a different board swapped in.
-- **RGB2HDMI board**, feeding an HDMI-to-USB capture dongle — the Mac has
-  no HDMI/VGA of its own, so video goes through this first.
+- **RGB2HDMI board**, feeding an HDMI-to-USB capture dongle.
 - **UVC camera** (optional) — same purpose as Retro PC's.
 
 Distinguishing settings, not a complete config — full example: [examples/vcctrl-macintosh.example.yaml](./examples/vcctrl-macintosh.example.yaml).
@@ -127,9 +124,8 @@ target.
 - **Official Raspberry Pi USB3 hub** — its upstream port plugs into the
   target, which then sees the Pi as a plug-in keyboard/mouse through it.
 - **Official Raspberry Pi power supply, plugged into the hub, not the
-  Pi** — it feeds the Pi over that same cable. Use the official pair
-  specifically: an underpowered hub or charger here caused a real
-  undervoltage brownout on this project's own hardware.
+  Pi** — feeds the Pi over that same cable; an underpowered hub or
+  charger here caused a real undervoltage brownout.
 - **HDMI capture dongle** — video and (usually) audio.
 - **UVC camera** (optional) — plugged into the Pi directly.
 
