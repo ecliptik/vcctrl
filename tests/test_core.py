@@ -10190,6 +10190,24 @@ class FakeTarget(object):
     def wait_boot(self):
         return self.boot
 
+    def booted(self):
+        # NOT `self.boot`. This fake has no menu-timing model -- self.boot is
+        # the eventual OUTCOME, decided once, not a live signal that flips
+        # true partway through the selection loop. Returning it here would
+        # make the loop break before typing a single "5" whenever a test
+        # asks for a successful boot, silently changing every existing
+        # `d.typed`/menu-attempt assertion. False preserves the exact old
+        # behavior (every attempt sent); see test_enter_net_stops_the_menu_
+        # loop_once_booted for a fake that DOES model the race this exists
+        # to catch.
+        return False
+
+    def flush_line(self):
+        # OWN COUNTER, NOT self.combos -- existing tests assert exact
+        # combo() call counts/contents (the reboot chords), and flush_line
+        # is Esc/Enter key presses, a different channel entirely.
+        self.flushes = getattr(self, "flushes", 0) + 1
+
     def wait_prompt(self):
         return self.prompt
 
@@ -10308,6 +10326,66 @@ def test_the_transfer_refuses_before_it_reboots_anything():
           explicit, calls)
     check("and it runs before anything is rebooted or typed",
           explicit and explicit[0][1] == 0 and explicit[0][2] == 0, explicit)
+
+
+class _MenuRaceTarget(FakeTarget):
+    """Models the race FakeTarget.booted()'s docstring points at: booted()
+    flips true partway through the blind menu-selection loop, the way a real
+    LED read would the moment an earlier "5<Enter>" actually lands.
+
+    Found 2026-09-11 on real hardware: attempt #1 selected NET, and
+    menu_attempts() - 1 further "5<Enter>" pairs still landed on the daemon
+    host over ssh, each one typed onto an already-live DOS prompt and
+    executing as its own "Bad command or file name" -- see NetJob._enter_net.
+    """
+
+    def __init__(self, cap, lands_on=1, **kw):
+        FakeTarget.__init__(self, cap, **kw)
+        self.lands_on = lands_on
+
+    def type_line(self, text):
+        FakeTarget.type_line(self, text)
+        if text == "5" and self.fives_sent >= self.lands_on:
+            self._landed = True
+
+    @property
+    def fives_sent(self):
+        return sum(1 for t in self.typed if t == "5")
+
+    def booted(self):
+        return getattr(self, "_landed", False)
+
+
+def test_enter_net_stops_the_menu_loop_once_booted():
+    """The early-stop fix: don't keep sending "5" past the attempt that
+    already selected NET.
+
+    Regression test for the 2026-09-11 incident: real hardware left six
+    stray "5<Enter>" pairs on the DOS command line because this loop sent
+    every menu_attempts() attempt regardless of whether an earlier one had
+    already landed.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    _send(cap, "a.txt", b"payload")
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    d = _MenuRaceTarget(cap, lands_on=1)
+    vcctrld.NetJob(cap, d)._enter_net()
+    check("only the attempt that actually landed was sent, not all of them",
+          d.fives_sent == 1, d.typed)
+    check("and the first real command afterward flushed the line first",
+          getattr(d, "flushes", 0) >= 1, d)
+
+    # THE OLD BEHAVIOR, STILL AVAILABLE: booted() never true (the ordinary
+    # FakeTarget) still sends every attempt, same as before this fix -- the
+    # early-stop is additive, not a change to what a genuinely-blind
+    # selection window does.
+    d2 = FakeTarget(cap, net=False)
+    vcctrld.NetJob(cap, d2)._enter_net()
+    check("a target that never signals booted still gets every attempt",
+          d2.typed.count("5") == d2.menu_attempts(), d2.typed)
 
 
 def test_the_transfer_proves_NET_by_arrival_not_by_reading_the_screen():

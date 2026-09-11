@@ -8171,6 +8171,36 @@ class RegistryDriver(object):
         """Scroll Lock 0 -> 1: RDYPULSE ran, so AUTOEXEC finished."""
         return self._await_led("scrolllock", True, self.BOOT_TIMEOUT_S)
 
+    def booted(self):
+        """Instant, non-blocking: is the boot-readiness LED already set?
+
+        Lets a blind menu-selection loop stop the moment an earlier attempt
+        has already landed, instead of sending every attempt regardless --
+        see NetJob._enter_net. This is the same check bin/vcctrl_common.py's
+        spam_menu() makes before every attempt (`leds().get("scrolllock")`);
+        that copy already stops early, this one (found 2026-09-11, never
+        ported) did not.
+        """
+        return self._led("scrolllock") is True
+
+    def flush_line(self):
+        """Discard whatever is sitting unentered on the DOS command line.
+
+        Blind menu selection can leave stray keystrokes in the BIOS buffer;
+        they flush into COMMAND.COM whenever it next reads input, landing on
+        the FRONT of whatever is typed next:
+
+            C:\\>5C:\\MTCP\\PUT.BAT M64A
+            Bad command or file name
+
+        Esc is COMMAND.COM's cancel-line key, so this discards a partial
+        line without executing it. Call it after a reboot, before the first
+        real command -- mirrors bin/vcctrl_common.py's flush_input_line(),
+        which this driver never had its own copy of.
+        """
+        self._do("key", keys=["escape"])
+        return self._do("key", keys=["enter"])
+
     def wait_prompt(self):
         """Is the BIOS keyboard ISR alive? NOT "is DOS at a prompt".
 
@@ -8400,7 +8430,17 @@ class NetJob(object):
                               "the machine never reset -- Scroll Lock did not "
                               "clear, so the reboot did not happen")
         self._say("select", "selecting NET, blind")
+        # STOP THE MOMENT AN EARLIER ATTEMPT LANDS, rather than sending every
+        # attempt regardless. Found 2026-09-11: a real send_file run left six
+        # stray "5<Enter>" pairs sitting on the DOS command line after boot,
+        # each executing as its own "Bad command or file name" -- attempt #1
+        # had already selected NET, and the remaining ~6 (menu_attempts() can
+        # be 7) landed on a live prompt instead of a live menu. This mirrors
+        # spam_menu()'s already-proven fix in bin/vcctrl_common.py, which
+        # this code path never got.
         for _ in range(self.d.menu_attempts()):
+            if self.d.booted():
+                break
             self.d.type_line("5")
             self.d.sleep(2.0)
 
@@ -8409,6 +8449,12 @@ class NetJob(object):
                               "no readiness pulse after the reboot: the "
                               "machine did not finish booting, or "
                               "RDYPULSE.COM is missing from the card")
+
+        # DEFENSIVE, NOT REDUNDANT: booted() can still race a keystroke that
+        # is in flight but not yet flushed, so a stray digit can reach the
+        # command line even with the early-stop above. This is the first
+        # real command typed after the reboot; see flush_line()'s docstring.
+        self.d.flush_line()
 
         return self._prove_net()
 
