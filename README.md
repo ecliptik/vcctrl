@@ -6,10 +6,7 @@ server, or a browser KVM. It exists to let automated tests run against
 hardware that predates automation — DOS boxes, classic Macs, anything you
 can wire a capture device and an input path to.
 
-This project was built agentically using [Claude Code](https://claude.com/claude-code),
-the same way as the DOS ports it drives real-hardware testing for
-([dossage](https://github.com/ecliptik/dossage),
-[doskutsu](https://github.com/ecliptik/doskutsu), and others).
+This project was built agentically using [Claude Code](https://claude.com/claude-code).
 
 - **Web KVM** — live keyboard, mouse and video in the browser, streamed over WebSocket, no client software. [docs/WEBKVM.md](./docs/WEBKVM.md)
 - **File transfer** — push files to the target and pull results back over its own network stack. [docs/FILE-TRANSFER.md](./docs/FILE-TRANSFER.md)
