@@ -6,10 +6,12 @@ server, or a browser KVM. It exists to let automated tests run against
 hardware that predates automation — DOS boxes, classic Macs, anything you
 can wire a capture device and an input path to.
 
-- **[docs/HARNESS-STANDARD.md](./docs/HARNESS-STANDARD.md)** — the target-agnostic contract for running measured tests.
-- **[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)** — connecting an agent over MCP.
-- **[docs/SKILLS.md](./docs/SKILLS.md)** — portable domain knowledge as `SKILL.md` files.
-- **[docs/PROFILES.md](./docs/PROFILES.md)** — driving more than one target from one daemon.
+- **Web KVM** — live keyboard, mouse and video in the browser, streamed over WebSocket, no client software. [docs/WEBKVM.md](./docs/WEBKVM.md)
+- **File transfer** — push files to the target and pull results back over its own network stack. [docs/FILE-TRANSFER.md](./docs/FILE-TRANSFER.md)
+- **Automated test harness** — unattended, measured test runs against real hardware. [docs/HARNESS-STANDARD.md](./docs/HARNESS-STANDARD.md)
+- **MCP server** — drive it directly from Claude Code, Codex, or any MCP client. [docs/MCP-SERVER.md](./docs/MCP-SERVER.md)
+- **Multi-target** — one daemon driving several profiles at once. [docs/PROFILES.md](./docs/PROFILES.md)
+- **Portable skills** — domain knowledge as `SKILL.md` files any agent can pick up. [docs/SKILLS.md](./docs/SKILLS.md)
 
 ## How it's built
 
@@ -26,17 +28,13 @@ Three roles, usually three machines:
                               the web KVM directly
 ```
 
-All timing-sensitive work — key dwell, event pacing, capture — happens on
-the daemon host, never the control host: network latency to the control
-host must never enter the input path. A minimal setup runs both roles on
-one box; the common one is a Pi as the daemon and a laptop as control.
-
 ## Hardware and configuration
 
-Three configurations, each a `profile-kinds/*.yaml` template. Scaffold one with
-`tools/new-profile.py --kind <kind> --name <yours>` and fill in the
-`REPLACE_ME` placeholders — the YAML below shows only what makes each
-one distinct, not a complete config.
+Three configurations, each a [`profile-kinds/*.yaml`](./profile-kinds/)
+template. Scaffold one with
+[`tools/new-profile.py`](./tools/new-profile.py) `--kind <kind> --name <yours>`
+and fill in the `REPLACE_ME` placeholders — the YAML below shows only
+what makes each one distinct, not a complete config.
 
 ### Retro PC — `vga-ps2`
 
@@ -174,7 +172,7 @@ VCCTRL_HOST=<pi-hostname-or-ip> pi/deploy.sh
 ```
 
 (`control.daemon_host` in `vcctrl.yaml` works instead of the env var;
-`deploy.sh` refuses clearly if neither is set.)
+[`pi/deploy.sh`](./pi/deploy.sh) refuses clearly if neither is set.)
 
 **5. Install the CLI and confirm the daemon answers:**
 
@@ -195,8 +193,8 @@ vcctrl shot                 # a frame from the capture device, as a file
 **7. Connect an agent** instead of typing verbs by hand — see below.
 
 **8. Scaffold your own profile** once the above works:
-`tools/new-profile.py --kind <vga-ps2|hdmi-usb|rgb2hdmi-usb4vc> --name <yours>`.
-See `docs/PROFILES.md` for running more than one target off one daemon.
+[`tools/new-profile.py`](./tools/new-profile.py) `--kind <vga-ps2|hdmi-usb|rgb2hdmi-usb4vc> --name <yours>`.
+See [docs/PROFILES.md](./docs/PROFILES.md) for running more than one target off one daemon.
 
 ## Connect an agent: skills vs. MCP
 
@@ -216,8 +214,8 @@ npx skills add <this repo's URL> \
 
 Installs the four hardware-portable skills. Two more
 (`vcctrl-repo-conventions`, `vcctrl-webkvm-copy`) describe this repo's own
-conventions and are left out on purpose — see `docs/SKILLS.md` if you
-want them anyway.
+conventions and are left out on purpose — see [docs/SKILLS.md](./docs/SKILLS.md)
+if you want them anyway.
 
 **MCP** (drives the real hardware):
 
@@ -256,25 +254,26 @@ tests/                  pytest tests/ -- no hardware required
 
 | configuration | proven | notes |
 |---|---|---|
-| Retro PC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, the web KVM — all on real hardware; `docs/lab/FINDINGS.md` |
+| Retro PC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, the web KVM — all on real hardware; [docs/lab/FINDINGS.md](./docs/lab/FINDINGS.md) |
 | Modern PC (`hdmi-usb`) | **working end to end** | no USB4VC needed; multi-profile (one daemon, several targets) proven the same way |
 | Classic Macintosh (`rgb2hdmi-usb4vc`) | **scaffolded, unmeasured** | templates exist; no such hardware has run against this project's own build yet |
 
 Known gaps: no hardware reset line for a target that swallows
 Ctrl-Alt-Del (GPIO to the reset header is planned, not built); H.264
 transport and full on-screen-keyboard coverage are measured on one board
-so far. `docs/lab/OPEN-FAULTS.md` has the complete list of what's broken;
-**`docs/KNOWN-LIMITATIONS.md`** has what doesn't yet adapt to different
-hardware at all — the DOS-side boot contract, timing constants, install
-paths, and similar still-hardcoded pieces.
+so far. [docs/lab/OPEN-FAULTS.md](./docs/lab/OPEN-FAULTS.md) has the
+complete list of what's broken; **[docs/KNOWN-LIMITATIONS.md](./docs/KNOWN-LIMITATIONS.md)**
+has what doesn't yet adapt to different hardware at all — the DOS-side
+boot contract, timing constants, install paths, and similar
+still-hardcoded pieces.
 
 ## Contributing
 
-See `CONTRIBUTING.md` for this repo's conventions. Run the tests with
-`pytest tests/` — no hardware required; needs Python, PyYAML, node, a
-Chromium/Chrome binary, and ffmpeg.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for this repo's conventions. Run
+the tests with `pytest tests/` — no hardware required; needs Python,
+PyYAML, node, a Chromium/Chrome binary, and ffmpeg.
 
 ## Licence
 
-MIT — see `LICENSE`. Third-party code under `vendor/` keeps its own
-licence; see `THIRD-PARTY.md`.
+MIT — see [LICENSE](./LICENSE). Third-party code under [vendor/](./vendor/)
+keeps its own licence; see [THIRD-PARTY.md](./THIRD-PARTY.md).
