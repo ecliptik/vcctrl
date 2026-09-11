@@ -15,19 +15,16 @@ This project was built agentically using [Claude Code](https://claude.com/claude
 - **Multi-target** — one daemon driving several profiles at once. [docs/PROFILES.md](./docs/PROFILES.md)
 - **Portable skills** — domain knowledge as `SKILL.md` files any agent can pick up. [docs/SKILLS.md](./docs/SKILLS.md)
 
-## How it's built
-
-Three roles, usually three machines:
+## How it works
 
 ```
- control host                 daemon host (a Raspberry Pi)         target
- ───────────────              ─────────────────────────            ──────
- bin/vcctrl (CLI)     ssh     daemon/vcctrld.py                    the DOS/
- agent/vcctrl_mcp.py  ─────►  owns the input device(s),   PS/2 or  Mac/Linux
- the web browser       http   the capture device(s),      USB/HDMI machine
-                              the smart plug, the file     ───────► under
-                              server; vcctrld also serves           test
-                              the web KVM directly
+┌───────────────────────┐            ┌───────────────────────┐            ┌───────────────────────┐
+│      Control Host     │            │    Daemon Host (Pi)   │            │         Target        │
+├───────────────────────┤            ├───────────────────────┤            ├───────────────────────┤
+│ vcctrl CLI            │   ssh /    │ vcctrld.py            │ PS/2, USB, │ DOS / Macintosh /     │
+│ AI Agent, Skills/MCP  │   http ──► │ input/output, video,  │ HDMI   ──► │ Linux hardware        │
+│ Web Browser (KVM)     │            │ power, audio, files   │            │                       │
+└───────────────────────┘            └───────────────────────┘            └───────────────────────┘
 ```
 
 ## Hardware and configuration
