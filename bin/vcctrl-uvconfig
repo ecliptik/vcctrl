@@ -46,7 +46,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
-    vc, at_prompt, wait_for_prompt, arm_leds, wait_led, grab)
+    vc, at_prompt, wait_for_prompt, arm_leds, wait_led, grab, load_profile)
 
 sys.path.insert(0, HERE)
 
@@ -151,15 +151,18 @@ def verify():
     running system OFFERS, which is the thing that matters and the thing that
     was wrong. File sizes and timestamps looked correct throughout the incident.
     """
+    target_dir = ((load_profile().get("target") or {}).get("dir")
+                  or "C:\\DOSKUTSU")
+    log = target_dir + "\\LOGS\\<TAG>SDL.LOG"
     print("== verify: reading the loaded configuration ==")
     print()
     print("  Run a cell first, then check its SDL log on the target:")
     print()
-    print('    FIND /I "oem_string"  C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
-    print('    FIND /I "0x01F8"      C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
-    print('    FIND /I "MODESET: id=" C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
-    print('    FIND /I "LFB-decision" C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
-    print('    FIND /I "FB-INIT"     C:\\DOSKUTSU\\LOGS\\<TAG>SDL.LOG')
+    print('    FIND /I "oem_string"  %s' % log)
+    print('    FIND /I "0x01F8"      %s' % log)
+    print('    FIND /I "MODESET: id=" %s' % log)
+    print('    FIND /I "LFB-decision" %s' % log)
+    print('    FIND /I "FB-INIT"     %s' % log)
     print()
     print("  A correctly configured Mach64-CT shows:")
     print("    oem_string='Universal VESA VBE 6.70'")

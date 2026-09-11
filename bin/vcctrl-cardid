@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""vcctrl-cardid -- identify the fitted video card from a doskutsu SDL log.
+"""vcctrl-cardid -- identify the fitted video card from a port's SDL log.
+
+Reads the shared SDL3-DOS backend's own probe/detect log lines -- these are
+platform-layer output, identical across every port that uses it, not
+specific to any one project. First exercised against doskutsu's own logs.
 
 WHY THIS EXISTS: after a card swap, nothing in the returned artifacts says
 which card produced the numbers. RB.BAT hardcodes `video=S3 ViRGE`, so it will
