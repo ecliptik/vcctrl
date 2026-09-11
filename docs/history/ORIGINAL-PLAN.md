@@ -1,3 +1,19 @@
+# Original plan (historical)
+
+**Written 2026-08-18, kept verbatim below except for two identifier fixes.**
+This was vcctrl's design document before any of it was built -- read it as a
+record of the starting plan, not as current fact. It predates the Pi 3 to
+Pi 5 migration, the multi-profile architecture, the web KVM, the MCP server,
+and most of what `docs/` now describes measured rather than planned. For the
+current design, start at the repository `README.md`, `docs/HARNESS-STANDARD.md`
+and `docs/PROFILES.md` instead. Some paths and modules named below (for
+example `daemon/capture.py`) were part of an early design and were never
+built, or were built differently -- this file is not corrected for that,
+because the point of keeping it is to show what was planned, not to keep it
+accurate.
+
+---
+
 # vcctrl -- plan for Claude-driven control of the g2k DOS machine
 
 Status 2026-08-18. Planning document. Everything marked **[measured]** was
@@ -1622,7 +1638,7 @@ What worked:
 - Payload pushed VM -> Pi over wifi (188 MB, ~53 s), sha verified on arrival.
 - The doskutsu installer's `CF_MOUNT` and `STAGING` are already environment-
   overridable, so **no change to their tooling was needed**:
-  `CF_MOUNT=/mnt/cf STAGING=/home/claude/staging bash install-qa-v163.sh`
+  `CF_MOUNT=/mnt/cf STAGING=~/staging bash install-qa-v163.sh`
 - Mount the vfat with `-o uid=<user>` so the installer runs unprivileged rather
   than under sudo. Mounting as root leaves the card root-owned and the extract
   fails partway through, after several steps have already reported PASS.
@@ -1707,7 +1723,7 @@ stock 32-bit image if the port misbehaves.
 ## 8. Repo layout
 
 ```
-/home/claude/git/vcctrl/
+~/git/vcctrl/
   bin/vcctrl              CLI on the VM; thin ssh client, no logic
   daemon/vcctrld.py       on the Pi: owns uinput devices, unix socket
   daemon/capture.py       frame grab + lock detection

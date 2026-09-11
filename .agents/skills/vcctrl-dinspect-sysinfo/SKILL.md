@@ -48,15 +48,15 @@ In the KVM: the **Download from target** popover's **Re-scan hardware**
 button does the same three steps, and the reading appears in the **State**
 panel under **DOS System (dinspect)**.
 
-## Updating the vendored binary (rare — after a `dosfetch` change)
+## Updating the vendored binary (rare — after a `dinspect` change)
 
-Only needed when `dosfetch`'s `dinspect.exe` itself changes (a new
-detected field, a bug fix). The Pi that runs the daemon has no checkout of
-`dosfetch` — the binary is vendored specifically so the daemon never needs
+Only needed when the `dinspect` project's `dinspect.exe` itself changes (a
+new detected field, a bug fix). The Pi that runs the daemon has no checkout
+of `dinspect` — the binary is vendored specifically so the daemon never needs
 one.
 
-1. Build in `/home/claude/git/dosfetch` (Open Watcom — see that repo's own
-   `make`).
+1. Build in a sibling checkout of `dinspect` (Open Watcom — see that repo's
+   own `make`).
 2. Copy the built `dinspect.exe` to `vcctrl/vendor/dinspect.exe`, replacing
    the checked-in copy.
 3. **If the field list changed, TWO places need updating, not one** —

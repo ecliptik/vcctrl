@@ -1248,8 +1248,9 @@ importance, four sweeps would have deployed broken, because the judgement was
 the part that failed.
 
 And the divergence itself recurred within twenty minutes of my diagnosing it: I
-patched `~/doskutsu-netiter/stage` without checking that `ecliptik/g2k` tracks
-those files. Naming a failure shape does not confer immunity to it. What caught
+patched the staging directory without checking that the target's own private
+boot-configuration repo tracks those files. Naming a failure shape does not
+confer immunity to it. What caught
 it was checking rather than assuming, which is a habit -- and habits work when
 understanding does not.
 

@@ -1546,7 +1546,9 @@ other profile there is no packet driver, and getting there costs a reboot.
 So a browser "send file" is not a push. It is:
 
 1. Upload to `vcctrld`, which stages it on the Pi and hands it to the VM's
-   `serve.sh` FTP root (192.0.2.10:2121, `USER`/`PASSWORD_FROM_ENV`).
+   `serve.sh` FTP root (host, port and credentials come from
+   `control.fileserver` in `vcctrl.yaml`, which is untracked -- see
+   `docs/FILE-TRANSFER.md`).
 2. Verify the gates that already exist and must not be dropped: **sha per
    binary, CRLF on every `.BAT`, ASCII-only** (PLAN sec. 5).
 3. **Type `GET.BAT` at a DOS prompt** to make the machine pull. `PUT.BAT` for
