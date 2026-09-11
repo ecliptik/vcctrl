@@ -102,16 +102,37 @@ target:
 
   # The names the program itself consults. Inventing one here would set a
   # variable on the target that nothing reads.
+  #
+  # CORRECTED 2026-09-11 (vcctrl-harness-migration fork): every one of these
+  # was previously written as DOSKUTSU_<LEVER>, copied verbatim from
+  # vcctrl-cell's own (pre-generalization) hardcoded strings without an
+  # independent check against doskutsu's actual source. That was wrong --
+  # confirmed directly against vendor/nxengine-evo/src/{tas.cpp,main.cpp,
+  # graphics/Renderer.cpp} (the real getenv() call sites) and
+  # tests/qa/CLRENV.BAT + RB.BAT (the real, currently-generated/used DOS
+  # batch files) in the doskutsu repo: doskutsu migrated these specific
+  # levers to the shared, neutral DOS_PORT_* naming at some point (an old
+  # DOSKUTSU_LOG_TAG use survives only in two now-_disabled/ patches), and
+  # vcctrl-cell's own hardcoded strings were never updated to follow. This
+  # means every vcctrl-cell-driven diagnostic cell that intended to arm a
+  # TAS replay/seed/pin/log-tag/shot-ticks lever via the OLD names below
+  # would have silently NOT armed it -- the engine has no fallback to the
+  # DOSKUTSU_-prefixed spelling at all. DOSKUTSU_NO_AUDIO is a real,
+  # different, legitimately DOSKUTSU_-prefixed var (no shared-layer
+  # equivalent) and is unaffected; it isn't one of this harness's levers.
   env:
-    replay: DOSKUTSU_TAS_REPLAY
-    seed: DOSKUTSU_TAS_PRNG_SEED
-    auto_exit_tick: DOSKUTSU_TAS_AUTO_EXIT_TICK
-    log_tag: DOSKUTSU_LOG_TAG
-    pin_native_mode: DOSKUTSU_PIN_NATIVE_MODE
-    shot_ticks: DOSKUTSU_SHOT_TICKS
+    replay: DOS_PORT_TAS_REPLAY
+    seed: DOS_PORT_TAS_PRNG_SEED
+    auto_exit_tick: DOS_PORT_TAS_AUTO_EXIT_TICK
+    log_tag: DOS_PORT_LOG_TAG
+    pin_native_mode: DOS_PORT_PIN_NATIVE_MODE
+    shot_ticks: DOS_PORT_SHOT_TICKS
     # Harness-side, not engine-side: keeps the console in mode 12h between
     # cells so the capture stick never loses lock at a text-mode prompt.
-    # Consulted by the harness's own QA.BAT, not by DOSKUTSU.EXE itself.
+    # Consulted by the harness's own QA.BAT/ADIAG.BAT etc. (verified: real
+    # `IF "%DKTCAP%"=="1"` checks in tests/qa/ADIAG.BAT), not by
+    # DOSKUTSU.EXE itself -- this one was never renamed and is confirmed
+    # still correct as DKTCAP.
     capture_flag: DKTCAP
 
 timing:
