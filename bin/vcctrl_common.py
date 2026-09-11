@@ -68,8 +68,14 @@ def cfg_get(path, fallback=None):
 # directory, executable name, the env-var names it consults, its boot-profile
 # witness -- so harness/vcctrl-sweep, -cell and -collect stay one script each
 # instead of a per-project fork. Located through vcctrl.yaml's
-# `harness.profile`, so a checkout with no config falls back to the doskutsu
-# profile beside this file.
+# `harness.profile` -- REQUIRED as of 2026-09-11, no fallback. Every port
+# tracks its own profile in its own repo now (dosags's profiles/dosags.yaml,
+# dossage's profiles/dossage.yaml, doskutsu's profiles/doskutsu.yaml -- this
+# repo's own profiles/doskutsu.yaml moved out to be the last of those), so
+# there is no longer one "default" project this repo can fall back to
+# guessing; a rig with no `harness.profile` set genuinely has nothing
+# configured, and should be told that plainly rather than pointed at a
+# hardcoded path that used to exist and no longer does.
 #
 # THIS USED TO BE THREE COPIES, and one of them had a real bug for as long as
 # it existed: vcctrl-collect's own `_profile_path()` called `cfg_get` without
@@ -82,11 +88,14 @@ def cfg_get(path, fallback=None):
 # whose config pointed `harness.profile` elsewhere. One shared function
 # cannot go stale in only one of its copies.
 def profile_path():
+    """The configured profile's absolute path, or None if harness.profile
+    isn't set. None is a real answer, not an error -- callers decide how to
+    refuse; this function never guesses a default project."""
     p = cfg_get("harness.profile", "") or ""
     root = os.path.dirname(HERE)
     if p and not os.path.isabs(p):
         p = os.path.join(root, p)
-    return p or os.path.join(root, "profiles", "doskutsu.yaml")
+    return p or None
 
 
 def load_profile(require_sweeps=False):
@@ -105,6 +114,12 @@ def load_profile(require_sweeps=False):
     wrong file.
     """
     path = profile_path()
+    if not path:
+        raise SystemExit(
+            "REFUSED: no harness.profile configured in vcctrl.yaml. Every "
+            "port tracks its own profile in its own repo now -- set "
+            "harness.profile to that file's path (e.g. "
+            "/path/to/<port>/profiles/<port>.yaml).")
     try:
         import yaml
     except ImportError:

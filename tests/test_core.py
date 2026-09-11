@@ -8744,12 +8744,12 @@ def test_the_harness_profile_carries_what_sweeps_json_did():
     root = os.path.join(HERE, os.pardir)
 
     try:
-        import yaml
+        import yaml  # noqa: F401  -- load_conf() below needs it; this is
+                                   # the same "no PyYAML" skip the direct
+                                   # read used to gate before it existed.
     except ImportError:
         print("  SKIP  no PyYAML")
         return
-    prof = yaml.safe_load(open(os.path.join(root, "profiles",
-                                            "doskutsu.yaml")))
 
     check("sweeps.json is gone -- one source, not two",
           not os.path.exists(os.path.join(root, "harness", "sweeps.json")))
@@ -8785,18 +8785,28 @@ def test_the_harness_profile_carries_what_sweeps_json_did():
           [k for k, s in conf["sweeps"].items() if not s.get("timeout_min")])
 
     # The target facts, which are the reason it is a profile and not a table.
-    t = prof.get("target") or {}
+    # Read from `conf` itself (already loaded via the real load_conf() path
+    # above) rather than a second, separately-hardcoded file read -- the
+    # latter is what silently kept pointing at this repo's own
+    # profiles/doskutsu.yaml after that file moved into doskutsu's own repo
+    # (2026-09-11), which is a real path this test used to get wrong twice
+    # over: once by not noticing the file moved, and again by asserting a
+    # replay env-var name (DOSKUTSU_TAS_REPLAY) that was already stale
+    # BEFORE the move -- the same-day vcctrl-harness-migration fix corrected
+    # it to the shared DOS_PORT_* naming doskutsu's engine actually reads,
+    # and this assertion was never updated to match.
+    t = conf.get("target") or {}
     check("the profile names the target's working directory",
           "DOSKUTSU" in (t.get("dir") or ""), t.get("dir"))
     check("and the boot-profile witness, which is DATA",
           (t.get("profile_witness") or {}).get("variable") == "BLASTER",
           t.get("profile_witness"))
     check("and the env names the program consults",
-          (t.get("env") or {}).get("replay") == "DOSKUTSU_TAS_REPLAY",
+          (t.get("env") or {}).get("replay") == "DOS_PORT_TAS_REPLAY",
           t.get("env"))
     check("menu window is TARGET physics and lives here",
-          (prof.get("timing") or {}).get("menu_window_s") == 14,
-          prof.get("timing"))
+          (conf.get("timing") or {}).get("menu_window_s") == 14,
+          conf.get("timing"))
 
 
 def test_the_client_finds_vcconfig_in_the_INSTALLED_layout():
@@ -9933,9 +9943,15 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
           "$SRC/vendor" in inst and "$PREFIX/vendor" in inst,
           "shipped but never installed")
 
-    # The two the daemon cannot run without, named individually so a rewrite
-    # of the parsing above cannot quietly stop checking them.
-    for needed in ("vendor", "common", "harness", "profiles", "daemon"):
+    # The ones the daemon cannot run without, named individually so a
+    # rewrite of the parsing above cannot quietly stop checking them.
+    # `profiles` was here until 2026-09-11 -- removed, not just skipped,
+    # because this repo no longer HAS a profiles/ directory to ship at all
+    # (every port's target-software profile moved into that port's own
+    # repo; see pi/deploy.sh's own updated comment). It is deliberately
+    # absent from `present` too, so it can't reappear here as
+    # "unclassified" the next time someone adds an unrelated directory.
+    for needed in ("vendor", "common", "harness", "daemon"):
         check("%s/ is deployed" % needed, needed in shipped, shipped)
 
 

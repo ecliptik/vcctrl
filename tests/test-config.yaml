@@ -27,3 +27,15 @@ rig:
 capabilities:
   power:
     backend: none
+
+# A repo-relative path to a TRACKED fixture, not real hardware and not an
+# address that resolves -- stays within this file's own "nothing here may
+# name real hardware" rule. Needed once profiles/doskutsu.yaml moved out of
+# this repo (into doskutsu's own, matching the per-repo-profile convention):
+# harness/vcctrl-sweep|-cell|-collect's own fallback (no harness.profile set)
+# used to land on this repo's own profiles/doskutsu.yaml, which is exactly
+# the file that moved, and the suite deliberately never reads a real
+# vcctrl.yaml (see this file's own header) to pick up wherever it moved TO.
+# See tests/fixtures/profile-no-denied.yaml's own header for the full story.
+harness:
+  profile: tests/fixtures/profile-no-denied.yaml

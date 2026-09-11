@@ -396,10 +396,20 @@ ssh "$HOST" 'rm -rf ~/vcctrl-src && mkdir -p ~/vcctrl-src'
 # sent ONLY IF IT EXISTS: a rig configured entirely by built-in defaults is a
 # supported state, and shipping the example in its place would install a
 # configuration nobody wrote, pointing at hardware nobody has.
-# harness/ and profiles/ ship too: the cell and sweep runners moved out of
-# bin/ in phase 6, and a deploy that still sent only bin/ would leave a Pi
-# with the client and no runners -- working for every verb anyone tests by
+# harness/ ships too: the cell and sweep runners moved out of bin/ in
+# phase 6, and a deploy that still sent only bin/ would leave a Pi with
+# the client and no runners -- working for every verb anyone tests by
 # hand, and missing exactly the ones a round needs.
+# profiles/ does NOT ship (removed 2026-09-11): the harness generalization
+# moved every port's target-software profile OUT of this repo and into
+# that port's own (dosags's profiles/dosags.yaml, dossage's profiles/
+# dossage.yaml, doskutsu's profiles/doskutsu.yaml) -- this repo has no
+# profiles/ directory left to ship at all. The control host's own
+# harness.profile (in its local vcctrl.yaml, shipped separately below)
+# names wherever the active one actually lives now; the Pi never
+# resolves harness.profile itself (no harness tools run in daemon mode --
+# see test_harness_workflow_tools_are_absent_in_daemon_mode), so it does
+# not need the file either.
 # vendor/ ships for the same reason harness/ does, and it is the same mistake
 # one release later: the file server the target pulls from is a vendored
 # library, and a deploy that omitted it would give a Pi where everything anyone
@@ -408,7 +418,7 @@ ssh "$HOST" 'rm -rf ~/vcctrl-src && mkdir -p ~/vcctrl-src'
 # agent/ ships as of the Pi-hosted MCP server (2026-08-25): install.sh sets
 # up its own venv and systemd service from what lands here, separate from and
 # fault-isolated from vcctrld's own install steps -- see the comment there.
-tar -C "$SRC" -cf - daemon bin pi tools common harness profiles vendor agent | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
+tar -C "$SRC" -cf - daemon bin pi tools common harness vendor agent | ssh "$HOST" 'tar -C ~/vcctrl-src -xf -'
 if [ -f "$SRC/vcctrl.yaml" ]; then
   # Validate BEFORE shipping. An invalid file does not stop the daemon -- it
   # degrades to built-in defaults, which on this rig means no power control and
