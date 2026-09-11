@@ -3209,7 +3209,7 @@
 <div id="pop-msd" class="pop" role="dialog" aria-label="Disk" hidden>
   <div class="hint" id="msd-mounted" style="margin-left:0">—</div>
   <div class="poprow" id="msd-ejectrow" hidden>
-    <button id="msd-ejectbtn" class="danger">Eject</button>
+    <button id="msd-ejectbtn" class="danger" title="Unmount this image">Eject</button>
   </div>
   <div id="msd-images"></div>
   <div class="hint" id="msd-empty" hidden style="margin-left:0">No images in
@@ -6874,8 +6874,9 @@ async function paintMsd() {
       + '<span class="hint" style="margin:0">' + fmtBytes(img.size || 0)
       + ' · ' + esc(img.kind) + '</span>'
       + '<button data-msd-mount="' + esc(img.name) + '" data-msd-mode="'
-      + esc(img.kind) + '"' + (isMounted ? ' class="on" disabled' : '') + '>'
-      + (isMounted ? 'Mounted' : 'Mount') + '</button>'
+      + esc(img.kind) + '"' + (isMounted ? ' class="on" disabled' : '')
+      + ' title="' + (isMounted ? 'Already mounted' : 'Mount this image')
+      + '">' + (isMounted ? 'Mounted' : 'Mount') + '</button>'
       + '</div>';
   }).join('');
   for (const b of $('msd-images').querySelectorAll('button[data-msd-mount]')) {
@@ -8540,7 +8541,8 @@ function statsRows(j) {
     // (see startScan) -- the same place the power buttons put theirs, not
     // as standing text beside the button.
     out.push('<div class="row" style="margin-bottom:6px">'
-      + '<button onclick="startScan()">Re-scan hardware</button></div>');
+      + '<button onclick="startScan()" title="Re-detect what\'s installed">'
+      + 'Re-scan hardware</button></div>');
   }
 
   g('Picture');

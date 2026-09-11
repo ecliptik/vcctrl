@@ -1579,6 +1579,37 @@ and the exact click sequence, since a rendering-engine-specific or
 viewport-specific trigger is now the more likely remaining explanation
 than a code defect in `applyZoom()` itself.
 
+**UPDATE 2026-09-11, the harness's own vouching stopped being true, and the
+cause is now known.** While preparing this repository for publication, the
+same synthetic-page harness (`test_zoom_layout_in_a_browser`) was found
+failing three checks that were passing when this entry was written:
+`fit fills one axis exactly`, and both `recentre` checks. Root cause,
+measured directly rather than guessed: the harness requests
+`--window-size=1580,900` and the actual delivered viewport, printed by the
+test itself, is **1174x708** on this host's current Chromium
+(152.0.7977.82) — headless Chromium is no longer honoring the requested
+window size at all, on a build considerably newer than whatever was current
+on 2026-08-26. This is the same class of drift as
+[[headless-chromium-clamps-to-500px]] (a different memory note, same
+mechanism: a headless top-level window's viewport can silently stop
+matching the `--window-size` flag across Chromium versions).
+
+**This does not overturn the "not reproduced" conclusion above** — five
+live-browser attempts against the real page found `applyZoom()`'s own math
+correct at every window size actually tried. It DOES mean the harness's
+"still passing its fit-mode checks" statement, offered above as evidence,
+is no longer current, and could not have been trusted on this host without
+first checking the delivered viewport against the requested one. **Not
+fixed in this pass** — the general fix is to size the page inside an
+`<iframe>` at a known dimension rather than relying on `--window-size` for
+the top-level headless window (the technique
+[[headless-chromium-clamps-to-500px]] already established), which needs
+retrofitting into all three `--window-size=` call sites in
+`tests/test_core.py`, not just this one. Until then, the test itself
+detects the mismatch and skips only the affected assertions with a printed
+reason, rather than failing red on a Chromium version difference that has
+nothing to do with `kvm.html`.
+
 ## 18. A crashed MCP client's input lock has no lightweight MCP-side recovery — OPEN, WORKAROUND KNOWN
 
 Measured 2026-08-26: an MCP-mode session's input lock (`mcp:<host>:<pid>`)
@@ -1809,7 +1840,7 @@ integration test (constructing a fake registry, rendering the page,
 and asserting on live WebSocket/fetch traffic) is still not written,
 and is the one thing from this paragraph that remains open.
 
-**`vcctrl-macintosh.yaml`/`profile-kinds/rgb2hdmi-usb4vc.yaml` are
+**`vcctrl-macintosh.example.yaml`/`profile-kinds/rgb2hdmi-usb4vc.yaml` are
 entirely unmeasured.** No RGB2HDMI board has ever been wired to this
 rig; the config is a scaffolded placeholder grounded in
 `docs/BOARD-IDENTITY.md`'s existing ADB findings, not in anything run
@@ -1849,7 +1880,7 @@ capability's three-state answer -- the read-only half of WP2 item 6 in
 the hardware-groups mechanism section 1 of that plan describes (one
 active profile per group of profiles sharing exclusive hardware) is
 UNBUILT, since there is no second real usb4vc-kind profile on this rig
-to verify it against; `vcctrl-macintosh.yaml` still cannot coexist with
+to verify it against; `vcctrl-macintosh.example.yaml` still cannot coexist with
 `gateway2000` today (B11, unchanged).
 
 **Not yet fixed:** none of the above blocks `gateway2000`/`modernpc`
@@ -1898,3 +1929,28 @@ its USB host controller stopped listening; see
 `internal/KVM-MACHINES-PLAN.md`'s WP4 status note and the memory this
 session filed on it) -- and modernpc's own `input`/`msd` capabilities will
 report against a device that is not really reachable until that clears.
+
+## 22. `test_one_thread_owns_the_websocket_for_its_whole_life` is flaky under full-suite load — OPEN, NOT REPRODUCED IN ISOLATION
+
+Found 2026-09-11 while preparing this repository for publication: a full
+`pytest` run intermittently fails this test; five consecutive isolated runs
+of the same test never have (`pytest tests/test_core.py::test_one_thread_owns_the_websocket_for_its_whole_life`,
+repeated).
+
+The test drives a real thread, a real `socketpair()`, and two real
+wall-clock deadlines (a 6 s wait for an echoed rate change, a 6 s wait for
+clean shutdown) against `WebCapability.serve_ws` running at `fps=20.0`/`7`.
+Nothing about it is synthetic-timing-free, which is exactly the shape of
+test that degrades under whatever CPU contention the other ~200 tests in
+the suite create (several of which shell out to a headless Chromium or
+`ffmpeg`), rather than revealing an actual ownership violation in
+`serve_ws` itself.
+
+**Not fixed, because it has not been caught in the act.** Speculatively
+widening the two deadlines without ever having reproduced a failing run
+would be tuning a number against a guess, not a measurement -- exactly the
+mistake `docs/HARNESS-STANDARD.md` warns against elsewhere in this repo. If
+this recurs, the useful next step is capturing the actual `touches` list
+and thread-count from a failing run (not just the pass/fail), since the
+test's own docstring explains a specific historical failure shape
+(`SSL_free` racing `SSL_read` on one `SSL*`) that this would rule in or out.
