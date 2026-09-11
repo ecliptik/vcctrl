@@ -48,13 +48,13 @@ What this project actually runs on, across all three configurations:
 
 - **Raspberry Pi 5** (4 GB+) — the daemon host.
 - **[USB4VC](https://github.com/dekuNukem/USB4VC) HAT** — PS/2 or ADB
-  keyboard/mouse emulation, for `vga-ps2` and `rgb2hdmi-usb4vc`.
+  keyboard/mouse emulation.
 - **HDMI/VGA-to-USB capture dongle** — plugs into a Pi USB port, presents as
   a UVC device emitting MJPEG natively (tested with a MacroSilicon
   MS2109/MS2130-chipset dongle).
 - **[RGB2HDMI](https://github.com/hoglet67/RGBtoHDMI) board** (Classic
   Macintosh only) — sits between the Mac's video output and the capture
-  dongle above; the Mac has no HDMI/VGA of its own.
+  dongle above.
 - **[Official Raspberry Pi USB3 hub](https://www.raspberrypi.com/products/usb-3-hub/),
   with the [official Raspberry Pi power
   supply](https://www.raspberrypi.com/products/power-supply/) plugged into
@@ -63,10 +63,11 @@ What this project actually runs on, across all three configurations:
 - **TP-Link Kasa, Kasa KLAP, or Belkin Wemo smart plug** (optional, any
   configuration) — remote power-cycling.
 - **Any UVC webcam** (optional, any configuration) — a second, independent
-  view of the physical machine, for when the primary capture is dark or
-  frozen.
+  view of the physical machine.
 
-### Retro PC — `vga-ps2`
+### Profiles
+
+#### Retro PC — `vga-ps2`
 
 A DOS/Windows-era PC with PS/2 keyboard/mouse and analog VGA out.
 
@@ -91,7 +92,7 @@ capabilities:
     backend: none   # or v4l2-ffmpeg, if you have the second camera
 ```
 
-### Classic Macintosh — `rgb2hdmi-usb4vc`
+#### Classic Macintosh — `rgb2hdmi-usb4vc`
 
 ADB keyboard/mouse, capture via an RGB2HDMI board. **Scaffolded but
 unverified/untested** — no such hardware has run against this project's own
@@ -118,7 +119,7 @@ capabilities:
       device: /dev/v4l/by-id/usb-xxxx-video-index0   # the RGB2HDMI dongle
 ```
 
-### Modern PC — `hdmi-usb`
+#### Modern PC — `hdmi-usb`
 
 Any machine with HDMI out and a spare USB port. The Pi's own
 USB-C port presents itself as a USB keyboard and mouse straight to the
