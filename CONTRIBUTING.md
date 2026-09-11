@@ -51,7 +51,17 @@ start rather than fall back to a built-in default if either is missing.
   (rather than a category the guard should catch generically for
   everyone), put them in an untracked `~/.config/vcctrl/identifiers.txt`
   (one regex fragment per line; override the path with
-  `VCCTRL_IDENT_FILE`) rather than editing the test.
+  `VCCTRL_IDENT_FILE`) rather than editing the test. `tools/scan-history.sh`
+  runs the same category checks against every blob, commit message and
+  tag in history, not just the current tree -- the guard above is
+  HEAD-only by design and cannot see what the history scanner can.
+- **Commit hashes changed on 2026-09-11.** This history was rewritten
+  once, before its first genuinely public audience (the repo was
+  tailnet-gated until that point, so no outside clone needed
+  reconciling), to remove a small number of identifiers a first pass had
+  missed. `docs/HISTORY-MAP.txt` maps every old hash to its current one,
+  for anything citing a pre-2026-09-11 commit from outside this
+  repository.
 - **The docs-index guard**
   (`test_the_docs_index_cannot_rot_silently`) fails if you add a
   `docs/*.md` file without a matching backticked filename in
