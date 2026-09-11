@@ -117,7 +117,7 @@ def _cell():
     return m
 
 
-def read_card_dir(tag, suffix="PPM", settle=3.5):
+def read_card_dir(tag, target_dir, suffix="PPM", settle=3.5):
     """OCR of the DIR summary for one tag directory, or None.
 
     PIPED THROUGH `FIND` ON PURPOSE. A bare `DIR` of a directory holding forty
@@ -138,8 +138,8 @@ def read_card_dir(tag, suffix="PPM", settle=3.5):
     if not at_prompt():
         return None
     vc("type", "CLS"); vc("key", "enter"); time.sleep(1.0)
-    vc("type", 'DIR C:\\DOSKUTSU\\LOGS\\%s\\*.%s | FIND "bytes"'
-       % (tag.upper(), suffix.upper()))
+    vc("type", 'DIR %s\\LOGS\\%s\\*.%s | FIND "bytes"'
+       % (target_dir, tag.upper(), suffix.upper()))
     vc("key", "enter")
     time.sleep(settle)
     _sh, txt = C.read_env_text_raw()
@@ -374,10 +374,17 @@ def classify_tag(card, local, sizes=None):
 
 
 def main(argv=None):
+    from vcctrl_common import load_profile, default_incoming
+    conf = load_profile()
+    target = conf.get("target") or {}
+    target_dir = target.get("dir")
+    if not target_dir:
+        print("REFUSED: this profile declares no target.dir.")
+        return 2
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--tags", required=True)
-    ap.add_argument("--incoming",
-                    default=os.path.expanduser("~/doskutsu-netiter/incoming"))
+    ap.add_argument("--incoming", default=default_incoming(conf))
     ap.add_argument("--logs", action="store_true")
     ap.add_argument("--delete", action="store_true")
     a = ap.parse_args(argv)
@@ -420,7 +427,7 @@ def main(argv=None):
         print("   dry run (default). Nothing is removed. Add --delete to act.")
     for tag in tags:
         for suf in suffixes:
-            ocr = read_card_dir(tag, suf)
+            ocr = read_card_dir(tag, target_dir, suf)
             card = parse_dir_summary(ocr)
             local = local_tag_totals(a.incoming, tag, "." + suf)
             sizes = local_tag_sizes(a.incoming, tag, "." + suf)

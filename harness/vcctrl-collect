@@ -52,7 +52,8 @@ Usage:
   --stay-net        leave it in NET afterwards (default: reboot to the
                     menu default, which is measurement-clean)
   --incoming <dir>  FTP landing directory
-                    (default ~/doskutsu-netiter/incoming)
+                    (default ~/<profile-name>-netiter/incoming, e.g.
+                    ~/doskutsu-netiter/incoming for the doskutsu profile)
 """
 
 import json
@@ -73,7 +74,7 @@ sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, vc_json, cfg_get, leds, wait_led, at_prompt, wait_for_prompt,
     arm_leds, ensure_powered, spam_menu, flush_input_line, MENU_MAX_KEYS,
-    KBD_BUFFER_KEYS, load_profile)
+    KBD_BUFFER_KEYS, load_profile, default_incoming)
 
 # grab() comes from the sweep runner rather than being copied. Since the KVM
 # daemon took ownership of /dev/video0 this is a read of its frame ring, so a
@@ -100,17 +101,8 @@ grab = _m.grab
 # used to carry its own copy, and that copy called `cfg_get` without ever
 # importing it, so `harness.profile` was silently ignored here while
 # vcctrl-sweep (which imports it correctly) honoured it. One shared function
-# cannot go stale in only one of its copies.
-
-
-def _default_incoming(profile):
-    """~/<name>-netiter/incoming, derived from the active profile's own name.
-
-    doskutsu's existing on-disk directory is literally `~/doskutsu-netiter/`,
-    so this preserves that exactly when doskutsu is the active profile; a
-    second profile gets its own directory by the same convention rather than
-    silently sharing doskutsu's."""
-    return os.path.expanduser("~/%s-netiter/incoming" % (profile.get("name") or "doskutsu"))
+# cannot go stale in only one of its copies. Likewise `default_incoming()`
+# for the FTP landing directory, shared with bin/vcctrl-cfclean.
 
 # NET is menu item 5. The digit alone does not commit the selection -- it only
 # highlights -- so every attempt is digit-then-Enter. See FINDINGS sec. 8.
@@ -638,7 +630,7 @@ def main(argv):
     if not target_dir:
         raise SystemExit("REFUSED: this profile declares no target.dir.")
 
-    incoming = _default_incoming(conf)
+    incoming = default_incoming(conf)
     if "--incoming" in argv:
         incoming = argv[argv.index("--incoming") + 1]
     already_net = "--already-net" in argv

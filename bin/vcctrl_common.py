@@ -137,6 +137,17 @@ def target_env_name(profile, key):
     return ((profile.get("target") or {}).get("env") or {}).get(key)
 
 
+def default_incoming(profile):
+    """~/<name>-netiter/incoming, derived from the active profile's own name.
+
+    doskutsu's existing on-disk directory is literally ~/doskutsu-netiter/,
+    so this preserves that exactly when doskutsu is the active profile; a
+    second profile gets its own directory by the same convention rather
+    than silently sharing doskutsu's."""
+    return os.path.expanduser(
+        "~/%s-netiter/incoming" % (profile.get("name") or "doskutsu"))
+
+
 CALL_COST_S = 1.5
 
 # The CONFIG.SYS menu appears within a few seconds of the POST edge and times
