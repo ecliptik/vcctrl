@@ -33,10 +33,10 @@ one box; the common one is a Pi as the daemon and a laptop as control.
 
 ## Hardware and configuration
 
-Three shapes, each a `profile-kinds/*.yaml` template. Scaffold one with
+Three configurations, each a `profile-kinds/*.yaml` template. Scaffold one with
 `tools/new-profile.py --kind <kind> --name <yours>` and fill in the
 `REPLACE_ME` placeholders — the YAML below shows only what makes each
-shape what it is, not a complete config.
+one distinct, not a complete config.
 
 ### Retro PC — `vga-ps2`
 
@@ -89,7 +89,8 @@ capabilities:
 ### Modern PC — `hdmi-usb`
 
 Any machine with HDMI out and a spare USB port. No USB4VC — the Pi's own
-USB-C port acts as a keyboard/mouse gadget straight to the target.
+USB-C port presents itself as a USB keyboard and mouse straight to the
+target.
 
 **Hardware:**
 - **Raspberry Pi 5** — the daemon host.
@@ -102,8 +103,8 @@ USB-C port acts as a keyboard/mouse gadget straight to the target.
 - **HDMI capture dongle** — video and (usually) audio.
 - **UVC camera** (optional) — plugged into the Pi directly.
 
-Driving capture, the HID gadget and encoding together can throttle a
-Pi 5 — one capture device per Pi for this shape.
+Driving capture, keyboard/mouse emulation and encoding together can
+throttle a Pi 5 — one capture device per Pi for this configuration.
 
 ```yaml
 capabilities:
@@ -138,7 +139,7 @@ fine (`none`, or omit the block) — you lose remote power-cycling, nothing
 else. `shell` runs your own on/off/state commands for a relay, a PDU, or
 a GPIO pin.
 
-### What every shape needs, regardless
+### What every configuration needs, regardless
 
 A Linux daemon host (`/dev/uinput` for USB4VC, or a peripheral-capable USB
 port for `hid-gadget`), root and systemd; a capture device that emits
@@ -244,16 +245,16 @@ daemon/vcweb.py         the control web KVM; daemon/vcweb_public.py is the read-
 common/vcconfig.py      shared config loader (both hosts import it)
 agent/vcctrl_mcp.py     MCP server exposing the CLI's tools
 harness/vcctrl-*        cell/sweep/collect -- automated test runs against a target
-profile-kinds/*.yaml    hardware-shape templates (tools/new-profile.py reads these)
+profile-kinds/*.yaml    hardware-configuration templates (tools/new-profile.py reads these)
 pi/install.sh           systemd units and setup on the daemon host
 pi/deploy.sh            push + install from the control host
 vendor/                 third-party code (see THIRD-PARTY.md)
 tests/                  pytest tests/ -- no hardware required
 ```
 
-## Status, by target shape
+## Status, by configuration
 
-| shape | proven | notes |
+| configuration | proven | notes |
 |---|---|---|
 | Retro PC (`vga-ps2`) | **working end to end** | keyboard, mouse, video, audio, power, file transfer, the web KVM — all on real hardware; `docs/lab/FINDINGS.md` |
 | Modern PC (`hdmi-usb`) | **working end to end** | no USB4VC needed; multi-profile (one daemon, several targets) proven the same way |
