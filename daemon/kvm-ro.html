@@ -5,27 +5,26 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" id="tcolor" content="#17150F">
-<!-- Absolute URLs, not relative -- most link-unfurlers (Slack, Signal,
+<!-- Absolute URL, not relative -- most link-unfurlers (Slack, Signal,
      iMessage) fetch this markup without a browser context to resolve a
-     relative path against, so og:image/og:url have to already be whole
-     URLs. The literal below is a placeholder, never a real hostname: this
-     page is server-rendered per request (see kvm-ro.html's own delivery in
+     relative path against, so og:url has to already be a whole URL. The
+     literal below is a placeholder, never a real hostname: this page is
+     server-rendered per request (see kvm-ro.html's own delivery in
      daemon/vcweb_public.py's _serve_html_with_csp, which already does the
      same per-request substitution for the CSP nonce), and the handler
-     replaces both placeholders with this request's own Host header before
-     sending -- the same reason no tailnet hostname is ever a literal in
-     this tracked file. -->
+     replaces it with this request's own Host header before sending -- the
+     same reason no tailnet hostname is ever a literal in this tracked
+     file. There is deliberately no og:image/twitter:image: the one this
+     page used to serve (`kvm-ro-share.jpg`) had no recorded source or
+     licence, and a link preview with no image is honest; one with someone
+     else's unlicensed art is not. -->
 <meta property="og:title" content="vcctrl KVM">
 <meta property="og:description" content="A live view of real vintage PC hardware controlled by AI">
 <meta property="og:type" content="website">
 <meta property="og:url" content="OG_PAGE_URL">
-<meta property="og:image" content="OG_IMAGE_URL">
-<meta property="og:image:width" content="778">
-<meta property="og:image:height" content="666">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="vcctrl KVM">
 <meta name="twitter:description" content="A live view of real vintage PC hardware controlled by AI">
-<meta name="twitter:image" content="OG_IMAGE_URL">
 <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNSIgZmlsbD0iIzE3MTUwZiIvPjxyZWN0IHg9IjMuNSIgeT0iNSIgd2lkdGg9IjI1IiBoZWlnaHQ9IjE3LjUiIHJ4PSIyLjUiIGZpbGw9IiMzYTM1MmMiIHN0cm9rZT0iIzhhODI3NiIgc3Ryb2tlLXdpZHRoPSIxIi8+PHJlY3QgeD0iNiIgeT0iNy41IiB3aWR0aD0iMjAiIGhlaWdodD0iMTIuNSIgcng9IjEiIGZpbGw9IiMwNDEyMGEiLz48cGF0aCBkPSJNOC41IDExaDlNOC41IDE0aDEzTTguNSAxN2g2IiBzdHJva2U9IiM1NWZmNTUiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cmVjdCB4PSIxMyIgeT0iMjIuNSIgd2lkdGg9IjYiIGhlaWdodD0iMyIgZmlsbD0iIzhhODI3NiIvPjxyZWN0IHg9IjkiIHk9IjI1LjUiIHdpZHRoPSIxNCIgaGVpZ2h0PSIyLjQiIHJ4PSIxLjIiIGZpbGw9IiM4YTgyNzYiLz48L3N2Zz4=">
 <link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNSIgZmlsbD0iIzE3MTUwZiIvPjxyZWN0IHg9IjMuNSIgeT0iNSIgd2lkdGg9IjI1IiBoZWlnaHQ9IjE3LjUiIHJ4PSIyLjUiIGZpbGw9IiMzYTM1MmMiIHN0cm9rZT0iIzhhODI3NiIgc3Ryb2tlLXdpZHRoPSIxIi8+PHJlY3QgeD0iNiIgeT0iNy41IiB3aWR0aD0iMjAiIGhlaWdodD0iMTIuNSIgcng9IjEiIGZpbGw9IiMwNDEyMGEiLz48cGF0aCBkPSJNOC41IDExaDlNOC41IDE0aDEzTTguNSAxN2g2IiBzdHJva2U9IiM1NWZmNTUiIHN0cm9rZS13aWR0aD0iMS43IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cmVjdCB4PSIxMyIgeT0iMjIuNSIgd2lkdGg9IjYiIGhlaWdodD0iMyIgZmlsbD0iIzhhODI3NiIvPjxyZWN0IHg9IjkiIHk9IjI1LjUiIHdpZHRoPSIxNCIgaGVpZ2h0PSIyLjQiIHJ4PSIxLjIiIGZpbGw9IiM4YTgyNzYiLz48L3N2Zz4=">
 <link rel="stylesheet" href="/themes.css">

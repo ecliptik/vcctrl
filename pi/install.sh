@@ -548,7 +548,6 @@ install_public() {
     return 1
   fi
   sudo install -m 0644 "$SRC/daemon/themes.css"  "$PREFIX/themes.css"
-  sudo install -m 0644 "$SRC/daemon/kvm-ro-share.jpg" "$PREFIX/kvm-ro-share.jpg"
   # The vendored browser-side Opus decoder kvm-ro.html loads for the
   # ?codec=opus audio stream. Flat, beside vcweb_public.py, which is the
   # first place its route looks. MISSING IS A WARNING, NOT A FAILURE: the
@@ -743,6 +742,12 @@ echo "options bluetooth disable_ertm=1" | sudo tee /etc/modprobe.d/usb4vc-ertm.c
 # because the values are specific to whichever capture stick is attached and a
 # swap to the Macintosh's HDMI device needs different ones. Overwriting a local
 # edit here would silently repoint capture at hardware that is not there.
+#
+# `pi/files/device-pin.conf.example` ships in the repo; the real
+# `device-pin.conf` (gitignored) is this rig's own copy, edited with the
+# actual by-id/ALSA-card values from `ls -la /dev/v4l/by-id/` and
+# `arecord -l`. A fresh clone has no real file here, so this step is
+# silently skipped rather than pinning someone else's hardware.
 if [ -f "$FILES/device-pin.conf" ] && \
    [ ! -f /etc/systemd/system/vcctrld.service.d/device-pin.conf ]; then
   sudo mkdir -p /etc/systemd/system/vcctrld.service.d

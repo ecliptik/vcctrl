@@ -1,0 +1,51 @@
+asyncore.py and asynchat.py were part of the Python standard library from
+Python 1.5 until their removal in Python 3.12 (they are still required by
+pyftpdlib 2.2.0). Two licenses apply, layered:
+
+1. Each file's own header carries Sam Rushing's original 1996 permissive
+   notice, which is the license for the code itself and predates its
+   inclusion in CPython:
+
+   Copyright 1996 by Sam Rushing
+
+                           All Rights Reserved
+
+   Permission to use, copy, modify, and distribute this software and
+   its documentation for any purpose and without fee is hereby
+   granted, provided that the above copyright notice appear in all
+   copies and that both that copyright notice and this permission
+   notice appear in supporting documentation, and that the name of Sam
+   Rushing not be used in advertising or publicity pertaining to
+   distribution of the software without specific, written prior
+   permission.
+
+   SAM RUSHING DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+   INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN
+   NO EVENT SHALL SAM RUSHING BE LIABLE FOR ANY SPECIAL, INDIRECT OR
+   CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+   OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+   NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+   CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+2. As code that was also distributed as part of the CPython standard
+   library, these files were additionally covered by the Python Software
+   Foundation License Agreement for the CPython releases that shipped them
+   (Python 1.5 through 3.11). The PSF license does not replace the notice
+   above; it applies on top of it, the way it applies to any stdlib module
+   with its own separately-stated author license. Full text:
+   https://docs.python.org/3/license.html
+
+WHAT WAS CHANGED FROM THE STDLIB SOURCE, found 2026-09-11 while preparing
+this repository for publication: the copies vendored here (taken from a
+sibling project's own vendored copy, itself apparently patched at some
+earlier point) each had their real deprecation-warning call replaced with a
+bare `pass`, leaving an unused message-string constant behind as dead code.
+Neither Debian's separately-packaged `python3-pyasyncore` nor the
+`test.support` copy bundled with this host's Python 3.13 carries an
+equivalent live warning to restore from (the former predates the warning
+being added at all; the latter calls a different, CPython-internal
+`warnings._deprecated` helper that does not exist as public API). Rather
+than guess at a "restore," the dead lines were removed outright in both
+files -- no functional change, since `pass` did nothing either way, and no
+deprecation warning fires now, matching the Debian package's own behavior.
+See the git history for the exact diff.

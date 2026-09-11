@@ -13,13 +13,14 @@ the result, so the next person who compares against upstream finds a match.
 
 The FTP server the DOS target pulls from. Pure Python, no build step.
 
-MIT, `LICENSE.pyftpdlib`. **That file was reconstructed**, and this note exists
-because the reconstruction is the sort of thing that should not be silent: the
-copy this came from arrived with no licence file at all, while every source
-header says the licence "can be found in the LICENSE file". The text is the
-standard MIT licence and the copyright line is taken verbatim from those
-headers. The canonical copy is in the upstream project; if this is ever
-re-vendored, take the real file with it.
+MIT, `LICENSE.pyftpdlib`. **Verified 2026-09-11 against the real upstream
+tag** (`release-2.2.0`, https://github.com/giampaolo/pyftpdlib): `LICENSE.pyftpdlib`
+here is now the exact file from that tag, and a spot check of `__init__.py`,
+`exceptions.py` and `authorizers.py` against the same tag came back
+byte-for-byte identical. (An earlier version of this note said the license
+file had been reconstructed from source-header text because the copy this
+vendoring started from had none; that is no longer the case now that the
+real file has been fetched.)
 
 **This exact build is the one the rig's transfers were proven against** — it is
 the copy that has been serving `~/doskutsu-netiter/` on the control host, so
@@ -38,7 +39,13 @@ operator's compatibility bar is Safari/Firefox/Chrome on desktop AND mobile,
 and as of 2026-08 WebCodecs audio is absent from Firefox for Android
 entirely and from Safari before 26.
 
-MIT. Provenance, exactly:
+MIT for the wrapper (`LICENSE.opus` carries the full text), **and it also
+compiles in libopus as WebAssembly**, by upstream design -- libopus itself is
+BSD-3-Clause (Xiph.Org and contributors). That notice was not carried
+anywhere in this repo until 2026-09-11; `LICENSE.opus` now has both,
+verbatim.
+
+Provenance, exactly:
 
 - upstream: https://github.com/eshaz/wasm-audio-decoders (author Ethan
   Halsall; MIT per the npm package metadata and the file's own header)
@@ -65,8 +72,50 @@ hard way -- an unawaited call "succeeds" with zero samples and no error.
 imports. Without them the server does not start on any current Python.
 
 They are NOT MIT and must not be described as such. Each carries its own
-permissive notice in its header — Sam Rushing, 1996 — which is the full licence
-text for those files, so there is no separate file to keep beside them.
+permissive notice in its header — Sam Rushing, 1996 — layered with the
+Python Software Foundation License Agreement under which they were also
+distributed as part of CPython. Full text of both: `LICENSE.asyncore`.
+
+**These files were edited, found 2026-09-11.** Both had their real
+deprecation-warning call quietly replaced with a bare `pass`, contradicting
+this section's own "do not edit" rule and going undocumented until now. The
+dead code (an unused message-string constant plus the no-op) has been
+removed outright in both files -- no functional change, no deprecation
+warning fires either way, and no other difference exists in `asyncore.py`
+(verified against Debian's `python3-pyasyncore` package, byte-for-byte
+identical elsewhere). See `LICENSE.asyncore` for why a clean "restore" was
+not possible and what was done instead. **The "do not edit" rule above
+applies going forward from here** -- if a future fix is needed, take it
+upstream (there is no upstream anymore, so: to the Debian package, or the
+`test.support` copy at least for the API shape) and re-vendor, and update
+this note.
+
+## `dinspect.exe`
+
+The DOS-side hardware-inventory binary the KVM's sysinfo panel runs (see
+`docs/DINSPECT-SYSINFO.md` and `.agents/skills/vcctrl-dinspect-sysinfo/SKILL.md`).
+**Missing from this file until 2026-09-11**, which this section now fixes.
+
+- Source: [dinspect](https://github.com/ecliptik/dinspect), a public sibling
+  project, built at commit `d92f000` (2026-09-03).
+- Licence: **CC0 1.0 Universal** (public-domain dedication) --
+  `dinspect`'s own `LICENSE`. No conditions attach to using or redistributing
+  it.
+- Provenance verified 2026-09-11: this file's sha256 matches a build of that
+  repository at `d92f000`.
+- The binary links the **Open Watcom C/C++ runtime** (Open Watcom Public
+  License 1.0, which permits distributing programs linked with its
+  unmodified runtime). `dinspect`'s own `THIRD-PARTY.md` currently states
+  that no Watcom code is linked into `dinspect.exe`; the binary's own string
+  table contradicts that ("Open Watcom C/C++16 Run-Time system..."). That is
+  a documentation issue in `dinspect`'s own repository, not this one, and is
+  flagged there rather than fixed here.
+- `dinspect` also credits, as protocol/design references only (not code
+  copied into it): PicoGUS's presence-detection protocol (GPLv2, referenced
+  as documented port/register facts, not copied), doskutsu's detection
+  approach (MIT, reimplemented independently), and Leah Neukirchen's
+  `dosfetch.pas` (CC0). None of that changes `dinspect.exe`'s own CC0 status;
+  see `dinspect`'s own `THIRD-PARTY.md` for the complete analysis.
 
 ## The path
 

@@ -2,6 +2,9 @@
 """Fix USB4VC's 32-bit `struct input_event` assumption for 64-bit userland.
 
 A LOCAL patch, not offered upstream, carried here and applied on the rig.
+Patches USB4VC (https://github.com/dekuNukem/USB4VC, MIT, dekuNukem) --
+this file contains only a handful of one-line match anchors copied from it
+to locate the patch site, not a redistribution of USB4VC itself.
 
 THE BUG. usb4vc_usb_scan.py reads input events with a hardcoded layout:
 

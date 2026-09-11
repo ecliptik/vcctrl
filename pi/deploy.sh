@@ -210,7 +210,7 @@ if [ "${1:-}" = "--page" ]; then
       || explain_hang
     echo "installed kvm-ro.html, stripped (no restart)"
   fi
-  for f in kvm.html themes.css kvm-ro-share.jpg; do
+  for f in kvm.html themes.css; do
     [ -f "$SRC/daemon/$f" ] || continue
     $SCP "$SRC/daemon/$f" "$HOST:/tmp/$f.new" || explain_hang
     $SSH "$HOST" "sudo sh -c 'install -m 0644 -T /tmp/$f.new /opt/vcctrl/.$f.tmp \
@@ -302,7 +302,7 @@ if [ "${1:-}" = "--public" ]; then
   rdir="/tmp/vcctrl-public-deploy.$$"
   $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi/files $rdir/tools $rdir/vendor" || explain_hang
   $SCP "$SRC/daemon/vcweb_public.py" "$SRC/daemon/kvm-ro.html" "$SRC/daemon/themes.css" \
-    "$SRC/daemon/kvm-ro-share.jpg" "$HOST:$rdir/daemon/" || explain_hang
+    "$HOST:$rdir/daemon/" || explain_hang
   # The vendored Opus decoder install_public() flat-installs beside
   # vcweb_public.py. Optional on purpose (install_public warns and the page
   # falls back to PCM audio), so an older checkout can still --public.

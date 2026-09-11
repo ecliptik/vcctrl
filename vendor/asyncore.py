@@ -57,9 +57,6 @@ from errno import EALREADY, EINPROGRESS, EWOULDBLOCK, ECONNRESET, EINVAL, \
      ENOTCONN, ESHUTDOWN, EISCONN, EBADF, ECONNABORTED, EPIPE, EAGAIN, \
      errorcode
 
-_DEPRECATION_MSG = ('The {name} module is deprecated and will be removed in '
-                    'Python {remove}. The recommended replacement is asyncio')
-pass  # _deprecated guard removed
 _DISCONNECTED = frozenset({ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED, EPIPE,
                            EBADF})
 

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Publish USB4VC's protocol-board identity to /run/usb4vc/board.json.
 
-A LOCAL patch to the USB4VC application. Deliberately not offered upstream --
-the operator's call -- so it is carried here and applied on the rig.
+A LOCAL patch to USB4VC (https://github.com/dekuNukem/USB4VC, MIT,
+dekuNukem). Deliberately not offered upstream -- the operator's call -- so
+it is carried here and applied on the rig. Contains only a handful of
+one-line match anchors copied from USB4VC to locate the patch site, not a
+redistribution of USB4VC itself.
 
 WHY THIS EXISTS. vcctrl drives two machines through one USB4VC: a Gateway 2000
 over the IBM PC board and a Macintosh Plus over the Lisa/Mac/ADB board, swapped

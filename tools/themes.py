@@ -50,6 +50,13 @@ THEMES = {
    red="#AA0000", orange="#A05000", yellow="#7A6000", green="#00701C",
    cyan="#006E75", blue="#0000AA", magenta="#AA00AA")),
 
+# CREDIT. Each colour value below is drawn from a published, MIT-licensed
+# base16/community colour scheme, re-keyed by MEANING rather than base16 slot
+# (see the module docstring). No file is copied; the palettes themselves are
+# not copyrightable, and this credit is a courtesy, not a licence obligation:
+# Tokyo Night (enkia), Solarized (Ethan Schoonover), Gruvbox (morhetz), Nord
+# (Arctic Ice Studio / Sven Greb), Catppuccin (the Catppuccin org), Dracula /
+# Alucard (Zeno Rocha and contributors), Everforest (Sainnhe Park).
  "tokyo-night": ("Editor", "Tokyo Night", True, "tokyo-night-light", dict(
    bg="#1a1b26", panel="#16161e", rule="#292e42", dim="#565f89",
    muted="#a9b1d6", text="#c0caf5", bright="#ffffff",

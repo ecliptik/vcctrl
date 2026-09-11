@@ -14,5 +14,5 @@
 # failure if you forget is loud (device absent) rather than quiet, which is the
 # point.
 [Service]
-Environment=VCCTRL_ALSA=hw:CARD=U0x010xff02,DEV=0
-Environment=VCCTRL_VIDEO=/dev/v4l/by-id/usb-MACROSILICON_ff02-video-index0
+Environment=VCCTRL_ALSA=hw:CARD=REPLACE_ME,DEV=0
+Environment=VCCTRL_VIDEO=/dev/v4l/by-id/REPLACE_ME-video-index0

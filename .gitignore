@@ -4,15 +4,29 @@ __pycache__/
 *.wav
 *.log
 
-# The ignore above is for captured frames/screenshots dropped during a
-# session, not tracked source assets -- this one ships with the repo.
-!daemon/kvm-ro-share.jpg
+# tools/find/FIND.COM is a BUILD ARTIFACT of tools/find/FIND.ASM (assemble
+# with `nasm -f bin FIND.ASM -o FIND.COM`, or run build-and-test.sh, which
+# rewrites it in place on every run). It predates the "the SOURCE is the
+# record" rule below and was tracked before that rule existed; untracked
+# and ignored here instead of carrying a second copy that can silently
+# disagree with the source that produces it.
+/tools/find/FIND.COM
 
 # The operator's real configuration. The tracked example is vcctrl.example.yaml.
 /vcctrl.yaml
 # Same reasoning, for the second vcctrld instance's config (the modernpc
 # profile). The tracked example is vcctrl-modernpc.example.yaml.
 /vcctrl-modernpc.yaml
+# Any other sibling profile: `vcctrl-<name>.yaml` is a live config vcctrld
+# will load as a running profile (discover_profiles() globs exactly this
+# shape); only a name ending `.example.yaml` is meant to be tracked.
+/vcctrl-*.yaml
+!/vcctrl.example.yaml
+!/vcctrl-*.example.yaml
+
+# This rig's real capture-device pin (by-id paths, ALSA card id). The
+# tracked example is pi/files/device-pin.conf.example.
+/pi/files/device-pin.conf
 
 # PLANNING WORK THAT MUST NEVER REACH THE REPOSITORY.
 #
