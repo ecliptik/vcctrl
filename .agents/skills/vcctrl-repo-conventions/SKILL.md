@@ -5,9 +5,9 @@ description: This repo's own working rules for anyone -- human or agent -- writi
 
 # Working in the vcctrl repo
 
-Full source of these rules: `CLAUDE.md` at the repo root. This skill exists
-so the rules apply even in a harness that doesn't load project instruction
-files the way Claude Code does.
+Full source of these rules: `CONTRIBUTING.md` at the repo root (pointed at
+by both `CLAUDE.md` and `AGENTS.md`). This skill exists so the rules apply
+even in a harness that doesn't load a project-instructions file at all.
 
 **`internal/` is where planning work goes, and it is gitignored as a
 directory, not a filename pattern.** Plans, drafts, scratch analysis, working
@@ -35,9 +35,19 @@ untracked and holds working addresses; the tracked template is
 part of a "cleanup" -- a scrub's job is history and the tracked tree, not the
 live config, and doing so breaks the rig, not just the repo.
 
-**`server.py`, `serve.sh`, and `~/.config/vcctrl/secrets.env` are outside the
-repo by design** (the FTP path) -- don't propose bringing them in without
-being asked.
+**`~/.config/vcctrl/secrets.env` (and the daemon host's own
+`/etc/vcctrl/secrets.env`) are outside the repo by design** -- they hold the
+file-transfer credential `control.fileserver.password_env` names, and both
+the daemon and the control-host FTP launcher refuse to start rather than
+fall back to a built-in default if either is missing. Don't propose
+bringing them in without being asked.
+
+**Before committing, run `pytest tests/`.** Two guards specifically gate
+what you're about to do: `test_no_rig_identifiers_in_the_code` (a rig's own
+literals go in an untracked `~/.config/vcctrl/identifiers.txt`, never in
+the test itself) and `test_the_docs_index_cannot_rot_silently` (a new
+`docs/*.md` file needs a matching entry in `docs/README.md` in the same
+commit).
 
 **A commit message is documentation, not a label.** State what was wrong,
 what the fix is, and what it does **not** fix. This repo has specifically
