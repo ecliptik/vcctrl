@@ -384,7 +384,8 @@ changed between them.
 > prints it. Four cells reading identically became a "repeatability floor".
 > **0.10 fps IS 10.3 flips**, and the system's measured same-config pair spread,
 > over seven independent pairs in the archive, is **0 to 16 flips**. See
-> `FINDINGS.md` §40, `T1-CONFIRM-RESULTS.md`, `HARNESS-STANDARD.md` 10.0e.
+> `FINDINGS.md` §40, doskutsu's `T1-CONFIRM-RESULTS.md`, `HARNESS-STANDARD.md`
+> 10.0e.
 >
 > **Phase 6 is an EQUIVALENCE test, so a too-tight floor fails the good case.**
 > Its question is "did the new machine move anything", and the stated rule —

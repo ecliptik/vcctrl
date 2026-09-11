@@ -46,29 +46,25 @@ complete config.
 
 What this project actually runs on, across all three configurations:
 
-- **Raspberry Pi 5** (4 GB+) — the daemon host. One free USB port per
-  capture device; `hdmi-usb` also needs its USB-C port switched to
-  peripheral mode.
+- **Raspberry Pi 5** (4 GB+) — the daemon host.
 - **[USB4VC](https://github.com/dekuNukem/USB4VC) HAT** — PS/2 or ADB
-  keyboard/mouse emulation, for `vga-ps2` and `rgb2hdmi-usb4vc`. Connects to
-  the Pi over GPIO, to the target over PS/2 or ADB.
-- **MacroSilicon-chipset (MS2109/MS2130) HDMI/VGA-to-USB capture dongle** —
-  plugs into a Pi USB port, presents as a UVC device emitting MJPEG
-  natively. This chipset is sold under many rebrands; any capture stick
-  with it works.
-- **RGB2HDMI board** (Classic Macintosh only) — sits between the Mac's
-  video output and the capture dongle above; the Mac has no HDMI/VGA of
-  its own.
-- **Official Raspberry Pi USB3 hub, with the official Raspberry Pi power
-  supply plugged into the hub** (Modern PC only) — the hub's upstream port
-  plugs into the target; the Pi draws power through the hub over that same
-  cable. Use the official pair specifically; an underpowered hub or
-  charger here caused a real brownout on this project's own hardware.
+  keyboard/mouse emulation, for `vga-ps2` and `rgb2hdmi-usb4vc`.
+- **HDMI/VGA-to-USB capture dongle** — plugs into a Pi USB port, presents as
+  a UVC device emitting MJPEG natively (tested with a MacroSilicon
+  MS2109/MS2130-chipset dongle).
+- **[RGB2HDMI](https://github.com/hoglet67/RGBtoHDMI) board** (Classic
+  Macintosh only) — sits between the Mac's video output and the capture
+  dongle above; the Mac has no HDMI/VGA of its own.
+- **[Official Raspberry Pi USB3 hub](https://www.raspberrypi.com/products/usb-3-hub/),
+  with the [official Raspberry Pi power
+  supply](https://www.raspberrypi.com/products/power-supply/) plugged into
+  the hub** (Modern PC only) — the hub's upstream port plugs into the
+  target; the Pi draws power through the hub over that same cable.
 - **TP-Link Kasa, Kasa KLAP, or Belkin Wemo smart plug** (optional, any
-  configuration) — remote power-cycling. Connects over the LAN, not USB.
+  configuration) — remote power-cycling.
 - **Any UVC webcam** (optional, any configuration) — a second, independent
   view of the physical machine, for when the primary capture is dark or
-  frozen. Plugs into a Pi USB port; any webcam presenting as UVC works.
+  frozen.
 
 ### Retro PC — `vga-ps2`
 

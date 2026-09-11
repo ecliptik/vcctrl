@@ -2314,8 +2314,8 @@ the subject, it tests the sample size.
 **The restated criterion got it right from the first cell**, and it did so
 because the margin came from the archive's own pair spread rather than from the
 metric's resolution.
-`T1-CONFIRM-RESULTS.md` has the round; `HARNESS-STANDARD.md` 10.0e is the
-design-time gate that prevents the next one.
+Doskutsu's `T1-CONFIRM-RESULTS.md` has the round; `HARNESS-STANDARD.md` 10.0e
+is the design-time gate that prevents the next one.
 
 ### And the band that replaced it is a PAIR spread, quoted as a population
 
