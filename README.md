@@ -6,11 +6,10 @@ server, or a browser KVM. It exists to let automated tests run against
 hardware that predates automation — DOS boxes, classic Macs, anything you
 can wire a capture device and an input path to.
 
-**[docs/HARNESS-STANDARD.md](./docs/HARNESS-STANDARD.md)** — the
-target-agnostic contract for running measured tests. **[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)**
-— connecting an agent over MCP. **[docs/SKILLS.md](./docs/SKILLS.md)** —
-portable domain knowledge as `SKILL.md` files. **[docs/PROFILES.md](./docs/PROFILES.md)**
-— driving more than one target from one daemon.
+- **[docs/HARNESS-STANDARD.md](./docs/HARNESS-STANDARD.md)** — the target-agnostic contract for running measured tests.
+- **[docs/MCP-SERVER.md](./docs/MCP-SERVER.md)** — connecting an agent over MCP.
+- **[docs/SKILLS.md](./docs/SKILLS.md)** — portable domain knowledge as `SKILL.md` files.
+- **[docs/PROFILES.md](./docs/PROFILES.md)** — driving more than one target from one daemon.
 
 ## How it's built
 
@@ -43,8 +42,12 @@ shape what it is, not a complete config.
 
 A DOS/Windows-era PC with PS/2 keyboard/mouse and analog VGA out.
 
-**Hardware:** Raspberry Pi 5 · USB4VC HAT with its IBM PC protocol board ·
-a VGA-to-USB capture dongle · optional UVC camera pointed at the machine.
+**Hardware:**
+- **Raspberry Pi 5** — the daemon host.
+- **USB4VC HAT**, IBM PC protocol board — keyboard/mouse over PS/2.
+- **VGA-to-USB capture dongle** — video and (usually) audio.
+- **UVC camera** (optional) — pointed at the machine itself, for a
+  hardware-level view when the primary capture is dark or frozen.
 
 ```yaml
 capabilities:
@@ -64,9 +67,13 @@ ADB keyboard/mouse, capture via an RGB2HDMI board. **Scaffolded but
 unmeasured** — no such hardware has run against this project's own build
 yet, so treat the template's values as a documented guess.
 
-**Hardware:** Raspberry Pi 5 · the same USB4VC HAT with its Lisa/Mac/ADB
-board instead of the IBM PC one · RGB2HDMI feeding an HDMI-to-USB capture
-dongle · optional UVC camera.
+**Hardware:**
+- **Raspberry Pi 5** — the daemon host.
+- **USB4VC HAT**, Lisa/Mac/ADB protocol board — the same HAT as Retro PC,
+  a different board swapped in.
+- **RGB2HDMI board**, feeding an HDMI-to-USB capture dongle — the Mac has
+  no HDMI/VGA of its own, so video goes through this first.
+- **UVC camera** (optional) — same purpose as Retro PC's.
 
 ```yaml
 capabilities:
@@ -84,13 +91,16 @@ capabilities:
 Any machine with HDMI out and a spare USB port. No USB4VC — the Pi's own
 USB-C port acts as a keyboard/mouse gadget straight to the target.
 
-**Hardware:** Raspberry Pi 5 · an **official Raspberry Pi USB3 hub**,
-upstream port into the target (which then sees the Pi as a plug-in
-keyboard/mouse) · the **official Raspberry Pi power supply plugged into
-the hub**, not the Pi — it feeds the Pi over the same cable. Use the
-official pair specifically: an underpowered hub or charger here caused a
-real undervoltage brownout on this project's own hardware. · an HDMI
-capture dongle · optional UVC camera on the Pi directly.
+**Hardware:**
+- **Raspberry Pi 5** — the daemon host.
+- **Official Raspberry Pi USB3 hub** — its upstream port plugs into the
+  target, which then sees the Pi as a plug-in keyboard/mouse through it.
+- **Official Raspberry Pi power supply, plugged into the hub, not the
+  Pi** — it feeds the Pi over that same cable. Use the official pair
+  specifically: an underpowered hub or charger here caused a real
+  undervoltage brownout on this project's own hardware.
+- **HDMI capture dongle** — video and (usually) audio.
+- **UVC camera** (optional) — plugged into the Pi directly.
 
 Driving capture, the HID gadget and encoding together can throttle a
 Pi 5 — one capture device per Pi for this shape.
