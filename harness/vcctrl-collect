@@ -2,10 +2,11 @@
 r"""vcctrl-collect -- bring a sweep's logs back off the g2k, unattended.
 
 Runs on the VM, after a sweep has finished and the machine is sitting at a
-prompt. Asks the daemon to fetch the sweep's logs off C:\DOSKUTSU\LOGS -- the
-same transfer machinery the KVM and `vcctrl get-file` use -- and saves them
-into the FTP server's incoming directory, where cfclean and everything else
-already look for them.
+prompt. Asks the daemon to fetch the sweep's logs off the active profile's
+own LOGS directory (C:\DOSKUTSU\LOGS for doskutsu) -- the same transfer
+machinery the KVM and `vcctrl get-file` use -- and saves them into the FTP
+server's incoming directory, where cfclean and everything else already look
+for them.
 
 WHAT THAT BUYS OVER THE PUT.BAT PATH IT REPLACED, which is still here behind
 `--via-put`: the card's own DIR is read BEFORE anything is typed, so a log
@@ -72,7 +73,7 @@ sys.path.insert(0, HERE)
 from vcctrl_common import (  # noqa: E402
     vc, vc_json, cfg_get, leds, wait_led, at_prompt, wait_for_prompt,
     arm_leds, ensure_powered, spam_menu, flush_input_line, MENU_MAX_KEYS,
-    KBD_BUFFER_KEYS)
+    KBD_BUFFER_KEYS, load_profile)
 
 # grab() comes from the sweep runner rather than being copied. Since the KVM
 # daemon took ownership of /dev/video0 this is a read of its frame ring, so a
@@ -87,7 +88,7 @@ _spec.loader.exec_module(_m)
 grab = _m.grab
 
 # THE PROFILE, not sweeps.json. Phase 6 moved the machine table and the
-# per-sweep budgets into profiles/doskutsu.yaml alongside the target facts they
+# per-sweep budgets into profiles/<name>.yaml alongside the target facts they
 # belong with -- the DOS working directory, the env-var names the program
 # consults, and the boot-profile witness. One file describing one target beats
 # a data file here and prose about the same target in three other places.
@@ -95,53 +96,21 @@ grab = _m.grab
 # Located through vcctrl.yaml's `harness.profile` so a different port points at
 # a different profile without editing the runner. Falls back to the doskutsu
 # profile beside this file, which is what a checkout with no config has.
-def _profile_path():
-    # `cfg_get` WAS NEVER IMPORTED HERE, and the `except Exception` below ate
-    # the NameError and returned the fallback. So `harness.profile` has been
-    # silently ignored by this script for as long as it has existed, while
-    # vcctrl-sweep -- which imports it -- honoured it. Two runners, one key,
-    # and only one of them reading it: on a rig that points the key somewhere
-    # other than the default, the sweep and the collector would disagree about
-    # the machine table and the tags, and nothing would say so.
-    #
-    # It was invisible on this rig because both paths resolve to the same
-    # file. It was found by pointing the unbound-name guard at harness/, which
-    # it had never covered -- a broad `except` cannot report the fault it is
-    # catching, so the only thing that can find this class is a reader.
-    try:
-        p = cfg_get("harness.profile", "") or ""
-    except Exception:
-        p = ""
-    if p and not os.path.isabs(p):
-        p = os.path.join(os.path.dirname(HERE), p)
-    return p or os.path.join(os.path.dirname(HERE), "profiles", "doskutsu.yaml")
+# `load_profile()` (bin/vcctrl_common.py) now owns this lookup -- this script
+# used to carry its own copy, and that copy called `cfg_get` without ever
+# importing it, so `harness.profile` was silently ignored here while
+# vcctrl-sweep (which imports it correctly) honoured it. One shared function
+# cannot go stale in only one of its copies.
 
 
-CONF = _profile_path()
+def _default_incoming(profile):
+    """~/<name>-netiter/incoming, derived from the active profile's own name.
 
-
-def _load_profile():
-    """The profile as a dict. Raises with the path in the message: a runner that
-    cannot find its profile must say which one it looked for, or the operator
-    debugs the wrong file."""
-    try:
-        import yaml
-    except ImportError:
-        raise SystemExit(
-            "REFUSED: PyYAML is needed to read %s (apt install python3-yaml)"
-            % CONF)
-    try:
-        with open(CONF) as f:
-            d = yaml.safe_load(f) or {}
-    except OSError as exc:
-        raise SystemExit("REFUSED: cannot read the harness profile %s: %s"
-                         % (CONF, exc))
-    if not d.get("sweeps") or not d.get("machines"):
-        raise SystemExit(
-            "REFUSED: %s has no sweeps/machines -- it is not a harness profile"
-            % CONF)
-    return d
-DEFAULT_INCOMING = os.path.expanduser("~/doskutsu-netiter/incoming")
+    doskutsu's existing on-disk directory is literally `~/doskutsu-netiter/`,
+    so this preserves that exactly when doskutsu is the active profile; a
+    second profile gets its own directory by the same convention rather than
+    silently sharing doskutsu's."""
+    return os.path.expanduser("~/%s-netiter/incoming" % (profile.get("name") or "doskutsu"))
 
 # NET is menu item 5. The digit alone does not commit the selection -- it only
 # highlights -- so every attempt is digit-then-Enter. See FINDINGS sec. 8.
@@ -375,7 +344,7 @@ def put_tag(incoming, tag, before):
     return False, got
 
 
-def put_manifest(incoming, name, src, before, label):
+def put_manifest(incoming, name, src, before, label, target_dir):
     """Upload one non-log file (a sweep manifest, BINARY.NFO) via CHK.BAT.
 
     PUT.BAT sends the LOG pair and nothing else, which is why the first RB run
@@ -389,7 +358,7 @@ def put_manifest(incoming, name, src, before, label):
     There is ONE manifest per sweep run, not one per cell.
     """
     print("  %s %s" % (label, name))
-    vc("type", "C:\\DOSKUTSU\\CHK.BAT %s %s" % (src, name))
+    vc("type", "%s\\CHK.BAT %s %s" % (target_dir, src, name))
     vc("key", "enter")
     t0 = time.time()
     while time.time() - t0 < PUT_TIMEOUT_S:
@@ -520,16 +489,17 @@ def save_into_incoming(incoming, job, want):
     return saved, lost
 
 
-def pull_transfer(incoming, tags, manifest, already_net, stay_net):
+def pull_transfer(incoming, tags, manifest, already_net, stay_net, target_dir):
     r"""Collect a sweep over the fetch path. Returns (ok_tags, failed).
 
     TWO DIRECTORIES, ONE REBOOT PAIR. The logs and the sweep manifest live in
-    C:\DOSKUTSU\LOGS; BINARY.NFO lives one level up in C:\DOSKUTSU. Two
-    directories would normally be two jobs and two reboot pairs -- so the
-    first job STAYS in NET and the second is told `--already-net`, which skips
-    the reboot and NOT the proof: the arrival gate runs again, so the second
-    job establishes for itself that the machine is still where the first one
-    left it rather than assuming it.
+    <target_dir>\LOGS; BINARY.NFO lives one level up, in <target_dir> itself
+    (C:\DOSKUTSU\LOGS / C:\DOSKUTSU for doskutsu). Two directories would
+    normally be two jobs and two reboot pairs -- so the first job STAYS in
+    NET and the second is told `--already-net`, which skips the reboot and
+    NOT the proof: the arrival gate runs again, so the second job establishes
+    for itself that the machine is still where the first one left it rather
+    than assuming it.
     """
     logs = []
     for tag in tags:
@@ -540,7 +510,7 @@ def pull_transfer(incoming, tags, manifest, already_net, stay_net):
     # The second job returns the machine unless the caller asked to stay; if
     # there is no second job, the first one does.
     second = bool(manifest)
-    job = _pull_job(logs, "C:\\DOSKUTSU\\LOGS", already_net,
+    job = _pull_job(logs, target_dir + "\\LOGS", already_net,
                     do_return=(not stay_net and not second), label="logs")
     saved, lost = save_into_incoming(incoming, job, logs)
 
@@ -548,7 +518,7 @@ def pull_transfer(incoming, tags, manifest, already_net, stay_net):
         # BINARY.NFO describes what is actually installed on the card. The
         # engine logs binary_sha12=UNKNOWN, so this is the only record of
         # binary identity that travels with a run.
-        nfo = _pull_job(["BINARY.NFO"], "C:\\DOSKUTSU", True,
+        nfo = _pull_job(["BINARY.NFO"], target_dir, True,
                         do_return=(not stay_net), label="binary")
         s2, l2 = save_into_incoming(incoming, nfo, ["BINARY.NFO"])
         saved += s2
@@ -657,7 +627,18 @@ def main(argv):
         print(__doc__)
         return 0
 
-    incoming = DEFAULT_INCOMING
+    # Loaded unconditionally: even --tags mode needs `target.dir` to know
+    # where the logs live on THIS profile's target. Named-sweep mode also
+    # needs sweeps/machines, checked below once we know which branch we're
+    # in -- a profile with no sweep harness (dosags, today) can still use
+    # --tags.
+    conf = load_profile()
+    target = conf.get("target") or {}
+    target_dir = target.get("dir")
+    if not target_dir:
+        raise SystemExit("REFUSED: this profile declares no target.dir.")
+
+    incoming = _default_incoming(conf)
     if "--incoming" in argv:
         incoming = argv[argv.index("--incoming") + 1]
     already_net = "--already-net" in argv
@@ -678,7 +659,11 @@ def main(argv):
             print(__doc__)
             return 2
         sweep, machine = argv[0].upper(), argv[1]
-        conf = _load_profile()
+        if not conf.get("sweeps") or not conf.get("machines"):
+            raise SystemExit(
+                "REFUSED: this profile has no sweeps/machines -- it has no "
+                "unattended-sweep harness configured yet. Use --tags to "
+                "collect ad-hoc tags instead.")
         if sweep not in conf["sweeps"]:
             raise SystemExit("REFUSED: unknown sweep %s" % sweep)
         if machine not in conf["machines"]:
@@ -723,7 +708,7 @@ def main(argv):
                 "rebooting that.")
         print("\n== transfer (fetch path) ==")
         ok, failed = pull_transfer(incoming, tags, manifest, already_net,
-                                   stay_net)
+                                   stay_net, target_dir)
     else:
         print("\n  --via-put: the legacy PUT.BAT path")
         if not already_net:
@@ -760,15 +745,15 @@ def main(argv):
         if manifest:
             print("\n== provenance ==")
             if not put_manifest(incoming, manifest,
-                                "C:\\DOSKUTSU\\LOGS\\" + manifest, before,
-                                "manifest"):
+                                target_dir + "\\LOGS\\" + manifest, before,
+                                "manifest", target_dir):
                 failed.append(manifest)
             before = snapshot(incoming)
             # BINARY.NFO describes what is actually installed on the card. The
             # engine logs binary_sha12=UNKNOWN, so this is the only record of
             # binary identity that travels with a run.
-            put_manifest(incoming, "BINARY.NFO", "C:\\DOSKUTSU\\BINARY.NFO",
-                         before, "binary  ")
+            put_manifest(incoming, "BINARY.NFO", target_dir + "\\BINARY.NFO",
+                         before, "binary  ", target_dir)
             before = snapshot(incoming)
 
         if not stay_net:
