@@ -18,6 +18,11 @@ name doesn't turn up in `docs/` directly.
 
 ## Start here
 
+**`KNOWN-LIMITATIONS.md`** — what does NOT yet adapt to a different rig's
+shape, separately from `OPEN-FAULTS.md`'s bugs-on-this-hardware register.
+**Read this if you're bringing your own hardware** — it's the honest list
+of what's still a literal in the source rather than a config choice.
+
 **`FILE-TRANSFER.md`** — how a file gets onto the CF card and how one comes
 back off it, and why the improvised reboot-and-`GET.BAT` is not it. `GET.BAT`
 is the bootstrap and the recovery path; `VCGET.BAT` is the routine one.

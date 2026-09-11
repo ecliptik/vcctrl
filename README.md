@@ -226,7 +226,13 @@ Known gaps, honestly: no hardware reset line yet for a target that ignores
 Ctrl-Alt-Del from within a program (GPIO to the reset header is the
 documented plan, not yet built); H.264 video transport and the on-screen
 keyboard's full per-key coverage are measured on exactly one board so far.
-See `docs/lab/OPEN-FAULTS.md` for the complete, current list.
+See `docs/lab/OPEN-FAULTS.md` for the complete, current list of what's
+broken on this project's own rig, and **`docs/KNOWN-LIMITATIONS.md` for
+what doesn't yet adapt to a different rig's shape at all** — the DOS-side
+boot/BLASTER/mTCP contract, timing constants, the install prefix, and a
+handful of other things that are still literals in the source rather than
+a config choice, if you're bringing hardware different from the table
+above.
 
 ## Contributing
 
