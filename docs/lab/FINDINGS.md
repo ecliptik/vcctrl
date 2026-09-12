@@ -3464,3 +3464,59 @@ recover behavior plus a retry rather than treating a single clean run as
 proof the hazard is gone. A real fix still wants the per-call/per-job
 `pace` override sec. 43 already found architecturally cheap and never
 wired up, this time tied to something other than "installed CPU is slow."
+
+## 57. `_enter_net()` sent every blind menu-select attempt regardless of whether an earlier one had landed  [measured 2026-09-11]
+
+A real `send_file` job on gateway2000 (a peer session's, driving the same
+daemon) reported `no-net`. The screen showed the actual cause plainly: six
+`C:\>5` / `Bad command or file name` pairs, followed by a mangled
+`C:\>C:\MTCP\VCCHK.BF.TXT` / `Bad command or file name`, then a bare
+prompt -- the same shape as `bin/vcctrl_common.py`'s own documented
+overflow example (`C:\>5C:\MTCP\PUT.BAT M64A`), and the same shape
+VCGET.BAT's own header comment describes from 2026-08-19.
+
+**Root cause, read directly from the code.** `NetJob._enter_net()`
+(`daemon/vcctrld.py`, `TransferJob`/`PullJob`'s shared reboot-into-NET
+path) sends the menu digit blind because the CONFIG.SYS menu (text mode
+03h, 70 Hz) cannot be captured -- correct, and unavoidable. But it looped
+`menu_attempts()` (derived as `max(2, window/2.0)` = 7) times
+**unconditionally**, typing "5<Enter>" on every iteration regardless of
+whether an earlier one had already selected NET. Attempt #1 landed
+correctly; the remaining ~6 landed on a live DOS prompt afterward, each
+one executing as its own stray command -- and a keystroke still in flight
+collided with the very next real command (`_prove_net()`'s `VCCHK.BAT`
+attest), garbling it too. `no-net` is the honest, designed refusal for
+"nothing arrived" -- it does not distinguish "the network genuinely never
+came up" from "the network came up fine and something else typed over the
+proof," which is exactly why this read as a credentials problem at first.
+
+**Why dossage's own week of real-hardware fps campaigns never hit this.**
+`bin/vcctrl_common.py`'s `spam_menu()` (shared by `select_boot_profile()`
+and `harness/vcctrl-collect`'s `reboot_into_net()`) already solved this
+exact problem, and says so in its own docstring: check the readiness LED
+before every attempt, stop the moment it is set. dossage's campaigns run
+through `vcctrl-collect`, so they share that fix. `daemon/vcctrld.py`'s
+own `_enter_net()` -- used only by `send_file`/`get_file` -- is separate
+code, original since `f3e346d`, and had never been given the same
+treatment. One mechanism, two implementations, and the fix had been
+sitting proven in the codebase the whole time.
+
+**Fixed:** `RegistryDriver.booted()` (instant, non-blocking LED read) lets
+the loop `break` the moment an earlier attempt has landed, mirroring
+`spam_menu()`'s `if bool(leds().get("scrolllock")): break`.
+`RegistryDriver.flush_line()` (Esc+Enter, ported from
+`bin/vcctrl_common.py`'s `flush_input_line()`) discards whatever is left
+on the command line before the first real command after boot, as a second
+layer against the keystroke that is already in flight when `booted()`
+returns true. See `test_enter_net_stops_the_menu_loop_once_booted` in
+`tests/test_core.py`, and the commit for the full before/after.
+
+**Not fixed by this:** `_enter_net()`'s underlying keystroke is still
+genuinely blind -- nothing here can *see* the menu, only stop sending
+into it sooner. `docs/lab/OPEN-FAULTS.md` sec. 20's core hazard (a blind,
+unconfirmable keystroke into a boot sequence is not something safe to
+race against, including a human or another session touching the target
+mid-job) is unchanged. Also unrelated: the same evening produced a real
+hard hang recovered only by a power cycle, and a separate, still-open
+`no-reset` that cleared on a plain retry with no diagnosis -- neither
+touched by this fix. See `OPEN-FAULTS.md` sec. 23-24.

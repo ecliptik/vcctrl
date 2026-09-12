@@ -93,6 +93,36 @@ hang -- `verify_input` succeeding (PS/2 link alive) while a job sits
 `running: true` with no new log line is the same shape as this incident, not
 proof the target itself is wedged.
 
+**`vcctrl_lock_status`/`vcctrl_activity` reading clear does not prove no
+file-transfer or harness job is running.** That is exactly what the
+auto-release behavior two paragraphs up means: `send_file`/`get_file`/
+`file_refresh`/`run_cell`/`run_sweep`/`collect` run under a different
+identity and don't hold this session's lock at all while in flight. Before
+any out-of-band power action (a cycle to recover a suspected hang, in
+particular -- see `docs/lab/OPEN-FAULTS.md` sec. 20, which documents
+exactly this race costing a real run when a session power-cycled a target
+mid-job), check `vcctrl_file_status`/`vcctrl_job_status` too, or confirm
+directly with any peer session that might be driving the same rig -- an
+explicit "nothing running" from a peer is real evidence here, a clear lock
+by itself is not.
+
+**Zero recorded LED transitions across a window does not prove nothing
+happened in it -- it can equally mean the value was already sitting at the
+target state.** `arm()` only presses Scroll Lock if its own first read
+disagrees with "already set"; if an earlier action already left it set,
+`arm()` correctly returns without pressing and produces no transition,
+identical in the log to "nothing was attempted at all." Found live
+2026-09-11 diagnosing a `no-reset`: a genuinely absent LED-change record was
+read as proof a caller's job had never attempted a reboot, when the more
+likely explanation (confirmed by a second correction after checking) was
+that a reset chord had been sent and genuinely failed to register, leaving
+the target sitting exactly where an earlier, unrelated recovery had left
+it. `vcctrl_led_changes`'s own `note` field already says this in different
+words ("does NOT establish that a reading is current... indistinguishably
+from one that has fallen off the wire") -- the lesson generalizes past
+staleness to absence-of-transition specifically: check what state the
+signal was already in before concluding "no change" means "no attempt."
+
 **Consequential actions require a named `confirm`, not a boolean.** Power
 actions, any `vcctrl_combo` matching the Ctrl-Alt-Delete chord, and anything
 that reboots the target (file send/refresh/get, `run_cell`, `run_sweep`,

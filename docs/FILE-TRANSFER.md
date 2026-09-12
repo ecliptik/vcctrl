@@ -199,6 +199,33 @@ or its server stops answering, the control host's endpoint is still how you
 fix the card. **Do not "tidy up" the two endpoints into one** — that removes
 the only way to repair `VCGET.BAT` without pulling the CF.
 
+## The two endpoints are two SERVERS, not one, and never share a password
+
+`GET.BAT`/`PUT.BAT`/`CHK.BAT` (the bootstrap tier) dial the **control host's
+own** FTP server — a separate, standalone process (e.g. `serve.sh` in a
+project's own net-iter tooling), independent of `vcctrld` entirely. `VCGET.BAT`/
+`VCCHK.BAT`/`VCLIST.BAT` (the routine tier, what `vcctrl file-bats` regenerates
+and what `send_file`/`get_file` type at the prompt) dial the **daemon host's**
+own embedded FTP server (`capabilities.files`, `daemon/vcctrld.py`'s
+`DummyAuthorizer`, reading `VCCTRL_FTP_PASSWORD` from the daemon's own service
+environment). Two different processes, two different hosts, and on this rig
+they happen to share a port number (2121) by coincidence — nothing else.
+
+**Incident, 2026-09-11:** a public-release-prep session pointed the control
+host's server at `control.fileserver.password_env` — the SAME variable name
+`vcctrl.yaml`'s schema already used to *describe* that server — on the
+assumption this meant sharing the daemon's own rotating credential. It doesn't:
+the CF card's bootstrap tier had carried its own fixed credential since the
+day it was written, unrelated to whatever the daemon's embedded server
+expects, and nothing had ever re-provisioned the card to match. That silently
+broke the one recovery path this whole section is about, for weeks, until a
+real `no-net` investigation traced it back. If you ever need to change what a
+control-host net-iter server authenticates with, check what the CF card's
+own `GET.BAT`/`PUT.BAT`/`CHK.BAT` actually carry first (their `.RSP`-building
+`ECHO` lines show it in plain text) — never assume it matches `vcctrl.yaml`'s
+`control.fileserver` block just because the config schema uses the same name
+for both.
+
 ## What this replaced
 
 Two hand-run pushes on 2026-08-24, both of which needed a human to notice

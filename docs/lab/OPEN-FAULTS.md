@@ -1696,7 +1696,17 @@ caller" discipline, applied to `AudioCapability.ring` instead of the video
 ring) would close this — flagged here rather than implemented, same reason
 as sec. 18: a new capability, not a bug fix, wants operator sign-off.
 
-## 20. `vcctrl_get_file`'s blind reboot can silently miss its own menu digit  — OPEN, WORKAROUND KNOWN
+## 20. `vcctrl_get_file`'s blind reboot can silently miss its own menu digit  — OPEN, PARTLY FIXED 2026-09-11
+
+**2026-09-11:** the specific sub-mechanism where the loop kept sending the
+menu digit after an earlier attempt had already landed -- corrupting the
+DOS prompt with stray commands and sometimes the next real command too --
+is fixed; see `FINDINGS.md` sec. 57. The core hazard this entry is about
+is unchanged: the keystroke into the menu is still genuinely blind (the
+menu cannot be captured), so the fix stops the loop from making things
+*worse* once a digit has landed, it cannot make landing itself observable.
+Everything below, including the out-of-band-power-cycle workaround, still
+applies exactly as written.
 
 Measured 2026-08-27, fetching `SDLDBG.LOG` from a DOSSAGE session while the
 game was still running in VESA graphics mode. `_reboot_to_net()`
@@ -1957,3 +1967,87 @@ this recurs, the useful next step is capturing the actual `touches` list
 and thread-count from a failing run (not just the pass/fail), since the
 test's own docstring explains a specific historical failure shape
 (`SSL_free` racing `SSL_read` on one `SSL*`) that this would rule in or out.
+
+## 23. A hard hang that only `vcctrl_power(action="cycle")` recovers — OPEN, WORKAROUND KNOWN
+
+**Confirmed 2026-09-03**, with the Pentium OverDrive 83 installed: executing
+RDTSC from a **real-mode** DOS program wedges the g2k completely -- PS/2
+fully unresponsive, Ctrl-Alt-Del does nothing, only a power cycle recovers
+it. Reproduced independently the same session by `dinspect`'s TSC-calibration
+path and by HWiNFO for DOS, both real-mode/V86 tools. **Narrower than "any
+RDTSC under EMM386"**: an audit across sdl-dos-ports found DJGPP/CWSDPMI
+protected-mode code (a DPMI client, own GDT/IDT, CR0.PE unconditionally set)
+executing RDTSC constantly on the same chip -- doskutsu's SDL audio-IRQ timer,
+every session, under EMM386 -- with no hang recorded. The real-mode/V86 case
+and the DPMI/protected-mode case are different execution contexts and this
+rig's evidence currently distinguishes them; only the former is confirmed to
+wedge. `dinspect`'s fix probes CR0.PE via SMSW (unprivileged, never traps)
+before touching RDTSC and falls back to a PIT-timed estimate under a V86
+monitor; this guard is real-mode-only and cannot port to DJGPP code (CR0.PE
+is always 1 there). `SDL_HINT_DOS_AUDIO_TIMER_RDTSC=0` exists in the shared
+sdl-dos-ports patch hub as an unwedge-without-rebuild escape hatch for the
+protected-mode case, default unchanged, not yet validated by an A/B on real
+hardware.
+
+**2026-09-11, a second hang, and it does NOT cleanly match the confirmed
+signature above.** Investigating a `send_file`/`get_file` failure reported
+as `no-reset` on gateway2000 (a different session's job, this one dosags's
+own AGS.EXE port): PS/2 keyboard link tested **alive**
+(`vcctrl_verify_input` succeeded, "the target acknowledged a keystroke") --
+the opposite of the confirmed case's "PS/2 goes fully unresponsive." Video
+capture reported `state: frozen`, every frame in a 100-frame window
+identical. The second, physical UVC camera (independent of the capture
+stick entirely -- see the `vcctrl-camera` skill) showed the real monitor
+displaying a featureless, uniform blue field, not the frozen capture
+stick's black and not a normal DOS/game screen -- consistent with a
+monitor's own "lost sync" placeholder. Scroll Lock had been stuck at one
+value with zero LED transitions recorded despite `_reboot_edge()`'s normal
+chord-and-resend sequence. `vcctrl_power(action="cycle")` recovered it
+completely -- clean POST edge, RDYPULSE, live video, normal boot banner.
+
+The port's own author confirmed their newest patch's timing code
+(`uclock()`) is PIT-driven on this DJGPP toolchain, not RDTSC -- ruling out
+their own new instrumentation as the specific trigger, though not ruling out
+RDTSC use elsewhere in AGS/Allegro's own code, nor a different cause
+entirely. **Recorded as a second confirmed instance of "power cycle is the
+only recovery," explicitly NOT as a second confirmed RDTSC hang** -- the
+PS/2-responsiveness mismatch with the 2026-09-03 case is real and
+unresolved. If this recurs: check `vcctrl_verify_input` (PS/2 alive or
+not?), pull a shot from the second camera before concluding "frozen" means
+"dead" -- a flat-black capture-stick frame proves the capture stick lost
+lock, not that the target is showing black, and the physical camera is the
+only witness that doesn't share the capture stick's own failure mode -- and
+treat "the target hard-hung and power-cycled clean afterward" as the
+actionable fact even when the mechanism isn't nailed down.
+
+## 24. A `no-reset` that cleared on a plain retry, mechanism unknown — OPEN, NOT DIAGNOSED
+
+**2026-09-11, same evening as sec. 23**, a separate attempt (same rig, same
+port, one run later) reported `no-reset` again after the hard hang above
+had already been recovered by a power cycle. This time the screen showed a
+**completely healthy boot** -- CuteMouse, PicoGUS init, Sound Blaster mode,
+MSCDEX, a clean prompt -- just sitting in the CONFIG.SYS menu's non-NET
+default profile rather than NET. Two explanations were considered and
+neither is confirmed:
+
+1. The job never actually attempted a reboot (some state caused it to skip
+   straight to the attest check). Checked and ruled out for this specific
+   run: the caller's own script does not pass `already_net` anywhere, by
+   grep.
+2. A real Ctrl-Alt-Del was sent and, as sec. 20 already documents can
+   happen, genuinely failed to register a reset -- in which case the
+   machine was simply still sitting wherever the *previous* recovery had
+   left it (the menu's default profile), never having rebooted since.
+
+**Zero LED transitions were recorded in the window this job ran**, which
+was read at the time as evidence favoring explanation 2 -- but that
+reasoning has a hole worth naming: if Scroll Lock was already sitting at
+the value `arm()` wants, `arm()` correctly returns without pressing
+anything, and that alone produces no transition either. Absence of a
+transition therefore does not by itself distinguish "no attempt was made"
+from "an attempt was made and the press step, needing no press, produced
+none" from "a reset was sent and genuinely didn't land." A plain retry one
+run later (no code change, no manual intervention) succeeded cleanly.
+**Not diagnosed -- flagged because a `no-reset` that clears on retry with
+no config change in between is a real fact worth someone reproducing
+deliberately, not a coincidence to wave off.**
