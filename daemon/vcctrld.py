@@ -7962,6 +7962,22 @@ class RegistryDriver(object):
     # full MENU_TIMEOUT_S has genuinely elapsed with no edge.
     RESET_ATTEMPTS = 2
     RESEND_TIMEOUT_S = 30.0
+    # THE SAME BUDGET bin/vcctrl_common.py's spam_menu() already enforces
+    # (MENU_MAX_KEYS = 6, i.e. 3 attempts of digit+Enter) -- found missing
+    # here 2026-09-11 (docs/lab/OPEN-FAULTS.md, HW-486-66/gateway2000): the
+    # early-stop added to _enter_net()'s menu loop (booted(), see below) is
+    # not enough on its own, because the LED it polls is RDYPULSE -- full
+    # boot completion -- which measured ~16 s after reset, LATER than this
+    # loop's own ~14 s span (menu_attempts() * the 2 s sleep between sends).
+    # So on real hardware the early-stop almost never has anything to catch
+    # before the loop would otherwise exhaust every attempt regardless,
+    # reproducing the exact six-stray-"5" failure it was built to prevent.
+    # Capping the attempt count itself is the part of spam_menu()'s fix that
+    # does not depend on the LED arriving in time: even when booted() never
+    # fires during the loop, at most this many "5<Enter>" pairs ever reach
+    # the target, the same ceiling a week of dossage/dosags campaigns through
+    # spam_menu() has run under without incident.
+    MENU_MAX_ATTEMPTS = 3
 
     def __init__(self, registry, pace=None):
         self.reg = registry
@@ -8077,7 +8093,10 @@ class RegistryDriver(object):
                 pass
         except Exception:
             pass
-        return max(2, int(window / 2.0))
+        # CAPPED, NOT JUST DERIVED. window / 2.0 alone gives 7 -- more than
+        # double MENU_MAX_ATTEMPTS -- and the loop's early-stop cannot be
+        # relied on to keep the real count below that; see MENU_MAX_ATTEMPTS.
+        return min(self.MENU_MAX_ATTEMPTS, max(2, int(window / 2.0)))
 
     def transfer_timeout(self):
         return self.TRANSFER_TIMEOUT_S

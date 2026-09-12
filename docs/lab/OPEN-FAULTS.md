@@ -1701,12 +1701,22 @@ as sec. 18: a new capability, not a bug fix, wants operator sign-off.
 **2026-09-11:** the specific sub-mechanism where the loop kept sending the
 menu digit after an earlier attempt had already landed -- corrupting the
 DOS prompt with stray commands and sometimes the next real command too --
-is fixed; see `FINDINGS.md` sec. 57. The core hazard this entry is about
-is unchanged: the keystroke into the menu is still genuinely blind (the
-menu cannot be captured), so the fix stops the loop from making things
-*worse* once a digit has landed, it cannot make landing itself observable.
-Everything below, including the out-of-band-power-cycle workaround, still
-applies exactly as written.
+is fixed; see `FINDINGS.md` sec. 57. **Same evening, sec. 57's own fix
+turned out incomplete** (`FINDINGS.md` sec. 58): its early-stop polls a
+signal (RDYPULSE, full boot completion, ~16s after reset) that arrives
+later than the loop's own ~14s span, so on this rig's ordinary timing it
+almost never fires in time and the loop fell back to sending every
+attempt regardless -- reproduced live by a peer session hitting the
+identical six-stray-"5" failure after sec. 57 was already deployed. Fixed
+properly by porting the OTHER half of `spam_menu()`'s design sec. 57 had
+left out: a hard 3-attempt cap independent of whether the LED ever comes
+true, verified against real hardware with an actual `send-file --return`
+run, not just a restart and a status check. The core hazard this entry is
+about is still unchanged either way: the keystroke into the menu is
+genuinely blind (the menu cannot be captured), so neither fix makes
+landing itself observable, only bounds how much damage a mistimed
+early-stop can do. Everything below, including the out-of-band-power-cycle
+workaround, still applies exactly as written.
 
 Measured 2026-08-27, fetching `SDLDBG.LOG` from a DOSSAGE session while the
 game was still running in VESA graphics mode. `_reboot_to_net()`

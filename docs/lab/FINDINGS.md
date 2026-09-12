@@ -3520,3 +3520,83 @@ mid-job) is unchanged. Also unrelated: the same evening produced a real
 hard hang recovered only by a power cycle, and a separate, still-open
 `no-reset` that cleared on a plain retry with no diagnosis -- neither
 touched by this fix. See `OPEN-FAULTS.md` sec. 23-24.
+
+## 58. sec. 57's early-stop polls a signal that arrives too late to ever catch the common case  [measured 2026-09-11]
+
+A peer session (`sdldos`, working on `dosags` on the same gateway2000
+daemon) hit the identical failure sec. 57 already "fixed": `send-file
+--return --dest C:\DOSAGS` timed out `no-net` at ~221s, twice in a row
+(221.07s, 221.06s), and a screenshot taken at the failure showed the exact
+same shape again -- `[NET] ready.` printed fine, then six literal `C:\>5`
+/ `Bad command or file name` lines, then a corrupted `C:\MTCP\VCCHKA:EOT`
+attempt. Confirmed on the deployed daemon before touching anything:
+`grep`ping `/opt/vcctrl/vcctrld.py` on `usb4vc` for `menu_attempts` showed
+`return max(2, int(window / 2.0))` -- sec. 57's fix (`booted()`,
+`flush_line()`) was live and unmodified, and still produced six stray
+`"5"`s.
+
+**Root cause: sec. 57 fixed the mechanism but not the arithmetic.**
+`booted()` polls the SAME LED `wait_boot()` blocks on -- RDYPULSE, i.e.
+the *entire* NET-profile boot finishing (menu selection, ODIPKT loading,
+the TCP stack coming up, `AUTOEXEC.BAT` reaching its end) -- not "the menu
+accepted the digit," which is the much earlier event the loop actually
+needs to detect and which this hardware has no LED for at all (the
+CONFIG.SYS menu is unobservable, per sec. 57 and the docstring both). This
+class's own `BOOT_TIMEOUT_S` comment records reset-to-RDYPULSE measured at
+**~16s** on this rig. `menu_attempts()`'s loop -- `max(2, window/2.0)` = 7
+attempts, 2.0s slept between each -- only runs for **~14s** before it is
+exhausted. 14 < 16: on the ordinary timing this rig actually has, RDYPULSE
+almost never fires before the loop runs out of attempts, so `booted()`
+never once reads True *during* the loop, and it falls straight back to
+sending all 7 attempts unconditionally -- observably identical to the
+pre-sec.-57 bug. The unit test added for sec. 57
+(`test_enter_net_stops_the_menu_loop_once_booted`) did not catch this: its
+`_MenuRaceTarget` fake sets `booted()` true as soon as an attempt "lands,"
+which is the behavior actually needed but not the behavior the real LED
+produces on this hardware's timing -- a fake that models the intended fix
+working is not evidence that the timing it depends on ever occurs. The
+test inherited the fix's own premise instead of checking it.
+
+**What sec. 57 missed porting.** `bin/vcctrl_common.py`'s `spam_menu()` --
+"THE ONE COPY" this whole mechanism is supposed to share -- was never
+just an early-stop. It also hard-caps the total keystrokes it will ever
+send regardless of whether the LED comes true in time: `MENU_MAX_KEYS = 6`
+(3 attempts of digit+Enter), a budget sized to the BIOS keyboard buffer
+and unrelated to how long boot actually takes. `daemon/vcctrld.py`'s
+`_enter_net()` only ever got the early-stop half; the attempt count itself
+stayed derived from a 14s "menu window" guess (7 attempts) with no ceiling
+tying it to the keyboard buffer at all -- more than double the CLI's own
+proven-safe budget, and exactly the gap that let all 7 through unchecked
+whenever (as here) the early-stop had nothing to catch.
+
+**Fixed:** `RegistryDriver.MENU_MAX_ATTEMPTS = 3`, and `menu_attempts()`
+now returns `min(MENU_MAX_ATTEMPTS, max(2, int(window / 2.0)))` -- the
+same 3-attempt/6-key ceiling `spam_menu()` already enforces, so the worst
+case (early-stop never engages, exactly as measured here) sends at most 3
+"5<Enter>" pairs instead of 7. The early-stop from sec. 57 is left in
+place and still helps on any boot fast enough to clear RDYPULSE inside the
+now-shorter ~6s loop span; it just isn't load-bearing for the common case
+the way it was assumed to be.
+
+**Verified live, not just re-deployed.** Single-file swap of
+`vcctrld.py` to `usb4vc:/opt/vcctrl/vcctrld.py` (previous copy kept as a
+timestamped `.bak`), `systemctl restart vcctrld`, confirmed via
+`vcctrl_status`/`vcctrl_profiles` answering normally -- then, unlike sec.
+57's own deployment note, an actual `send-file --return --dest
+C:\DOSAGS` was run against the peer's own still-queued payload (`AGS.EXE`,
+`AGSQUEST.AGS`, `CWSDPMI.EXE`, `RUN.BAT` -- found already staged from
+their two failed attempts; the daemon-global file queue is not
+per-caller). Result: NET proven on the very first real attempt (no
+`no-net`), all four files sent and verified byte-for-byte, clean return
+to the menu default, `left_in_net: false`. The exact operation that failed
+identically twice for the peer now completes end to end with the fix in
+place. Sec. 57's own "confirmed live" was a source-level/health-check
+verification only (grep + restart + `vcctrl_status`), which is exactly
+why this sibling gap shipped unnoticed in the first place -- the
+distinction between that and an actual real-hardware run is why it
+matters here.
+
+**Not fixed by this:** same as sec. 57 -- the menu keystroke is still
+genuinely blind, and this only bounds the damage a mistimed early-stop can
+do, it does not make menu landing observable. `OPEN-FAULTS.md` sec. 20 is
+updated to reflect this second partial fix.

@@ -10388,6 +10388,61 @@ def test_enter_net_stops_the_menu_loop_once_booted():
           d2.typed.count("5") == d2.menu_attempts(), d2.typed)
 
 
+def test_menu_attempts_is_capped_to_the_shared_safe_budget():
+    """menu_attempts() must not exceed bin/vcctrl_common.py's MENU_MAX_KEYS
+    budget (3 attempts of digit+Enter), or every stray "5" the early-stop
+    above fails to catch overflows it again on real hardware.
+
+    Sibling to the 2026-09-11 fix, found the same evening on HW-486-66/
+    gateway2000 running a real dosags transfer AFTER that fix had already
+    shipped: window / 2.0 alone gives 7, and booted() polls RDYPULSE, which
+    real hardware showed arriving (~16 s after reset) LATER than this loop's
+    own ~14 s span -- so the early-stop had nothing to catch and the
+    uncapped count of 7 came right back, six of them landing on a live
+    prompt exactly like before.
+    """
+    d = vcctrld.RegistryDriver(None)
+    check("menu_attempts() is capped at the shared safe budget",
+          d.menu_attempts() == d.MENU_MAX_ATTEMPTS, d.menu_attempts())
+    check("well under the naive window/2.0 count of 7",
+          d.menu_attempts() < 7, d.menu_attempts())
+
+
+class _NeverBootsTarget(FakeTarget):
+    """The realistic case, not the optimistic one: booted() (RDYPULSE) never
+    fires inside the menu loop's own span, because on real hardware it
+    arrives later than the loop's total duration. The early-stop this loop
+    leans on then has nothing to catch, and only the attempt cap protects
+    the target -- uses the REAL RegistryDriver.menu_attempts(), not
+    FakeTarget's hardcoded 2, so a regression in the cap itself would show
+    here even though it would not show in the test above.
+    """
+
+    def menu_attempts(self):
+        return vcctrld.RegistryDriver(None).menu_attempts()
+
+    def booted(self):
+        return False
+
+
+def test_enter_net_caps_stray_fives_when_the_early_stop_cannot_help():
+    """End-to-end: even when booted() never fires during the loop -- the
+    real-hardware case, not the fake's optimistic one -- no more than
+    MENU_MAX_ATTEMPTS "5<Enter>" pairs ever reach the target.
+    """
+    import tempfile
+    cap = _mkfiles(tempfile.mkdtemp())
+    _send(cap, "a.txt", b"payload")
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+
+    d = _NeverBootsTarget(cap, net=False)
+    vcctrld.NetJob(cap, d)._enter_net()
+    check("stray fives stay within the shared safe budget",
+          d.typed.count("5") <= vcctrld.RegistryDriver.MENU_MAX_ATTEMPTS,
+          d.typed)
+
+
 def test_the_transfer_proves_NET_by_arrival_not_by_reading_the_screen():
     """One arrival proves four things at once, and no OCR is in the verdict.
 
