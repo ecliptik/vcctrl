@@ -8565,6 +8565,99 @@ def test_cfclean_deletes_despite_a_misread_count_and_never_on_a_blind_read():
     check("the clean single-file listing DELETEs", v == cf.DELETE)
 
 
+def test_note_auto_narrates_gated_commands_but_never_the_gate_itself():
+    """The note bar used to show nothing unless a driving session called
+    `vcctrl_note` by hand -- accurate to the code, but it meant the bar
+    tracked whether anyone had bothered to narrate, not whether the target
+    was doing anything. `Registry.dispatch` now falls back to an
+    auto-generated one-liner (`_narrate`) for `_gated` commands, tagged
+    `auto: true` in the snapshot so it is never confused with someone's
+    deliberate reason.
+
+    Four properties, each one a way this could silently go wrong:
+    - a gated command that SUCCEEDS narrates itself, `auto: true`;
+    - an UNGATED command (no lock, no plug, no target state changed) leaves
+      the note untouched -- a status poll must not stomp on an explicit
+      "why";
+    - a gated command that FAILS (here: `power` with backend `none`, which
+      routes to the refusal function rather than touching a plug) must not
+      narrate either -- it did not happen to the physical system;
+    - `type`'s auto note never contains the literal text. This is the one
+      that matters: `note` flows UNREDACTED to the public read-only mirror
+      (docs and vcweb_public.py's `_filter_public_state`/
+      `_redact_public_events`, and `test_public_events_redact_typed_text`
+      above), specifically because a human was trusted to choose what
+      `vcctrl_note` says. Auto-narration removes that human, so a literal
+      echo here would leak a password typed at the target to the open
+      internet the moment it happened.
+    """
+    print("\nnote auto-narration")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    check("note capability is registered", "note" in reg.caps)
+    note = reg.caps["note"]
+
+    # Nothing reported yet.
+    check("starts unset", note.snapshot()["text"] is None)
+
+    # An ungated, hardware-free read must not touch the note at all.
+    r = reg.dispatch("keymap", {"as": "peer-session"})
+    check("keymap succeeds", r.get("ok") is True, r)
+    check("but the note is still unset -- ungated commands never narrate",
+          note.snapshot()["text"] is None, note.snapshot())
+
+    # A gated command that succeeds narrates itself, tagged auto.
+    r = reg.dispatch("key", {"keys": ["f5"], "as": "peer-session"})
+    check("key succeeds", r.get("ok") is True, r)
+    snap = note.snapshot()
+    check("key auto-narrates", snap["text"] == "Pressed f5", snap)
+    check("marked auto, not a human's explicit reason",
+          snap["auto"] is True, snap)
+    check("attributed to whoever sent the command",
+          snap["by"] == "peer-session", snap)
+
+    # A gated command that FAILS (power with backend `none` refuses before
+    # touching anything) must not overwrite the last real narration.
+    r = reg.dispatch("power", {"action": "on", "as": "peer-session"})
+    check("power is refused -- no backend configured in the test rig",
+          r.get("ok") is False, r)
+    check("the refused power-on left the previous note alone",
+          note.snapshot()["text"] == "Pressed f5", note.snapshot())
+
+    # An explicit note is not immediately clobbered by an UNGATED command...
+    r = reg.dispatch("note_set", {"text": "why: checking F5 launched the "
+                                           "menu", "as": "human-operator"})
+    check("explicit note_set succeeds", r.get("ok") is True, r)
+    check("explicit note is not marked auto",
+          note.snapshot()["auto"] is False, note.snapshot())
+    reg.dispatch("keymap", {"as": "peer-session"})
+    check("...and an ungated read still doesn't touch it",
+          note.snapshot()["text"] == "why: checking F5 launched the menu",
+          note.snapshot())
+
+    # ...but the NEXT gated command does supersede it -- the auto fallback
+    # only ever loses to a *fresher* explicit call, never survives past the
+    # next real action. This is the trade-off the vcctrl_note docstring
+    # warns about: call it again after driving the rig if the reason still
+    # needs to be on screen.
+    reg.dispatch("key", {"keys": ["enter"], "as": "peer-session"})
+    snap = note.snapshot()
+    check("a later gated command does supersede an explicit note",
+          snap["text"] == "Pressed enter" and snap["auto"] is True, snap)
+
+    # THE SECURITY-CRITICAL CASE: typing a secret must never appear in the
+    # note text, because this field -- unlike /events -- reaches the public
+    # mirror unredacted.
+    secret = "hunter2thisisasecretpassword"
+    r = reg.dispatch("type", {"text": secret, "as": "peer-session"})
+    check("type succeeds", r.get("ok") is True, r)
+    snap = note.snapshot()
+    check("the typed secret never appears in the auto note",
+          secret not in snap["text"], snap)
+    check("control: the auto note still says SOMETHING happened",
+          snap["text"] and snap["auto"] is True, snap)
+
+
 def test_power_is_gated_by_action_and_the_holder_can_still_use_it():
     """The most destructive control was the one the arbiter did not cover.
 

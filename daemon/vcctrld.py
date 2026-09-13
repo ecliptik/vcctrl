@@ -11116,15 +11116,20 @@ SysinfoCapability.DEFAULT_BACKEND_NAME = 'dinspect-pulled'
 
 
 class NoteCapability(Capability):
-    """The one-sentence 'what is happening right now', set by whoever is
-    driving the rig -- typically a Claude Code session, not a person at a
-    keyboard.
+    """The one-sentence 'what is happening right now', either narrated by
+    whoever is driving the rig -- typically a Claude Code session, not a
+    person at a keyboard -- or, failing that, auto-derived by the dispatcher
+    from the last gated (input/power) command it ran.
 
     Not a fact about any device, so it holds nothing that Rule 1 would
-    object to: it never touches input, power or video. It exists because the
-    activity log has command names, not narration, and the public read-only
-    page has no other way to tell a viewer WHY the screen is doing what it is
-    doing.
+    object to: it never touches input, power or video itself. It exists
+    because the activity log has command names, not narration, and the
+    public read-only page had no other way to tell a viewer WHY the screen
+    is doing what it is doing -- explicit narration is still the only source
+    of WHY. The auto fallback (see `auto()` and `Registry.dispatch`) only
+    covers WHAT: it exists so the bar still tracks live physical activity
+    when nobody has bothered to say why, rather than freezing on the last
+    thing somebody typed here, or on "Idle" forever.
 
     In-memory only, like `lastCmd`/`ledLog` on the page side -- a note that
     survived a daemon restart would describe a session that may not still be
@@ -11141,16 +11146,17 @@ class NoteCapability(Capability):
         self._text = None
         self._at = None
         self._by = None
+        self._auto = False
 
     def commands(self):
         return {"note": self._note, "note_set": self._note_set}
 
     def snapshot(self):
         if self._text is None:
-            return {"text": None, "at": None, "by": None,
+            return {"text": None, "at": None, "by": None, "auto": False,
                     "reason": "nothing reported yet"}
         return {"text": self._text, "at": self._at, "by": self._by,
-                "reason": None}
+                "auto": self._auto, "reason": None}
 
     def _note(self, req):
         return dict({"ok": True}, **self.snapshot())
@@ -11159,7 +11165,19 @@ class NoteCapability(Capability):
         text = req.get("text")
         if not text:
             return {"ok": False, "error": "note_set needs 'text'"}
-        text = str(text)
+        self._set(str(text), req.get("as"), auto=False)
+        return dict({"ok": True}, **self.snapshot())
+
+    def auto(self, text, by=None):
+        """Called by `Registry.dispatch`, never by a client request -- an
+        automatic echo of the last gated command, not narration. Marked
+        `auto: true` in the snapshot so a viewer (and the next explicit
+        `vcctrl_note`) can tell "the harness just pressed F5" apart from
+        someone's deliberate reason for pressing it.
+        """
+        self._set(text, by or "auto", auto=True)
+
+    def _set(self, text, by, auto):
         # One sentence, not a log dump -- long enough for the examples this
         # was asked for ("rebooting into NET profile to copy log files for
         # review"), short enough that a runaway caller cannot turn this into
@@ -11168,8 +11186,8 @@ class NoteCapability(Capability):
             text = text[:199] + "…"
         self._text = text
         self._at = time.time()
-        self._by = req.get("as")
-        return dict({"ok": True}, **self.snapshot())
+        self._by = by
+        self._auto = auto
 
 
 NoteCapability.BACKENDS = {"in-memory": NoteCapability}
@@ -11465,10 +11483,24 @@ class Registry(object):
             raise
         finally:
             self.activity.end(ident)
+        ok = bool(resp.get("ok"))
         self.bus.publish("cmd", cmd=cmd, by=req.get("as"),
-                         ok=bool(resp.get("ok")),
+                         ok=ok,
                          ms=round((time.time() - t0) * 1000.0, 1),
                          detail=_summarise(cmd, req))
+        # Auto-narrate physical activity for the note bar, same as the
+        # activity-log publish above and for the same reason: central,
+        # so a new gated capability cannot forget it. Restricted to
+        # `_gated` commands -- the ones that actually move the target --
+        # so a status poll or a frame grab never overwrites someone's
+        # explicit "why". Only on success: a refused or failed command
+        # did not actually happen to the physical system.
+        if ok and _gated(cmd, req):
+            note = self.caps.get("note")
+            if note is not None:
+                text = _narrate(cmd, req)
+                if text:
+                    note.auto(text, by=req.get("as"))
         return resp
 
     def execute(self, req):
@@ -11583,6 +11615,56 @@ def _summarise(cmd, req):
         return req.get("button", "left")
     if cmd == "mouse_wheel":
         return str(req.get("dy", 0))
+    return ""
+
+
+def _narrate(cmd, req):
+    """Full sentence for the note bar's auto fallback (`NoteCapability.auto`).
+
+    Deliberately separate from `_summarise`: that produces a short fragment
+    for the activity log's `detail` column, read alongside the command name
+    it belongs to. This stands alone as the entire text of the note, so it
+    has to name the action itself, not just add detail to it. Covers exactly
+    the commands `_gated` can return True for -- anything else never reaches
+    here (see `Registry.dispatch`).
+
+    `type` deliberately does NOT include the literal text, unlike
+    `_summarise`'s activity-log detail: this note flows unredacted to the
+    public read-only mirror (vcweb_public.py's `_filter_public_state` passes
+    `note` through as-is, on the operator's decision that it never echoes
+    keystrokes), and there is no path back from this function to whatever
+    redacts `/events`. A password typed at the target must not become the
+    one line the whole internet sees.
+    """
+    if cmd == "type":
+        return "Typing at the keyboard"
+    if cmd == "key":
+        return "Pressed " + " ".join(req.get("keys", []))
+    if cmd == "combo":
+        return "Sent " + " ".join(req.get("keys", []))
+    if cmd == "keydown":
+        return "Pressed and holding " + req.get("key", "")
+    if cmd == "keyup":
+        return "Released " + req.get("key", "")
+    if cmd == "hold":
+        return "Holding " + req.get("key", "")
+    if cmd == "release_all":
+        return "Released all keys"
+    if cmd == "mouse_move":
+        return "Moving the mouse"
+    if cmd == "mouse_click":
+        return "Clicked the " + req.get("button", "left") + " mouse button"
+    if cmd == "mouse_down":
+        return "Pressed the " + req.get("button", "left") + " mouse button"
+    if cmd == "mouse_up":
+        return "Released the " + req.get("button", "left") + " mouse button"
+    if cmd == "mouse_release_all":
+        return "Released all mouse buttons"
+    if cmd == "mouse_wheel":
+        return "Scrolling the mouse wheel"
+    if cmd == "power":
+        return {"on": "Powering on", "off": "Powering off",
+                "cycle": "Power-cycling"}.get(req.get("action", "state"), "")
     return ""
 
 

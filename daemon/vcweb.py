@@ -1515,13 +1515,15 @@ class WebCapability(object):
                 # briefly so a 1.5 s poll from several tabs does not re-read
                 # them per tab.
                 "host": self.host_facts(),
-                # WHAT IS HAPPENING RIGHT NOW, in one sentence -- narration
-                # a driving session (typically Claude Code, not a person)
-                # sets by hand. Not derived from `inflight`/the activity log
-                # above, which only ever have command names: this is the one
-                # field that tells a viewer WHY, and it is the whole reason
+                # WHAT IS HAPPENING RIGHT NOW, in one sentence -- narration a
+                # driving session (typically Claude Code, not a person) sets
+                # by hand, telling a viewer WHY, which is the whole reason
                 # the public read-only mirror's control strip has anything
                 # in the slot the file/type/send controls used to occupy.
+                # When nobody has said why, `Registry.dispatch` keeps it
+                # from going stale by auto-narrating the last gated (input/
+                # power) command instead -- `snapshot()["auto"]` tells the
+                # two apart.
                 "note": (self.registry.caps["note"].snapshot()
                          if "note" in self.registry.caps else
                          self._absent("note", text=None, at=None, by=None)),

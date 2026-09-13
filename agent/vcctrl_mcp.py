@@ -638,11 +638,13 @@ def vcctrl_note(text: str, profile: "str | None" = None) -> dict:
     """Set the one-sentence 'what's happening right now' shown on the public
     read-only KVM page -- e.g. "rebooting into NET profile to copy log files
     for review". Not gated by the input lock: it touches no hardware, so it
-    needs no --as arbitration beyond attribution. Has no expiry, so a stale
-    sentence reads as a live one until the next call replaces it. The public
-    mirror currently shows the primary/DOS profile only regardless of what a
-    non-primary profile's own note is set to (operator's call, revisit if
-    that changes)."""
+    needs no --as arbitration beyond attribution. No expiry of its own, but
+    the next gated input/power command this session (or anyone else) sends
+    will silently replace it with an auto-generated one-liner ("Pressed F5")
+    once nobody has said why -- call this again after such a command if the
+    reason still needs to be on screen. The public mirror currently shows
+    the primary/DOS profile only regardless of what a non-primary profile's
+    own note is set to (operator's call, revisit if that changes)."""
     resolved = _resolve_profile(profile)
     return _run_vcctrl(["note-set", "--text", text, "--as", OWNER]
                        + _profile_flag(resolved))
