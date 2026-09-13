@@ -2061,3 +2061,63 @@ run later (no code change, no manual intervention) succeeded cleanly.
 **Not diagnosed -- flagged because a `no-reset` that clears on retry with
 no config change in between is a real fact worth someone reproducing
 deliberately, not a coincidence to wave off.**
+
+## 25. Primary video capture wedged silently for hours after one failed spawn — FIXED 2026-09-13
+
+**2026-09-13**, a peer session (`sdldos`) running a real-hardware GUS DMA
+test reported two `vcctrl_burst` calls, minutes apart with real reboot/type
+activity in between, returning the identical stale seq range and identical
+frames. `vcctrl_video_state` confirmed it independently: `frames` (the
+running decode counter) read exactly the same value across three separate
+checks spanning ~20 minutes, `last_frame_age_s` climbed in lockstep with
+real wall-clock time (not a fixed offset), while `state` stayed `"locked"`
+throughout and `last_error` stayed `null` — a channel reporting perfect
+health while producing nothing. `ps` on the Pi confirmed it directly: **no
+ffmpeg process existed at all** for the primary capture device, though the
+second camera's and the audio capture's ffmpeg processes (spawned at the
+same daemon startup) were both still running fine.
+
+**Root cause, confirmed by reading `VideoCapability._watchdog`/`_acquire`:**
+the watchdog's very first check every 0.5s is `if not owned: continue`. The
+respawn logic living a few lines below only ever runs from the branch that
+notices `proc.poll() is not None` **after** a successful spawn — it is
+never reached if `_acquire()` itself fails (`subprocess.Popen` raising, as
+opposed to a process starting fine and dying later). A single failed spawn
+attempt, at any point in a daemon's uptime, therefore left `owned` False
+forever with nothing left to ever call `_acquire()` again — not a respawn,
+not even the classifier that would have moved `state` to `nosignal`, since
+that also lives below the same early `continue`. **Identical bug,
+independently, in `AudioCapability` and `CameraCapability`'s own
+`_watchdog` methods** — same shape, never factored into one copy (see
+`spam_menu`'s own docstring for this codebase's earlier version of the same
+lesson).
+
+Exactly what made this one failed `_acquire()` call fail is not established
+— no traceback reached `journalctl` (the exception is caught and stored in
+`last_error`, by design, so nothing propagates to stderr), and `last_error`
+itself read `null` by the time this was noticed, hours later. The
+multiple target reboots in this rig's own recent history (a target reboot
+changes video mode repeatedly in a few seconds) are the leading suspect for
+whatever transient condition made `ffmpeg`'s `-i /dev/v4l/by-id/...` open
+fail exactly once, but this is not confirmed and does not need to be to fix
+the actual bug: the watchdog must not treat "never successfully owned" as a
+permanent, un-retried state.
+
+**Fixed**: each of the three `_watchdog` methods now retries `_acquire()`
+from the `if not owned` branch itself, with the same capped exponential
+backoff (`fast_failures`, 2s/4s/8s/16s/30s) already used for the
+process-died case, gated on a new `_started` flag set only by `start()` —
+never by a test constructing the capability directly to exercise
+`_watchdog()` in isolation, which is how every existing watchdog test in
+`tests/test_core.py` works and would otherwise start spawning real `ffmpeg`
+processes. `test_not_owned_keeps_retrying_instead_of_wedging_forever`
+covers both the retry and the test-safety guard.
+
+**If this recurs**, `vcctrl_video_state`'s `frames` counter staying bit-for-
+bit identical across calls spread over real elapsed time — not
+`last_frame_age_s` alone, and not `state` alone, both of which this
+incident showed can look perfectly healthy — is the tell. Confirm with `ps`
+on the daemon host for the actual ffmpeg process before assuming the target
+is at fault: this was a capture-pipeline bug with the real machine sitting
+at a normal prompt the entire time, verified only because the second,
+independent camera was still working.

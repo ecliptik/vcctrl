@@ -981,6 +981,84 @@ def test_watchdogs_survive_one_pass():
           "an attribute its class lacks", err == ["AttributeError"], err)
 
 
+def test_not_owned_keeps_retrying_instead_of_wedging_forever():
+    """Found live 2026-09-13, diagnosing a peer session's report of a
+    stuck-looking real-hardware test: the primary capture's ffmpeg process
+    was simply gone (confirmed via `ps` on the Pi -- no process at all), yet
+    `video_state` had reported `state: locked` for hours with the frame
+    counter frozen. Root cause: `_acquire()` failing (Popen raising, as
+    opposed to a process that started fine and died later -- the respawn a
+    few lines below this already handled that case) left `owned` False
+    forever, and `if not owned: continue` meant NOTHING ever tried again --
+    not the classifier (so `state` never moved to `nosignal` either), not a
+    respawn. One failed spawn attempt, ever, wedged the capability
+    permanently and silently. Same bug, independently, in Video/Audio/
+    CameraCapability -- this exercises the shape once against Video.
+    """
+    print("\nnot-owned retries instead of wedging forever")
+    import threading as _th
+
+    calls = []
+
+    class FlakyVideo(vcctrld.VideoCapability):
+        def _acquire(self):
+            calls.append(time.time())
+            with self.lock:
+                if self.owned:
+                    return True
+                if len(calls) < 2:
+                    self.last_error = "simulated Popen failure"
+                    return False
+                self.owned = True
+                self.proc = None      # no real process; nothing to poll()
+                self.spawn_t = time.time()
+                return True
+
+    cap = FlakyVideo(None, vcctrld.Bus())
+    cap.running = True
+    cap._started = True               # as if start() had been called
+    cap.owned = False
+    cap.proc = None
+
+    t = _th.Thread(target=cap._watchdog)
+    t.start()
+    # One simulated failure costs a 2**1s backoff (fast_failures=1) on top of
+    # the 0.5s poll interval either side of it -- 4s is comfortable headroom
+    # without waiting anywhere near the 30s cap.
+    time.sleep(4.0)
+    cap.running = False
+    t.join(timeout=3)
+
+    check("acquire was retried after failing, not attempted just the once",
+          len(calls) >= 2, len(calls))
+    check("and the retry succeeded", cap.owned is True,
+          (cap.owned, len(calls)))
+
+    # Control: a capability that was never start()ed -- every OTHER watchdog
+    # test in this file builds one exactly this way -- must stay inert. If
+    # this ever retried too, every such test would spawn a real ffmpeg.
+    calls2 = []
+
+    class FlakyVideoUnstarted(vcctrld.VideoCapability):
+        def _acquire(self):
+            calls2.append(time.time())
+            return False
+
+    cap2 = FlakyVideoUnstarted(None, vcctrld.Bus())
+    cap2.running = True
+    cap2.owned = False
+    cap2.proc = None
+    # cap2._started left at its __init__ default (False): start() never ran.
+    t2 = _th.Thread(target=cap2._watchdog)
+    t2.start()
+    time.sleep(1.6)
+    cap2.running = False
+    t2.join(timeout=3)
+    check("a never-start()ed capability never retries -- the test safety "
+          "every other watchdog test in this file relies on",
+          calls2 == [], calls2)
+
+
 def test_theme_contrast():
     """Every colour a theme ships must clear the WCAG floor on every surface.
 

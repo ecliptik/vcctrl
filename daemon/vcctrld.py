@@ -3964,6 +3964,12 @@ class VideoCapability(Capability):
         self.reader = None
         self.running = False
         self.owned = False
+        # Set only by start() (see there), never by a test constructing this
+        # class directly to exercise _watchdog() in isolation -- the
+        # not-owned retry below must stay inert for a capability that was
+        # never told to actually run, or every such test spawns a real
+        # ffmpeg (test_watchdogs_survive_one_pass).
+        self._started = False
         self.last_frame_t = 0.0
         self.frames_total = 0
         self.state = "starting"
@@ -4096,6 +4102,7 @@ class VideoCapability(Capability):
         self.RESOLUTION = CFG.default("capabilities.video.settings.resolution",
                                       "640x480")
         self.running = True
+        self._started = True
         self._acquire()
         threading.Thread(target=self._watchdog, daemon=True).start()
 
@@ -4350,6 +4357,29 @@ class VideoCapability(Capability):
                               holders=expired, pinned=still)
 
             if not owned:
+                # NOT THE SAME AS "correctly not locked". A capability that
+                # never successfully spawned, or whose last _acquire() call
+                # itself raised (Popen failing outright, as opposed to the
+                # process starting and later exiting -- that case is the
+                # branch below), leaves owned False with no process object at
+                # all. The branch below only re-acquires after a PROCESS
+                # DEATH it just witnessed; it never runs again once owned is
+                # already False, so without this, a single failed spawn
+                # attempt wedged the capture PERMANENTLY -- confirmed live
+                # 2026-09-13: ffmpeg for the primary capture was gone
+                # entirely (no process, `ps` showed nothing), `owned: false`,
+                # frame count frozen for hours, and the daemon never noticed
+                # or retried. `_started` keeps this inert for a capability
+                # built directly by a test and never told to run (see
+                # test_watchdogs_survive_one_pass) -- only start() sets it.
+                if self._started and self.running:
+                    if not self._acquire():
+                        with self.lock:
+                            self.fast_failures = min(self.fast_failures + 1, 5)
+                            fails = self.fast_failures
+                        self._publish("video.acquire_retry_failed",
+                                     error=self.last_error, fast_failures=fails)
+                        time.sleep(min(30.0, 2.0 ** fails))
                 continue
             if proc is not None and proc.poll() is not None:
                 # The process died. Respawn -- but a process that dies within
@@ -5496,6 +5526,8 @@ class AudioCapability(Capability):
         self.ring_bytes = 0
         self.proc = None
         self.owned = False
+        # See VideoCapability's own comment on this field -- same reason.
+        self._started = False
         self.running = False
         self.last_chunk_t = 0.0
         self.bytes_total = 0
@@ -5523,6 +5555,7 @@ class AudioCapability(Capability):
 
     def start(self):
         self.running = True
+        self._started = True
         self._acquire()
         threading.Thread(target=self._watchdog, daemon=True).start()
 
@@ -5631,6 +5664,18 @@ class AudioCapability(Capability):
                     else (time.time() - self.spawn_t if self.spawn_t else None)
                 state = self.state
             if not owned:
+                # See VideoCapability._watchdog's own comment on this branch
+                # -- same bug, same fix: a failed _acquire() (as opposed to a
+                # process that started and later died, handled below) used to
+                # leave this capability wedged forever with no retry.
+                if self._started and self.running:
+                    if not self._acquire():
+                        with self.lock:
+                            self.fast_failures = min(self.fast_failures + 1, 5)
+                            fails = self.fast_failures
+                        self._publish("audio.acquire_retry_failed",
+                                     error=self.last_error, fast_failures=fails)
+                        time.sleep(min(30.0, 2.0 ** fails))
                 continue
             if proc is not None and proc.poll() is not None:
                 lifetime = time.time() - self.spawn_t
@@ -6120,6 +6165,8 @@ class CameraCapability(Capability):
         self.reader = None
         self.running = False
         self.owned = False
+        # See VideoCapability's own comment on this field -- same reason.
+        self._started = False
         self.last_frame = None
         self.last_frame_t = 0.0
         self.frames_total = 0
@@ -6134,6 +6181,7 @@ class CameraCapability(Capability):
 
     def start(self):
         self.running = True
+        self._started = True
         self._acquire()
         threading.Thread(target=self._watchdog, daemon=True).start()
 
@@ -6253,6 +6301,18 @@ class CameraCapability(Capability):
                     else (time.time() - self.spawn_t if self.spawn_t else None)
                 state = self.state
             if not owned:
+                # See VideoCapability._watchdog's own comment on this branch
+                # -- same bug, same fix: a failed _acquire() (as opposed to a
+                # process that started and later died, handled below) used to
+                # leave this capability wedged forever with no retry.
+                if self._started and self.running:
+                    if not self._acquire():
+                        with self.lock:
+                            self.fast_failures = min(self.fast_failures + 1, 5)
+                            fails = self.fast_failures
+                        self._publish("camera.acquire_retry_failed",
+                                     error=self.last_error, fast_failures=fails)
+                        time.sleep(min(30.0, 2.0 ** fails))
                 continue
             if proc is not None and proc.poll() is not None:
                 lifetime = time.time() - self.spawn_t
