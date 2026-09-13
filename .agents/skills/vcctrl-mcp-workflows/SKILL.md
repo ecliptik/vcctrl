@@ -228,13 +228,21 @@ same way any other caller is. Don't treat MCP access as unobserved.
 **Call `vcctrl_note` at the start of any sequence of MCP calls that drives
 the rig, and again whenever what you're doing changes.** The KVM page's
 status bar (`#worklabel` in `kvm.html`/`kvm-ro.html`, fed by `state.json`'s
-`note` field) shows nothing but "Idle" unless a driving session sets it --
-it is `NoteCapability` in `daemon/vcctrld.py`, in-memory only, not derived
-from the activity log, and nothing sets it automatically. It is the only
-field that tells a human watching the KVM (or the public read-only mirror)
-*why* the picture is doing what it's doing, not just that a command ran.
-One sentence, e.g. `vcctrl_note("running a dinspect hardware re-scan for a
-peer session, target rebooting")`. Not gated by the input lock and touches
+`note` field) is `NoteCapability` in `daemon/vcctrld.py`. `Registry.dispatch`
+auto-narrates it with a generic one-liner ("Pressed F5", "Powering on")
+after every gated input/power command that succeeds, so the bar does not
+just freeze on "Idle" between explicit notes -- but that auto text (`auto:
+true` in
+the snapshot) only ever says WHAT happened, generated from the command name,
+never WHY. It is also short-lived: the very next gated command from anyone
+replaces it, including your own explicit note. Calling `vcctrl_note`
+yourself is still the only way to put a *reason* on screen, and you should
+still call it at the start of a sequence and whenever the reason changes --
+just be aware a `vcctrl_key`/`vcctrl_type`/etc. call afterward will silently
+supersede it, so re-call `vcctrl_note` after such a call if the reason still
+needs to be visible. One sentence, e.g. `vcctrl_note("running a dinspect
+hardware re-scan for a peer session, target rebooting")`. Not gated by the
+input lock and touches
 no hardware, so there's no reason to skip it even for a read-only or
 diagnostic sequence.
 
