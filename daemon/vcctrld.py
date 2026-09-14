@@ -8415,6 +8415,9 @@ class NetJob(object):
         # no measured run may start from" are two facts, and the second one is
         # the one that costs somebody a cell.
         self.in_net = False
+        # SET BY _reboot_edge WHEN THE CHORD ITSELF WAS REFUSED, distinct
+        # from "sent but no edge followed" -- see that method's docstring.
+        self._combo_refusal = None
 
     def _say(self, phase, text, **kw):
         rec = dict(kw, phase=phase, text=text, t=time.time())
@@ -8447,17 +8450,59 @@ class NetJob(object):
         worst delay actually measured, and only a single resend follows if
         that entire window truly finds nothing, itself given a further
         RESEND_TIMEOUT_S rather than a slice of the first window.
+
+        THE CHORD'S OWN RETURN VALUE WAS NEVER CHECKED, and that was a
+        second bug wearing this one's clothes. `combo()` goes through the
+        same gated dispatch as any other input command -- the arbiter can
+        refuse it outright if a DIFFERENT identity already holds the input
+        lock -- and a refusal and a chord that was genuinely sent but never
+        landed produce the IDENTICAL symptom from here: no edge, ever,
+        within the window. Confirmed live 2026-09-13 (a peer session, HW-
+        486-66): a `vcctrl_lock_acquire`-held name blocked `get_file`'s own
+        "transfer" identity on every attempt, four times, surviving a full
+        power cycle in between, and the daemon told the truth about it in
+        the bus (`kind: "input.refused"`) the entire time -- nothing here
+        was reading it. `_enter_net`/`_boot_to_default` now report this as
+        its own `why` (`input-refused`) instead of the misleading `no-reset`
+        ("the machine never reset"), which is not what happened: the
+        machine was never asked to.
         """
-        self.d.combo(["ctrl", "alt", "delete"])
+        self._combo_refusal = None
+        r = self.d.combo(["ctrl", "alt", "delete"])
+        if isinstance(r, dict) and r.get("ok") is False:
+            self._combo_refusal = r
+            return False
         if self.d.wait_menu(getattr(self.d, "MENU_TIMEOUT_S", 100.0)):
             return True
         attempts = getattr(self.d, "RESET_ATTEMPTS", 2)
         resend_s = getattr(self.d, "RESEND_TIMEOUT_S", 30.0)
         for _ in range(attempts - 1):
-            self.d.combo(["ctrl", "alt", "delete"])
+            r = self.d.combo(["ctrl", "alt", "delete"])
+            if isinstance(r, dict) and r.get("ok") is False:
+                self._combo_refusal = r
+                return False
             if self.d.wait_menu(resend_s):
                 return True
         return False
+
+    def _reset_fail(self):
+        """The right `_fail()` call after `_reboot_edge()` returns False.
+
+        ONE COPY, called from both `_enter_net` and `ScanJob._boot_to_default`
+        -- `_leave_net` does not use this because a failed return-leg reboot
+        warns and carries on rather than failing the whole (already-
+        successful) run; it reads `_combo_refusal` directly for its own
+        warning text instead.
+        """
+        if self._combo_refusal:
+            return self._fail(
+                "input-refused",
+                "the reboot chord was refused, not merely unanswered: %s -- "
+                "the machine was never asked to reset"
+                % self._combo_refusal.get("error", "input is locked"))
+        return self._fail("no-reset",
+                          "the machine never reset -- Scroll Lock did not "
+                          "clear, so the reboot did not happen")
 
     # -- getting there, and back ----------------------------------------------
 
@@ -8505,9 +8550,7 @@ class NetJob(object):
         # edge is not observable either. The chord that gets it there is
         # retried the same way -- see _reboot_edge.
         if not self._reboot_edge():
-            return self._fail("no-reset",
-                              "the machine never reset -- Scroll Lock did not "
-                              "clear, so the reboot did not happen")
+            return self._reset_fail()
         self._say("select", "selecting NET, blind")
         # STOP THE MOMENT AN EARLIER ATTEMPT LANDS, rather than sending every
         # attempt regardless. Found 2026-09-11: a real send_file run left six
@@ -8628,10 +8671,19 @@ class NetJob(object):
                                 "all this can say", warn=True)
             return
         if not self._reboot_edge():
-            self._say("return", "NO RESET AFTER THE RETURN REBOOT -- Scroll "
-                                "Lock never cleared, so the machine may still "
-                                "be in NET, which no measured run may start "
-                                "from", warn=True)
+            if self._combo_refusal:
+                self._say("return", "THE RETURN REBOOT'S CHORD WAS REFUSED "
+                                    "(%s), not merely unanswered -- the "
+                                    "machine was never asked to reset and is "
+                                    "still wherever it was, which may be NET"
+                                    % self._combo_refusal.get(
+                                        "error", "input is locked"),
+                          warn=True)
+            else:
+                self._say("return", "NO RESET AFTER THE RETURN REBOOT -- "
+                                    "Scroll Lock never cleared, so the "
+                                    "machine may still be in NET, which no "
+                                    "measured run may start from", warn=True)
             return
         if self.d.wait_boot():
             # DELIBERATELY NOT ASSERTING WHICH PROFILE. The timeout lands on
@@ -8691,6 +8743,11 @@ class NetJob(object):
                           invisible -- refusing beats rebooting blind
             no-reset      Scroll Lock never cleared, so the reboot did not
                           happen at all
+            input-refused the reboot chord itself was refused by the input
+                          arbiter (a different identity holds the lock) --
+                          distinct from no-reset, where the chord was sent
+                          but nothing followed it. The machine was never
+                          asked to reboot at all, not asked and ignored
             no-boot       no readiness pulse: the machine did not finish
                           booting, or RDYPULSE.COM is missing
             no-net        nothing arrived from the target -- NET is not up, or
@@ -9315,9 +9372,7 @@ class ScanJob(NetJob):
                               "be invisible -- refusing rather than "
                               "rebooting blind")
         if not self._reboot_edge():
-            return self._fail("no-reset",
-                              "the machine never reset -- Scroll Lock did "
-                              "not clear, so the reboot did not happen")
+            return self._reset_fail()
         if not self.d.wait_boot():
             return self._fail("no-boot",
                               "no readiness pulse after the reboot: the "

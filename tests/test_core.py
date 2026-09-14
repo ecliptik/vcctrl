@@ -12395,6 +12395,53 @@ def test_a_reset_edge_that_takes_its_time_still_gets_one_resend():
           len(d2.combos) == vcctrld.RegistryDriver.RESET_ATTEMPTS, d2.combos)
 
 
+def test_a_refused_chord_fails_fast_and_distinctly_from_no_reset():
+    """Found live 2026-09-13: a peer session held `vcctrl_lock_acquire`
+    under its own name, then called `get_file`, whose internal "transfer"
+    identity had every one of its Ctrl-Alt-Del chords silently refused by
+    the arbiter -- same symptom as a genuinely swallowed chord (no LED
+    edge, ever), but a completely different cause, confirmed live by the
+    bus's own `input.refused` event that nothing in this path was reading.
+    Four attempts, one surviving a full power cycle in between, before the
+    actual cause was found by chance.
+
+    `_reboot_edge()` now checks `combo()`'s own return value: a refusal
+    stops the attempt immediately (no resend, no waiting out
+    MENU_TIMEOUT_S+RESEND_TIMEOUT_S for an edge that was never going to
+    come), and the job reports `why: "input-refused"` with the lock
+    holder's name in `reason` -- distinct from `no-reset`, which means the
+    chord was actually sent and nothing followed it.
+    """
+    print("\na refused chord fails fast, not as no-reset")
+    import tempfile
+
+    class LockedOut(FakeTarget):
+        """Every combo() is refused by a different identity, as the
+        arbiter itself would refuse it -- never even reaches wait_menu."""
+
+        def combo(self, keys):
+            self.combos.append(list(keys))
+            return {"ok": False,
+                    "error": "input locked by 'run-rig-GUSQ2-check' since 0",
+                    "locked_by": "run-rig-GUSQ2-check"}
+
+    cap = _mkfiles(tempfile.mkdtemp())
+    cap.support = lambda: (True, None)
+    cap._reachable = lambda timeout=None: (True, None)
+    _send(cap, "a.txt", b"payload")
+    d = LockedOut(cap, reset=False)
+    r = vcctrld.TransferJob(cap, d).run()
+
+    check("the job fails, distinctly, as input-refused, not no-reset",
+          r["why"] == "input-refused", r)
+    check("the lock holder's name reaches the reason a human reads",
+          "run-rig-GUSQ2-check" in r["reason"], r["reason"])
+    check("it did not claim the machine 'never reset' -- it was never asked",
+          "never reset" not in r["reason"], r["reason"])
+    check("no resend was attempted -- a refusal is not a swallowed chord",
+          len(d.combos) == 1, d.combos)
+
+
 def test_a_refusal_carries_a_diagnostic_frame_never_a_verdict():
     """Every `_fail()` is "something we expected did not happen" -- exactly
     the moment a picture of the screen is worth more than another line about
