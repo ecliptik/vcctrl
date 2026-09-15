@@ -3588,6 +3588,13 @@ C:\DOSAGS` was run against the peer's own still-queued payload (`AGS.EXE`,
 their two failed attempts; the daemon-global file queue is not
 per-caller). Result: NET proven on the very first real attempt (no
 `no-net`), all four files sent and verified byte-for-byte, clean return
+to the menu default, `left_in_net: false`. The exact operation that failed
+identically twice for the peer now completes end to end with the fix in
+place. Sec. 57's own "confirmed live" was a source-level/health-check
+verification only (grep + restart + `vcctrl_status`), which is exactly
+why this sibling gap shipped unnoticed in the first place -- the
+distinction between that and an actual real-hardware run is why it
+matters here.
 
 ## 59. `spam_menu()`'s per-attempt `leds()` check regressed sec. 17's own "one call, no polling" fix  [measured 2026-09-15]
 
@@ -3630,6 +3637,34 @@ buying safety. `select_boot_profile()`'s docstring is corrected to match --
 it previously argued FOR the per-attempt poll it no longer does.
 `MENU_WINDOW_S` is removed as dead: there is no retry loop left to time out.
 
+**No deploy step exists to skip.** `vcctrl_run_cell`/`vcctrl_run_sweep`/
+`vcctrl_collect` are CONTROL-MODE-ONLY tools (`agent/vcctrl_mcp.py`,
+`ROLE == "control"`) that always shell out to `harness/` scripts in
+*this* checkout -- there is no separate deployed copy on `usb4vc` that a
+daemon-hosted MCP server runs instead. (`bin/`+`harness/` do ship to the
+Pi via `pi/deploy.sh`, but for a different reason -- the Pi's own
+daemon-mode MCP server, `vcctrl-mcp-daemon`, has no `run_cell`/`run_sweep`/
+`collect` tools registered at all; nothing there ever calls
+`spam_menu()`.) So this fix was live for its one production call site
+the moment the file was saved, with nothing to copy anywhere.
+
+**Verified live 2026-09-15**, via `vcctrl-collect --tags VERIFYFIX
+--via-put` (the only production caller of `spam_menu()`; a placeholder
+tag was used since no real sweep had been run to generate one --
+`vcctrl-collect` itself warns that every tag failing this way looks
+identical to a missed menu selection, and reports it as `MISSING:
+VERIFYFIX` with the exact caution its own `if EVERY tag failed, suspect
+the blind menu selection` text describes, which is why the earlier steps
+matter independently of that expected failure):
+`selecting menu item '5' (budget 6 keys, buffer holds 15)` /
+`3 attempts / 6 keys over 0.2s -- 9 keys of buffer margin`, RDYPULSE at
+t+14.7s, `profile verified: [NET] banner on screen`. First attempt
+refused earlier in the run at the pre-existing `at_prompt()` gate
+(unrelated to this fix -- a known race right after `wait_cold_boot()`
+reports ready, see sec. 17's own stale-LED discussion), succeeded
+cleanly on retry. Script returned the target to the menu default on
+exit, same as any normal collect run.
+
 **Not fixed by this.** `daemon/vcctrld.py`'s `_enter_net()`/`NetJob` (sec.
 57-58) is separate code and untouched -- its polling is a local LED read
 inside the daemon process, not an ssh/MCP round trip, so it is not exposed
@@ -3638,12 +3673,12 @@ high-level "select boot profile N" call of its own; a caller with no
 daemon-side job to lean on (as `sdldos` had none for an arbitrary
 CONFIG.SYS digit, only `NetJob` for NET specifically) still has to either
 hand-roll the packed-burst pattern or wait for `vcctrl-collect`/
-`vcctrl-sweep` to run it on their behalf on the control host. `tests/
-test_core.py` passes unchanged (199 passed) -- no test exercised the removed
-per-attempt loop's call count directly. Not yet deployed to `usb4vc`:
-`bin/vcctrl_common.py` is read fresh by every harness invocation rather than
-held by a running service, so no daemon restart is needed, but the fix has
-not been confirmed against a real reboot on this rig.
+`vcctrl-sweep` to run it on their behalf on the control host -- and that
+gap is exactly why `sdldos` hit the raw-MCP-call version of this hazard
+in the first place rather than going through `spam_menu()` at all; this
+fix does not touch the code path they actually used. `tests/test_core.py`
+passes unchanged (199 passed) -- no test exercised the removed
+per-attempt loop's call count directly.
 to the menu default, `left_in_net: false`. The exact operation that failed
 identically twice for the peer now completes end to end with the fix in
 place. Sec. 57's own "confirmed live" was a source-level/health-check
