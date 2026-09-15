@@ -187,8 +187,10 @@ CALL_COST_S = 1.5
 # So: a budget the buffer can absorb whole, and verification afterwards instead
 # of volume beforehand. Three pairs covers the jitter; select_boot_profile
 # reports what it spent so a caller can see the margin rather than assume it.
+#
+# No separate window constant: spam_menu() sends the whole budget as one call
+# now (2026-09-15, see its docstring), so there is no loop left to time out.
 KBD_BUFFER_KEYS = 15
-MENU_WINDOW_S = 14
 MENU_MAX_KEYS = 6              # 3 x (digit + Enter)
 
 
@@ -662,12 +664,16 @@ def select_boot_profile(digit, edge_timeout=60, ready_timeout=200):
     5 s, so selection is blind and timed. The digit alone does not commit --
     it highlights; Enter commits (FINDINGS sec. 8).
 
-    WHY THIS POLLS, WHEN THE ORIGINAL DELIBERATELY DID NOT: the first version
-    blind-fired a fixed number of attempts across a window, because a leds()
-    check cost ~1.5 s of ssh and would have pushed the cadence past the 5 s
-    window it had to hit. After ControlMaster (FINDINGS sec. 19) a poll costs
-    ~0.2 s, so checking between attempts is affordable and the whole tradeoff
-    disappears.
+    WHY THIS NO LONGER POLLS BETWEEN ATTEMPTS: a version in between DID --
+    ControlMaster (FINDINGS sec. 19) cut a local call to ~0.2 s, cheap enough
+    to check leds() before every digit+Enter send. That number is a property
+    of calls placed on the control host itself, not of "a vcctrl call" in
+    general, and a caller reaching the daemon by a slower path (an MCP relay,
+    measured 9-12 s/call on 2026-09-15) pays the full round trip on every
+    check AND every send -- so the very first check-then-send pair already
+    cost more than the 5 s the DOS menu stays up, before any attempt at all
+    got out the door. See spam_menu()'s own docstring for the fix: one call,
+    not one per attempt.
 
     The operator hears the difference: every attempt beyond the one that lands
     goes into the BIOS 15-key buffer, and once full the machine beeps per
@@ -704,20 +710,32 @@ def spam_menu(digit):
     twice and was applied to neither for as long as it merely sounded better.
     Same reason at_prompt() became shared: see the module header.
 
+    ONE round trip, not one per attempt, and no leds() check gating it. This
+    used to check "already booted through?" before every digit+Enter send,
+    which is affordable ONLY when a call costs a couple hundred ms -- true on
+    the control host after ControlMaster, false for a caller a hop further
+    away. Measured 2026-09-15 on an MCP-relayed session: 9-12 s per call, so a
+    loop that read-then-sent never got its first attempt out before the DOS
+    menu's 5 s window had already closed -- three real reboots landed on the
+    menu default before the caller gave up on polling and fired blind.
+    Checking first bought nothing worth that cost anyway: a stray digit+Enter
+    landing at an already-live prompt is harmless (vcctrl-collect's
+    reboot_into_net(): DOS answers "Bad command or file name" and carries on)
+    and flush_input_line() cleans up whatever the buffer absorbed. So the
+    whole MENU_MAX_KEYS budget goes out as ONE vc() call, paced by the daemon
+    once it lands (~12 ms/tap -- InputCapability.key()) rather than by
+    however long the call took to arrive. The only latency left in the
+    critical path is this function's single outbound trip.
+
     Returns (attempts, keys). Sends nothing and returns (0, 0) for digit=None,
     which is how a caller takes the menu default.
     """
     if digit is None:
         return 0, 0
-    t0 = time.time()
-    attempts, keys = 0, 0
-    while time.time() - t0 < MENU_WINDOW_S and keys + 2 <= MENU_MAX_KEYS:
-        if bool(leds().get("scrolllock")):
-            break                # already booted through; nothing to select
-        vc("key", str(digit), "enter", check=False)
-        attempts += 1
-        keys += 2
-    return attempts, keys
+    reps = MENU_MAX_KEYS // 2
+    keys = [k for _ in range(reps) for k in (str(digit), "enter")]
+    vc("key", *keys, check=False)
+    return reps, len(keys)
 
 
 def flush_input_line():

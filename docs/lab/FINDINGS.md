@@ -3588,6 +3588,62 @@ C:\DOSAGS` was run against the peer's own still-queued payload (`AGS.EXE`,
 their two failed attempts; the daemon-global file queue is not
 per-caller). Result: NET proven on the very first real attempt (no
 `no-net`), all four files sent and verified byte-for-byte, clean return
+
+## 59. `spam_menu()`'s per-attempt `leds()` check regressed sec. 17's own "one call, no polling" fix  [measured 2026-09-15]
+
+Sec. 17 established, and this file has said since 2026-08-19, that the menu
+selection loop must send its whole attempt budget as **one call with no
+polling during the window** -- a leds() check between attempts turns the
+digit+Enter cadence into roughly one attempt per 5 s, the exact width of the
+window it is trying to hit. `bin/vcctrl_common.py`'s `spam_menu()` -- "THE
+ONE COPY" both `select_boot_profile()` and `vcctrl-collect`'s
+`reboot_into_net()` share -- had nonetheless grown back exactly that
+check-then-send loop, justified by its own docstring as safe now that
+ControlMaster cut a *local* call to ~0.2 s. That number describes calls
+placed on the control host itself; nothing enforced it for every caller.
+
+**Reported by a peer session (`sdldos`, dosags S7-GUS real-hardware A/B),
+not found here.** Manually reproducing this loop's pattern (poll `leds()`
+for the readiness edge, then fire the digit) over an MCP-relayed session
+whose calls measured 9-12 s round trip, blind menu selection landed on the
+CONFIG.SYS default (PGSB) twice in a row -- confirmed via `SET` showing
+`CONFIG=PGSB` and a literal stray `"3"` / `Bad command or file name` at the
+prompt each time. At that latency the very first leds()-then-send pair
+already cost more than the 5 s the menu stays up, before any attempt left
+the caller at all -- not a coin-flip race like sec. 17's original bug, a
+guaranteed miss. Their working third attempt fired a single packed call of
+~15 digit+Enter reps at a fixed offset from the reboot chord, with no
+LED wait gating the send at all, and landed cleanly (confirmed via `SET`:
+`CONFIG=PGGUS`, `ULTRASND=240,3,3,7,7`). Full writeup:
+`dosags/tests/games/trilbysnotes/results/S7-gus-autoinc-ab-realhw-2026-09-15.md`.
+
+**Fixed:** `spam_menu()` sends the whole `MENU_MAX_KEYS` budget (3 attempts
+of digit+Enter) as a single `vc("key", ...)` call, paced by the daemon after
+it lands (~12 ms/tap) rather than by however long the call took to arrive --
+this restores sec. 17's design rather than inventing a new one. The
+per-attempt "already booted through?" check is also gone, not narrowed: a
+stray digit+Enter landing at an already-live prompt is harmless (sec. 17's
+own "the beeps are ours" note, and `vcctrl-collect`'s `reboot_into_net()`
+comment) and `flush_input_line()` already exists to clean up whatever the
+buffer absorbed, so the check was only ever costing a round trip, never
+buying safety. `select_boot_profile()`'s docstring is corrected to match --
+it previously argued FOR the per-attempt poll it no longer does.
+`MENU_WINDOW_S` is removed as dead: there is no retry loop left to time out.
+
+**Not fixed by this.** `daemon/vcctrld.py`'s `_enter_net()`/`NetJob` (sec.
+57-58) is separate code and untouched -- its polling is a local LED read
+inside the daemon process, not an ssh/MCP round trip, so it is not exposed
+to this hazard the same way. Nothing here gives an MCP-driving session a
+high-level "select boot profile N" call of its own; a caller with no
+daemon-side job to lean on (as `sdldos` had none for an arbitrary
+CONFIG.SYS digit, only `NetJob` for NET specifically) still has to either
+hand-roll the packed-burst pattern or wait for `vcctrl-collect`/
+`vcctrl-sweep` to run it on their behalf on the control host. `tests/
+test_core.py` passes unchanged (199 passed) -- no test exercised the removed
+per-attempt loop's call count directly. Not yet deployed to `usb4vc`:
+`bin/vcctrl_common.py` is read fresh by every harness invocation rather than
+held by a running service, so no daemon restart is needed, but the fix has
+not been confirmed against a real reboot on this rig.
 to the menu default, `left_in_net: false`. The exact operation that failed
 identically twice for the peer now completes end to end with the fix in
 place. Sec. 57's own "confirmed live" was a source-level/health-check
