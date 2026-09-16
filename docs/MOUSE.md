@@ -35,8 +35,9 @@ moment. Cursor positions across two bursts:
 with box sizes 12x20, 10x26, 9x18, 13x18 — cursor-sized throughout, and the
 last two at the top-left corner where a homing move ends. Threshold 45.
 
-**Still unproven:** clicks, drag, the ADB/Macintosh side, and anything at all
-about DOS-native mouse programs.
+**Still unproven:** drag, the ADB/Macintosh side, and anything at all about
+DOS-native mouse programs beyond a single AGS/Allegro game (see section 9 --
+clicks are proven now, with a real timing caveat).
 
 ## 2. Numbers worth keeping
 
@@ -255,7 +256,35 @@ touch as a mouse on a phone (Pointer Lock has no meaningful behavior on
 a touchscreen, so Grab's mouse half is simply inert there rather than
 shown as a separate, non-functional control).
 
-## 8. Open questions
+## 9. Clicks are proven now, and an instant one can be missed entirely
+
+**2026-09-15**, the first real DOS-native mouse-click exercise on this rig:
+`sdldos`'s dosags/AGS real-hardware campaign needed to quit a game running
+at an extreme ~0.05 fps (see `docs/lab/OPEN-FAULTS.md` sec. 27) by clicking
+its QUIT menu item.
+
+**`vcctrl mouse click` (instant press+release) fell between the game's own
+input polls three times in a row and registered nothing.** A game reading
+its input state once per render frame samples it far more rarely than usual
+at 0.05 fps -- roughly once every 20 seconds -- and a press-then-release
+that both happen inside one gap between polls is a state transition the
+poll never catches, at either edge. **`mouse down`, held across a full poll
+interval, then `mouse up` (a real release edge instead of an instantaneous
+pulse) is what actually registered** -- confirmed in the target's own
+`STDOUT.TXT` ("Mouse click over GUI 2" x3, then a clean "Quitting the
+game..." / "ENGINE HAS SHUTDOWN").
+
+**The general lesson, not specific to this one game:** an instant
+click/keypress assumes the target polls faster than the gap between press
+and release. That is normally true and was never worth stating -- it stops
+being true against anything polling unusually slowly (an extreme frame
+rate, a busy-loop under load, deliberately coarse polling to save cycles),
+and the failure is silent: the call succeeds, nothing lands, and there is
+no error to notice. Prefer an explicit `mouse down` / wait / `mouse up`
+pair over `mouse click` whenever the target's own polling rate is unknown
+or suspected slow.
+
+## 10. Open questions
 
 - Whether the acceleration factor is stable within one environment or varies
   with speed, which is what a real acceleration *curve* would imply. 1.49x was

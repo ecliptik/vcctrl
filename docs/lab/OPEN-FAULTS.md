@@ -2311,44 +2311,60 @@ else might be holding the keyboard. Documented directly in
 this is visible from the tool itself and not only from this incident
 record.
 
-**Second addendum, same session: the "just slow" title screen turned out
-to be a genuine hang, and this one is suspected NOT to be a rig/tooling
-issue at all.** `verify_input` on the same still-visible title screen read
+**Second addendum, same session, LATER CORRECTED BELOW: initially read as a
+genuine hang.** `verify_input` on the same still-visible title screen read
 `verified: false` again -- independently confirmed here, and, per the
 addendum above, uninformative on its own while AGS holds the keyboard.
-What actually established a real hang: `sdldos` sent two `mouse-move`
-commands 45 s apart and the cursor did not move between them, and the
-mean brightness across four screenshots spanning ~15 minutes was flat at
-37.46-37.49 (noise-level variance). **That is a content-level check, not
-an LED one, and the foreground-game caveat above does not apply to it.**
-Critically, brightness had climbed steadily for the first ~20 minutes
-before that (3.1 to 37.5) -- real rendering progress, not a hang from the
-start -- so whatever happened, happened only after a substantial period of
-demonstrably correct operation.
+Two content-level checks were read as establishing a real hang instead:
+`sdldos` sent two `mouse-move` commands 45 s apart and the cursor did not
+move between them, and mean brightness across four screenshots spanning
+~15 minutes was flat at 37.46-37.49, after climbing steadily (3.1 to 37.5)
+for a genuine ~20 minutes beforehand. That reasoning was sound as far as
+it went; it was wrong about what it was measuring, corrected below.
 
-`sdldos`'s own read, **not this repo's finding to own**: this is the first
-sustained real-hardware exercise of `patches/ags/0075` (a native 32-bit
-display path) in the `dosags` project, and a hang appearing only after 20
-minutes of correct rendering at that depth is consistent with a real
-correctness bug in that new code (a VESA bank-switch edge case, a
-framebuffer-size issue, or similar) rather than with this rig's own known
-hazard classes above -- there is no evidence tying it to RDTSC/EMM386 or
-to the reboot-detection mechanism sec. 23-27 are otherwise about. Recorded
-here only because it happened on this rig and because it usefully
-narrows what "the machine looks dead after AGS has been running a while"
-should make a future session suspect first; the actual bug investigation
-belongs to and is being pursued by the `dosags` project and its operator,
-not tracked further in this file. Machine was left as-is (not
-power-cycled) at the time of writing, pending that decision.
+**RESOLVED: not a hang. Extreme render lag, ~0.05 fps (one frame per ~20
+seconds), and input was reaching the game the entire time.** Holding the
+lock and re-testing with patience found cumulative cursor movement across
+repeated `mouse-move` calls (just at extreme lag) and a hover-highlight
+change on the QUIT menu item -- both proofs of life a single 45-second
+window or a 15-minute span of 4 screenshots is simply too short to catch
+at this render rate: **the two checks that read as "flat, therefore dead"
+were sampling far more frequently than the one thing they were trying to
+observe actually changes.** Confirmed conclusively by getting the game to
+quit cleanly and reading the real result out of the target's own log --
+see below. **There is no display-path correctness bug here** -- the
+earlier paragraph's suspicion of `patches/ags/0075` was a reasonable
+hypothesis at the time but does not survive the actual resolution, and is
+left above only so the reasoning trail stays honest about what was
+believed and when, per this project's own commit-message convention.
 
-**If this recurs:** `vcctrl_verify_input` is the fast, direct check --
-cheaper and more conclusive than reading LED state or a screenshot alone,
-and what actually caught this one. Consider whether a driving harness's own
-post-launch stability wait should include an input-liveness check rather
-than relying on screen content alone; that is a property of whatever
-harness is driving (here, `dosags`'s `run-rig.sh`, outside this repo), not
-of `vcctrl` itself, which already exposes the check needed
-(`vcctrl_verify_input`).
+**The actual finding, and it is a real one:** `patches/ags/0075`'s native
+32-bit display path, exercised under sustained real operation for the
+first time, renders this title screen's complexity at roughly 0.05 fps on
+a 486DX2-66 -- a genuine, valid KPI result (`exit_code=0`, `fps_p50=0.05`,
+`tick_rate=0.32`, `duration_s=3147`), not a defect in either the rig or
+the port. Getting a clean quit needed one more real finding of its own:
+an instant `mouse click` fell between this game's own widely-spaced input
+polls three times running and was never seen at all, while `mouse down`
+(held across a full poll interval) followed by `mouse up` registered
+immediately -- confirmed in `STDOUT.TXT` ("Mouse click over GUI 2" x3,
+then "Quitting the game..." / "ENGINE HAS SHUTDOWN"). Written up on its
+own terms in `docs/MOUSE.md` sec. 9, since it generalizes past this one
+game. Committed to `dosags` (`9349514`) with the full raw logs; the target
+was fetched clean and the rig powered down afterward on the operator's
+instruction.
+
+**The lesson worth keeping, independent of AGS or this rig specifically:**
+a liveness check's sampling interval has to be longer than the target's
+own slowest legitimate update period, or a target that is genuinely alive
+but slow reads identically to one that is dead. Both checks used here
+(cursor movement across 45 s, brightness across four shots in 15 minutes)
+were real, correctly-executed, content-level checks -- exactly what the
+first addendum recommends over trusting `verify_input` alone -- and both
+still gave the wrong answer, because 45 seconds and even several minutes
+between samples is not patient enough against a ~20-second-per-frame
+target. The fix was not a better check; it was the same checks, run for
+longer before concluding "flat."
 
 ## 28. `vcctrl_shot` returned the identical frame for 50+ seconds while the ring was fresh — OPEN, NOT DIAGNOSED
 
