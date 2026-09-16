@@ -2257,24 +2257,31 @@ likely reading is that this `STDOUT.TXT` is *itself* a stale leftover from
 that same 09-11-26 era, and `RUN.BAT` produced no fresh output at all this
 run -- not that AGS opened the wrong file.
 
-**Whether that no-op launch and the confirmed hang are one incident is
-open, not settled, and there is a real tension against collapsing them.**
-`sdldos`'s own theory: PS/2 was already dead before the launch's own typed
+**RESOLVED: two separate open questions, not one incident.** The initial
+theory was that PS/2 was already dead before the launch's own typed
 `CD`/`RUN.BAT`/Enter sequence, so none of it reached the target, and the
 harness's `wait_for_stable_screen` (screen-diff only, no input-liveness
 check of its own) could not tell "genuinely idle" from "wedged" and reported
-success regardless. **The gap**: fetching `STDOUT.TXT` back at all requires
-a fresh reboot into NET and a real `VCCHK.BAT` round trip under this
-project's own file-transfer contract (`docs/FILE-TRANSFER.md`) -- and that
-fetch *succeeded*, returning real (if stale) content. If PS/2 were already
+success regardless -- which would make the no-op launch and the hang one
+continuous event. Checked against `FilesCapability._file_pull`'s own
+comment (`daemon/vcctrld.py:9802-9803`): fetching `STDOUT.TXT` back shares
+the identical job slot and reboot-into-NET mechanism as a push ("Both
+directions reboot the machine, so they cannot run at once"), and that
+fetch *succeeded*, returning real (if stale) content. Had PS/2 already been
 in the confirmed-dead state at launch time, that same reboot-into-NET
-should have failed exactly like the next job's did, not succeeded. So
-either PS/2 died **after** the collect step rather than before the launch
-(in which case the no-op launch and the hang are two things, close together
-in time but not yet shown to share a cause), or the collect step doesn't
-work the way this section assumes (unconfirmed -- `run-rig.sh` is the
-`dosags` project's own script, not read as part of this investigation).
-**Not resolved either way; recorded here rather than asserted.**
+would have hit the identical `no-reset` condition the next job did, not
+succeeded. **So PS/2 was still alive through the collect step, and
+whatever killed it happened afterward, before the next job's own reboot
+attempt.** The no-op launch (still unexplained) and the confirmed hang
+(mechanism still not nailed down either) are two separate open questions
+that happened to land close together in time, not one incident.
+
+`sdldos` has since added a `vcctrl verify-input` round trip to `run-rig.sh`
+right after its stability wait and before collecting, so a future case
+where the screen looks settled but the target is not actually responsive
+gets refused rather than silently collecting stale data. That is a
+`dosags`-side harness change, outside this repo, mentioned here only
+because it directly addresses the blind spot named above.
 
 **If this recurs:** `vcctrl_verify_input` is the fast, direct check --
 cheaper and more conclusive than reading LED state or a screenshot alone,
