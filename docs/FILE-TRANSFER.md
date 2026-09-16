@@ -380,8 +380,16 @@ an unwitnessed return keeps `left_in_net` true rather than guessing.
 
 Named because a feature that works is the easiest thing to over-claim.
 
-- **Nothing between 10 MB and the 64 MB refusal.** The ceiling has only been
-  met by a file well past it, never by one just over.
+- ~~Nothing between 10 MB and the 64 MB refusal~~ — **stale as of
+  2026-09-15**: `REFUSE_BYTES` is now 150 MB (raised from 64, commit
+  `3b766a0`), and a real campaign pushed a 44.6–72.8 MB batch into exactly
+  this range the same day. Mixed result, not a clean pass: the 44.6 MB file
+  verified 3 for 3, the 72.8 MB one failed 2 of 3 with a strong (but
+  unconfirmed) explanation and a 239-byte file failed once for no known
+  reason. See `docs/lab/OPEN-FAULTS.md` sec. 26 for the full data — in
+  particular, `TRANSFER_TIMEOUT_S` (a flat 180 s, `daemon/vcctrld.py:8021`)
+  was never scaled to either byte ceiling and is the leading suspect for the
+  large-file failures.
 - **Nothing larger than 2.4 KB has been fetched OFF the card.** The direction
   works and is proved byte-for-byte at that size; the throughput curve above
   was measured on the way out, not back.

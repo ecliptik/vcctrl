@@ -2121,3 +2121,90 @@ on the daemon host for the actual ffmpeg process before assuming the target
 is at fault: this was a capture-pipeline bug with the real machine sitting
 at a normal prompt the entire time, verified only because the second,
 independent camera was still working.
+
+## 26. Two file-transfer failure shapes above 44 MB — ONE HAS A STRONG EXPLANATION, ONE DOES NOT
+
+**2026-09-15**, hours after `REFUSE_BYTES` was raised 64→150 MB (commit
+`3b766a0`, operator-approved for exactly this transfer) so a peer session
+(`sdldos`) could stage a real ~126 MB dosags/AGS payload on `gateway2000`,
+three `send-file` attempts of the same batch each failed with `no-return` on
+a *different* file, none of them a wedge — the daemon detected the
+non-arrival and cleanly aborted every time, confirmed by live capture. Raw
+`vcctrl_file_status` job logs, not a narrated summary:
+
+    ACSETUP.CFG=219B  AGS.EXE=8,186,338B  AUDIO.VOX=44,618,063B
+    CWSDPMI.EXE=21,325B  OPL3BANK.DAT=1,548B  RUN.BAT=239B  SHARDS.AGS=72,782,284B
+
+    S32B1: AUDIO.VOX verified 135.7s into that leg, then SHARDS.AGS never
+           came back — abort at 190.8s elapsed on that file, no-return.
+    S32B2: AUDIO.VOX verified fine (135.7s) again, then RUN.BAT (239 BYTES)
+           never came back — abort at 181.6s elapsed on that file, no-return.
+    S32B3: AUDIO.VOX verified fine again (156.2s), then SHARDS.AGS never
+           came back — abort at 190.8s elapsed, no-return, same shape as S32B1.
+
+AUDIO.VOX (44.6 MB) verified 3 for 3, no retries — the standard push check
+(`FileSendJob._send_one`, `daemon/vcctrld.py`), which is sha256-proved
+end-to-end because the staged copy was hashed before anything moved (see
+`docs/FILE-TRANSFER.md`'s "What the upload path does"). SHARDS.AGS (72.8 MB,
+the single largest file) failed 2 of 3; the one file that failed instead
+of it was a 239-byte batch script, in a run where every other file had
+already gone through cleanly.
+
+**Shape 1 (SHARDS.AGS) has a strong, arithmetic-grounded explanation that
+does NOT require inventing a link reliability cliff.** `VCGET.BAT`
+round-trips the FULL file — a `get` from the daemon host followed by a
+`put` of the target's own copy straight back, inside the one typed command
+(`daemon/vcctrld.py`'s `VCGET_BAT` template) — so the real time budget for
+one file is roughly **twice** its one-direction transfer time, not once.
+That whole round trip is timed against a single FLAT constant,
+`TRANSFER_TIMEOUT_S = 180.0` (`daemon/vcctrld.py:8021`, read via
+`transfer_timeout()`), used by both the fetch leg and `_send_one`'s push
+leg — **it does not scale with file size and was never touched when
+`REFUSE_BYTES` moved, either to 64 MB or to 150 MB today.**
+
+AUDIO.VOX's own measured round trip gives the yardstick: 44.6 MB out and
+back (89.2 MB total) in 135.7–156.2 s is ~558–642 KiB/s aggregate, matching
+`docs/FILE-TRANSFER.md`'s historical ~685 KiB/s figure closely enough to
+trust. SHARDS.AGS's round trip is 145.6 MB total; at the same rates that is
+**~215–255 s** — past the 180 s ceiling every time, by 35–75 s. Both
+SHARDS.AGS aborts landed at 190.8 s elapsed on that file (180.0 s window
+plus ~10.8 s for the `wait_prompt()` tiebreaker that runs only after the
+timeout fires) — identical to the second past four decimal places between
+S32B1 and S32B3, which is the signature of a watchdog firing on schedule,
+not of a stalled link. **Most likely reading: the transfer was still
+healthy and still running when the fixed clock ran out**, and the "abort
+rather than type blind" guard did exactly its job on a false alarm. This is
+an inference from AUDIO.VOX's own rate, not a direct observation of the
+FTP session continuing past 180 s — nobody watched it — so it is filed as
+the leading hypothesis, not a confirmed diagnosis, and **no code has been
+changed here.** A concrete test that would settle it: temporarily pass a
+larger timeout for one retry of SHARDS.AGS alone and see whether it
+verifies past 180 s.
+
+**Shape 2 (RUN.BAT) is NOT explained by the above and is genuinely open.**
+239 bytes round-tripped should take a couple of seconds under any rate seen
+in this data, yet the daemon waited the full window and got nothing back —
+in a run (S32B2) where AUDIO.VOX had verified cleanly moments before it in
+the very same NET session, and where the very next attempt (S32B3) sent
+every small file, including RUN.BAT, without issue. Not explained by "the
+session degrades permanently after a big transfer" either: S32B2's own
+AGS.EXE leg ran at roughly half S32B1's rate, yet AUDIO.VOX right after it
+recovered to S32B1's speed — the noise is per-file, not a one-way ramp.
+**Not diagnosed. Flagged, same reasoning as sec. 24: a real `no-return` on
+a trivial file, sitting in the middle of an otherwise clean run, is a fact
+worth someone reproducing deliberately, not a coincidence to wave off.**
+
+**Deliberately NOT folded into `LARGEST_VERIFIED_BYTES`/`WARN_BYTES`.**
+Those constants document a specific, stronger claim — a matched STOR+RETR
+pair read from the file server's own transfer log (`docs/FILE-TRANSFER.md`,
+"What has actually been measured"). AUDIO.VOX's 3-for-3 push-verify success
+is real and is past that constant's 10 MB, but it is provenance of a
+different shape (job-log timestamps, not the server's own transfer log),
+and rolling it in without that would be exactly the kind of two-things-one-
+word conflation this file's own comments are careful to avoid. Left for
+whoever next revisits that constant with matching server-log evidence in
+hand.
+
+Raw data (job logs, byte counts, sha256s for SHARDS.AGS and AUDIO.VOX)
+supplied by the `sdldos` peer session; `docs/FILE-TRANSFER.md`'s "What has
+NOT been tested" section is updated to match.
