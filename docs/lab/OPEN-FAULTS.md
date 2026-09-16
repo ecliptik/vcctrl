@@ -2208,3 +2208,79 @@ hand.
 Raw data (job logs, byte counts, sha256s for SHARDS.AGS and AUDIO.VOX)
 supplied by the `sdldos` peer session; `docs/FILE-TRANSFER.md`'s "What has
 NOT been tested" section is updated to match.
+
+## 27. A third hard hang matching sec. 23's confirmed signature, mechanism still not nailed down
+
+**2026-09-15**, after sec. 26's fix let a real dosags/AGS push through
+cleanly (SHARDS.AGS's own round trip completed and verified -- confirmed by
+reading the target's own screen), the same real-hardware campaign hit a
+hard hang on `gateway2000` a few jobs later. A peer session (`sdldos`)
+reported `vcctrl_status` reading `capslock:1, scrolllock:1` and a `no-reset`
+("the machine never reset -- Scroll Lock did not clear") on its next reboot
+attempt. **Verified independently before acting, not taken on the report
+alone:** `vcctrl_lock_status`/`vcctrl_activity` showed nothing in flight,
+`vcctrl_verify_input` (a real Caps Lock round trip, not a cached LED read)
+came back `verified: false` -- *"no LED change -- the PS/2 link is not
+carrying keystrokes, whatever the device status says"* -- and a `vcctrl_shot`
+showed the screen sitting on an old, unchanging FTP scrollback. This is the
+**confirmed** signature from sec. 23's 2026-09-03 case (PS/2 fully
+unresponsive), not that section's ambiguous second case (PS/2 alive, video
+frozen). `vcctrl_power(action="cycle")` recovered it completely -- clean
+POST, `verify_input` succeeding again, live video showing a normal boot
+banner (CuteMouse, PicoGUS, MSCDEX) at a bare prompt. Operator approved the
+cycle before it ran, same as sec. 23 and sec. 25's incidents.
+
+**Mechanism NOT confirmed as RDTSC, and there is a real reason to doubt it
+this time.** `dosags` ships `CWSDPMI.EXE` alongside `AGS.EXE`, meaning
+AGS is a DJGPP/CWSDPMI protected-mode client -- and
+[[rdtsc-wedges-under-emm386]] / this section's own sec. 23 entry both record
+protected-mode RDTSC use as *"observed not to hang"* on this rig (doskutsu's
+SDL audio-IRQ timer, every session). If AGS/Allegro does execute RDTSC
+somewhere and this is that bug, it would be the first protected-mode
+counterexample to that observation -- worth someone auditing AGS/Allegro's
+own timing code for real-mode fallback paths rather than assuming DPMI
+protects it. Filed as a third instance of "power cycle is the only known
+recovery, confirmed; mechanism not," same epistemic status as sec. 23's
+second case.
+
+**A separate, NOT resolved question: what actually happened to the game
+launch that preceded the hang.** The job that ran before the hang
+(`S32B5`) fetched back a `STDOUT.TXT` reporting AGS had loaded
+`notes.ags` ("Trilby's Notes") rather than `SHARDS.AGS` -- initially read as
+"the wrong game ran." The raw data does not support that reading cleanly:
+the fetched file's own `Path arg:` field is **empty**, meaning whatever
+process produced it was never invoked with any argument at all, and its
+whole banner format doesn't match any of the session's other real runs
+that day; `C:\DOSAGS` is independently known to still hold `HW1.LOG`/
+`HW7.LOG`/`HW8.LOG`/`HW10.LOG` dated 09-11-26, four days stale. The more
+likely reading is that this `STDOUT.TXT` is *itself* a stale leftover from
+that same 09-11-26 era, and `RUN.BAT` produced no fresh output at all this
+run -- not that AGS opened the wrong file.
+
+**Whether that no-op launch and the confirmed hang are one incident is
+open, not settled, and there is a real tension against collapsing them.**
+`sdldos`'s own theory: PS/2 was already dead before the launch's own typed
+`CD`/`RUN.BAT`/Enter sequence, so none of it reached the target, and the
+harness's `wait_for_stable_screen` (screen-diff only, no input-liveness
+check of its own) could not tell "genuinely idle" from "wedged" and reported
+success regardless. **The gap**: fetching `STDOUT.TXT` back at all requires
+a fresh reboot into NET and a real `VCCHK.BAT` round trip under this
+project's own file-transfer contract (`docs/FILE-TRANSFER.md`) -- and that
+fetch *succeeded*, returning real (if stale) content. If PS/2 were already
+in the confirmed-dead state at launch time, that same reboot-into-NET
+should have failed exactly like the next job's did, not succeeded. So
+either PS/2 died **after** the collect step rather than before the launch
+(in which case the no-op launch and the hang are two things, close together
+in time but not yet shown to share a cause), or the collect step doesn't
+work the way this section assumes (unconfirmed -- `run-rig.sh` is the
+`dosags` project's own script, not read as part of this investigation).
+**Not resolved either way; recorded here rather than asserted.**
+
+**If this recurs:** `vcctrl_verify_input` is the fast, direct check --
+cheaper and more conclusive than reading LED state or a screenshot alone,
+and what actually caught this one. Consider whether a driving harness's own
+post-launch stability wait should include an input-liveness check rather
+than relying on screen content alone; that is a property of whatever
+harness is driving (here, `dosags`'s `run-rig.sh`, outside this repo), not
+of `vcctrl` itself, which already exposes the check needed
+(`vcctrl_verify_input`).
