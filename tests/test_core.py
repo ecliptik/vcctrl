@@ -10355,7 +10355,7 @@ class FakeTarget(object):
     def menu_attempts(self):
         return 2
 
-    def transfer_timeout(self):
+    def transfer_timeout(self, bytes_one_way=None, round_trip=False):
         return 6.0
 
     def wait_menu(self, timeout=None):
@@ -10580,6 +10580,48 @@ def test_menu_attempts_is_capped_to_the_shared_safe_budget():
           d.menu_attempts() == d.MENU_MAX_ATTEMPTS, d.menu_attempts())
     check("well under the naive window/2.0 count of 7",
           d.menu_attempts() < 7, d.menu_attempts())
+
+
+def test_transfer_timeout_scales_with_size_once_known():
+    """docs/lab/OPEN-FAULTS.md sec. 26: a flat 180 s window undercounts a
+    push's round trip once the file is big enough, and REFUSE_BYTES being
+    raised is what let one through big enough to hit it.
+
+    No size passed in still floors at the proven 180 s -- the proof file and
+    the directory listing never pass one, and neither should regress to a
+    scaled value neither has ever needed.
+    """
+    d = vcctrld.RegistryDriver(None)
+    MB = 1024 * 1024
+
+    check("no size at all floors at the proven constant",
+          d.transfer_timeout() == d.TRANSFER_TIMEOUT_S, d.transfer_timeout())
+    check("a zero size is the same as no size -- not a divide by it",
+          d.transfer_timeout(0) == d.TRANSFER_TIMEOUT_S, d.transfer_timeout(0))
+    check("a small one-way size still floors at the proven constant",
+          d.transfer_timeout(13 * 1024) == d.TRANSFER_TIMEOUT_S,
+          d.transfer_timeout(13 * 1024))
+
+    # SHARDS.AGS, sec. 26 -- 72,782,284 B, pushed (so doubled: VCGET.BAT gets
+    # the file and then puts the same bytes straight back). Both real
+    # aborts landed at ~190.8 s having gotten nothing in 180 s; this must
+    # clear that comfortably.
+    shards = d.transfer_timeout(72782284, round_trip=True)
+    check("a real push past the old ceiling scales past the flat window",
+          shards > d.TRANSFER_TIMEOUT_S, shards)
+    check("and clears what actually aborted at ~190.8 s twice",
+          shards > 220, shards)
+
+    check("round_trip doubles the bytes actually on the wire",
+          d.transfer_timeout(10 * MB, round_trip=True)
+          == d.transfer_timeout(20 * MB, round_trip=False),
+          (d.transfer_timeout(10 * MB, round_trip=True),
+           d.transfer_timeout(20 * MB, round_trip=False)))
+
+    big = d.transfer_timeout(140 * MB)
+    small = d.transfer_timeout(14 * MB)
+    check("scaling is monotonic in size, not a step function",
+          big > small, (big, small))
 
 
 class _NeverBootsTarget(FakeTarget):

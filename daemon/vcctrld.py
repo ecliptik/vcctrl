@@ -8018,7 +8018,27 @@ class RegistryDriver(object):
     # the failure of waiting too little is a second chord landing mid-boot.
     MENU_TIMEOUT_S = 100.0
     PROMPT_TIMEOUT_S = 120.0
+    # THE FLOOR, NOT A DEFAULT FOR EVERY SIZE. 180 s has real evidence behind
+    # it at the sizes the proof file and the directory listing actually are
+    # -- both always small and neither passes a size into transfer_timeout()
+    # below, so both still get exactly this. It stopped being enough once
+    # REFUSE_BYTES allowed a file whose PUSH -- which round-trips the whole
+    # thing via VCGET.BAT, get then put the same bytes straight back -- no
+    # longer fits in 180 s of real transfer time. See
+    # docs/lab/OPEN-FAULTS.md sec. 26.
     TRANSFER_TIMEOUT_S = 180.0
+    # THE RATE FLOOR, FROM THE WORST ROUND TRIP ACTUALLY MEASURED: sec. 26's
+    # S32B3 sent AUDIO.VOX (44,618,063 B) out and back in 156.223 s, ~571
+    # KiB/s aggregate. This sits ~30% below that observed floor, the same
+    # discipline LARGEST_VERIFIED_BYTES/WARN_BYTES already apply elsewhere in
+    # this file -- cite the worst evidence actually seen, padded down, not a
+    # number that feels safe.
+    TRANSFER_RATE_FLOOR_BPS = 400 * 1024
+    # A PUSH RUNS TWO SEPARATE FTP.EXE SESSIONS INSIDE ONE VCGET.BAT (get,
+    # then put), each paying its own login/cd/quit cost --
+    # docs/FILE-TRANSFER.md measured ~5 s of session setup per FTP session at
+    # small sizes. Doubled for two sessions, then padded for margin.
+    TRANSFER_SETUP_OVERHEAD_S = 20.0
     LED_POLL_S = 0.5
     # ONE resend, not a loop of short ones -- see NetJob._reboot_edge. The
     # 2026-08-26 evidence above points at DELAY, not loss, so eagerly
@@ -8164,8 +8184,29 @@ class RegistryDriver(object):
         # relied on to keep the real count below that; see MENU_MAX_ATTEMPTS.
         return min(self.MENU_MAX_ATTEMPTS, max(2, int(window / 2.0)))
 
-    def transfer_timeout(self):
-        return self.TRANSFER_TIMEOUT_S
+    def transfer_timeout(self, bytes_one_way=None, round_trip=False):
+        """How long one typed transfer command is given before "no-return".
+
+        FLOORS AT TRANSFER_TIMEOUT_S WHEN SIZE IS UNKNOWN OR ZERO -- the
+        proof file and the directory listing call this with nothing at all,
+        because what they wait for is always small and that floor already
+        has real evidence behind it at that size (see its own comment).
+        SCALES WHEN A CALLER KNOWS THE SIZE, because a fixed window sized for
+        a small file is not honest about a large one -- that gap, exposed
+        only once REFUSE_BYTES let a file through big enough to hit it, is
+        docs/lab/OPEN-FAULTS.md sec. 26.
+
+        `round_trip=True` doubles the bytes actually on the wire, because
+        that is what a push's VCGET.BAT does -- get the file, then put the
+        same bytes straight back -- and a timeout sized for one direction on
+        a two-direction wait undercounts by exactly half.
+        """
+        if not bytes_one_way:
+            return self.TRANSFER_TIMEOUT_S
+        total = bytes_one_way * (2 if round_trip else 1)
+        scaled = (total / self.TRANSFER_RATE_FLOOR_BPS
+                  + self.TRANSFER_SETUP_OVERHEAD_S)
+        return max(self.TRANSFER_TIMEOUT_S, scaled)
 
     # -- the LED return channel -----------------------------------------------
 
@@ -8926,7 +8967,9 @@ class TransferJob(NetJob):
         before = time.time()
         self.d.type_line("C:\\MTCP\\VCGET.BAT %s %s" % (name, self.dest))
         if not self.cap._await_incoming(back, before,
-                                        self.d.transfer_timeout()):
+                                        self.d.transfer_timeout(
+                                            rec.get("bytes"),
+                                            round_trip=True)):
             # NOTHING CAME BACK, AND THAT IS TWO DIFFERENT FACTS: the
             # transfer failed, or the machine is wedged. Only the second one
             # means the next file would be typed into the dark.
@@ -9255,7 +9298,7 @@ class PullJob(NetJob):
         src = self.out_dir.rstrip("\\") + "\\" + name
         self._say("fetch", "fetching %s (%d bytes)" % (name, want), name=name)
 
-        path, why = self._leg(src, name)
+        path, why = self._leg(src, name, bytes_one_way=want)
         if why:
             return {"name": name, "ok": False, "why": why, "bytes": want,
                     "reason": ("%s did not come back, so whether it left the "
@@ -9275,7 +9318,7 @@ class PullJob(NetJob):
         sha = self.cap._sha_of(path)
         verified = "size"
         if self.paranoid:
-            second, why2 = self._leg(src, name + ".CH2")
+            second, why2 = self._leg(src, name + ".CH2", bytes_one_way=want)
             if why2:
                 self.cap._drop_incoming(path)
                 return {"name": name, "ok": False, "why": why2, "bytes": want,
@@ -9303,7 +9346,7 @@ class PullJob(NetJob):
                 "sha256": sha, "verified": verified, "path": dest,
                 "source": src}
 
-    def _leg(self, src, server_name):
+    def _leg(self, src, server_name, bytes_one_way=None):
         """Type one VCCHK and wait for the bytes. (path, None) or (None, why).
 
         The readiness probe is used HERE and nowhere else -- as a tiebreaker
@@ -9311,11 +9354,15 @@ class PullJob(NetJob):
         path. It tests whether the BIOS keyboard ISR is alive, not whether DOS
         is reading, which is worth having only when the alternative is
         guessing between "the transfer failed" and "the machine is wedged".
+
+        ONE DIRECTION, NOT A ROUND TRIP -- VCCHK.BAT only ever sends `src`
+        back; it never fetches anything first the way a push's VCGET.BAT
+        does. `bytes_one_way` is passed straight through with no doubling.
         """
         before = time.time()
         self.d.type_line("C:\\MTCP\\VCCHK.BAT %s %s" % (src, server_name))
         if not self.cap._await_incoming(server_name, before,
-                                        self.d.transfer_timeout()):
+                                        self.d.transfer_timeout(bytes_one_way)):
             return None, ("no-return" if self.d.wait_prompt() else "no-prompt")
         path = self.cap._incoming_path(server_name)
         return (path, None) if path else (None, "no-return")
