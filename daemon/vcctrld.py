@@ -7272,7 +7272,13 @@ LARGEST_VERIFIED_BYTES = 10 * 1024 * 1024
 # warning. Tying them together means the threshold cannot drift away from the
 # evidence for it.
 WARN_BYTES = LARGEST_VERIFIED_BYTES
-REFUSE_BYTES = 64 * 1024 * 1024
+# Raised 64 -> 150 MB 2026-09-15, operator-approved, for a real dosags AGS
+# campaign staging SHARDS.AGS (72.8 MB) + AUDIO.VOX (44.6 MB) together (see
+# sdldos peer session). The no-safe-interrupt risk this ceiling names is
+# unchanged and was accepted explicitly for that transfer, not waived
+# generally -- a future push past 150 MB needs its own sign-off, not just
+# headroom under this one.
+REFUSE_BYTES = 150 * 1024 * 1024
 
 
 def dos_filename(name):

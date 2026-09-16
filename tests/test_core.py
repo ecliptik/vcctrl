@@ -9282,19 +9282,22 @@ def test_size_verdict_has_three_answers_not_two():
           str(vcctrld.LARGEST_VERIFIED_BYTES // MB) in r["reason"]
           and "7.8" not in r["reason"], r["reason"])
 
-    r = v([80 * MB])
-    check("past 64 MB it refuses", (r["ok"], r["why"]) == (False, "too-large"),
-          r)
+    r = v([vcctrld.REFUSE_BYTES + MB])
+    check("past the ceiling it refuses",
+          (r["ok"], r["why"]) == (False, "too-large"), r)
     check("the refusal explains that a transfer cannot be interrupted",
           "interrupted" in r["reason"], r["reason"])
 
-    # THE CEILING IS ON THE QUEUE TOO. Without this, three 30 MB files walk
-    # past a 64 MB refusal one at a time and the machine spends half an hour
-    # in a state nothing can cancel.
-    r = v([30 * MB, 30 * MB, 30 * MB])
+    # THE CEILING IS ON THE QUEUE TOO. Without this, several files each under
+    # the ceiling walk past a refusal one at a time and the machine spends
+    # however long that takes in a state nothing can cancel. Derived from
+    # REFUSE_BYTES rather than a fixed MB figure so raising the ceiling (see
+    # its own comment) cannot leave this test asserting a stale number.
+    each = vcctrld.REFUSE_BYTES // 3 + MB
+    r = v([each, each, each])
     check("a queue is judged on its total, not per file",
           (r["ok"], r["why"]) == (False, "too-large"), r)
-    check("the total is reported", r["total"] == 90 * MB, r["total"])
+    check("the total is reported", r["total"] == each * 3, r["total"])
 
     r = v([])
     check("an empty queue is not a pass on nothing",
