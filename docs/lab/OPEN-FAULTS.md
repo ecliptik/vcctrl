@@ -2283,6 +2283,34 @@ gets refused rather than silently collecting stale data. That is a
 `dosags`-side harness change, outside this repo, mentioned here only
 because it directly addresses the blind spot named above.
 
+**Addendum, same day: `verify_input`'s OWN false-negative, found by the
+same harness change immediately paying rent.** The retry (`S32B7`) first
+reported "input verification failed" -- a real bug in the new check itself
+(a missing `--as` argument collided with `run-rig.sh`'s own held lock, not
+a hardware fault), fixed on the `dosags` side. With the lock genuinely
+released, `verify_input` **still** read `verified: false` on a machine
+that was demonstrably alive: ~30 minutes of screenshots showed Shards of
+God's own title screen genuinely animating, mouse cursor sprite included.
+Reasoned root cause, not yet independently confirmed: AGS/Allegro likely
+hooks the keyboard IRQ directly for its own input polling and does not
+chain through to the BIOS's default handler, which is what actually
+toggles the Caps Lock LED -- so the LED round trip has nothing to observe
+while a program like this holds the keyboard, regardless of how alive the
+machine is. **This does NOT retroactively cast doubt on this section's own
+earlier power-cycle** -- that diagnosis had independent corroboration a
+foreground game cannot fake (a *reboot attempt's* Scroll Lock refusing to
+clear, which is BIOS/POST-level, before any DOS program has loaded) and a
+static, unchanging screen rather than a visibly live one. The two
+incidents together are the actual lesson: `verified: false` means "the
+BIOS's own keyboard ISR did not toggle the LED," full stop -- reading it as
+"the machine is dead" is only safe back at a plain prompt, and needs a
+second, foreground-independent signal (screen content actually changing,
+or Scroll Lock's behavior during a real reboot attempt) whenever something
+else might be holding the keyboard. Documented directly in
+`LedsCapability._verify_input`'s own docstring (`daemon/vcctrld.py`), so
+this is visible from the tool itself and not only from this incident
+record.
+
 **If this recurs:** `vcctrl_verify_input` is the fast, direct check --
 cheaper and more conclusive than reading LED state or a screenshot alone,
 and what actually caught this one. Consider whether a driving harness's own

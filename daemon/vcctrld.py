@@ -3066,6 +3066,26 @@ class LedsCapability(Capability):
         happen with the lead out. It proves the LINK, not that DOS read
         anything -- Caps Lock is BIOS-serviced, and conflating those is a
         separate mistake this rig has already paid for.
+
+        THE FAILURE DIRECTION HAS ITS OWN FALSE ALARM, AND IT IS THE MIRROR
+        OF THE ONE ABOVE. `verified: False` was read as proof of a hard hang
+        on 2026-09-15 (docs/lab/OPEN-FAULTS.md sec. 27) and led to a real
+        `vcctrl_power(action="cycle")` -- correctly, that time, corroborated
+        independently by a stuck Scroll Lock during a later reboot ATTEMPT
+        (a BIOS/POST-level signal no foreground DOS program can touch). But
+        the same session later found `verified: False` on a machine that was
+        genuinely alive and running a real game (Shards of God's title
+        screen, visibly animating, minutes on end) -- because a DOS program
+        that hooks the keyboard IRQ directly for its own low-latency input
+        (routine for games) need not chain through to the BIOS's own
+        Caps-Lock-LED bookkeeping. **A `False` here means "the BIOS's own
+        keyboard ISR did not toggle the LED," which is only the same fact
+        as "the machine is dead" back at a plain COMMAND.COM prompt.** With
+        something else running in the foreground, corroborate with a change
+        in screen content (a `vcctrl_shot`/`vcctrl_burst` showing real,
+        moving output is proof of life this check cannot give you) or with a
+        POST-level signal like Scroll Lock's behavior during an actual
+        reboot attempt, before treating a `False` as a hang.
         """
         # REFUSE rather than run on a board with no return channel. On ADB
         # this would toggle Caps Lock, wait 1.5 s for an LED that cannot
