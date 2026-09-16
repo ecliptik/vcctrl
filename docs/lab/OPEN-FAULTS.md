@@ -2349,3 +2349,50 @@ than relying on screen content alone; that is a property of whatever
 harness is driving (here, `dosags`'s `run-rig.sh`, outside this repo), not
 of `vcctrl` itself, which already exposes the check needed
 (`vcctrl_verify_input`).
+
+## 28. `vcctrl_shot` returned the identical frame for 50+ seconds while the ring was fresh — OPEN, NOT DIAGNOSED
+
+**2026-09-15**, unrelated to this session's other incidents: `sdldos`
+(after the sec. 27 power-cycle, during the retry) reported `vcctrl_shot`
+returning the **identical** frame -- same `t`, same byte count -- across 4+
+consecutive calls spanning ~50 seconds, while `vcctrl_video_state` showed
+`last_frame_age_s: 0.023` the whole time (the raw feed was actively
+receiving new frames, not stalled). Cross-checked independently with
+`vcctrl_camera_shot` (the second, physical webcam, entirely out-of-band
+from the primary capture pipeline -- see the `vcctrl-camera` skill): the
+real monitor showed genuinely current content (`CD C:\DOSAGS`,
+`ECHO HELLO123` echoing `HELLO123`), matching keystrokes typed during
+that exact window. **The target and the raw capture were both fine; only
+`_shot`'s own frame *selection* was stuck.**
+
+Read against `VideoCapability._shot`/`_recent`/`_select`
+(`daemon/vcctrld.py`), this does not look like expected behavior of a
+large ring: `TARGET_SPAN_S` defaults to 30 s, but `_recent(n)` (default
+`n=16`) takes `list(self.ring)[-16:]` -- the 16 **most recently inserted**
+frames, roughly half a second of real time at a healthy 30 fps rate, not
+a sample across the whole 30 s span. With `last_frame_age_s` confirming
+continuous fresh insertion, `_select`'s input window should have been
+made entirely of new frames on every one of the 4+ calls, and its
+duplicate-hash rejection (`self.ANALOG` branch) is specifically justified
+by this rig's own measurement that a static analog picture still produces
+zero repeated hashes at 30 fps (this method's own docstring, citing
+2026-08-19). None of that explains a `best` frame whose `t` does not
+advance for 50 real seconds. **Not diagnosed** -- no live reproduction was
+attempted here (the incident had passed by the time this was written up),
+so this is a precise description of the symptom and a note that the
+obvious explanations (a slow ring, expected duplicate-hash behavior) do
+not fit the evidence, not a confirmed mechanism.
+
+**Workaround, already in use**: `vcctrl_camera_shot` is unaffected (a
+separate capture pipeline entirely) and is what caught this live. Prefer
+it, or a `vcctrl_burst` fresh read, over trusting a single `vcctrl_shot`
+during any stretch where the picture matters and the target is suspected
+unhealthy -- consistent with this skill's existing guidance that `shot()`
+can lag a fast-changing screen ([[headless-screenshots-miss-canvas]]-
+adjacent, though this is a different and more severe symptom than the
+previously-documented 12.85 s lag). **If this recurs**: capture the actual
+`out` filenames/bytes across repeated calls (to rule out an MCP-client-
+side cache rather than the daemon's own selection) and, if reproducible
+live, add temporary logging to `_select` to see whether `items` genuinely
+differs between calls or whether the ring itself is not advancing the way
+`last_frame_age_s` claims.
