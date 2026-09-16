@@ -2311,6 +2311,36 @@ else might be holding the keyboard. Documented directly in
 this is visible from the tool itself and not only from this incident
 record.
 
+**Second addendum, same session: the "just slow" title screen turned out
+to be a genuine hang, and this one is suspected NOT to be a rig/tooling
+issue at all.** `verify_input` on the same still-visible title screen read
+`verified: false` again -- independently confirmed here, and, per the
+addendum above, uninformative on its own while AGS holds the keyboard.
+What actually established a real hang: `sdldos` sent two `mouse-move`
+commands 45 s apart and the cursor did not move between them, and the
+mean brightness across four screenshots spanning ~15 minutes was flat at
+37.46-37.49 (noise-level variance). **That is a content-level check, not
+an LED one, and the foreground-game caveat above does not apply to it.**
+Critically, brightness had climbed steadily for the first ~20 minutes
+before that (3.1 to 37.5) -- real rendering progress, not a hang from the
+start -- so whatever happened, happened only after a substantial period of
+demonstrably correct operation.
+
+`sdldos`'s own read, **not this repo's finding to own**: this is the first
+sustained real-hardware exercise of `patches/ags/0075` (a native 32-bit
+display path) in the `dosags` project, and a hang appearing only after 20
+minutes of correct rendering at that depth is consistent with a real
+correctness bug in that new code (a VESA bank-switch edge case, a
+framebuffer-size issue, or similar) rather than with this rig's own known
+hazard classes above -- there is no evidence tying it to RDTSC/EMM386 or
+to the reboot-detection mechanism sec. 23-27 are otherwise about. Recorded
+here only because it happened on this rig and because it usefully
+narrows what "the machine looks dead after AGS has been running a while"
+should make a future session suspect first; the actual bug investigation
+belongs to and is being pursued by the `dosags` project and its operator,
+not tracked further in this file. Machine was left as-is (not
+power-cycled) at the time of writing, pending that decision.
+
 **If this recurs:** `vcctrl_verify_input` is the fast, direct check --
 cheaper and more conclusive than reading LED state or a screenshot alone,
 and what actually caught this one. Consider whether a driving harness's own
