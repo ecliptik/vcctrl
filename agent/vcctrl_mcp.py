@@ -1269,18 +1269,30 @@ def vcctrl_power(action: str, confirm: "str | None" = None,
         return {"ok": False,
                 "error": ("power actions require confirm to equal the "
                           "action name -- pass confirm=%r to send this" % action)}
-    refusal = LOCK.ensure()
-    if refusal is not None:
-        return refusal
-    LOCK.touch()
     args = ["power", action]
     if action == "cycle" and off_seconds is not None:
         args.append(off_seconds)
+    # Through _gated_run, NOT a hand-rolled ensure()+_run_vcctrl: until
+    # 2026-09-19 this took the lock itself and never released it, so a power
+    # action left the hardware lock held for the full idle window
+    # (LockManager.IDLE_TIMEOUT_S) with nothing in flight -- long enough for
+    # a recovery guard that needed to power-cycle to be refused by it, which
+    # read as a send-file failure rather than a lock problem. _gated_run's
+    # `finally` is the only release path there is; a tool that skips the
+    # wrapper skips the release. The daemon side only ever CHECKS the lock on
+    # a power action (Arbiter.check), never takes it -- so nothing else was
+    # going to clean this up.
+    #
+    # profile="default" pins the PRIMARY explicitly: this tool has no
+    # `profile` parameter and always spoke to the primary, and _gated_run's
+    # own None would resolve through vcctrl_profile_set's session default --
+    # a mains action must not follow that to a different target's daemon.
+    #
     # cycle blocks for the full off_seconds itself (PowerCapability's own
     # docstring: "touches no device and holds no lock ... `cycle` blocks for
     # 15s") -- give it real headroom rather than the 60s default.
-    return _run_vcctrl(args + ["--as", OWNER],
-                       timeout=(off_seconds or 20.0) + 30.0)
+    return _gated_run(args, profile="default",
+                      timeout=(off_seconds or 20.0) + 30.0)
 
 
 # ---- Phase 4: file transfer -------------------------------------------

@@ -415,6 +415,96 @@ def test_sticky_lock_survives_across_gated_calls_until_released():
           and calls[-1][:2] == ["lock", "release"], calls)
 
 
+def test_vcctrl_power_releases_the_lock_it_took():
+    """2026-09-19 (reported by the sdldos peer on a dosags 40/40 cell): a
+    worker's vcctrl_power left the hardware lock held for the full 300 s
+    idle window with `inflight: []` the whole time, and the recovery guard
+    that needed to power-cycle was refused by it -- surfacing as a send-file
+    verification failure, not a lock problem. vcctrl_power called
+    LOCK.ensure() itself but bypassed _gated_run, so the `finally` that
+    releases the lock unless it is sticky never ran for it. Same class as
+    the 2026-08-31 bug _gated_run's docstring describes; that fix covered
+    every tool routed through _gated_run and missed the one that took the
+    lock by hand.
+    """
+    print("\nvcctrl_power releases the lock it took, like every gated tool")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER)
+
+    for action in ("on", "off", "cycle"):
+        calls.clear()
+        r = mod.vcctrl_power(action, confirm=action)
+        check("power %s ran" % action, r.get("ok") is True, r)
+        power_calls = [c for c in calls if c[:1] == ["power"]]
+        check("power %s carried --as OWNER (the daemon compares it)" % action,
+              len(power_calls) == 1 and power_calls[0][-2:] == ["--as", mod.OWNER],
+              calls)
+        check("power %s took the lock BEFORE acting" % action,
+              calls[0][:2] == ["lock", "acquire"], calls)
+        check("power %s released it AFTER, as the last call made" % action,
+              calls[-1][:2] == ["lock", "release"], calls)
+
+
+def test_vcctrl_power_does_not_release_a_sticky_hold():
+    """CONTROL for the test above: a caller who deliberately holds the lock
+    with vcctrl_lock_acquire keeps it across a power action, exactly as it
+    does across vcctrl_key. Without this the test above would pass on a
+    vcctrl_power that released unconditionally and broke sticky holds."""
+    print("\nvcctrl_power leaves a deliberate sticky hold alone")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER)
+
+    mod.vcctrl_lock_acquire()
+    calls.clear()
+    r = mod.vcctrl_power("on", confirm="on")
+    check("power on ran under the sticky hold", r.get("ok") is True, r)
+    check("and neither re-acquired nor released",
+          not any(c[:2] in (["lock", "acquire"], ["lock", "release"])
+                  for c in calls), calls)
+
+
+def test_vcctrl_power_refused_by_a_held_lock_never_reaches_the_plug():
+    """CONTROL: when someone else holds the lock, the daemon's own refusal is
+    returned as-is and the plug is not touched -- routing power through
+    _gated_run must not have turned a refusal into an attempt."""
+    print("\na refused vcctrl_power returns the refusal and sends no power call")
+    mod = _load_agent(role="control")
+    calls = []
+
+    def fake(args, timeout=60.0):
+        calls.append(list(args))
+        if args[:2] == ["lock", "acquire"]:
+            return {"ok": False, "error": "input locked by 'operator' since 1",
+                    "locked_by": "operator"}
+        return {"ok": True}
+    mod._run_vcctrl = fake
+
+    r = mod.vcctrl_power("cycle", confirm="cycle")
+    check("refusal is the daemon's own", r.get("locked_by") == "operator", r)
+    check("no power command was sent",
+          not any(c[:1] == ["power"] for c in calls), calls)
+    check("and nothing was released that we never held",
+          not any(c[:2] == ["lock", "release"] for c in calls), calls)
+
+
+def test_vcctrl_power_stays_on_the_primary_whatever_the_session_default():
+    """vcctrl_power has no `profile` parameter and always spoke to the
+    primary instance. Routing it through _gated_run must not let a
+    vcctrl_profile_set session default redirect a MAINS action to a different
+    target's daemon."""
+    print("\nvcctrl_power ignores the session's default profile")
+    mod = _load_agent(role="control")
+    calls = []
+    mod._run_vcctrl = _fake_vcctrl_for_lock(calls, mod.OWNER)
+    mod._CURRENT_PROFILE = "someotherprofile"
+
+    mod.vcctrl_power("on", confirm="on")
+    check("no --profile flag on any call made",
+          not any("--profile" in c for c in calls), calls)
+
+
 def test_lock_acquire_refuses_while_a_harness_job_is_running():
     """A sticky hold taken while THIS SESSION's own run_cell/run_sweep/
     collect job is still in flight is the dangerous pattern: that job's own
@@ -489,6 +579,10 @@ if __name__ == "__main__":
     test_burst_logging_failure_does_not_break_the_call()
     test_gated_run_releases_the_lock_after_one_action_by_default()
     test_sticky_lock_survives_across_gated_calls_until_released()
+    test_vcctrl_power_releases_the_lock_it_took()
+    test_vcctrl_power_does_not_release_a_sticky_hold()
+    test_vcctrl_power_refused_by_a_held_lock_never_reaches_the_plug()
+    test_vcctrl_power_stays_on_the_primary_whatever_the_session_default()
     test_lock_acquire_refuses_while_a_harness_job_is_running()
     test_lock_acquire_refuses_while_a_file_transfer_job_is_running()
     test_lock_acquire_succeeds_when_nothing_is_running()
