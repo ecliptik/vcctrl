@@ -14217,3 +14217,66 @@ def test_devices_survives_a_hid_gadget_that_is_not_attached_yet():
         else:
             os.environ["VCCTRL_CONFIG"] = old
         os.unlink(p)
+
+
+def test_send_dest_normalises_and_validates():
+    """Regression: a root destination timed out instead of transferring.
+
+    dosags, 2026-09-21. `send_file(dest="C:\\")` aborted twice, 181.5 s each
+    and 0.0 s apart, on a 1,349-byte file. VCGET.BAT composes its paths as
+    `%VGD%\\%VGF%` -- the separator is a literal in the BAT -- so a dest that
+    already ends in one doubles it:
+
+        C:\\FSTEST  ->  get NAME C:\\FSTEST\\NAME   worked all night
+        C:\\        ->  get NAME C:\\\\NAME          malformed
+
+    The malformed get failed, nothing landed, the return leg had nothing to
+    put back, and TRANSFER_TIMEOUT_S = 180.0 fired. The failure was on the
+    RETURN leg, which is why it looked like a transfer stall rather than a
+    path bug.
+
+    Two things are asserted here: that a root normalises to the bare drive,
+    which composes correctly for both users of %VGD%; and that a destination
+    which cannot work is REFUSED rather than discovered by timeout -- the
+    send path had no validator at all, while the listing path has had one
+    since forever.
+    """
+    import re as _re
+    src = open(os.path.join(HERE, os.pardir, "daemon", "vcctrld.py")).read()
+    ns = {"re": _re}
+    for name in ("_DOS_DEVICES", "_DOS_ILLEGAL"):
+        i = src.index("\n%s" % name) + 1
+        j = i
+        while True:
+            nl = src.index("\n", j) + 1
+            chunk = src[i:nl]
+            depth = (chunk.count("(") - chunk.count(")")
+                     + chunk.count("[") - chunk.count("]")
+                     + chunk.count("{") - chunk.count("}"))
+            if depth <= 0 and chunk.strip():
+                break
+            j = nl
+        exec(src[i:nl], ns)
+    m = _re.search(r"def _send_dest\(raw\):.*?\n(?=\S)", src, _re.S)
+    assert m, "_send_dest is gone -- the root-destination fix was removed"
+    exec(m.group(0), ns)
+    f = ns["_send_dest"]
+
+    # the bug, and the shapes around it
+    assert f("C:\\") == "C:"
+    assert f("c:\\") == "C:"
+    assert f("C:") == "C:"
+    assert f("D:\\") == "D:"
+    # unchanged for every destination that already worked
+    assert f("C:\\FSTEST") == "C:\\FSTEST"
+    assert f("C:\\DOSAGS\\") == "C:\\DOSAGS"
+    assert f("C:\\A\\B") == "C:\\A\\B"
+
+    # a dest that cannot work fails NOW, not in 180 seconds
+    for bad in ("FSTEST", "C:\\..\\X", "C:\\NUL", "C:\\TOOLONGNAME", "C:\\A*B"):
+        try:
+            f(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("%r was accepted; it would time out" % bad)

@@ -3086,6 +3086,34 @@ class LedsCapability(Capability):
         moving output is proof of life this check cannot give you) or with a
         POST-level signal like Scroll Lock's behavior during an actual
         reboot attempt, before treating a `False` as a hang.
+
+        THIS PROBE IS NOT A SAFE NO-OP AGAINST THAT SAME FOREGROUND PROGRAM.
+        A peer session (`sdldos`/`dosags`, 2026-09-16, commits 5f86091 and
+        1f9790d in that repo -- independently verified here before writing
+        this) traced WHY the round trip never completes against a running
+        SDL3-DOS game: `SDL_dosevents.c`'s `DOSVESA_InitKeyboard()` replaces
+        the BIOS IRQ-1 handler outright for the whole life of the process,
+        so there is no version of this call that can succeed while such a
+        program owns the keyboard -- healthy or hung read identically, by
+        construction, not by bad luck. That much only makes the `False`
+        uninformative. The costlier finding is that the Scroll-Lock keypress
+        this probe sends is not swallowed just because the BIOS never echoes
+        it back: it still reaches the running program's own raw-scancode
+        handler as a real keystroke. Two REFUSED reboot-chord attempts
+        against a still-running game were immediately followed, in that
+        game's own log, by four `on_key_press` events and an unexplained
+        "Quitting the game..." with no completion record -- a call that
+        REPORTED as refused, changing nothing by its own account, ended a
+        legitimately-running program anyway. Do not call this as a liveness
+        poll against a target that may have a foreground program holding the
+        keyboard directly (any SDL3-DOS title among them, likely others) --
+        it can end that program's run as a side effect of asking. Reach for
+        a channel that injects nothing instead: a screen-content check
+        (`vcctrl_shot`/`vcctrl_burst`), the camera (`vcctrl_camera_shot`,
+        genuinely out-of-band), or `vcctrl_video_state`. This probe is still
+        the right tool for "no program is running, is the link alive at
+        all" -- that is the case it was built for and where it costs
+        nothing to ask.
         """
         # REFUSE rather than run on a board with no return channel. On ADB
         # this would toggle Caps Lock, wait 1.5 s for an LED that cannot
@@ -7272,6 +7300,73 @@ _DOS_ILLEGAL = set('"*+,/:;<=>?[]|\\ ') | set(chr(c) for c in range(0, 32))
 # the server's incoming/. IN and OUT are deliberately terse so nobody reads
 # them as matching the server's names.
 DEFAULT_DEST = "C:\\XFER\\IN"
+
+
+def _send_dest(raw):
+    """Normalise a push destination for VCGET.BAT's path composition.
+
+    VCGET.BAT builds paths as `%VGD%\\%VGF%` -- the separator is a literal in
+    the BAT, so a dest that ALREADY ends in one doubles it. Only a drive root
+    does:
+
+        C:\\FSTEST  ->  get NAME C:\\FSTEST\\NAME     correct
+        C:\\        ->  get NAME C:\\\\NAME            malformed
+
+    The malformed get fails, nothing lands, the return leg has nothing to put
+    back, and the caller learns about it 180 seconds later when
+    TRANSFER_TIMEOUT_S fires. Measured twice on dosags 2026-09-21, 181.5 s
+    apart by 0.0 s, on a 1,349-byte file; every other send that night used a
+    subdirectory and worked.
+
+    Dropping the trailing backslash to the bare drive fixes both users of
+    %VGD% at once:
+
+        %VGD%\\%VGF%  ->  C:\\NAME   correct
+        %VGD%\\NUL    ->  C:\\NUL    always exists, so the MD is skipped
+
+    `C:` is the DOS-correct spelling of "the root of C:" in a path context,
+    and pure BAT on 6.22 has no substring operations, so normalising here
+    rather than target-side is both cleaner and total.
+
+    IT ALSO VALIDATES, because the send path did not. The listing path has
+    had a validator since forever (see the "refusing the root" branch), but
+    nothing checked a PUSH destination -- so a dest that could not work was
+    discovered by a 180-second timeout rather than refused before anything
+    was typed. Two attempts, six minutes and two boot cycles went into
+    learning what this raises instantly.
+
+    It deliberately does NOT refuse the root the way the listing validator
+    does. Listing a root means fetching everything under it, which nobody
+    should reach by accident; WRITING one named file to it is an ordinary
+    request, and the only reason it failed was the composition bug above.
+
+    BOUNDARY: this covers the destination string. It says nothing about
+    whether the directory exists on the target, whether it is writable, or
+    whether the file arrived -- those are the transfer's own business and
+    are still only knowable after the fact.
+    """
+    if not isinstance(raw, str):
+        raise ValueError("destination must be a string, got %r" % (raw,))
+    d = raw.strip()
+    m = re.match(r"^([A-Za-z]:)(.*)$", d)
+    if not m:
+        raise ValueError("%r is not an absolute DOS path like C:\\XFER or C:"
+                         % raw)
+    drive, rest = m.group(1).upper(), m.group(2)
+    parts = [p for p in rest.split("\\") if p != ""]
+    for part in parts:
+        if part in (".", ".."):
+            raise ValueError("%r contains a relative component" % raw)
+        base, dot, ext = part.partition(".")
+        if not base or len(base) > 8 or len(ext) > 3 or "." in ext:
+            raise ValueError("%r is not a DOS 8.3 directory name" % part)
+        if base.rstrip(".").upper() in _DOS_DEVICES:
+            raise ValueError("%r is a DOS device name, not a directory" % part)
+        bad = set(part) & (_DOS_ILLEGAL | {"*", "?"})
+        if bad:
+            raise ValueError("%r contains %s" % (part, "".join(sorted(bad))))
+    return drive if not parts else drive + "\\" + "\\".join(parts)
+
 DEFAULT_OUT = "C:\\XFER\\OUT"
 
 # THE LARGEST TRANSFER THIS TOOL HAS ACTUALLY VERIFIED, end to end, on the
@@ -8899,7 +8994,8 @@ class TransferJob(NetJob):
 
     def __init__(self, cap, driver, dest=None, do_return=True, log=None):
         NetJob.__init__(self, cap, driver, do_return=do_return, log=log)
-        self.dest = dest or (cap.settings or {}).get("dest", DEFAULT_DEST)
+        self.dest = _send_dest(dest or (cap.settings or {}).get("dest",
+                                                                DEFAULT_DEST))
 
     def run(self):
         """{"ok", "why", "files": [...], "log": [...]}."""
