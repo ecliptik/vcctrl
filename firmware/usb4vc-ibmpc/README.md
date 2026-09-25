@@ -75,8 +75,22 @@ Flashed 15:04-15:08Z, following the runbook below, with the Gateway off:
   the Gateway is off, so the events wait in the board's 16-deep queue, to be
   sent or discarded at the next power-on.
 
-**Not yet checked on the board:** keyboard, LEDs and mouse with the Gateway
-powered. That needs the operator's approval to power on.
+**Powered check, 15:28-15:39Z, PASSED.** The operator approved; dosags ran
+it. The raw record is in the dosags repo at 34c41d8,
+`tests/harness/results/POSTFLASH-2026-09-25/`.
+- Boot was normal, and CuteMouse v2.1b4 installed at the PS/2 port.
+- `ver` + Enter typed correctly (MS-DOS 6.22).
+- 20 clicks in the game. All 15 that fell inside the game's input window
+  registered (lost_clicks 0); the other 5 landed during its boot.
+- Cross-checked from vcctrl's own side afterwards. Board counters since the
+  flash: ev_in 66 (2 of them the test moves above), pkt_built 64 = pkt_ok 64,
+  every loss counter 0 except ev_discarded 2. The input log shows
+  20 mouse_down + 20 mouse_up + 24 mouse_move = 64 sends, one packet each.
+- The only `mouse.dropped` row is ev_discarded 2 at power-on (15:28:43Z):
+  the two moves queued while the Gateway was off, discarded before the
+  driver enabled reporting, exactly as expected.
+- Boots and driver loads show as host_ff/host_cmd (mouse resets); the
+  keyboard retried 4 sends after an inhibit (kb_inhibit_retry).
 
 ## Flashing: the bench runbook
 
