@@ -376,6 +376,35 @@ firmware that counts its own drops, can close it.
   It used to return the oldest page of the ring while the help said
   "recent".
 
+### First board-side losses observed: 2026-09-25, dosags cell CAP3d-D1
+
+**Observed, not yet correlated.** These are the first losses the 0.5.107
+counters recorded in live use, as `mouse.dropped` rows in `vcctrl input-log`,
+read at 20:44Z:
+
+    19:40:49Z  pkt_timeout 1, pkt_partial 1   (after a move + click at 19:40:47-48)
+    19:40:57Z  pkt_timeout 1, pkt_partial 1   (after a move + click at 19:40:55-56)
+    19:41:00Z  edge_merged 2                  (after a move + click at 19:40:57-58)
+
+Rows lag the loss by up to the ~1 s poll. Totals since the flash: ev_in 401,
+pkt_ok 395, pkt_inhibit **0**, ev_buf_full 0.
+
+What the counters say, read against the firmware source:
+- `pkt_timeout` + `pkt_partial`: a packet was abandoned after at least one
+  byte had gone out, because the host kept the aux clock held for more than
+  200 ms between bytes. It was not retried.
+- `edge_merged` 2: events queued behind that stall were merged into one
+  packet, so a press and its release collapsed into one state, which no
+  driver can see as a click.
+- `pkt_inhibit` 0: nothing here is a brief mid-byte inhibit. The losses are
+  host stalls longer than 200 ms.
+
+dosags reports the cell ran its MIDI drain with interrupts off
+(`DRAIN_STI=0`), which would leave IRQ12 unserviced. Whether the game's own
+click accounting shows these clicks lost is being checked by the dosags lab
+session. Until it does, this shows the mechanism occurring; it does not yet
+show it costing a click the target needed.
+
 ## 11. Open questions
 
 - What inhibits the aux clock mid-byte late in a dosags run, if that is
