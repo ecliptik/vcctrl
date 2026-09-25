@@ -1953,6 +1953,12 @@ subject — has a sibling here: **a verdict must also name its sample size.**
 
 ## 36. Two recordings, one ring: 94.5% of a cell's "glass" was the previous cell's  [measured 2026-08-20]
 
+> **The AVIs are gone** (deleted 2026-09-25, operator-approved, during a
+> control-host disk cleanup). The figures below can be cited but no longer
+> re-measured. The `.meta` sidecars holding `first_seq`/`last_seq`/window/
+> `thinned` are kept in `~/doskutsu-netiter/banked/`, so the table below
+> still checks against its source.
+
 `GMQ3-glass.avi` is 815 MB and looks like a recording of cell MQ3. It is not.
 **18,871 of its 19,976 frame packets are byte-identical to frames in
 `GMQ2-glass.avi`** — 94.5%, checked by hashing the MJPEG packets on both
