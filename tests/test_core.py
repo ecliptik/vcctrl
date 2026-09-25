@@ -779,6 +779,186 @@ def test_parse_when_refuses_a_time_with_no_zone():
         check("refused: %s" % bad, ok)
 
 
+def _load_mousestats_tool():
+    path = os.path.join(HERE, os.pardir, "tools", "patch-usb4vc-mousestats.py")
+    spec = importlib.util.spec_from_loader(
+        "patch_mousestats", SourceFileLoader("patch_mousestats", path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Just enough of rpi_app's usb4vc_usb_scan.py for the patch to anchor on.
+_FAKE_SCAN = '''import os
+import time
+SPI_MOSI_MAGIC = 0xde
+nop_spi_msg_template = [SPI_MOSI_MAGIC] + [0]*31
+
+def raw_input_event_worker():
+    last_usb_event = 0
+    while 1:
+        now = time.time()
+        # ----------------- PBOARD INTERRUPT -----------------
+        pass
+
+def get_pboard_info():
+    return None
+'''
+
+
+def test_mousestats_rpi_patch_applies_once_and_refuses_to_guess():
+    import tempfile
+    print("\nrpi_app mouse-stats patch: apply, idempotence, anchors")
+    tool = _load_mousestats_tool()
+    d = tempfile.mkdtemp(prefix="msp")
+    p = os.path.join(d, "usb4vc_usb_scan.py")
+    open(p, "w").write(_FAKE_SCAN)
+    check("--check on an unpatched file fails", tool.main(["--check", p]) == 1)
+    check("apply", tool.main([p]) == 0)
+    once = open(p).read()
+    check("apply twice inserts once", tool.main([p]) == 0 and open(p).read() == once)
+    check("--check passes once applied", tool.main(["--check", p]) == 0)
+    compile(once, p, "exec")
+    check("the patched file compiles", True)
+    check("the poll call sits inside the loop, before the interrupt block",
+          once.index("_vc_mouse_stats_poll(now)") <
+          once.index("# ----------------- PBOARD INTERRUPT"), "")
+    open(p, "w").write(_FAKE_SCAN.replace("def get_pboard_info", "def x"))
+    check("a missing anchor is refused, not guessed at",
+          tool.main([p]) == 3 and "vcctrl mouse stats" not in open(p).read())
+
+
+def _mousestats_ns(tmpdir, reply):
+    """Exec the patch's poller with a fake SPI bus. `reply(seq, n)` returns
+    what the n-th transfer after a request carries (n = 1, 2)."""
+    tool = _load_mousestats_tool()
+    ns = {"__name__": "fake_scan"}
+    exec(_FAKE_SCAN, ns)
+    exec(tool.BLOCK_DEF, ns)
+    ns["_VC_MS_DIR"] = tmpdir
+    # A stand-in, NOT the real module: assigning .sleep on ns["time"] would
+    # replace time.sleep for every test that runs after this one.
+    ns["time"] = type("T", (), {"sleep": staticmethod(lambda s: None),
+                                "time": staticmethod(time.time)})
+    state = {"seq": None, "n": 0}
+
+    def xfer(msg):
+        if msg[2] == 0x40:
+            state["seq"], state["n"] = msg[1], 0
+            return [0] * 32
+        state["n"] += 1
+        return reply(state["seq"], state["n"])
+    ns["xfer_when_not_busy"] = xfer
+    return ns
+
+
+def _stats_frame(seq, counters):
+    out = [0xcd, seq, 0xc0, 1]
+    for v in counters:
+        out += [v & 0xff, v >> 8]
+    return out
+
+
+def test_mousestats_poller_reads_either_nop_and_backs_off_on_stock():
+    import tempfile
+    import json as _json
+    import io
+    import contextlib
+    print("\nrpi_app mouse-stats poller")
+    d = tempfile.mkdtemp(prefix="msp")
+    counters = [10, 0, 9, 9, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1]
+
+    for which in (1, 2):
+        ns = _mousestats_ns(d, lambda seq, n, w=which: (
+            _stats_frame(seq, counters) if n == w else [0xcd, 0, 129] + [0] * 29))
+        ns["_vc_mouse_stats_poll"](100.0)
+        rec = _json.load(open(os.path.join(d, "mouse_stats.json")))
+        check("a reply in NOP %d is accepted" % which,
+              rec["supported"] is True and rec["counters"]["ev_in"] == 10
+              and rec["counters"]["kb_inhibit_retry"] == 1, rec)
+
+    ns = _mousestats_ns(d, lambda seq, n: _stats_frame((seq + 1) % 256, counters))
+    ns["_vc_mouse_stats_poll"](100.0)
+    check("a reply with the wrong sequence number is not trusted",
+          ns["_VC_MS"]["misses"] == 1, ns["_VC_MS"])
+
+    # A loss prints one line, and only when a LOSS counter moved.
+    frames = [counters, list(counters), counters[:4] + [2] + counters[5:]]
+    cur = [None]
+    ns = _mousestats_ns(d, lambda seq, n: _stats_frame(seq, cur[0]))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        for f in frames:
+            cur[0] = f
+            ns["_vc_mouse_stats_poll"](100.0)
+    lines = [l for l in out.getvalue().splitlines() if "VC MOUSE LOSS" in l]
+    check("exactly one loss line, for the inhibit that moved",
+          len(lines) == 1 and "'pkt_inhibit': 2" in lines[0], out.getvalue())
+
+    # Stock firmware: every NOP carries whatever spi_transmit_buf held.
+    os.remove(os.path.join(d, "mouse_stats.json"))
+    ns = _mousestats_ns(d, lambda seq, n: [0xcd, 0, 128] + [0] * 29)
+    for _ in range(5):
+        ns["_vc_mouse_stats_poll"](100.0)
+    rec = _json.load(open(os.path.join(d, "mouse_stats.json")))
+    check("stock firmware: after 5 misses the file says unsupported",
+          rec["supported"] is False and "counters" not in rec, rec)
+    check("and polling backs off to 30 s", ns["_VC_MS"]["next"] == 130.0,
+          ns["_VC_MS"]["next"])
+
+
+def test_mouse_stats_absence_rule_and_loss_events():
+    import tempfile
+    import json as _json
+    print("\nmouse_stats: absence rule, baseline, loss into the input log")
+    d = tempfile.mkdtemp(prefix="ms")
+    reg = vcctrld.Registry(make_devices())
+    board = reg.caps["board"]
+    orig = vcctrld.BoardCapability.MOUSE_STATS_FILE
+    p = os.path.join(d, "mouse_stats.json")
+    try:
+        board.MOUSE_STATS_FILE = os.path.join(d, "absent.json")
+        r = vcctrld.handle(reg.devs, reg, {"cmd": "mouse_stats"})
+        check("no file: supported None, and NO counters key",
+              r["ok"] and r["supported"] is None and "counters" not in r, r)
+
+        _json.dump({"supported": False, "t": time.time(), "reason": "stock"},
+                   open(p, "w"))
+        board.MOUSE_STATS_FILE = p
+        r = vcctrld.handle(reg.devs, reg, {"cmd": "mouse_stats"})
+        check("stock firmware: supported False, still no counters key",
+              r["supported"] is False and "counters" not in r, r)
+
+        def write(**c):
+            base = {"ev_in": 0, "pkt_inhibit": 0, "pkt_partial": 0,
+                    "edge_merged": 0, "host_fe": 0, "ev_buf_full": 0,
+                    "pkt_timeout": 0, "ev_discarded": 0}
+            base.update(c)
+            _json.dump({"supported": True, "t": time.time(), "counters": base},
+                       open(p, "w"))
+        write(ev_in=50, pkt_inhibit=7)
+        check("the first reading is a baseline, not a loss",
+              board._mouse_stats_step() == {})
+        write(ev_in=60, pkt_inhibit=7)
+        check("events in without loss publish nothing",
+              board._mouse_stats_step() == {})
+        write(ev_in=70, pkt_inhibit=9, pkt_partial=1)
+        check("a moved loss counter is reported as a delta",
+              board._mouse_stats_step() == {"pkt_inhibit": 2, "pkt_partial": 1})
+        write(ev_in=70, pkt_inhibit=1, pkt_partial=1)
+        check("a uint16 wrap is a delta, not a negative",
+              board._mouse_stats_step() == {"pkt_inhibit": 65528})
+        rows = [e for e in reg.input_log.query()["events"]
+                if e["kind"] == "mouse.dropped"]
+        check("each loss is a mouse.dropped row in the input log",
+              len(rows) == 2 and rows[0]["pkt_inhibit"] == 2, rows)
+        r = vcctrld.handle(reg.devs, reg, {"cmd": "mouse_stats"})
+        check("supported: counters present",
+              r["supported"] is True and r["counters"]["ev_in"] == 70, r)
+    finally:
+        vcctrld.BoardCapability.MOUSE_STATS_FILE = orig
+
+
 def test_mouse_click_reassert_repeats_each_edge():
     """Every PS/2 packet carries the absolute button state, so a nudge while
     held re-delivers a dropped press and one after re-delivers a dropped
@@ -10407,6 +10587,12 @@ def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
         # profile-kinds/vga-ps2.yaml's own comment.
         "profile-kinds": "read once by tools/new-profile.py to scaffold a "
                          "new vcctrl-<name>.yaml; vcctrld never reads it",
+        # Built on the control host (the daemon host has no internet or
+        # toolchain); the images and pi-flash.py are staged by hand for a
+        # bench flash. A routine deploy must never be a step toward
+        # reflashing the protocol board the harness types through.
+        "firmware": "protocol-board firmware build; staged by hand for a "
+                    "supervised flash, never by a deploy",
         # SAME REASONING AS profile-kinds ABOVE: these are templates a
         # human or tools/new-profile.py copies FROM at authoring time (`cp
         # examples/vcctrl.example.yaml vcctrl.yaml`), never files vcctrld

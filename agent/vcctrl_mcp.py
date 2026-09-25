@@ -1066,6 +1066,20 @@ def vcctrl_input_log(start: "str | None" = None, end: "str | None" = None,
 
 
 @mcp.tool()
+def vcctrl_mouse_stats(profile: "str | None" = None) -> dict:
+    """The USB4VC protocol board's own PS/2 mouse delivery counters: events
+    in, packets sent OK, packets abandoned because the target's 8042
+    inhibited the clock mid-byte or held the bus (pkt_inhibit/pkt_timeout),
+    truncated packets, button edges merged away, host resend/reset commands.
+    The only witness on this rig for whether a click left the board.
+    `supported` None = rpi_app not patched, False = stock firmware (no
+    counters), True = `counters` present. Counters are free-running uint16:
+    compare two readings, do not read one as a total. A moved loss counter
+    also appears as a `mouse.dropped` row in vcctrl_input_log. Never gated."""
+    return _run_vcctrl_p(["mouse-stats"], profile)
+
+
+@mcp.tool()
 def vcctrl_lock_status(profile: "str | None" = None) -> dict:
     """Input-lock status: who holds it, for how long. Never gated -- an
     observation, not an action. Each profile has its OWN lock (its own

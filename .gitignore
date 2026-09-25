@@ -61,3 +61,7 @@ __pycache__/
 # to rely on. An untracked directory in this tree is a thing waiting to be
 # added by somebody who did not look.
 /.claude/worktrees/
+
+# The protocol-board firmware build: fetched upstream source + objects. The
+# SOURCE of record is fetch.sh's pins plus firmware/usb4vc-ibmpc/patches/.
+/firmware/usb4vc-ibmpc/build/

@@ -209,6 +209,7 @@ SCHEMA = {
             "app_dir": str,
             "debug_log": str,
             "board_file": str,
+            "mouse_stats_file": str,
         },
         "web": {
             "bind": str,
@@ -333,6 +334,7 @@ DEFAULTS = {
             "app_dir": "/home/pi/usb4vc/rpi_app",
             "debug_log": "/home/pi/usb4vc/usb4vc_debug_log.txt",
             "board_file": "/run/usb4vc/board.json",
+            "mouse_stats_file": "/run/usb4vc/mouse_stats.json",
         },
         "web": {
             "bind": "127.0.0.1",

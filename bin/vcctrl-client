@@ -398,6 +398,12 @@ USAGE = """usage: vcctrl <command> [args]
   events [since]            activity log. No argument: the NEWEST 200
                             events. With a sequence number: the next 200
                             after it, oldest first, for walking forward.
+  mouse-stats               the USB4VC protocol board's own mouse delivery
+                            counters (packets sent, abandoned on a host
+                            inhibit or timeout, truncated, merged edges...).
+                            Needs vcctrl's patched board firmware and the
+                            rpi_app patch; `supported` says which is missing
+                            (docs/MOUSE.md sec. 10)
   input-log [--from T] [--to T] [--limit N]
                             every input command the daemon sent (keys, type,
                             mouse, lock, refusals), persisted on the daemon
@@ -1404,6 +1410,8 @@ def main(argv):
         req = {"cmd": "config"}
     elif cmd == "board":
         req = {"cmd": "board"}
+    elif cmd in ("mouse-stats", "mouse_stats"):
+        req = {"cmd": "mouse_stats"}
     elif cmd == "sysinfo":
         req = {"cmd": "sysinfo"}
     elif cmd in ("public-telemetry", "public_telemetry"):

@@ -1,0 +1,290 @@
+vcctrl local patch 0001: mouse delivery counters (observation only)
+
+Against dekuNukem/USB4VC firmware/ibmpc at ae3813d (stock 0.5.7 release).
+Reports as firmware 0.5.107.
+
+Stock firmware abandons a PS/2 mouse packet when the host inhibits the clock
+mid-byte, or holds the bus past the idle timeout, and counts nothing. So a
+lost click has no witness on either side of the board (vcctrl
+docs/MOUSE.md sec. 10). This patch counts every way a mouse event can fail
+to reach the host, and answers a new SPI request with the counts:
+
+  MOSI 0x40 (VC_MOUSE_STATS_REQUEST) -> MISO 0xC0 (VC_MOUSE_STATS), layout 1
+  bytes 0-3: 0xCD, seq echo, 0xC0, layout
+  bytes 4-31: 14 x uint16 little-endian, free-running:
+     0 ev_in           1 ev_buf_full      2 pkt_built       3 pkt_ok
+     4 pkt_inhibit     5 pkt_timeout      6 pkt_partial     7 ev_discarded
+     8 edge_merged     9 host_cmd        10 host_fe        11 host_ff
+    12 host_f5        13 kb_inhibit_retry
+
+The reply goes out from its own buffer, armed for the next two transfers,
+and never overwrites spi_transmit_buf. A keyboard-LED request waiting there
+is untouched.
+
+It does NOT change what is sent: no retry, no change to consolidation. The
+retry fix is a separate patch, to write only if these counters show the
+firmware is where clicks go. ps2kb.c is untouched; the one keyboard-path
+line added is a counter increment in main.c's ps2kb_update().
+
+diff --git a/Inc/helpers.h b/Inc/helpers.h
+index 634c6c0..3078eff 100644
+--- a/Inc/helpers.h
++++ b/Inc/helpers.h
+@@ -30,6 +30,12 @@
+ #define SPI_MISO_MSG_TYPE_INFO_REQUEST 128
+ #define SPI_MISO_MSG_TYPE_KB_LED_REQUEST 129
+ 
++// vcctrl local: mouse delivery counters. Numbered well away from upstream's
++// own types so a future upstream type cannot collide with them.
++#define SPI_MOSI_MSG_TYPE_VC_MOUSE_STATS_REQUEST 0x40
++#define SPI_MISO_MSG_TYPE_VC_MOUSE_STATS 0xC0
++#define VC_MOUSE_STATS_LAYOUT 1
++
+ #define BTN_LEFT    0x110
+ #define BTN_RIGHT   0x111
+ #define BTN_MIDDLE    0x112
+diff --git a/Inc/ps2mouse.h b/Inc/ps2mouse.h
+index 5d1b3e9..beeecb4 100644
+--- a/Inc/ps2mouse.h
++++ b/Inc/ps2mouse.h
+@@ -20,6 +20,9 @@ void ps2mouse_host_req_reply(uint8_t cmd, mouse_event* mevent);
+ void ps2mouse_release_lines(void);
+ uint8_t ps2mouse_get_outgoing_data(mouse_event* this_event, ps2_outgoing_buf* pbuf);
+ uint8_t ps2mouse_send_update(ps2_outgoing_buf* pbuf);
++// vcctrl local: bytes of the last packet that completed before an error.
++// Non-zero on a failed send means the host saw a TRUNCATED packet.
++extern uint8_t ps2mouse_bytes_sent;
+ uint8_t ps2mouse_write_nowait(uint8_t data);
+ void ps2mouse_reset(void);
+ void ps2mouse_restore_defaults(void);
+diff --git a/Src/main.c b/Src/main.c
+index 88d73b9..8bb9c80 100644
+--- a/Src/main.c
++++ b/Src/main.c
+@@ -80,10 +80,54 @@ fixed a baud rate bug
+ const uint8_t board_id = 1;
+ const uint8_t version_major = 0;
+ const uint8_t version_minor = 5;
+-const uint8_t version_patch = 7;
++// vcctrl local build: 1xx marks a patched build of upstream 0.5.x, so the
++// board reports it is not stock (PB INFO / `vcctrl board`). Higher than any
++// 0.5.x upstream ever shipped, so USB4VC's own OLED-menu updater does not
++// quietly replace it with stock -- only an explicit newer minor would.
++const uint8_t version_patch = 107;
+ uint8_t hw_revision;
+ 
+ uint8_t spi_transmit_buf[SPI_BUF_SIZE];
++
++/* vcctrl local: mouse delivery counters.
++ *
++ * Stock firmware discards a mouse packet when the host inhibits the clock
++ * mid-byte, and counts nothing, so a lost click has no witness anywhere. These
++ * count every way a mouse event can fail to reach the host, plus the keyboard
++ * path's own inhibit retries as a reference for how busy the 8042 is.
++ * Observation only: nothing here changes what is sent.
++ *
++ * uint16 and free-running: the Pi polls about once a second and takes
++ * deltas modulo 65536, so a wrap is not a loss. A halfword store is atomic
++ * on the M0, so the ISR's snapshot cannot tear a value.
++ */
++enum {
++  VC_EV_IN,             // mouse events received over SPI
++  VC_EV_BUF_FULL,       // ...and dropped because mouse_buf was full
++  VC_PKT_BUILT,         // PS/2 packets built (events consolidated)
++  VC_PKT_OK,            // ...sent completely
++  VC_PKT_INHIBIT,       // ...abandoned: host pulled CLK low mid-byte
++  VC_PKT_TIMEOUT,       // ...abandoned: bus not idle within the timeout
++  VC_PKT_PARTIAL,       // abandoned after >=1 byte went out (truncated)
++  VC_EV_DISCARDED,      // events consumed while reporting off / not stream
++  VC_EDGE_MERGED,       // button edges collapsed by consolidation
++  VC_HOST_CMD,          // host->mouse commands received
++  VC_HOST_FE,           // ...of which resend
++  VC_HOST_FF,           // ...of which reset
++  VC_HOST_F5,           // ...of which disable reporting
++  VC_KB_INHIBIT_RETRY,  // keyboard sends retried after an inhibit
++  VC_NCOUNTERS
++};
++volatile uint16_t vc_mouse_stats[VC_NCOUNTERS];
++// The stats reply's own buffer. It never touches spi_transmit_buf, which may
++// be holding a keyboard-LED request the Pi has not collected yet --
++// overwriting that would lose an LED change the harness waits on. Armed for
++// the next TWO transfers: rpi_app follows every request with two NOPs and
++// reads the second (get_pboard_info, the LED ACK pair), because the SPI TX
++// FIFO can already hold stale bytes when the first one starts. Both carry the
++// same snapshot, so the Pi can take whichever arrives intact.
++uint8_t vc_stats_tx_buf[SPI_BUF_SIZE];
++volatile uint8_t vc_stats_pending;
+ uint8_t backup_spi1_recv_buf[SPI_BUF_SIZE];
+ uint8_t spi_recv_buf[SPI_BUF_SIZE];
+ kb_buf my_kb_buf;
+@@ -277,7 +321,9 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+     latest_mouse_event.button_middle = backup_spi1_recv_buf[15];
+     latest_mouse_event.button_side = backup_spi1_recv_buf[16];
+     latest_mouse_event.button_extra = backup_spi1_recv_buf[17];
+-    mouse_buf_add(&my_mouse_buf, &latest_mouse_event);
++    vc_mouse_stats[VC_EV_IN]++;
++    if(mouse_buf_add(&my_mouse_buf, &latest_mouse_event))
++      vc_mouse_stats[VC_EV_BUF_FULL]++;
+   }
+   else if(backup_spi1_recv_buf[SPI_BUF_INDEX_MSG_TYPE] == SPI_MOSI_MSG_TYPE_GAMEPAD_EVENT_MAPPED_IBMPC)
+   {
+@@ -322,6 +368,20 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+       curr_index++;
+     }
+   }
++  else if(backup_spi1_recv_buf[SPI_BUF_INDEX_MSG_TYPE] == SPI_MOSI_MSG_TYPE_VC_MOUSE_STATS_REQUEST)
++  {
++    vc_stats_tx_buf[SPI_BUF_INDEX_MAGIC] = SPI_MISO_MAGIC;
++    vc_stats_tx_buf[SPI_BUF_INDEX_SEQNUM] = backup_spi1_recv_buf[SPI_BUF_INDEX_SEQNUM];
++    vc_stats_tx_buf[SPI_BUF_INDEX_MSG_TYPE] = SPI_MISO_MSG_TYPE_VC_MOUSE_STATS;
++    vc_stats_tx_buf[3] = VC_MOUSE_STATS_LAYOUT;
++    for (int i = 0; i < VC_NCOUNTERS; i++)
++    {
++      uint16_t v = vc_mouse_stats[i];
++      vc_stats_tx_buf[4 + 2 * i] = v & 0xff;
++      vc_stats_tx_buf[5 + 2 * i] = v >> 8;
++    }
++    vc_stats_pending = 2;
++  }
+   else if(backup_spi1_recv_buf[SPI_BUF_INDEX_MSG_TYPE] == SPI_MOSI_MSG_TYPE_SET_PROTOCOL)
+   {
+     for (int i = 3; i < SPI_BUF_SIZE; ++i)
+@@ -331,7 +391,13 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+       handle_protocol_switch(backup_spi1_recv_buf[i]);
+     }
+   }
+-  HAL_SPI_TransmitReceive_IT(&hspi1, spi_transmit_buf, spi_recv_buf, SPI_BUF_SIZE);
++  if(vc_stats_pending)
++  {
++    vc_stats_pending--;
++    HAL_SPI_TransmitReceive_IT(&hspi1, vc_stats_tx_buf, spi_recv_buf, SPI_BUF_SIZE);
++  }
++  else
++    HAL_SPI_TransmitReceive_IT(&hspi1, spi_transmit_buf, spi_recv_buf, SPI_BUF_SIZE);
+   ACT_LED_off_ts = micros() + 10000;
+ }
+ 
+@@ -343,8 +409,10 @@ void cap_to_127(int32_t *number)
+     *number = -127;
+ }
+ 
+-void get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
++uint8_t get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
+ {
++  uint8_t n = 0;
++  uint8_t prev_buttons = 0;
+   cme_result->movement_x = 0;
+   cme_result->movement_y = 0;
+   cme_result->scroll_vertical = 0;
+@@ -359,6 +427,17 @@ void get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
+     mouse_event* this_mouse_event = mouse_buf_peek(mbuf);
+     if(this_mouse_event == NULL)
+       break;
++    // vcctrl local: two merged events whose buttons differ are an edge the
++    // host will never see -- OR-ing a press with its release is a hold.
++    uint8_t buttons = (this_mouse_event->button_left ? 1 : 0)
++      | (this_mouse_event->button_right ? 2 : 0)
++      | (this_mouse_event->button_middle ? 4 : 0)
++      | (this_mouse_event->button_side ? 8 : 0)
++      | (this_mouse_event->button_extra ? 16 : 0);
++    if(n > 0 && buttons != prev_buttons)
++      vc_mouse_stats[VC_EDGE_MERGED]++;
++    prev_buttons = buttons;
++    n++;
+     cme_result->movement_x += this_mouse_event->movement_x;
+     cme_result->movement_y += this_mouse_event->movement_y;
+     cme_result->scroll_vertical += this_mouse_event->scroll_vertical;
+@@ -372,6 +451,7 @@ void get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
+   }
+   cap_to_127(&cme_result->movement_x);
+   cap_to_127(&cme_result->movement_y);
++  return n;
+ }
+ 
+ uint32_t last_mouse_movement;
+@@ -386,7 +466,16 @@ void ps2mouse_update(void)
+   else if(ps2mouse_bus_status == PS2_BUS_REQ_TO_SEND)
+   {
+     PCARD_BUSY_HI();
+-    ps2mouse_read(&ps2mouse_host_cmd, 10);
++    if(ps2mouse_read(&ps2mouse_host_cmd, 10) == PS2_OK)
++    {
++      vc_mouse_stats[VC_HOST_CMD]++;
++      if(ps2mouse_host_cmd == 0xFE)
++        vc_mouse_stats[VC_HOST_FE]++;
++      else if(ps2mouse_host_cmd == 0xFF)
++        vc_mouse_stats[VC_HOST_FF]++;
++      else if(ps2mouse_host_cmd == 0xF5)
++        vc_mouse_stats[VC_HOST_F5]++;
++    }
+     ps2mouse_host_req_reply(ps2mouse_host_cmd, &latest_mouse_event);
+     PCARD_BUSY_LOW();
+     return;
+@@ -399,14 +488,30 @@ void ps2mouse_update(void)
+   if(mouse_buf_peek(&my_mouse_buf) == NULL)
+     return;
+ 
+-  get_consolidated_mouse_event(&my_mouse_buf, &consolidated_mouse_event);
++  uint8_t vc_n = get_consolidated_mouse_event(&my_mouse_buf, &consolidated_mouse_event);
+   // mouse buffer now empty
+ 
+   if(ps2mouse_get_outgoing_data(&consolidated_mouse_event, &my_ps2_outbuf))
++  {
++    vc_mouse_stats[VC_EV_DISCARDED] += vc_n;
+     return; // if return value is not 0, no need to send out packets
++  }
+ 
++  vc_mouse_stats[VC_PKT_BUILT]++;
+   PCARD_BUSY_HI();
+-  if(ps2mouse_send_update(&my_ps2_outbuf) != PS2_OK)
++  uint8_t vc_result = ps2mouse_send_update(&my_ps2_outbuf);
++  if(vc_result == PS2_OK)
++    vc_mouse_stats[VC_PKT_OK]++;
++  else
++  {
++    if(vc_result == PS2_ERROR_HOST_INHIBIT)
++      vc_mouse_stats[VC_PKT_INHIBIT]++;
++    else
++      vc_mouse_stats[VC_PKT_TIMEOUT]++;
++    if(ps2mouse_bytes_sent > 0)
++      vc_mouse_stats[VC_PKT_PARTIAL]++;
++  }
++  if(vc_result != PS2_OK)
+   {
+     uint32_t enter_time = HAL_GetTick();
+     while(ps2mouse_get_bus_status() != PS2_BUS_IDLE)
+@@ -452,7 +557,10 @@ uint8_t ps2kb_update(void)
+   {
+     PCARD_BUSY_HI();
+     if(ps2kb_press_key(buffered_code, buffered_value) == PS2_ERROR_HOST_INHIBIT) // host inhibited line during transmission
++    {
++      vc_mouse_stats[VC_KB_INHIBIT_RETRY]++;
+       HAL_Delay(1);
++    }
+     else
+       kb_buf_pop(&my_kb_buf);
+   }
+diff --git a/Src/ps2mouse.c b/Src/ps2mouse.c
+index 37755ac..556af6e 100644
+--- a/Src/ps2mouse.c
++++ b/Src/ps2mouse.c
+@@ -400,15 +400,19 @@ uint8_t ps2mouse_write_nowait(uint8_t data)
+   return PS2_OK;
+ }
+ 
++uint8_t ps2mouse_bytes_sent;
++
+ uint8_t ps2mouse_send_update(ps2_outgoing_buf* pbuf)
+ {
+   uint8_t write_result;
++  ps2mouse_bytes_sent = 0;
+   for (int i = 0; i < pbuf->size; ++i)
+   {
+     // return error if inhibited or interrupted while transmitting
+     write_result = ps2mouse_write(pbuf->data[i], 200);
+     if(write_result)
+       return write_result;
++    ps2mouse_bytes_sent++;
+   }
+   return PS2_OK;
+ }

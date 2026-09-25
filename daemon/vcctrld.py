@@ -7081,12 +7081,93 @@ class BoardCapability(Capability):
     # not installed, and both differ from "we could not look".
     KEYBOARDS = {1: "pc-at-101", 2: None, 3: "mac-plus"}
 
+    # Written by the rpi_app patch tools/patch-usb4vc-mousestats.py, from the
+    # counters in vcctrl's patched protocol-board firmware
+    # (firmware/usb4vc-ibmpc). Absent with stock firmware or an unpatched
+    # rpi_app, which is a real answer, not a fault.
+    MOUSE_STATS_FILE = CFG.default("daemon.usb4vc.mouse_stats_file",
+                                   "/run/usb4vc/mouse_stats.json")
+    # The counters that mean an event did not reach the host as sent.
+    # host_fe is here because stock and 0001 firmware only ACK a resend.
+    MOUSE_LOSS = ("ev_buf_full", "pkt_inhibit", "pkt_timeout", "pkt_partial",
+                  "ev_discarded", "edge_merged", "host_fe")
+
     def __init__(self, *a, **kw):
         super(BoardCapability, self).__init__(*a, **kw)
         self._last_id = _UNSET
+        self._ms_prev = None
 
     def commands(self):
-        return {"board": self._board, "profile": self._profile}
+        return {"board": self._board, "profile": self._profile,
+                "mouse_stats": self._mouse_stats}
+
+    def _read_mouse_stats(self):
+        with open(self.MOUSE_STATS_FILE) as f:
+            return json.load(f)
+
+    def _mouse_stats(self, req):
+        """The protocol board's own mouse delivery counters, as last polled.
+
+        MEASURED values, so by the absence rule `counters` is ABSENT, never
+        zeroed, when there is no reading -- a zero would read as "nothing was
+        lost". `supported` is True / False (rpi_app asked and stock firmware
+        did not answer) / None (no file: rpi_app unpatched, or no USB4VC).
+        """
+        try:
+            rec = self._read_mouse_stats()
+        except FileNotFoundError:
+            return {"ok": True, "supported": None, "path": self.MOUSE_STATS_FILE,
+                    "reason": "no counters file -- rpi_app is not patched "
+                              "(tools/patch-usb4vc-mousestats.py) or not running"}
+        except Exception as exc:
+            return {"ok": False, "error": errstr(exc),
+                    "path": self.MOUSE_STATS_FILE}
+        out = {"ok": True, "supported": bool(rec.get("supported")),
+               "path": self.MOUSE_STATS_FILE,
+               "age_s": (round(time.time() - rec["t"], 1)
+                         if rec.get("t") else None)}
+        if rec.get("supported") and isinstance(rec.get("counters"), dict):
+            out["counters"] = rec["counters"]
+        else:
+            out["reason"] = rec.get("reason")
+        return out
+
+    def _mouse_stats_step(self):
+        """One watcher pass: read the file, publish `mouse.dropped` for any
+        loss counter that moved since the last pass. Returns the deltas (for
+        the tests). Published with _input=True so a loss lands in the input
+        log next to the click it may have cost. The FIRST reading is a
+        baseline, never a loss: a counter that was already non-zero when the
+        daemon started happened before anyone here was watching."""
+        try:
+            rec = self._read_mouse_stats()
+        except Exception:
+            return None
+        c = rec.get("counters") if rec.get("supported") else None
+        if not isinstance(c, dict):
+            self._ms_prev = None
+            return None
+        prev, self._ms_prev = self._ms_prev, c
+        if prev is None:
+            return {}
+        moved = {}
+        for k in self.MOUSE_LOSS:
+            if k in c and k in prev:
+                d = (int(c[k]) - int(prev[k])) & 0xffff
+                if d:
+                    moved[k] = d
+        if moved and self.bus:
+            self.bus.publish("mouse.dropped", _input=True,
+                             polled_t=rec.get("t"), **moved)
+        return moved
+
+    def _mouse_stats_watch(self):
+        while True:
+            try:
+                self._mouse_stats_step()
+            except Exception as exc:
+                sys.stderr.write("mouse stats watch: %s\n" % errstr(exc))
+            time.sleep(1.0)
 
     def _profile(self, req):
         """Read, establish or forget the target's boot-profile reading.
@@ -7129,6 +7210,10 @@ class BoardCapability(Capability):
 
     def start(self):
         self.snapshot()          # publishes board.changed on first read
+        # No USB4VC behind a static backend, so nothing to watch.
+        if self.backend_name != "static":
+            _profile_thread(self._mouse_stats_watch,
+                            name="mouse-stats").start()
 
     def _targets(self):
         """board id -> machine name, from config where configured.

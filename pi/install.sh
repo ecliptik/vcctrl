@@ -842,7 +842,7 @@ if [ -f "$FILES/coredump.conf" ]; then
   sudo systemctl daemon-reload
 fi
 
-# Two LOCAL patches to USB4VC that must not silently disappear under an
+# LOCAL patches to USB4VC that must not silently disappear under an
 # upstream update. --check only reports; it never modifies.
 if [ -f "$SRC/tools/patch-usb4vc-board.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_ui.py ]; then
   sudo python3 "$SRC/tools/patch-usb4vc-board.py" --check || \
@@ -857,6 +857,15 @@ fi
 if [ -f "$SRC/tools/patch-usb4vc-64bit.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_usb_scan.py ]; then
   sudo python3 "$SRC/tools/patch-usb4vc-64bit.py" --check || \
     echo "WARNING: 64-bit input_event patch is NOT applied. On this kernel that means no input reaches the target at all."
+fi
+
+# Optional: reads the mouse delivery counters in vcctrl's patched protocol-board
+# firmware (firmware/usb4vc-ibmpc). Harmless and inert with stock firmware, so a
+# missing patch is a note, not a warning. Applying it restarts nothing by
+# itself; rpi_app picks it up on its next start.
+if [ -f "$SRC/tools/patch-usb4vc-mousestats.py" ] && [ -f /home/pi/usb4vc/rpi_app/usb4vc_usb_scan.py ]; then
+  sudo python3 "$SRC/tools/patch-usb4vc-mousestats.py" --check >/dev/null 2>&1 || \
+    echo "NOTE: mouse-stats patch is not applied; \`vcctrl mouse-stats\` will say so."
 fi
 
 

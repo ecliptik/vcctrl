@@ -117,6 +117,21 @@ The DOS-side hardware-inventory binary the KVM's sysinfo panel runs (see
   `dosfetch.pas` (CC0). None of that changes `dinspect.exe`'s own CC0 status;
   see `dinspect`'s own `THIRD-PARTY.md` for the complete analysis.
 
+## `usb4vc/PBFW_IBMPC_PBID1_V0_5_7.hex` — USB4VC IBM PC board firmware 0.5.7
+
+The stock protocol-board firmware, kept as the **rollback image** for
+vcctrl's patched build (`firmware/usb4vc-ibmpc/`). It is here and not
+fetched because the rollback is needed at the bench, and the daemon host has
+no internet. It is not read by anything at runtime. The only way it reaches
+the board is by hand, with `firmware/usb4vc-ibmpc/pi-flash.py write`.
+
+MIT, `LICENSE.usb4vc` (dekuNukem). Exact file from
+https://github.com/dekuNukem/USB4VC `firmware/releases/` at `2e21505`,
+sha256 `e2f2dd4bdb799ff9ed11b3b534c0095333df12a7cb4c94c2f0488c7b90602ad7`.
+That file is byte-identical to Keil's own build output checked in at
+upstream `ae3813d` (2023-07-02), which is the source revision vcctrl's
+patched build starts from.
+
 ## The path
 
 `daemon/vcctrld.py` puts this directory on `sys.path` itself rather than
