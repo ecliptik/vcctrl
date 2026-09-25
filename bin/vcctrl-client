@@ -118,7 +118,12 @@ USAGE = """usage: vcctrl <command> [args]
                             does NOT say which keys reach the target; only a
                             sweep at the machine can (docs/WEBKVM.md 5.2).
   mouse move <dx> <dy>
-  mouse click [left|right|middle]
+  mouse click [left|right|middle] [--reassert]
+                            --reassert  follow each edge with a 1-count
+                            nudge right and back, so a PS/2 packet the USB4VC
+                            board drops is re-sent by the next one. Lowers
+                            the loss rate; cannot make a click certain
+                            (docs/MOUSE.md sec. 10)
   mouse down [left|right|middle]  press and hold, for a drag -- release_all
                             (or `mouse up`) lets go; a dropped connection
                             with a button still down is why release_all
@@ -390,7 +395,16 @@ USAGE = """usage: vcctrl <command> [args]
                             --clip  take only your own frames instead of
                             refusing. Reports `clipped_frames` so a shortened
                             recording says so rather than quietly being short.
-  events [since]            activity log since a sequence number
+  events [since]            activity log. No argument: the NEWEST 200
+                            events. With a sequence number: the next 200
+                            after it, oldest first, for walking forward.
+  input-log [--from T] [--to T] [--limit N]
+                            every input command the daemon sent (keys, type,
+                            mouse, lock, refusals), persisted on the daemon
+                            host so browser polling cannot evict it. T is
+                            epoch seconds or ISO 8601 with a zone
+                            (2026-09-25T03:12:05Z). Proves what vcctrld sent,
+                            not what the target received.
   activity                  what is running, for how long, and who holds input
   lock [status|acquire|release|break] --as NAME
                             input arbitration. Unheld by default; while held,
@@ -1348,8 +1362,11 @@ def main(argv):
             req = {"cmd": "mouse_move", "dx": int(rest[1]),
                    "dy": int(rest[2])}
         elif rest[0] == "click":
+            args = [a for a in rest[1:] if a != "--reassert"]
             req = {"cmd": "mouse_click",
-                   "button": rest[1] if len(rest) > 1 else "left"}
+                   "button": args[0] if args else "left"}
+            if "--reassert" in rest[1:]:
+                req["reassert"] = True
         elif rest[0] == "down":
             req = {"cmd": "mouse_down",
                    "button": rest[1] if len(rest) > 1 else "left"}
@@ -1392,7 +1409,25 @@ def main(argv):
     elif cmd in ("public-telemetry", "public_telemetry"):
         req = {"cmd": "public_telemetry"}
     elif cmd == "events":
-        req = {"cmd": "events", "since": int(rest[0]) if rest else 0}
+        # No argument means "what just happened", which is Bus.tail(). It
+        # used to send since=0 -- the OLDEST page of the ring, three minutes
+        # stale under a KVM tab's polling -- while the help said "recent".
+        req = ({"cmd": "events", "since": int(rest[0])} if rest
+               else {"cmd": "events", "tail": 200})
+    elif cmd in ("input-log", "input_log"):
+        req = {"cmd": "input_log"}
+        it = iter(rest)
+        for a in it:
+            if a in ("--from", "--to", "--limit"):
+                v = next(it, None)
+                if v is None:
+                    sys.stderr.write("vcctrl input-log: %s needs a value\n" % a)
+                    return 3
+                req[a[2:]] = int(v) if a == "--limit" else v
+            else:
+                sys.stderr.write("usage: vcctrl input-log [--from T] "
+                                 "[--to T] [--limit N]\n")
+                return 3
     elif cmd == "activity":
         req = {"cmd": "activity"}
     elif cmd == "video":

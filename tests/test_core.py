@@ -638,6 +638,178 @@ def test_event_bus():
           small.since(1, 100)["missed"] is True)
 
 
+def test_events_with_no_argument_means_the_newest():
+    """`vcctrl events` with no argument said "recent" and returned the OLDEST
+    page of the ring -- at ~10 events/s of KVM polling, 20 seconds from three
+    minutes ago. That is how "the daemon's event history only holds ~20 s"
+    got reported by a peer session auditing lost clicks (2026-09-25)."""
+    print("\nevents: tail is the newest, since is for walking forward")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    for i in range(500):
+        reg.bus.publish("cmd", cmd="shot", detail=str(i))
+    tail = vcctrld.handle(d, reg, {"cmd": "events", "tail": 200})
+    got = [ev["detail"] for ev in tail["events"]]
+    check("tail returns the newest 200", got == [str(i) for i in range(300, 500)],
+          got[:2] + got[-2:])
+    def shots(r):
+        return [ev["detail"] for ev in r["events"] if ev.get("cmd") == "shot"]
+    page = vcctrld.handle(d, reg, {"cmd": "events", "since": 0})
+    check("CONTROL: since=0 still pages from the oldest, for the page and "
+          "the public mirror that walk forward with it",
+          shots(page)[:1] == ["0"], shots(page)[:1])
+    check("an explicit since wins over tail",
+          shots(vcctrld.handle(d, reg, {"cmd": "events", "since": 0,
+                                        "tail": 5}))[:1] == ["0"])
+
+
+def test_input_log_is_not_evicted_by_polling():
+    """THE property, asserted with the flood that defeated the shared ring:
+    thousands of poll events must not push a click out of the input log."""
+    print("\ninput log: survives a polling flood")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    check("the suite's config writes no file (hermetic)",
+          reg.input_log.path is None, reg.input_log.path)
+    vcctrld.handle(d, reg, {"cmd": "mouse_click", "button": "right",
+                            "pace": 0, "as": "run-hw-C3512"})
+    for _ in range(5000):
+        vcctrld.handle(d, reg, {"cmd": "events", "tail": 1})
+        reg.bus.publish("cmd", cmd="spectrum", detail="")
+    bus_clicks = [ev for ev in reg.bus.since(0, 5000)["events"]
+                  if ev.get("cmd") == "mouse_click"]
+    check("CONTROL: the flood really does evict it from the shared bus",
+          bus_clicks == [], bus_clicks)
+    q = vcctrld.handle(d, reg, {"cmd": "input_log"})
+    clicks = [ev for ev in q["events"] if ev.get("cmd") == "mouse_click"]
+    check("the click is still in the input log", len(clicks) == 1, q["events"])
+    check("with which button, and who sent it",
+          clicks and clicks[0]["detail"] == "right"
+          and clicks[0]["by"] == "run-hw-C3512", clicks)
+    check("and the answer says it came from memory, not a file",
+          q["source"] == "memory" and q["write_error"], q)
+    check("observation is kept out of it",
+          all(ev.get("cmd") != "spectrum" for ev in q["events"]), "")
+
+
+def test_input_log_records_refusals_and_the_lock():
+    """An audit that only lists what succeeded cannot explain a click that
+    was refused because somebody else held the lock."""
+    print("\ninput log: refusals and lock transitions")
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    vcctrld.handle(d, reg, {"cmd": "lock", "action": "acquire", "as": "A"})
+    r = vcctrld.handle(d, reg, {"cmd": "mouse_click", "as": "B", "pace": 0})
+    check("B is refused", r["ok"] is False, r)
+    vcctrld.handle(d, reg, {"cmd": "lock", "action": "release", "as": "A"})
+    kinds = [ev["kind"] for ev in reg.input_log.query()["events"]]
+    check("acquire, refusal, release are all recorded",
+          kinds == ["lock.acquired", "input.refused", "lock.released"], kinds)
+
+
+def test_input_log_file_persists_windows_and_rotates():
+    import tempfile
+    print("\ninput log: the file")
+    tmp = tempfile.mkdtemp(prefix="inputlog")
+    path = os.path.join(tmp, "sub", "input.jsonl")
+    log = vcctrld.InputLog(path)
+    base = 1790305925.0
+    for i in range(10):
+        log.record({"seq": i + 1, "t": base + i, "kind": "cmd",
+                    "cmd": "mouse_click", "detail": "left", "ok": True})
+    check("the file is created, directory and all", os.path.exists(path))
+    check("mode 0600 -- `type` details are what somebody typed",
+          (os.stat(path).st_mode & 0o777) == 0o600,
+          oct(os.stat(path).st_mode & 0o777))
+    # A restart is a new object on the same path with an empty ring.
+    again = vcctrld.InputLog(path)
+    q = again.query(base + 3, base + 5)
+    check("a restarted daemon still answers from the file",
+          q["source"] == "file" and [ev["seq"] for ev in q["events"]] == [4, 5, 6],
+          q)
+    q = again.query(limit=4)
+    check("limit is honoured and truncation is said, not hidden",
+          len(q["events"]) == 4 and q["truncated"] is True, q)
+
+    again.ROTATE_BYTES = 300
+    for i in range(40):
+        again.record({"seq": 100 + i, "t": base + 100 + i, "kind": "cmd",
+                      "cmd": "key", "detail": "enter", "ok": True})
+    files = sorted(os.listdir(os.path.dirname(path)))
+    check("it rotates, and keeps KEEP old files",
+          files == ["input.jsonl", "input.jsonl.1", "input.jsonl.2",
+                    "input.jsonl.3"], files)
+    q = again.query(base + 100, None, 1000)
+    seqs = [ev["seq"] for ev in q["events"]]
+    check("a query across rotated files comes back oldest first",
+          seqs == sorted(seqs) and seqs[-1] == 139, seqs[-3:])
+
+
+def test_input_log_write_failure_is_never_fatal():
+    import tempfile
+    print("\ninput log: an unwritable path")
+    tmp = tempfile.mkdtemp(prefix="inputlog")
+    blocker = os.path.join(tmp, "a-file")
+    open(blocker, "w").close()
+    log = vcctrld.InputLog(os.path.join(blocker, "input.jsonl"))
+    log.record({"seq": 1, "t": 1.0, "kind": "cmd", "cmd": "key"})
+    q = log.query()
+    check("the event is still answered, from memory",
+          q["source"] == "memory" and len(q["events"]) == 1, q)
+    check("and the write failure is reported with it", q["write_error"], q)
+
+
+def test_parse_when_refuses_a_time_with_no_zone():
+    print("\ninput log: time parsing")
+    f = vcctrld._parse_when
+    check("Z", f("2026-09-25T03:12:05Z") == 1790305925.0,
+          f("2026-09-25T03:12:05Z"))
+    check("an offset is the same instant",
+          f("2026-09-24T20:12:05-07:00") == 1790305925.0)
+    check("epoch seconds, as a number or a string",
+          f(1790305925) == 1790305925.0 and f("1790305925.5") == 1790305925.5)
+    check("None is an open end", f(None) is None)
+    for bad in ("2026-09-25T03:12:05", "yesterday"):
+        try:
+            f(bad)
+        except ValueError:
+            ok = True
+        else:
+            ok = False
+        check("refused: %s" % bad, ok)
+
+
+def test_mouse_click_reassert_repeats_each_edge():
+    """Every PS/2 packet carries the absolute button state, so a nudge while
+    held re-delivers a dropped press and one after re-delivers a dropped
+    release. Asserted on the emitted event sequence, which is what USB4VC
+    turns into packets one-for-one."""
+    print("\nmouse click: reassert")
+    d = make_devices()
+    d.mouse_click("left", 0)
+    plain = list(d.log)
+    check("CONTROL: a plain click is still exactly press, release",
+          plain == [(e.EV_KEY, e.BTN_LEFT, 1), (e.EV_KEY, e.BTN_LEFT, 0)],
+          plain)
+    d = make_devices()
+    d.mouse_click("left", 0, reassert=True)
+    want = [(e.EV_KEY, e.BTN_LEFT, 1),
+            (e.EV_REL, e.REL_X, 1), (e.EV_REL, e.REL_X, -1),
+            (e.EV_KEY, e.BTN_LEFT, 0),
+            (e.EV_REL, e.REL_X, 1), (e.EV_REL, e.REL_X, -1)]
+    check("each edge is followed by a nudge right and back", d.log == want,
+          d.log)
+    check("net movement is zero",
+          sum(v for t, c, v in d.log if t == e.EV_REL) == 0)
+    reg = vcctrld.Registry(make_devices())
+    vcctrld.handle(reg.devs, reg, {"cmd": "mouse_click", "reassert": True,
+                                   "pace": 0})
+    ev = [x for x in reg.input_log.query()["events"]
+          if x.get("cmd") == "mouse_click"]
+    check("the log says a reassert click was sent",
+          ev and ev[0]["detail"] == "left reassert", ev)
+
+
 def test_activity_age():
     """'harness has been in ledwait for 14 minutes' is the operator's question
     in one line. Test it reports an in-flight command while it is still

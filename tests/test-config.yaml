@@ -22,6 +22,13 @@ version: 1
 rig:
   name: test-suite
 
+# No input-log FILE: the suite must not write under /var/lib (and, run as
+# root, would succeed). Null keeps InputLog's in-memory ring, which is what
+# the tests that exercise the file give an explicit temporary path instead.
+daemon:
+  input_log:
+    path: null
+
 # No `capabilities.power.settings.host`, deliberately and permanently. With no
 # host the power path stays inert, which is what makes the suite hermetic.
 capabilities:

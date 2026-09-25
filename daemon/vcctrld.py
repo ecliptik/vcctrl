@@ -2034,15 +2034,53 @@ class Devices(object):
         self._hid_mouse_buttons &= ~HID_MOUSE_BUTTON_BITS[code]
         self._write_hid_mouse_report()
 
-    def mouse_click(self, button, pace=DEFAULT_PACE_S):
+    def _mouse_nudge(self, dx):
+        """A one-axis move that also carries the CURRENT button state, on
+        either backend: a PS/2 packet always encodes the buttons, and so does
+        a HID report. Caller holds self.lock."""
+        if not self.hid_mode:
+            self.mouse.write(e.EV_REL, e.REL_X, int(dx))
+            self.mouse.syn()
+            return
+        self._write_hid_mouse_report(dx, 0)
+
+    def mouse_click(self, button, pace=DEFAULT_PACE_S, reassert=False):
+        """Press, release.
+
+        `reassert` (opt-in) follows EACH edge with a 1-count nudge right and
+        back, so every edge travels in three packets rather than one. WHY:
+        USB4VC's IBM PC firmware (0.5.7, ps2mouse_update in
+        firmware/ibmpc/Src/main.c) pops the queued mouse events BEFORE it
+        transmits and discards the packet if the host inhibits the clock
+        mid-byte -- no retry, unlike its keyboard path. A lost press packet
+        is a lost click: the release packet reports buttons-up, which is no
+        change. But every PS/2 packet carries the absolute button state, so
+        a nudge sent while the button is held re-delivers the press, and one
+        after the release re-delivers the release. docs/MOUSE.md sec. 10.
+
+        WHAT IT COSTS: the cursor moves 1 count and back while held -- a
+        drag, to a UI that cares -- and at the right-hand screen edge the +1
+        is clamped away, leaving a net 1-count drift left. WHAT IT DOES NOT
+        FIX: the nudges can be dropped too; it lowers the loss rate, it does
+        not make a click certain. Nothing on this rig can confirm a click
+        landed except the target itself.
+        """
         code = MOUSE_BUTTONS.get(button.lower())
         if code is None:
             raise ValueError("unknown button: %s" % button)
         with self.lock:
             self._mouse_button_press(code)
             time.sleep(pace)
+            if reassert:
+                for dx in (1, -1):
+                    self._mouse_nudge(dx)
+                    time.sleep(pace)
             self._mouse_button_release(code)
             time.sleep(pace)
+            if reassert:
+                for dx in (1, -1):
+                    self._mouse_nudge(dx)
+                    time.sleep(pace)
 
     def mouse_down(self, button):
         """Press and hold, for a drag. The matching mouse_up may never
@@ -2178,14 +2216,23 @@ class Bus(object):
         self.lock = threading.Lock()
         self.seq = 0
         self.events = collections.deque(maxlen=cap)
+        # Set by Registry. None (a bare Bus, as the tests build) means input
+        # events are simply not teed anywhere else.
+        self.input_log = None
 
-    def publish(self, kind, **fields):
+    def publish(self, kind, _input=False, **fields):
+        """`_input` marks an event that belongs in the InputLog as well --
+        decided by the PUBLISHER, which is the only place that knows whether
+        this was input (see Registry.dispatch and Arbiter). Teed outside the
+        bus lock: the file write must never hold up another publisher."""
         with self.lock:
             self.seq += 1
             ev = {"seq": self.seq, "t": time.time(), "kind": kind}
             ev.update(fields)
             self.events.append(ev)
-            return ev
+        if _input and self.input_log is not None:
+            self.input_log.record(ev)
+        return ev
 
     def since(self, seq, limit=200):
         with self.lock:
@@ -2194,8 +2241,173 @@ class Bus(object):
             oldest = self.events[0]["seq"] if self.events else 0
         # `missed` tells a reconnecting client it fell off the back of the ring
         # rather than letting it believe it has a complete history.
+        #
+        # out[:limit] is the OLDEST `limit` after `seq` -- right for a pager
+        # walking forward (the page and the public mirror both do), and wrong
+        # for "what just happened", which is tail().
         return {"events": out[:limit], "seq": newest,
                 "missed": seq != 0 and seq + 1 < oldest}
+
+    def tail(self, n=200):
+        """The NEWEST n events. `since(0)` answers a different question: it
+        returns the oldest page of the ring, and `vcctrl events` with no
+        argument used to call it -- so "the recent window" was, at ~10
+        events/s of browser polling, a 20-second slice from three minutes
+        ago (2026-09-25, found while auditing lost clicks in dosags C3512)."""
+        with self.lock:
+            out = list(self.events)[-n:] if n > 0 else []
+            newest = self.seq
+        return {"events": out, "seq": newest, "missed": False}
+
+
+class InputLog(object):
+    """Every input the daemon sent, kept where browser polling cannot evict it.
+
+    WHY A SEPARATE RECORD. The Bus holds 2000 events of every kind, and an
+    open KVM tab publishes ~10 a second (shot, spectrum, level, video...), so
+    a click is gone from it in about three minutes. dosags C3512 lost 11-13
+    clicks on 2026-09-25 and the question "what did the daemon actually send,
+    and when" was already unanswerable when anyone asked it. Same finding,
+    same fix, as the WebSocket connection log: two things with different
+    lifetimes do not belong in one ring.
+
+    TWO LAYERS. An in-memory ring of input events only (so the flood cannot
+    reach it), and an append-only JSONL file, rotated by size, that survives a
+    daemon restart. The file is what answers "what happened during last
+    night's run". The ring is what is left if the file cannot be written, and
+    query() says which one it answered from.
+
+    WHAT IT CAN AND CANNOT PROVE. A record here means vcctrld wrote the event
+    to its uinput (or HID) device and the call returned. It says NOTHING about
+    whether USB4VC relayed it or the target received it -- the PS/2 side has no
+    witness at all (docs/MOUSE.md sec. 10). It narrows a loss to "after the
+    daemon"; it cannot place it further.
+
+    Mode 0600: `type` details are the literal text typed (see _summarise), so
+    this file can hold whatever somebody typed at the target. Read it through
+    the daemon's `input_log` command, not off the disk.
+    """
+
+    ROTATE_BYTES = 4 * 1024 * 1024
+    KEEP = 3                # input.jsonl plus .1 .. .3 -- ~16 MB worst case
+    RING = 2000
+
+    def __init__(self, path, ring=None):
+        self.path = path
+        self.lock = threading.Lock()
+        self.ring = collections.deque(maxlen=ring or self.RING)
+        self.started_t = time.time()
+        self.error = None if path else "disabled by configuration"
+
+    @classmethod
+    def from_config(cls):
+        """daemon.input_log.path: absent -> <state_dir>/input.jsonl (or
+        input-<profile>.jsonl for a named profile, so two profiles sharing a
+        state_dir cannot interleave); explicit null -> no file, ring only."""
+        v = CFG.optional("daemon.input_log.path")
+        if v is vcconfig.NONE:
+            return cls(None)
+        if v is not vcconfig.ABSENT:
+            return cls(v)
+        name = CFG.optional("daemon.profile_name")
+        fname = ("input-%s.jsonl" % name
+                 if name not in (vcconfig.ABSENT, vcconfig.NONE)
+                 else "input.jsonl")
+        return cls(os.path.join(
+            CFG.default("daemon.state_dir", "/var/lib/vcctrl"), fname))
+
+    def record(self, ev):
+        ev = dict(ev)
+        with self.lock:
+            self.ring.append(ev)
+            if not self.path:
+                return
+            try:
+                # "t" first, so query() can window a line without parsing it.
+                line = json.dumps(dict([("t", ev["t"])] + [
+                    (k, v) for k, v in ev.items() if k != "t"]),
+                    separators=(",", ":")) + "\n"
+                d = os.path.dirname(self.path)
+                if d:
+                    os.makedirs(d, exist_ok=True)
+                fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+                             0o600)
+                try:
+                    os.write(fd, line.encode("utf-8"))
+                    size = os.fstat(fd).st_size
+                finally:
+                    os.close(fd)
+                if size > self.ROTATE_BYTES:
+                    self._rotate()
+                self.error = None
+            except Exception as exc:
+                # Never fatal, and never raised into the input path: a full
+                # disk must not cost the keyboard. Said once per new error
+                # rather than per event, and reported by query().
+                msg = errstr(exc)
+                if msg != self.error:
+                    sys.stderr.write("input log write failed: %s\n" % msg)
+                self.error = msg
+
+    def _rotate(self):
+        for i in range(self.KEEP, 0, -1):
+            src = self.path if i == 1 else "%s.%d" % (self.path, i - 1)
+            if os.path.exists(src):
+                os.replace(src, "%s.%d" % (self.path, i))
+
+    def _files(self):
+        """Oldest first."""
+        out = ["%s.%d" % (self.path, i) for i in range(self.KEEP, 0, -1)]
+        return [p for p in out + [self.path] if os.path.exists(p)]
+
+    def query(self, from_t=None, to_t=None, limit=500):
+        """Input events with from_t <= t <= to_t, oldest first, at most
+        `limit` -- `truncated` says the window held more. Answered from the
+        file when there is one; otherwise from the ring, whose scope starts at
+        this daemon's start, and the reply says so."""
+        lo = float("-inf") if from_t is None else float(from_t)
+        hi = float("inf") if to_t is None else float(to_t)
+        limit = max(1, int(limit))
+        out, truncated = [], False
+        if self.path and os.path.exists(self.path):
+            source = "file"
+            for p in self._files():
+                with open(p, "rb") as f:
+                    for raw in f:
+                        # {"t":1790305925.12,... -- window on the prefix and
+                        # parse only what is kept. Rule 1: a query must not
+                        # parse 16 MB of JSON on the process that types.
+                        try:
+                            end = raw.index(b",")
+                            t = float(raw[5:end])
+                        except ValueError:
+                            continue
+                        if t < lo or t > hi:
+                            continue
+                        if len(out) >= limit:
+                            truncated = True
+                            break
+                        try:
+                            out.append(json.loads(raw))
+                        except ValueError:
+                            continue
+                if truncated:
+                    break
+            scope = "persisted across restarts, rotated at %d MB x %d" % (
+                self.ROTATE_BYTES // (1024 * 1024), self.KEEP + 1)
+        else:
+            source = "memory"
+            with self.lock:
+                rows = [ev for ev in self.ring if lo <= ev["t"] <= hi]
+            truncated = len(rows) > limit
+            out = rows[:limit]
+            scope = ("this daemon's run only, since %s, last %d input events"
+                     % (time.strftime("%Y-%m-%dT%H:%M:%S%z",
+                                      time.localtime(self.started_t)),
+                        self.ring.maxlen))
+        return {"ok": True, "events": out, "truncated": truncated,
+                "source": source, "scope": scope, "path": self.path,
+                "write_error": self.error}
 
 
 class Activity(object):
@@ -2268,8 +2480,9 @@ class Arbiter(object):
         if broke:
             # A break is the tainting event. Published so it lands in the run's
             # log rather than living only in whoever clicked the button's head.
-            self.bus.publish("lock.broken", broke=broke, by=owner, taint=True)
-        self.bus.publish("lock.acquired", owner=owner)
+            self.bus.publish("lock.broken", _input=True, broke=broke, by=owner,
+                             taint=True)
+        self.bus.publish("lock.acquired", _input=True, owner=owner)
         return {"ok": True, "owner": owner}
 
     def release(self, owner=None, force=False):
@@ -2280,7 +2493,8 @@ class Arbiter(object):
                 return {"ok": False, "error": "input locked by %r" % self.owner,
                         "locked_by": self.owner}
             was, self.owner, self.since = self.owner, None, None
-        self.bus.publish("lock.released", owner=was, forced=bool(force))
+        self.bus.publish("lock.released", _input=True, owner=was,
+                         forced=bool(force))
         return {"ok": True, "owner": None, "was": was}
 
     def check(self, who):
@@ -2466,7 +2680,8 @@ class InputCapability(Capability):
         return {"ok": True}
 
     def _mouse_click(self, req):
-        self.devs.mouse_click(req.get("button", "left"), _pace(req))
+        self.devs.mouse_click(req.get("button", "left"), _pace(req),
+                              reassert=bool(req.get("reassert")))
         return {"ok": True}
 
     def _mouse_down(self, req):
@@ -3251,7 +3466,7 @@ class LedsCapability(Capability):
         LedsCapability.verified_at = time.time()
         LedsCapability.verified_ok = changed
         if self.bus:
-            self.bus.publish("input.verify", ok=changed)
+            self.bus.publish("input.verify", _input=True, ok=changed)
         return {"ok": True, "verified": changed, "before": before,
                 "after": settled,
                 "restored": restored,
@@ -11604,6 +11819,10 @@ class Registry(object):
     def __init__(self, devs):
         self.devs = devs
         self.bus = Bus()
+        # Built here, under this profile's config scope, so a second
+        # profile gets its own file rather than the primary's.
+        self.input_log = InputLog.from_config()
+        self.bus.input_log = self.input_log
         self.activity = Activity()
         self.arbiter = Arbiter(self.bus)
         self.caps = {}
@@ -11752,7 +11971,7 @@ class Registry(object):
         if _gated(cmd, req):
             refusal = self.arbiter.check(req.get("as"))
             if refusal is not None:
-                self.bus.publish("input.refused", cmd=cmd,
+                self.bus.publish("input.refused", _input=True, cmd=cmd,
                                  locked_by=refusal["locked_by"],
                                  by=req.get("as"))
                 return refusal
@@ -11762,13 +11981,15 @@ class Registry(object):
         try:
             resp = fn(req)
         except Exception as exc:
-            self.bus.publish("cmd.error", cmd=cmd, by=req.get("as"),
+            self.bus.publish("cmd.error", _input=_gated(cmd, req),
+                             cmd=cmd, by=req.get("as"),
                              error="%s: %s" % (type(exc).__name__, exc))
             raise
         finally:
             self.activity.end(ident)
         ok = bool(resp.get("ok"))
-        self.bus.publish("cmd", cmd=cmd, by=req.get("as"),
+        self.bus.publish("cmd", _input=_gated(cmd, req),
+                         cmd=cmd, by=req.get("as"),
                          ok=ok,
                          ms=round((time.time() - t0) * 1000.0, 1),
                          detail=_summarise(cmd, req))
@@ -11897,9 +12118,42 @@ def _summarise(cmd, req):
         return "%s,%s" % (req.get("dx", 0), req.get("dy", 0))
     if cmd in ("mouse_down", "mouse_up"):
         return req.get("button", "left")
+    if cmd == "mouse_click":
+        # Was missing entirely, so every click in the log read as a bare
+        # "mouse_click" and left/right could not be told apart afterwards.
+        return req.get("button", "left") + (
+            " reassert" if req.get("reassert") else "")
     if cmd == "mouse_wheel":
         return str(req.get("dy", 0))
     return ""
+
+
+def _parse_when(v):
+    """None, epoch seconds (number or numeric string), or ISO 8601 with an
+    offset or Z -> epoch seconds. A NAIVE ISO time is refused rather than
+    guessed at: the daemon host's local zone and the caller's are not the
+    same fact, and a window read in the wrong one silently misses everything
+    it was meant to cover."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    s = str(v).strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    import datetime
+    try:
+        dt = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("unparseable time %r -- use epoch seconds or ISO "
+                         "8601 with an offset, e.g. 2026-09-25T03:12:05Z" % s)
+    if dt.tzinfo is None:
+        raise ValueError("time %r has no zone -- add Z or an offset "
+                         "(e.g. -07:00); a naive time would be read in the "
+                         "daemon host's zone, not yours" % s)
+    return dt.timestamp()
 
 
 def _narrate(cmd, req):
@@ -12024,9 +12278,25 @@ def handle(devs, registry, req):
                 }}
 
     if cmd == "events":
+        # `tail` (newest N) is what a person or an agent means by "recent";
+        # `since` is for a pager walking forward. See Bus.tail().
+        if req.get("tail") is not None and req.get("since") is None:
+            return dict({"ok": True}, **registry.bus.tail(int(req["tail"])))
         return dict({"ok": True},
                     **registry.bus.since(int(req.get("since", 0)),
                                          int(req.get("limit", 200))))
+
+    if cmd == "input_log":
+        # Never gated: an observation, and auditing a run must not need the
+        # lock the run is holding.
+        try:
+            lo = _parse_when(req.get("from"))
+            hi = _parse_when(req.get("to"))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        out = registry.input_log.query(lo, hi, int(req.get("limit", 500)))
+        out["from"], out["to"] = lo, hi
+        return out
 
     if cmd == "activity":
         # Everything the browser needs to answer "is it stuck": what is running

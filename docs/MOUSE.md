@@ -284,7 +284,91 @@ no error to notice. Prefer an explicit `mouse down` / wait / `mouse up`
 pair over `mouse click` whenever the target's own polling rate is unknown
 or suspected slow.
 
-## 10. Open questions
+## 10. The PS/2 side can drop a click, and nothing sees it
+
+**2026-09-25**, dosags cell C3512: 11-13 clicks sent late in the run
+(03:12:05-03:13:00Z) never reached CuteMouse. Every send returned rc=0. The
+witness is CuteMouse's own press counter (INT 33h AX=5, read by dosags'
+lost-click accounting): it matched the presses the game saw (32 = 32), and
+both fell short of what was sent. A counter goes up even for a click too
+brief for the game to poll, and the game held ~38-40 fps in that room, so
+sec. 9's slow-polling miss cannot explain it. Other cells lost nothing.
+
+**What the logs could say: nothing about the clicks.** Read on the daemon
+host, read-only:
+
+- vcctrld kept its event history only in memory, in a 2000-event ring. An
+  open KVM tab's polling publishes ~10 events/s, so a click is gone from it
+  in about three minutes. By the time anyone asked, C3512 was hours old.
+- USB4VC's `usb4vc_debug_log.txt` (and the journal, which gets the same
+  stdout through `tee`) timestamps exactly one kind of line: a message the
+  protocol board raises over SPI. On the IBM PC board that is only ever a
+  keyboard LED request. Mouse events, SPI sends, and anything on the PS/2
+  wire are never logged. What the log does show for C3512: no device
+  disappeared or reopened, and rpi_app did not restart, so the Pi → uinput →
+  rpi_app path stayed attached.
+
+**What the firmware does: drops the packet, no retry.** USB4VC IBM PC
+protocol-board firmware 0.5.7 (the boot `PB INFO` frame carries 0,5,7; the
+upstream source at `firmware/ibmpc/Src/` names the same version):
+
+- `ps2mouse_update()` (`main.c`) pops **every** queued mouse event and ORs
+  the buttons together into one packet, then transmits it.
+- `ps2mouse_write()` (`ps2mouse.c`) first waits up to 200 ms for an idle bus.
+  So an inhibit already in place before a byte starts is waited out.
+- `ps2mouse_write_nowait()` checks CLK after every bit. If the host pulls it
+  low mid-byte, it returns `PS2_ERROR_HOST_INHIBIT`. A bus not idle within
+  200 ms between bytes returns `PS2_ERROR_TIMEOUT`.
+- On either error the packet is abandoned. The events were already popped.
+- The keyboard path in the same file is the opposite. `ps2kb_update()` only
+  pops a key after it was sent, and on an inhibit it waits 1 ms and retries.
+  That asymmetry is why keys survive conditions that lose clicks.
+- Two more silent drops:
+  - **`0xFE` (resend)** is answered with an ACK and nothing is re-sent.
+  - **Reporting disabled or not in stream mode** (e.g. while CuteMouse
+    re-initialises on an INT 33h reset): events are popped and thrown away.
+
+Every PS/2 packet carries the absolute button state, so one lost packet
+costs exactly one click. Lose the press and the release reports "up", which
+is no change. Lose the release and the button looks held until the next
+packet, which swallows the next click. A mid-packet inhibit leaves a
+truncated packet, and the driver can lose sync for several more. The 8042
+inhibits the aux clock while its single output byte is unread (IRQ12 not
+yet serviced), while keyboard traffic is in flight, and while it handles a
+command written to port 0x64.
+
+**Status: the leading hypothesis for C3512, not a finding.** No witness exists
+on either side of the board, so the loss cannot be placed from any record.
+dosags' own lab notes say the target's interrupts-off drains are too rare
+and too short to explain it alone. What inhibits mid-byte late in a run is
+still unidentified. Only a logic analyzer on the aux CLK/DATA lines, or
+firmware that counts its own drops, can close it.
+
+**What vcctrl now has for this:**
+
+- **`vcctrl input-log` / `vcctrl_input_log`.** Every input command (and every
+  lock transition, refusal and `verify_input`), kept in its own ring and in
+  `<state_dir>/input.jsonl` (`input-<profile>.jsonl` for a named profile).
+  The file is mode 0600, rotated at 4 MB × 4, and queryable by time window.
+  It proves what vcctrld sent. It cannot prove delivery.
+- **`vcctrl mouse click --reassert` / `vcctrl_mouse_click(reassert=True)`.**
+  Each edge is followed by a 1-count nudge right and back. Because every
+  packet carries the button state, a nudge re-delivers a dropped press or
+  release. This lowers the loss rate but does not remove it: the nudges can
+  be dropped too. The costs are a 1-count move while the button is held,
+  and a net 1-count drift left at the right-hand screen edge. Opt-in.
+  Neither mode helps against sec. 9: a game that polls slower than the click
+  lasts still needs `mouse down` / wait / `mouse up`.
+- **`vcctrl events` with no argument now returns the newest 200 events.**
+  It used to return the oldest page of the ring while the help said
+  "recent".
+
+## 11. Open questions
+
+- What inhibits the aux clock mid-byte late in a dosags run, if that is
+  what happened to C3512 (sec. 10).
+- Whether `--reassert` measurably lowers the loss rate on a cell that loses
+  clicks without it. Unmeasured.
 
 - Whether the acceleration factor is stable within one environment or varies
   with speed, which is what a real acceleration *curve* would imply. 1.49x was

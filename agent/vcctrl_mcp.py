@@ -1035,10 +1035,33 @@ def vcctrl_activity(profile: "str | None" = None) -> dict:
 
 @mcp.tool()
 def vcctrl_events(since: "int | None" = None, profile: "str | None" = None) -> dict:
-    """Activity log since a sequence number (omit for the recent window)."""
+    """Activity log. Omit `since` for the NEWEST 200 events; pass a sequence
+    number to get the next 200 after it, oldest first. An open KVM tab
+    publishes ~10 events/s, so this ring covers only a few minutes -- for
+    what input was sent during a past run, use vcctrl_input_log."""
     args = ["events"]
     if since is not None:
         args.append(since)
+    return _run_vcctrl_p(args, profile)
+
+
+@mcp.tool()
+def vcctrl_input_log(start: "str | None" = None, end: "str | None" = None,
+                     limit: int = 500, profile: "str | None" = None) -> dict:
+    """Every input command the daemon sent (key, type, mouse, lock
+    acquire/release/break, refusals, verify_input) in a time window, oldest
+    first. Persisted on the daemon host, so browser polling cannot push it
+    out and it outlasts a restart. `start`/`end` are epoch seconds or ISO
+    8601 WITH a zone (e.g. "2026-09-25T03:12:05Z"); a time with no zone is
+    refused. `source` says whether the answer came from the file or only the
+    in-memory ring (this daemon run only). A row proves vcctrld wrote the
+    event, NOT that the target received it: the USB4VC/PS/2 side has no
+    witness. Never gated."""
+    args = ["input-log", "--limit", str(int(limit))]
+    if start is not None:
+        args += ["--from", str(start)]
+    if end is not None:
+        args += ["--to", str(end)]
     return _run_vcctrl_p(args, profile)
 
 
@@ -1132,9 +1155,20 @@ def vcctrl_mouse_move(dx: int, dy: int, profile: "str | None" = None) -> dict:
 
 
 @mcp.tool()
-def vcctrl_mouse_click(button: str = "left", profile: "str | None" = None) -> dict:
-    """Click left, right, or middle."""
-    return _gated_run(["mouse", "click", button], profile)
+def vcctrl_mouse_click(button: str = "left", reassert: bool = False,
+                       profile: "str | None" = None) -> dict:
+    """Click left, right, or middle. `reassert=True` follows each edge with
+    a 1-count nudge right and back: the USB4VC board drops a PS/2 mouse
+    packet with no retry when the target's 8042 inhibits the clock mid-byte,
+    and every packet carries the button state, so the nudges re-deliver a
+    dropped press or release. It lowers the loss rate but cannot guarantee
+    the click, and the cursor moves 1 count while the button is held
+    (docs/MOUSE.md sec. 10). Neither mode is noticed by a game that polls
+    slower than the click lasts -- use mouse_down / wait / mouse_up then."""
+    args = ["mouse", "click", button]
+    if reassert:
+        args.append("--reassert")
+    return _gated_run(args, profile)
 
 
 @mcp.tool()

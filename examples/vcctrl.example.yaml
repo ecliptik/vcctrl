@@ -59,6 +59,13 @@ daemon:
   state_dir: /var/lib/vcctrl
   socket: /run/vcctrl.sock
 
+  # Every input command the daemon sends, persisted for after-the-fact
+  # audit (`vcctrl input-log`, docs/MOUSE.md sec. 10). Leave unset for
+  # <state_dir>/input.jsonl (input-<profile_name>.jsonl when named); set to
+  # null to keep only the in-memory ring.
+  # input_log:
+  #   path: /var/lib/vcctrl/input.jsonl
+
   # THIS PROFILE'S OWN NAME -- e.g. "gateway2000". Optional: a rig with no
   # second profile at all can leave this unset and run exactly as it
   # always has, reachable only at `socket` above. Setting it gives this

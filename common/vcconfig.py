@@ -198,6 +198,13 @@ SCHEMA = {
         # from its filename, never from this key -- see discover_profiles()'s
         # own comment on why the directory listing is the registry.
         "profile_name": str,
+        # The persistent record of every input command (InputLog in
+        # vcctrld.py). Absent: <state_dir>/input.jsonl, or
+        # input-<profile_name>.jsonl for a named profile. Explicit null: no
+        # file, in-memory ring only -- what the test suite uses.
+        "input_log": {
+            "path": str,
+        },
         "usb4vc": {
             "app_dir": str,
             "debug_log": str,
