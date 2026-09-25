@@ -7312,7 +7312,7 @@ class BoardCapability(Capability):
             bid = (self.settings or {}).get("board_id")
             if bid is None:
                 out = {"id": None, "name": None, "target": None,
-                       "keyboard": None,
+                       "keyboard": None, "fw_ver": None,
                        "source": "configured", "stale": None,
                        "reason": "backend is `static` but no board_id is set"}
             else:
@@ -7320,6 +7320,7 @@ class BoardCapability(Capability):
                 out = {"id": bid, "name": (self.settings or {}).get("name"),
                        "target": self._targets().get(bid),
                        "keyboard": self._keyboards().get(bid),
+                       "fw_ver": None,
                        "source": "configured", "stale": None,
                        "reason": "asserted by configuration, not detected -- "
                                  "it cannot notice a board swap"}
@@ -7336,7 +7337,7 @@ class BoardCapability(Capability):
                 reason = errstr(exc)
         if not rec:
             out = {"id": None, "name": None, "target": None, "keyboard": None,
-                   "source": None, "stale": None,
+                   "fw_ver": None, "source": None, "stale": None,
                    "reason": ("usb4vc has not reported a board (%s)"
                               % reason)[:ERR_MAX]}
         else:
@@ -7347,6 +7348,19 @@ class BoardCapability(Capability):
                    "name": rec.get("name"),
                    "target": self._targets().get(bid),
                    "keyboard": self._keyboards().get(bid),
+                   # The protocol board's firmware version, [major, minor,
+                   # patch], as PB INFO reported it to the running rpi_app.
+                   # ONLY from the status file: the journal's PB INFO frame
+                   # belongs to this boot, and the board can be reflashed
+                   # within a boot (2026-09-25 was exactly that), so a version
+                   # read from it could name firmware no longer on the board.
+                   # Null there, never a guess. 0.5.1xx is vcctrl's patched
+                   # build (firmware/usb4vc-ibmpc); a harness that records it
+                   # can void a cell whose firmware differs from its round's.
+                   "fw_ver": (list(rec["fw_ver"])
+                              if src_name == "status-file"
+                              and isinstance(rec.get("fw_ver"), (list, tuple))
+                              else None),
                    "source": src_name,
                    # The journal path cannot prove the frame belongs to the
                    # currently running rpi_app -- only to this boot -- so it is
@@ -12394,6 +12408,10 @@ def handle(devs, registry, req):
                 "lock": registry.arbiter.status(),
                 "last_event_age_s": (round(time.time() - latest[0]["t"], 3)
                                      if latest else None),
+                # When this daemon process started. A harness that reads it
+                # at round start and end detects a restart inside the round
+                # (the bus seq and every in-memory record reset with it).
+                "daemon_start_t": DAEMON_START_T,
                 "seq": registry.bus.seq}
 
     if cmd == "lock":

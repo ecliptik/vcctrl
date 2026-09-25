@@ -359,7 +359,7 @@ firmware that counts its own drops, can close it.
   and a net 1-count drift left at the right-hand screen edge. Opt-in.
   Neither mode helps against sec. 9: a game that polls slower than the click
   lasts still needs `mouse down` / wait / `mouse up`.
-- **Board-side counters (built 2026-09-25, not yet on the board).**
+- **Board-side counters: on the board since 2026-09-25 15:08Z (0.5.107).**
   `firmware/usb4vc-ibmpc/` is a GCC build of the stock source, plus a patch
   that counts every way a mouse event can fail to reach the host: packets
   abandoned on an inhibit or a timeout, truncated packets, button edges
@@ -368,7 +368,10 @@ firmware that counts its own drops, can close it.
   applied, `vcctrl mouse-stats` reads the counters, and a moved loss counter
   becomes a `mouse.dropped` row in `vcctrl input-log`, beside the click.
   That is the first witness on this rig for whether a click left the board.
-  Until it is flashed, `mouse-stats` says `supported: null` or `false`.
+  With stock firmware, `mouse-stats` says `supported: false`. With rpi_app
+  unpatched, it says `null`. The counters are read on rpi_app's ~1 s idle
+  poll, not live, so `age_s` says how old a reading is. Bench notes:
+  `firmware/usb4vc-ibmpc/README.md`.
 - **`vcctrl events` with no argument now returns the newest 200 events.**
   It used to return the oldest page of the ring while the help said
   "recent".

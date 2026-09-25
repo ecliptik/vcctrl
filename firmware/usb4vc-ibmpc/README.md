@@ -51,6 +51,33 @@ compiler, and microlib versus newlib-nano). Only running it on the board
 can show equivalence, which is why `stock` exists: flash it first, and any
 misbehaviour is the compiler rather than the patch.
 
+## On the board: 2026-09-25, operator at the bench
+
+Flashed 15:04-15:08Z, following the runbook below, with the Gateway off:
+
+- **`probe` works from the Pi 5.** BOOT0/RESET are driven through the same
+  RPi.GPIO shim rpi_app uses, and the ROM bootloader answered on I2C 0x3b:
+  device ID 0x0448 (STM32F07x), bootloader 0x10. `stm32flash`'s
+  "serial_posix ... Not a tty" lines are it trying serial first, and are
+  harmless.
+- **`backup` read all 128 KB, with no read protection.** The first 18,236
+  bytes were **byte-identical to upstream's stock 0.5.7 release**, and the
+  rest was erased (all 0xFF). So the board ran exactly the vendored rollback
+  image, and that rollback is exact. The backup is on the Pi at
+  `~claude/usb4vc-fw/board-backup-20260925.bin`, sha256 `475df17a…`.
+- **stock-GCC** wrote and verified, PB INFO 0.5.7. rpi_app came up on it,
+  and `vcctrl board` showed the IBM PC board from the live status file.
+- **counters** wrote and verified, PB INFO **0.5.107**, and board.json
+  `fw_ver` [0, 5, 107].
+- With the rpi_app patch applied, `vcctrl mouse-stats` returned
+  `supported: true` with all counters 0. Two 1-count `mouse move`s then gave
+  `ev_in` 2 and `pkt_built` 0. The board's PS/2 port reads as absent while
+  the Gateway is off, so the events wait in the board's 16-deep queue, to be
+  sent or discarded at the next power-on.
+
+**Not yet checked on the board:** keyboard, LEDs and mouse with the Gateway
+powered. That needs the operator's approval to power on.
+
 ## Flashing: the bench runbook
 
 Only with the operator at the bench and nothing else using the Gateway. The

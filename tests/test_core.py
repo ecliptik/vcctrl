@@ -8174,6 +8174,43 @@ def test_static_board_backend_says_it_was_asserted():
           out2["id"] is None and "no board_id" in (out2["reason"] or ""), out2)
 
 
+def test_board_reports_fw_ver_only_from_the_status_file():
+    """dosags voids a click-loss cell whose protocol-board firmware differs
+    from its round's record, so the version must be readable, and must never
+    be a guess: the journal's PB INFO frame belongs to the boot, and the
+    board was reflashed within a boot on 2026-09-25."""
+    import json as _json
+    import tempfile
+    print("\nboard: fw_ver")
+    d = tempfile.mkdtemp(prefix="fwver")
+    p = os.path.join(d, "board.json")
+    _json.dump({"id": 1, "name": "IBM PC Compatible", "fw_ver": [0, 5, 107],
+                "hw_rev": 0, "t": time.time()}, open(p, "w"))
+    cap = vcctrld.BoardCapability(None)
+    cap.FILE = p
+    out = cap.snapshot()
+    check("from the status file: [major, minor, patch]",
+          out["fw_ver"] == [0, 5, 107] and out["source"] == "status-file", out)
+    cap.FILE = os.path.join(d, "absent.json")
+    cap._from_journal = lambda: ({"id": 1, "name": None, "fw_ver": [0, 5, 7],
+                                  "hw_rev": None, "t": None}, "journal")
+    out = cap.snapshot()
+    check("from the journal: null, even if a version could be parsed",
+          out["source"] == "journal" and out["fw_ver"] is None, out)
+    cap._from_journal = lambda: (_ for _ in ()).throw(LookupError("none"))
+    out = cap.snapshot()
+    check("no reading: the key is still present, null",
+          "fw_ver" in out and out["fw_ver"] is None, out)
+    st = vcctrld.BoardCapability(None)
+    st.backend_name, st.settings = "static", {"board_id": 1}
+    check("static backend: null, a declaration has no firmware",
+          st.snapshot()["fw_ver"] is None)
+    reg = vcctrld.Registry(make_devices())
+    a = vcctrld.handle(reg.devs, reg, {"cmd": "activity"})
+    check("activity carries the daemon's start time",
+          a["daemon_start_t"] == vcctrld.DAEMON_START_T, a)
+
+
 def test_an_unknown_backend_name_fails_rather_than_falling_back():
     """A typo must not be absorbed.
 
