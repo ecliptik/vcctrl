@@ -400,10 +400,32 @@ What the counters say, read against the firmware source:
   host stalls longer than 200 ms.
 
 dosags reports the cell ran its MIDI drain with interrupts off
-(`DRAIN_STI=0`), which would leave IRQ12 unserviced. Whether the game's own
-click accounting shows these clicks lost is being checked by the dosags lab
-session. Until it does, this shows the mechanism occurring; it does not yet
-show it costing a click the target needed.
+(`DRAIN_STI=0`), which would leave IRQ12 unserviced.
+
+**Correlated, 2026-09-25**, by the dosags lab session (their LAB-JOURNEYS
+8.38, repo lab/journeys at 4bb8813). Engine clicks and host clicks aligned
+one to one (rms 39 ms):
+
+- The engine counted 42 presses against 43 in-window host clicks: **one
+  press lost.**
+- The first loss row (pkt_timeout + pkt_partial, polled 19:40:48.57)
+  matches the cell's only main-loop stall of 200 ms or more with a mouse
+  packet in flight: 239 ms, spanning click 41's release exactly. The cell's
+  other four stalls of 200 ms or more had no packet in flight and cost
+  nothing.
+- After it, click 42 reached the engine about 1.4 s late, and click 43 was
+  never counted, with no board counter moving for it. That is the
+  truncated-packet desync described above: a loss AFTER the board, caused
+  by the loss AT the board.
+- The second and third rows fall at and after the game's quit.
+
+So the board's no-retry abandonment is the **trigger**. The **root** is the
+target leaving IRQ12 unserviced for more than 200 ms, which dosags is
+chasing on its side. For any retry fix: bytes that already went out were
+received, so re-sending the whole packet would repeat its first byte and
+still desync the driver. The fix is to **resume**: complete the packet from
+the byte that failed. See `internal/USB4VC-MOUSE-FIRMWARE-PLAN.md`; it is a
+candidate, not yet requested.
 
 ## 11. Open questions
 
