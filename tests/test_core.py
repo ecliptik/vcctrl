@@ -1892,6 +1892,30 @@ def test_the_type_field_is_16px_on_touch_so_ios_does_not_zoom():
           m is not None and base != -1 and m.start() > base, (base, m and m.start()))
 
 
+def test_the_tab_bar_drops_home_bar_padding_while_typing():
+    """With the keyboard up, the home-bar padding under #tabs is dead space.
+
+    Operator's screenshot, 2026-09-26: an empty strip between the tab row
+    and the iOS keyboard. On a touch screen, while #line or #ghost has
+    focus, #tabs loses env(safe-area-inset-bottom), and measureBars() re-runs
+    on focus changes so --tabs-h (the floating panels' anchor) follows.
+    The selector must outrank the phone layout's `body #tabs`; :has(#id)
+    gives it an id's weight, so it does.
+    """
+    src = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+               encoding="utf-8").read()
+    rule = ("@media (pointer: coarse) {\n"
+            "    body:has(#line:focus, #ghost:focus) #tabs "
+            "{ padding-bottom:0; }\n  }")
+    check("#tabs drops its bottom padding while a typing field has focus, "
+          "on touch only", rule in src)
+    check("measureBars re-runs on focus in and out",
+          "addEventListener('focusin', () => requestAnimationFrame(measureBars));"
+          in src and
+          "addEventListener('focusout', () => requestAnimationFrame(measureBars));"
+          in src)
+
+
 def test_pwa_icons_match_the_favicon():
     """daemon/pwa/*.png are rendered from favicon.svg and must follow it.
 

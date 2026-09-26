@@ -1651,6 +1651,17 @@
      #app fix, same numbers on both). Coarse pointers only: with a mouse
      there is no zoom, and the field keeps the 13px of the log lines. */
   @media (pointer: coarse) { #line { font-size:16px; } }
+  /* NO HOME-BAR PADDING WHILE THE KEYBOARD IS UP. #tabs keeps
+     env(safe-area-inset-bottom) clear for the iPhone's home bar, but while
+     one of the typing fields has focus the on-screen keyboard covers that
+     bar, and the padding became an empty strip between the tab row and the
+     keyboard (operator's screenshot, 2026-09-26). Focus stands in for "the
+     keyboard is up": on a touch screen these two fields only take focus to
+     type. measureBars() is re-run on focus changes (below the function) so
+     the floating panels' --tabs-h follows the shorter bar. */
+  @media (pointer: coarse) {
+    body:has(#line:focus, #ghost:focus) #tabs { padding-bottom:0; }
+  }
   /* A GROUND, so they read as controls rather than as decoration inside the
      input. Transparent on the field's own --bg they looked like part of the
      text area -- which is what made the paper clip look unclickable even
@@ -6775,6 +6786,11 @@ function measureBars() {
   st.setProperty('--cam-bottom', camBottom + 'px');
 }
 addEventListener('resize', measureBars);
+// The tab bar drops its home-bar padding while a typing field has focus
+// (see the #tabs rule under #line), which changes its height without any
+// resize event. Re-measure after the style has applied.
+addEventListener('focusin', () => requestAnimationFrame(measureBars));
+addEventListener('focusout', () => requestAnimationFrame(measureBars));
 measureBars();
 
 function showSettings(on) {
