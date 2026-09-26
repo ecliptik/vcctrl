@@ -77,30 +77,6 @@
     font:var(--t-read)/1.45 var(--sans); -webkit-text-size-adjust:100%;
   }
 
-  /* THE INSTALLED APP'S TOP EDGE. Installed to the iOS home screen (iOS
-     26+), WebKit draws its Liquid Glass scroll-edge blur over the top of
-     the web view, and the header sat inside that band: lamps and icons
-     blurred, the text just below them sharp (operator's screenshots,
-     2026-09-26). WebKit skips the effect when a FIXED or STICKY box with a
-     background colour covers the top edge (taller than 10px, at least 90%
-     of the width) and fills the area with that colour instead. The header
-     is neither fixed nor sticky, so this strip is: exactly the status-bar
-     inset, in the header's own colour, over the header's own top padding,
-     so nothing visible changes. Standalone only: in Safari the inset is 0
-     and the strip would do nothing.
-     NOT black-translucent, which was tried (bcbe3b1, reverted in 03dd9a9):
-     it moved the header up INTO the band and changed nothing about the
-     blur. Taken from other projects' fixes; one reports it verified on the
-     iOS 27 simulator, and it is not yet seen on this page. */
-  #topedge { display:none; }
-  @media (display-mode: standalone) {
-    #topedge {
-      display:block; position:fixed; top:0; left:0; right:0; z-index:50;
-      height:env(safe-area-inset-top,0px); background:var(--panel);
-      pointer-events:none;
-    }
-  }
-
   /* Visible focus everywhere. The page had none at all. */
   :focus-visible {
     outline:2px solid var(--blue); outline-offset:2px; border-radius:3px;
@@ -2454,7 +2430,6 @@
   }
 </style>
 
-<div id="topedge" aria-hidden="true"></div>
 <div id="app">
   <header>
    <!-- THE STATUS SCROLLS; THE CONTROLS DO NOT. The whole bar was

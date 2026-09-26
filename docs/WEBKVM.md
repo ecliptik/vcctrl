@@ -475,14 +475,18 @@ in a band about 75pt tall that took in the lamp strip and header icons
 (the operator's screenshots, 2026-09-26, iPhone, Safari UA Version/27.0).
 Setting `apple-mobile-web-app-status-bar-style` to `black-translucent` made
 it **worse**: the header moved up into the band and the band stayed put. It
-was reverted. The fix now in place follows other projects' reports: WebKit
+was reverted. A second attempt followed other projects' reports that WebKit
 skips the blur when a fixed or sticky box with a background colour covers
-the top edge (taller than 10px, at least 90% of the width). The page's
-header is neither fixed nor sticky, so a standalone-only `#topedge` strip is:
-fixed, exactly `env(safe-area-inset-top)` tall, in `--panel`, drawn over the
-header's own top padding. Changing the status-bar style only takes effect
-when the app is re-added; this fix is plain CSS and reaches an installed app
-on its next launch. It was still unconfirmed on a device when written.
+the top edge (taller than 10px, at least 90% of the width). It added a
+standalone-only fixed strip `env(safe-area-inset-top)` tall, in `--panel`
+(576388d). **That changed nothing either** (app re-added, seen at 11:06
+local), and the strip was removed. The likely reason, inferred from the
+screenshots' geometry and not measured: with the default status bar the
+web view already starts below it, so the inset is 0 and the strip was 0px
+tall, under the 10px minimum. **Still open.** The next step is to measure
+on the device (`display-mode`, the inset, where the web view starts)
+before trying anything else. Meanwhile Safari itself shows the header
+sharp.
 
 **There is no service worker, deliberately.** Safari does not need one to
 install, the page is useless offline, and a cached copy of `kvm.html` would

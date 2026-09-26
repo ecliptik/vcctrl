@@ -1791,26 +1791,9 @@ def test_the_page_installs_as_a_web_app_per_profile():
         check("and a PNG touch icon, not the SVG iOS ignores",
               b'rel="apple-touch-icon" href="/pwa/apple-touch-icon.png"'
               in body)
-        # iOS 26+ blurs the top of an installed app unless a FIXED or
-        # STICKY box with a background colour covers the top edge. The
-        # strip must be that box, only in standalone, and exactly inset
-        # tall. black-translucent was tried and made it worse (03dd9a9).
-        import re
+        # black-translucent was tried for the iOS 26+ header blur and made
+        # it worse (03dd9a9); see WEBKVM.md sec. 3.1.
         page = body.decode("utf-8")
-        sa = re.search(r"@media \(display-mode: standalone\) \{\s*"
-                       r"#topedge \{(.*?)\}", page, re.S)
-        rules = sa.group(1) if sa else ""
-        check("a standalone-only top-edge strip is styled",
-              sa is not None and "#topedge { display:none; }" in page)
-        check("fixed at the top, full width, the status-bar inset tall, in "
-              "the header's colour",
-              all(x in rules for x in (
-                  "position:fixed", "top:0", "left:0", "right:0",
-                  "height:env(safe-area-inset-top,0px)",
-                  "background:var(--panel)", "pointer-events:none")), rules)
-        check("and the element exists, outside #app",
-              '<div id="topedge" aria-hidden="true"></div>\n<div id="app">'
-              in page)
         check("black-translucent stays gone",
               "apple-mobile-web-app-status-bar-style" not in page)
 
