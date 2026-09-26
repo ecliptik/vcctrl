@@ -469,6 +469,21 @@ HTTPS tailnet name only: a raw-IP `http://` origin is not a secure context
   blocks the manifest and Safari silently falls back to a screenshot icon
   and the `<title>`.
 
+**The top edge, on iOS 26+.** Installed, the app had its header blurred:
+iOS draws its Liquid Glass scroll-edge blur over the top of the web view,
+in a band about 75pt tall that took in the lamp strip and header icons
+(the operator's screenshots, 2026-09-26, iPhone, Safari UA Version/27.0).
+Setting `apple-mobile-web-app-status-bar-style` to `black-translucent` made
+it **worse**: the header moved up into the band and the band stayed put. It
+was reverted. The fix now in place follows other projects' reports: WebKit
+skips the blur when a fixed or sticky box with a background colour covers
+the top edge (taller than 10px, at least 90% of the width). The page's
+header is neither fixed nor sticky, so a standalone-only `#topedge` strip is:
+fixed, exactly `env(safe-area-inset-top)` tall, in `--panel`, drawn over the
+header's own top padding. Changing the status-bar style only takes effect
+when the app is re-added; this fix is plain CSS and reaches an installed app
+on its next launch. It was still unconfirmed on a device when written.
+
 **There is no service worker, deliberately.** Safari does not need one to
 install, the page is useless offline, and a cached copy of `kvm.html` would
 bring back the stale-page problem the build-id check exists to catch.
