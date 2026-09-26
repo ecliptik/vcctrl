@@ -89,6 +89,29 @@
   }
 
   #app { display:flex; flex-direction:column; height:100%; }
+  /* THE INSTALLED APP'S HEADER BLUR (iOS 26+). Installed to the home
+     screen, iOS drew its scroll-edge blur over the status bar AND the
+     header. WebKit hides that effect only when it finds a "fixed colour
+     extension" at the top edge: it hit-tests one point 4px below the top of
+     the viewport, walks up to the first position:fixed or sticky ancestor,
+     and needs it at least 90% of the viewport wide
+     (LocalFrameView::fixedContainerEdges; WKWebViewIOS.mm
+     _shouldHideTopScrollPocket). The header and all its ancestors were
+     static, so nothing qualified.
+     Fixing #app to the viewport makes #app that ancestor. The layout is
+     identical, since #app was already the full-height column, and the band
+     is then filled with the header's own --panel. Standalone only: plain
+     Safari was never blurred and is left alone.
+     NOT header{position:sticky}. It clears the blur too, but the header's
+     overflow:hidden then clips #profilemenu to the 38px header.
+     Two blind attempts came first and failed: black-translucent, and a
+     fixed strip env(safe-area-inset-top) tall. The inset is 0 in this
+     mode, so the strip had no height. This one was found in WebKit's source
+     and checked on fresh installs in the iOS 27.0 simulator by the
+     vcctrl-ios session (2026-09-26): WEBKVM.md sec. 3.1. */
+  @media (display-mode: standalone) {
+    #app { position:fixed; inset:0; }
+  }
 
   /* ── status rail ─────────────────────────────────────────────────────────
      One line. Never wraps: a status bar that reflows is one you have to read

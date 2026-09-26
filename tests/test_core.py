@@ -1791,9 +1791,24 @@ def test_the_page_installs_as_a_web_app_per_profile():
         check("and a PNG touch icon, not the SVG iOS ignores",
               b'rel="apple-touch-icon" href="/pwa/apple-touch-icon.png"'
               in body)
-        # black-translucent was tried for the iOS 26+ header blur and made
-        # it worse (03dd9a9); see WEBKVM.md sec. 3.1.
+        # iOS 26+ blurs the installed app's top edge unless the element at
+        # 4px below it has a position:fixed/sticky ancestor at least 90% of
+        # the viewport wide. #app is that ancestor, in standalone only;
+        # WEBKVM.md sec. 3.1. black-translucent made it worse (03dd9a9).
+        import re
         page = body.decode("utf-8")
+        sa = re.search(r"@media \(display-mode: standalone\) \{\s*"
+                       r"#app \{([^}]*)\}", page)
+        check("in standalone #app is fixed to the whole viewport",
+              sa is not None and "position:fixed" in sa.group(1)
+              and "inset:0" in sa.group(1), sa and sa.group(1))
+        base = re.search(r"\n  #app \{([^}]*)\}", page)
+        check("and outside standalone #app stays in flow",
+              base is not None and "position" not in base.group(1),
+              base and base.group(1))
+        hdr = re.search(r"\n  header \{([^}]*)\}", page)
+        check("the header is NOT made sticky (it would clip #profilemenu)",
+              hdr is not None and "sticky" not in hdr.group(1))
         check("black-translucent stays gone",
               "apple-mobile-web-app-status-bar-style" not in page)
 

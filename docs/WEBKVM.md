@@ -483,10 +483,61 @@ standalone-only fixed strip `env(safe-area-inset-top)` tall, in `--panel`
 local), and the strip was removed. The likely reason, inferred from the
 screenshots' geometry and not measured: with the default status bar the
 web view already starts below it, so the inset is 0 and the strip was 0px
-tall, under the 10px minimum. **Still open.** The next step is to measure
-on the device (`display-mode`, the inset, where the web view starts)
-before trying anything else. Meanwhile Safari itself shows the header
-sharp.
+tall, under the 10px minimum. (Later measured: it was.)
+
+**The fix, found rather than guessed.** The `vcctrl-ios` session read the
+rule in WebKit's source and tested on fresh installs in the simulator.
+- **Where the blur comes from.** WKWebView hides the top scroll-edge
+  effect only when `_shouldHideTopScrollPocket` finds a "fixed colour
+  extension" (WKWebViewIOS.mm). `LocalFrameView::fixedContainerEdges`
+  looks for one only if the page has any fixed or sticky box.
+- **What WebKit checks.** It hit-tests one point, 4px below the top of the
+  viewport at the horizontal middle. It walks up to the first
+  `position:fixed` or `sticky` ancestor, which must be at least 90% of the
+  viewport wide and at most 105% of its height. It uses that box's
+  background colour, or, under 10px, samples the top 2px.
+- **Why we were blurred.** The header is static, and so was every
+  ancestor, so nothing qualified. Pseudo-elements are not hit-test nodes.
+- **Retention.** The container WebKit finds is kept until the next page
+  load. Injected CSS therefore misleads: removing a working rule leaves the
+  header sharp until the app relaunches. Every candidate had to be tested
+  on a cold launch.
+- **Why Safari differs.** Safari only samples when the host app's top
+  obscured inset is above 0, which the page cannot set.
+
+The fix is `@media (display-mode: standalone) { #app { position:fixed;
+inset:0 } }`. #app was already the full-height column, so the layout does
+not change, and the band is then filled with the header's `--panel`.
+`header { position:sticky; top:0 }` also clears the blur, but was rejected:
+with the header's `overflow:hidden` it clips `#profilemenu` to the header.
+
+Conditions: Xcode 27.0 simulator (27A266a), iOS 27.0 (24A434), iPhone 17
+Pro, UA identical to the operator's iPhone (`iPhone OS 18_7 ...
+Version/27.0 Mobile`). Installed via Share → Add to Home Screen, "Open as
+Web App" on. Measured in the installed app:
+- display-mode standalone; `innerHeight` 812 against `screen.height` 874,
+  so the web view starts 62pt down, below the status bar;
+- `env(safe-area-inset-top)` 0 and inset-bottom 34;
+- the header static at top 0, 38px tall (the phone breakpoint).
+
+Sharpness was scored as edge variance on the lamp strip, each on a cold
+launch of a harness copy of the page:
+
+| | score |
+|---|---|
+| Safari | 2575 |
+| installed baseline | 876 (harness 933) |
+| fix, light theme | 2321 |
+| fix, dark theme | 1412, against a dark baseline of 85 |
+| fixed `::before` strip | 941, still blurred |
+
+A pixel diff of everything below the header against the baseline found no
+difference in light or dark. Not yet tested:
+- the on-screen keyboard with a TYPE-tab field focused (iOS may scroll the
+  document to reveal it, and a fixed #app will not follow);
+- iPad (WebKit uses a solid "hard" pocket there);
+- the in-page full-screen mode;
+- a real device.
 
 **There is no service worker, deliberately.** Safari does not need one to
 install, the page is useless offline, and a cached copy of `kvm.html` would
