@@ -1870,6 +1870,28 @@ def test_both_pages_ignore_safaris_share_sheet_error():
               and "return" in body, body.strip()[:200])
 
 
+def test_the_type_field_is_16px_on_touch_so_ios_does_not_zoom():
+    """iOS zooms onto a focused text field under 16px and stays zoomed.
+
+    The TYPE tab's #line was 13px (--t-data): focusing it left the page at
+    1.23x with the header off-screen until a pinch (iOS 27.0 simulator,
+    2026-09-26). On a coarse pointer it must be at least 16px, and the rule
+    must come AFTER #line's own `font:` shorthand, which would otherwise
+    reset it.
+    """
+    import re
+    src = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+               encoding="utf-8").read()
+    base = src.find("\n  #line {")
+    m = re.search(r"@media \(pointer: coarse\) \{ #line \{ font-size:(\d+)px; \} \}",
+                  src)
+    check("#line has a coarse-pointer font size", m is not None)
+    check("of at least 16px", m is not None and int(m.group(1)) >= 16,
+          m and m.group(1))
+    check("declared after #line's font shorthand",
+          m is not None and base != -1 and m.start() > base, (base, m and m.start()))
+
+
 def test_pwa_icons_match_the_favicon():
     """daemon/pwa/*.png are rendered from favicon.svg and must follow it.
 

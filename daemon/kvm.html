@@ -1643,6 +1643,14 @@
     padding:0 11px; min-height:0;
   }
   #line:focus { outline:none; }
+  /* 16PX ON A TOUCH SCREEN, OR iOS ZOOMS. iOS auto-zooms onto any text
+     field under 16px when it takes focus, and does not zoom back out: the
+     page stayed at 1.23x, scrolled so the header was off-screen, after the
+     field lost focus, until the user pinched out (measured by the vcctrl-ios
+     session, iOS 27.0 simulator, 2026-09-26; older than the standalone
+     #app fix, same numbers on both). Coarse pointers only: with a mouse
+     there is no zoom, and the field keeps the 13px of the log lines. */
+  @media (pointer: coarse) { #line { font-size:16px; } }
   /* A GROUND, so they read as controls rather than as decoration inside the
      input. Transparent on the field's own --bg they looked like part of the
      text area -- which is what made the paper clip look unclickable even
