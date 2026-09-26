@@ -1466,13 +1466,23 @@ def vcctrl_send_file(mode: str, dest: "str | None" = None,
 
 
 @mcp.tool()
-def vcctrl_file_status(n: int = 40) -> dict:
-    """How the running transfer (send/refresh/get) is getting on, with the
-    last n log lines. Exit 0 while still running -- nothing has failed yet;
-    0 also means fully done and verified. 1 means at least one file did
+def vcctrl_file_status(n: int = 40, job_id: "str | None" = None,
+                       history: bool = False) -> dict:
+    """How the running transfer (send/refresh/get/scan) is getting on, with
+    the last n log lines. Exit 0 while still running -- nothing has failed
+    yet; 0 also means fully done and verified. 1 means at least one file did
     not. 2 means it finished but work was left (cancelled or stopped
-    early) -- `remaining` names it."""
-    return _run_vcctrl(["file-status", n])
+    early) -- `remaining` names it. job_id (the `id` every start returns)
+    reads that job instead, running or one of the last 16 finished, so a
+    later job cannot overwrite the result you are waiting for; an unknown
+    id exits 3 rather than answering with the current job. history=True
+    lists the kept jobs, newest first."""
+    args = ["file-status", n]
+    if job_id is not None:
+        args += ["--job", job_id]
+    if history:
+        args.append("--history")
+    return _run_vcctrl(args)
 
 
 @mcp.tool()

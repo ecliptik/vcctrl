@@ -9271,6 +9271,19 @@ class NetJob(object):
                           GET.BAT could never see
             unstable      two fetches of the same file disagree
 
+        And the run's own summary of its files, when it FINISHED but did not
+        deliver everything it was asked for (a pull or scan; `reason` names
+        each missing file beside its why):
+
+            none-delivered  not one file came back
+            partial         some came back, some did not
+
+        `file_status` itself refuses one thing:
+
+            unknown-job   a job id that is neither running nor among the last
+                          JOB_HISTORY_N finished -- refused rather than
+                          answered with the current job
+
         `unsupported`, `unknown` and `not_configured` reach here unchanged
         from FilesCapability.snapshot(), which is where they are defined, and
         the listing's own words are defined on dos_dir_listing().
@@ -9616,14 +9629,39 @@ class PullJob(NetJob):
         cancelled = self._cancelled()
         self._leave_net()
         left = [r["name"] for r in selected if r["name"] not in done]
+        ok = all(r["ok"] for r in results)
+        delivered = [r["name"] for r in results if r["ok"]]
+        missing = [r for r in results if not r["ok"]]
+        reason = None
+        if not ok:
+            # THE RUN'S OWN SENTENCE, NOT ONLY THE FILES'. Every failed file
+            # already carried its why, but the run said `why: null` above
+            # them, and a reader of the top level -- or of a record that
+            # survived only as a summary -- saw a failed run with no stated
+            # failure. Asked for by a peer whose three-name pull (round O,
+            # 2026-09-26 ~00:24Z) delivered nothing and whose record was then
+            # overwritten, so "missing on the card" and "the names did not
+            # match" could no longer be told apart. The per-file whys ARE
+            # that distinction (`not-listed` vs `no-return` vs ...), so the
+            # reason names every missing file beside its why.
+            reason = "%d of %d asked for came back; missing: %s" % (
+                len(delivered), len(results), ", ".join(
+                    "%s (%s)" % (r["name"], r.get("why") or "failed")
+                    for r in missing))
         # THE SAME TWO FACTS THE SEND SIDE KEEPS APART. `ok` answers "did
         # everything I attempted succeed" and is vacuously true when nothing
         # was attempted -- a run cancelled before the first file. `complete`
         # is what says the job was done, and it cannot be true on nothing:
         # an empty selection has already returned above, saying so positively.
-        return {"ok": all(r["ok"] for r in results), "why": None,
+        # INLINE, NOT A LOCAL: the `why` guard reads dict literals, and a
+        # value routed through a variable is one it cannot see.
+        return {"ok": ok, "reason": reason,
+                "why": (None if ok else
+                        "none-delivered" if not delivered else "partial"),
                 "complete": not cancelled and not left and not refused,
                 "cancelled": cancelled, "remaining": left,
+                "delivered": delivered,
+                "missing": [r["name"] for r in missing],
                 "files": results, "listing": listing, "log": self.log,
                 "left_in_net": self.in_net}
 
@@ -10176,6 +10214,83 @@ SET VLD=
     _job = None
     _job_lock = threading.Lock()
 
+    # THE LAST FEW FINISHED JOBS, NOT ONLY THE CURRENT ONE. The slot above is
+    # one record, and the next job's start replaced it -- so a finished job's
+    # verdict lived exactly as long as nobody started another. Measured
+    # 2026-09-26 ~00:24Z (round O, reported by the sdldos peer): a three-name
+    # pull ran to completion, delivered none of them, and its record was
+    # overwritten by the next send before anyone read it, leaving "missing on
+    # the card" and "the names did not match" permanently indistinguishable.
+    # Kept in memory and written to disk beside the listing store, so a
+    # daemon restart (a deploy) does not erase them either. Oldest dropped
+    # first.
+    JOB_HISTORY_N = 16
+    _histories = {}         # history file path -> [job, ...], oldest first
+
+    @staticmethod
+    def _job_id(kind, t):
+        """`pull-20260926T002400.123Z`: sortable, and says what it was."""
+        return "%s-%s.%03dZ" % (kind, time.strftime("%Y%m%dT%H%M%S",
+                                                    time.gmtime(t)),
+                                int((t % 1) * 1000))
+
+    def _new_job(self, kind, **fields):
+        t = time.time()
+        job = {"id": self._job_id(kind, t), "kind": kind, "running": True,
+               "started_at": t, "log": [], "files": [], "ok": None,
+               "why": None, "reason": None}
+        job.update(fields)
+        return job
+
+    def _history_file(self):
+        return os.path.join(self._pulled_dirs()[1], "jobs.json")
+
+    def _job_history(self):
+        """Finished jobs, oldest first. Loaded from disk once per process."""
+        path = self._history_file()
+        hist = FilesCapability._histories.get(path)
+        if hist is None:
+            loaded = []
+            try:
+                with open(path) as f:
+                    loaded = [j for j in json.load(f).get("jobs") or []
+                              if isinstance(j, dict) and j.get("id")]
+            except Exception:
+                pass
+            hist = FilesCapability._histories[path] = \
+                loaded[-self.JOB_HISTORY_N:]
+        return hist
+
+    def _finish_job(self, job, out):
+        """ONE COPY OF THE END OF A JOB, for all three kinds.
+
+        It was three copies, one per closure, and the history had to be added
+        to each -- the shape where the next fix lands in two of them.
+        """
+        out.pop("log", None)        # already live in job["log"]
+        job.update(out)
+        job["running"] = False
+        job["finished_at"] = time.time()
+        # THE MACHINE'S STATE AFTER A CRASH IS THE PART WORTH SAYING. A run
+        # that died between the two reboots has left the target in NET, and
+        # nothing downstream can tell that from a tidy exit.
+        if out.get("why") == "crashed":
+            job["left_in_net"] = True
+        with FilesCapability._job_lock:
+            hist = self._job_history()
+            hist.append(dict(job, log=list(job["log"])))
+            del hist[:-self.JOB_HISTORY_N]
+            snapshot = list(hist)
+        try:
+            self._ensure_pulled()
+            tmp = self._history_file() + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"jobs": snapshot}, f)
+            os.replace(tmp, self._history_file())
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            # Memory still has it; only a restart would lose it now.
+            sys.stderr.write("file job history not written: %s\n" % exc)
+
     def _file_send(self, req):
         with FilesCapability._job_lock:
             cur = FilesCapability._job
@@ -10194,12 +10309,11 @@ SET VLD=
             # their reboots would each misread the other's machine -- and a
             # page polling file_status has to know whether "3 files" means
             # sent or fetched.
-            job = {"kind": "send", "running": True, "started_at": time.time(),
-                   "log": [], "files": [], "ok": None, "why": None,
-                   "reason": None,
-                   "dest": req.get("dest") or (self.settings or {}).get(
-                       "dest", DEFAULT_DEST),
-                   "return": bool(req.get("return", True))}
+            job = self._new_job(
+                "send",
+                dest=req.get("dest") or (self.settings or {}).get(
+                    "dest", DEFAULT_DEST),
+                **{"return": bool(req.get("return", True))})
             FilesCapability._job = job
 
         def run():
@@ -10213,15 +10327,7 @@ SET VLD=
                        "reason": "%s: %s" % (type(exc).__name__, exc),
                        "files": [], "log": tj.log}
                 sys.stderr.write("transfer crashed: %s\n" % exc)
-            out.pop("log", None)        # already live in job["log"]
-            job.update(out)
-            job["running"] = False
-            job["finished_at"] = time.time()
-            # THE MACHINE'S STATE AFTER A CRASH IS THE PART WORTH SAYING. A
-            # transfer that died between the two reboots has left the target
-            # in NET, and nothing downstream can tell that from a tidy exit.
-            if out.get("why") == "crashed":
-                job["left_in_net"] = True
+            self._finish_job(job, out)
 
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True, "started": True, "status": FilesCapability._job}
@@ -10270,13 +10376,11 @@ SET VLD=
                                   "`refresh` for the listing alone. This "
                                   "reboots the target, so it will not guess "
                                   "which of those you meant")}
-            job = {"kind": "pull", "running": True, "started_at": time.time(),
-                   "log": [], "files": [], "ok": None, "why": None,
-                   "reason": None, "out_dir": where,
-                   "names": names, "all": want_all, "refresh": refresh,
-                   "paranoid": bool(req.get("paranoid")),
-                   "already_net": bool(req.get("already_net")),
-                   "return": bool(req.get("return", True))}
+            job = self._new_job(
+                "pull", out_dir=where, names=names, refresh=refresh,
+                paranoid=bool(req.get("paranoid")),
+                already_net=bool(req.get("already_net")),
+                **{"all": want_all, "return": bool(req.get("return", True))})
             FilesCapability._job = job
 
         def run():
@@ -10293,15 +10397,7 @@ SET VLD=
                        "reason": "%s: %s" % (type(exc).__name__, exc),
                        "files": [], "log": pj.log}
                 sys.stderr.write("pull crashed: %s\n" % exc)
-            out.pop("log", None)        # already live in job["log"]
-            job.update(out)
-            job["running"] = False
-            job["finished_at"] = time.time()
-            # THE MACHINE'S STATE AFTER A CRASH IS THE PART WORTH SAYING. A
-            # run that died between the two reboots has left the target in
-            # NET, and nothing downstream can tell that from a tidy exit.
-            if out.get("why") == "crashed":
-                job["left_in_net"] = True
+            self._finish_job(job, out)
 
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True, "started": True, "status": FilesCapability._job}
@@ -10329,12 +10425,10 @@ SET VLD=
             if self.registry is None:
                 return {"ok": False, "why": "unsequenced",
                         "error": "no registry to sequence input through"}
-            job = {"kind": "scan", "running": True, "started_at": time.time(),
-                   "log": [], "files": [], "ok": None, "why": None,
-                   "reason": None, "out_dir": self._out_dir(),
-                   "names": [ScanJob.REPORT_NAME], "all": False,
-                   "refresh": False, "paranoid": False, "already_net": False,
-                   "return": bool(req.get("return", True))}
+            job = self._new_job(
+                "scan", out_dir=self._out_dir(), names=[ScanJob.REPORT_NAME],
+                refresh=False, paranoid=False, already_net=False,
+                **{"all": False, "return": bool(req.get("return", True))})
             FilesCapability._job = job
 
         def run():
@@ -10347,21 +10441,59 @@ SET VLD=
                        "reason": "%s: %s" % (type(exc).__name__, exc),
                        "files": [], "log": sj.log}
                 sys.stderr.write("scan crashed: %s\n" % exc)
-            out.pop("log", None)        # already live in job["log"]
-            job.update(out)
-            job["running"] = False
-            job["finished_at"] = time.time()
-            if out.get("why") == "crashed":
-                job["left_in_net"] = True
+            self._finish_job(job, out)
 
         threading.Thread(target=run, daemon=True).start()
         return {"ok": True, "started": True, "status": FilesCapability._job}
 
+    # What `history` lists per job: enough to pick one, not the whole record.
+    _SUMMARY_KEYS = ("id", "kind", "running", "ok", "complete", "cancelled",
+                     "why", "reason", "started_at", "finished_at", "out_dir",
+                     "dest", "names", "all", "refresh", "delivered", "missing",
+                     "remaining", "left_in_net")
+
     def _file_status(self, req):
-        job = FilesCapability._job
+        """The current job; or, with `job`, that one; or, with `history`,
+        a one-line summary of each finished job still kept.
+
+        A `job` id that is neither current nor kept is REFUSED, never
+        answered with whatever job is current -- that substitution is the
+        exact confusion the id exists to prevent.
+        """
+        if req.get("history"):
+            cur = FilesCapability._job
+            rows = list(self._job_history())
+            if cur and cur.get("running"):
+                rows.append(cur)
+            return {"ok": True, "kept": self.JOB_HISTORY_N,
+                    "jobs": [{k: j.get(k) for k in self._SUMMARY_KEYS
+                              if k in j} for j in reversed(rows)]}
+        want = req.get("job")
+        if want:
+            job = None
+            cur = FilesCapability._job
+            if cur and cur.get("id") == want:
+                job = cur
+            else:
+                for j in reversed(self._job_history()):
+                    if j.get("id") == want:
+                        job = j
+                        break
+            if job is None:
+                return {"ok": False, "why": "unknown-job",
+                        "error": ("no job %s: not running and not among the "
+                                  "last %d kept" % (want, self.JOB_HISTORY_N)),
+                        "known": [j.get("id") for j in
+                                  reversed(self._job_history())]}
+        else:
+            job = FilesCapability._job
         if not job:
+            kept = len(self._job_history())
             return {"ok": True, "job": None,
-                    "note": "no transfer has run since the daemon started"}
+                    "note": "no transfer has run since the daemon started"
+                            + ("; %d earlier job%s kept -- see `history`"
+                               % (kept, "" if kept == 1 else "s")
+                               if kept else "")}
         out = dict(job)
         # The log is unbounded over a long run and the page polls this; the
         # tail is what anyone watching needs, and the whole thing is in the

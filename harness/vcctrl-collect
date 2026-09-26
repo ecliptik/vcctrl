@@ -414,11 +414,22 @@ def _pull_job(want, from_dir, already_net, do_return, label):
     args.append("--return" if do_return else "--stay")
     if already_net:
         args.append("--already-net")
-    vc(*args)
+    started = vc(*args)
+    # FOLLOWED BY ITS OWN ID, NOT BY WHATEVER IS IN THE SLOT. The slot holds
+    # the current job, and a peer's send started between our end and our
+    # next poll would be read as this fetch. A daemon that predates job ids
+    # prints none, and the old behaviour is all there is to fall back on.
+    try:
+        job_id = ((json.loads(started) if started else {})
+                  .get("status") or {}).get("id")
+    except ValueError:
+        job_id = None
+    status_args = ["file-status", "400"] + (["--job", job_id] if job_id
+                                            else [])
 
     t0, seen = time.time(), 0
     while time.time() - t0 < PULL_JOB_TIMEOUT_S:
-        raw = vc("file-status", "400", check=False)
+        raw = vc(*status_args, check=False)
         try:
             job = (json.loads(raw) if raw else {}).get("job") or {}
         except ValueError:

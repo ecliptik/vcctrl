@@ -11997,6 +11997,157 @@ def test_a_name_the_target_did_not_list_is_never_typed_at_it():
           r["left_in_net"] is False, r)
 
 
+def test_a_pull_that_delivers_nothing_says_so_at_the_top():
+    """The run's own why, not only the files'.
+
+    Round O, 2026-09-26 ~00:24Z: a three-name pull finished having
+    delivered none of them. Each file carried its own why, but the run's top
+    level said `why: null` -- and once only a summary of the record
+    survived, "missing on the card" and "the names did not match" were one
+    fact. The top level now says how many came back and names every
+    missing file beside its why.
+    """
+    print("\npull: nothing delivered")
+    cap, d = _mkpull(card={"SCORES.DAT": b"x" * 40})
+    r = vcctrld.PullJob(cap, d, names=["CHKDSKF.TXT", "CHKLIST.TXT"]).run()
+    check("the run fails", r["ok"] is False, r)
+    check("named as nothing delivered", r["why"] == "none-delivered", r)
+    check("the reason counts and names each missing file with its why",
+          r["reason"].startswith("0 of 2")
+          and "CHKDSKF.TXT (not-listed)" in r["reason"]
+          and "CHKLIST.TXT (not-listed)" in r["reason"], r["reason"])
+    check("and the lists say it too",
+          r["delivered"] == [] and
+          r["missing"] == ["CHKDSKF.TXT", "CHKLIST.TXT"], r)
+
+    cap, d = _mkpull(card={"SCORES.DAT": b"x" * 40})
+    r = vcctrld.PullJob(cap, d, names=["SCORES.DAT", "NOSUCH.TXT"]).run()
+    check("some of it is `partial`, not `none-delivered`",
+          r["why"] == "partial" and r["reason"].startswith("1 of 2"), r)
+    check("and names only what is missing",
+          "NOSUCH.TXT" in r["reason"] and "SCORES.DAT" not in r["reason"],
+          r["reason"])
+
+    # THE PAIRED SAFE CHECK: a clean run must not grow a why.
+    cap, d = _mkpull(card={"SCORES.DAT": b"x" * 40})
+    r = vcctrld.PullJob(cap, d, names=["SCORES.DAT"]).run()
+    check("a run that delivered everything has no why",
+          r["ok"] is True and r["why"] is None and r["reason"] is None
+          and r["delivered"] == ["SCORES.DAT"] and r["missing"] == [], r)
+
+
+def test_a_finished_job_survives_the_next_one():
+    """The job slot is one record, and the next start replaced it.
+
+    Round O again: the pull's record was overwritten by the next send before
+    anyone read it. Finished jobs are now kept (the last JOB_HISTORY_N, on
+    disk), readable by id, and an id that is not kept is REFUSED rather than
+    answered with whatever is current -- that substitution is the confusion
+    the id exists to prevent.
+    """
+    print("\nfile jobs: history")
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    cap = _mkfiles(tmp)
+    vcctrld.FilesCapability._histories.clear()
+    try:
+        a = cap._new_job("pull", names=["CHKDSKF.TXT"])
+        cap._finish_job(a, {"ok": False, "why": "none-delivered",
+                            "reason": "0 of 1 asked for came back; missing: "
+                                      "CHKDSKF.TXT (not-listed)",
+                            "files": [], "log": []})
+        time.sleep(0.002)
+        b = cap._new_job("send")
+        check("two jobs get different ids", a["id"] != b["id"], (a, b))
+        check("and the id says what it was", a["id"].startswith("pull-"),
+              a["id"])
+        vcctrld.FilesCapability._job = b     # the next job has started
+
+        cur = cap._file_status({})
+        check("the bare call still answers with the current job",
+              cur["job"]["id"] == b["id"], cur)
+        got = cap._file_status({"job": a["id"]})
+        check("the finished one is still readable by its id",
+              got["ok"] and got["job"]["id"] == a["id"]
+              and got["job"]["why"] == "none-delivered", got)
+        hist = cap._file_status({"history": True})
+        check("history lists the running job first, then the finished one",
+              [j["id"] for j in hist["jobs"]] == [b["id"], a["id"]], hist)
+        bad = cap._file_status({"job": "pull-nosuch"})
+        check("an unknown id is refused, NOT answered with the current job",
+              bad["ok"] is False and bad["why"] == "unknown-job"
+              and "job" not in bad, bad)
+
+        # A RESTART (a deploy) must not lose it either.
+        vcctrld.FilesCapability._histories.clear()
+        vcctrld.FilesCapability._job = None
+        again = _mkfiles(tmp)._file_status({"job": a["id"]})
+        check("it is read back from disk after a restart",
+              again["ok"] and again["job"]["why"] == "none-delivered", again)
+        empty = _mkfiles(tmp)._file_status({})
+        check("and an empty slot points at what is kept",
+              empty["job"] is None and "1 earlier job kept" in empty["note"],
+              empty)
+
+        # Bounded, oldest dropped first.
+        n = vcctrld.FilesCapability.JOB_HISTORY_N
+        for i in range(n + 3):
+            j = cap._new_job("scan")
+            j["id"] += "-%d" % i
+            cap._finish_job(j, {"ok": True, "files": [], "log": []})
+        kept = cap._job_history()
+        check("only the last %d are kept" % n, len(kept) == n, len(kept))
+        check("and the oldest went first",
+              kept[-1]["id"].endswith("-%d" % (n + 2))
+              and not any(k["id"] == a["id"] for k in kept),
+              [k["id"] for k in kept][:3])
+    finally:
+        vcctrld.FilesCapability._job = None
+        vcctrld.FilesCapability._histories.clear()
+
+
+def test_file_status_by_id_refuses_a_substituted_job():
+    """A daemon from before job ids ignores `--job` and answers with the
+    current job, which reads exactly like the one asked for. The client
+    checks the id that came back, and refuses (3) rather than exit 0/1 on
+    somebody else's run.
+    """
+    print("\nclient: file-status --job")
+    import contextlib, io
+    c = _client()
+    seen = []
+
+    def run(resp, *argv):
+        c.call = lambda req: (seen.append(req), resp)[1]
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            return c.main(list(argv))
+
+    mine = {"id": "pull-1", "running": False, "ok": False, "log": []}
+    other = dict(mine, id="send-2", ok=True, complete=True)
+    check("the id asked for is sent",
+          run({"ok": True, "job": mine}, "file-status", "--job", "pull-1") == 1
+          and seen[-1].get("job") == "pull-1", seen[-1])
+    check("a different job in the answer is refused, not reported",
+          run({"ok": True, "job": other},
+              "file-status", "--job", "pull-1") == 3)
+    check("so is a job with no id at all (an old daemon)",
+          run({"ok": True, "job": dict(other, id=None)},
+              "file-status", "--job", "pull-1") == 3)
+    check("an unknown id is 3",
+          run({"ok": False, "why": "unknown-job", "error": "no job"},
+              "file-status", "--job", "pull-9") == 3)
+    check("history from a daemon that keeps none is 3, not an empty list",
+          run({"ok": True, "job": other}, "file-status", "--history") == 3)
+    check("and a real history is 0",
+          run({"ok": True, "kept": 16, "jobs": []},
+              "file-status", "--history") == 0
+          and seen[-1].get("history") is True, seen[-1])
+    check("the bare call is unchanged",
+          run({"ok": True, "job": other}, "file-status") == 0
+          and "job" not in seen[-1], seen[-1])
+
+
 def test_a_short_download_is_caught_by_the_cards_own_size():
     """The failure that looks exactly like success, in the direction where
     there is no sha to catch it.

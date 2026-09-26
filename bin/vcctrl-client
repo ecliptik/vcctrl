@@ -276,8 +276,14 @@ USAGE = """usage: vcctrl <command> [args]
                             that does not say would leave the rig in a state
                             its author did not choose.
                             Returns at once -- watch it with file-status.
-  file-status [n]           how the running transfer is getting on, with the
-                            last n log lines. Exit codes once it has finished:
+  file-status [n] [--job ID] [--history]
+                            how the running transfer is getting on, with the
+                            last n log lines. --job reads that job instead,
+                            running or one of the last 16 finished (kept on
+                            disk, so a restart does not lose them); every
+                            start prints its `id`. --history lists them.
+                            An unknown id exits 3, never the current job.
+                            Exit codes once it has finished:
                               0  everything asked for was sent and verified
                               1  at least one file did not
                               2  what was sent verified, but work is left --
@@ -1663,6 +1669,15 @@ def main(argv):
     elif cmd in ("file-status", "file_status"):
         req = {"cmd": "file_status", "log": int(rest[0]) if rest and
                rest[0].isdigit() else 40}
+        for i, a in enumerate(rest):
+            if a == "--job":
+                if i + 1 >= len(rest):
+                    sys.stderr.write("file-status --job needs a job id "
+                                     "(see `file-status --history`)\n")
+                    return 3
+                req["job"] = rest[i + 1]
+        if "--history" in argv:
+            req["history"] = True
     elif cmd in ("file-cancel", "file_cancel"):
         req = {"cmd": "file_cancel"}
     elif cmd in ("file-check", "file_check"):
@@ -1699,7 +1714,27 @@ def main(argv):
     if cmd in ("file-check", "file_check"):
         return file_check_exit(resp)
     if cmd in ("file-status", "file_status"):
+        if req.get("history"):
+            sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
+            if "jobs" not in resp:
+                # A DAEMON FROM BEFORE THE HISTORY ignores the key and answers
+                # with the current job, which is not a list of anything.
+                sys.stderr.write("error: this daemon keeps no job history "
+                                 "(it predates it)\n")
+                return 3
+            return 0 if resp.get("ok") else 1
+        if req.get("job") and not resp.get("ok"):
+            sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
+            return 3
         j = resp.get("job") or {}
+        if req.get("job") and j.get("id") != req["job"]:
+            # THE SUBSTITUTION THE ID EXISTS TO PREVENT. A daemon from before
+            # job ids ignores `job` and answers with whatever job is current,
+            # which reads exactly like the one asked for.
+            sys.stderr.write("error: asked for job %s and the daemon answered "
+                             "with %s -- it predates job ids, or the job is "
+                             "gone\n" % (req["job"], j.get("id") or "no id"))
+            return 3
         sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
         if j.get("running") or j.get("ok") is None:
             return 0
