@@ -546,8 +546,9 @@ better". The same day, from the operator's phone screenshots:
   It is now dropped while a typing field has focus on a touch screen
   (8360d0e; the operator reported TYPE "looks much better now").
 
-Not yet tested: iPad (WebKit uses a solid "hard" pocket there) and the
-in-page full-screen mode.
+Not yet tested: the in-page full-screen mode, and iPad (WebKit uses a
+solid "hard" pocket there). The operator has deferred the iPad for now
+(2026-09-26), so it is not a pending task.
 
 **There is no service worker, deliberately.** Safari does not need one to
 install, the page is useless offline, and a cached copy of `kvm.html` would
