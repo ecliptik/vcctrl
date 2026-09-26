@@ -532,12 +532,18 @@ launch of a harness copy of the page:
 | fixed `::before` strip | 941, still blurred |
 
 A pixel diff of everything below the header against the baseline found no
-difference in light or dark. Not yet tested:
+difference in light or dark.
+
+**Confirmed on the operator's iPhone** on 2026-09-26, after f8b9041 and
+4cffa9d were live: "no more blur", and the installed app "looks much
+better". Not yet tested:
 - the on-screen keyboard with a TYPE-tab field focused (iOS may scroll the
   document to reveal it, and a fixed #app will not follow);
+- whether the 16px touch size on that field (4cffa9d) stops the auto-zoom
+  on the phone as well as in the simulator. The Settings dropdowns are
+  15px and may still zoom;
 - iPad (WebKit uses a solid "hard" pocket there);
-- the in-page full-screen mode;
-- a real device.
+- the in-page full-screen mode.
 
 **There is no service worker, deliberately.** Safari does not need one to
 install, the page is useless offline, and a cached copy of `kvm.html` would
