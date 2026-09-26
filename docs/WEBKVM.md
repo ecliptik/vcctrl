@@ -544,7 +544,7 @@ better". The same day, from the operator's phone screenshots:
   That is iOS revealing the field, and is left alone;
 - the tab row's home-bar padding was an empty strip above the keyboard.
   It is now dropped while a typing field has focus on a touch screen
-  (8360d0e, not yet seen on the phone).
+  (8360d0e; the operator reported TYPE "looks much better now").
 
 Not yet tested: iPad (WebKit uses a solid "hard" pocket there) and the
 in-page full-screen mode.
