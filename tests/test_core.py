@@ -10585,6 +10585,62 @@ def test_the_file_server_actually_serves_a_staged_file():
     check("stopping releases the server", cap._ftpd is None)
 
 
+def _guard_busy(state, events=None):
+    """Run deploy.sh's real guard_busy() against a stubbed daemon.
+
+    `curl` is replaced by a shell function, so the guard's own code -- its
+    python snippets included -- is what runs, not a re-implementation.
+    """
+    import re, subprocess
+    src = open(os.path.join(HERE, os.pardir, "pi", "deploy.sh")).read()
+    fn = re.search(r"^guard_busy\(\) \{.*?^\}$", src, re.S | re.M).group(0)
+    script = (
+        "curl() { case \"$*\" in\n"
+        "  *state.json*) printf %s \"$STATE\" ;;\n"
+        "  *events*) printf %s \"$EVENTS\" ;;\n"
+        "esac; }\n" + fn + "\nWEB=http://stub\nguard_busy\n")
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                       env=dict(os.environ, STATE=json.dumps(state),
+                                EVENTS=json.dumps({"events": events or []})))
+    return r.returncode, r.stderr
+
+
+def test_deploy_refuses_while_the_target_is_powered():
+    """A relay-on takes no lock and makes no harness traffic.
+
+    2026-09-26: a peer powered the target on for a round at 02:49:01Z; a
+    deploy started 16 s later passed the guard and restarted vcctrld during
+    the target's boot. Between cells nothing holds the lock either, so the
+    plug is the only witness to an open round that the guard can read.
+    """
+    print("\ndeploy: the power guard")
+    idle = {"lock": {"owner": None}, "inflight": []}
+    off = dict(idle, power={"on": False, "power_mw": 0,
+                            "standby_threshold_mw": 8000, "stale": False})
+    rc, err = _guard_busy(off)
+    check("an off, idle target deploys (the paired safe check)",
+          rc == 0 and not err, (rc, err))
+    on = dict(idle, power={"on": True, "power_mw": 24005,
+                           "standby_threshold_mw": 8000, "stale": False})
+    rc, err = _guard_busy(on)
+    check("a powered target is refused", rc == 1, (rc, err))
+    check("and the refusal says why, with the reading",
+          "powered" in err and "24005 mW" in err, err)
+    standby = dict(idle, power={"on": True, "power_mw": 1200,
+                                "standby_threshold_mw": 8000})
+    check("relay on at standby draw is still refused -- someone turned it on",
+          _guard_busy(standby)[0] == 1)
+    drawing = dict(idle, power={"on": None, "power_mw": 30000,
+                                "standby_threshold_mw": 8000})
+    check("drawing above standby with the relay state unknown is refused",
+          _guard_busy(drawing)[0] == 1)
+    check("a rig with no power reading at all is not refused on that basis",
+          _guard_busy(idle)[0] == 0)
+    held = dict(off, lock={"owner": "sdldos"})
+    check("and the lock check still runs first",
+          "input lock is held" in _guard_busy(held)[1])
+
+
 def test_every_top_level_directory_is_deployed_or_deliberately_is_not():
     """Adding a directory must force a decision about whether it ships.
 

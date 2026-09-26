@@ -84,6 +84,32 @@ print(sum(1 for i in d if i.get("by") not in ("browser", None)))' 2>/dev/null ||
     echo "VCCTRL_FORCE=1 if you know it is safe." >&2
     return 1
   fi
+  # A POWERED TARGET MAY BE A ROUND IN PROGRESS, lock or no lock. Measured
+  # 2026-09-26: a peer powered the target on for a round at 02:49:01Z, and a
+  # deploy started 16 s later passed every check below and restarted vcctrld
+  # during the target's boot (the peer found it before the first cell). A
+  # relay-on takes no lock and is not a harness `cmd`, and between cells
+  # nothing holds the lock either, so neither the lock nor recent traffic
+  # can see an open round. The plug can: the rig's resting state is off,
+  # and on (or drawing above standby) means someone turned it on.
+  # A plug with no reading says nothing either way and does not refuse.
+  local power
+  power="$(printf '%s' "$state" | python3 -c \
+      'import json,sys
+p = json.load(sys.stdin).get("power") or {}
+mw, thr = p.get("power_mw"), p.get("standby_threshold_mw")
+drawing = mw is not None and thr is not None and mw > thr
+if p.get("on") is True or drawing:
+    print("on=%s, %s mW against a %s mW standby threshold%s" % (
+        p.get("on"), mw, thr, ", reading STALE" if p.get("stale") else ""))' \
+      2>/dev/null || true)"
+  if [ -n "$power" ]; then
+    echo "REFUSING TO DEPLOY: the target is powered ($power)." >&2
+    echo "A powered target may be mid-round even with no lock held -- a" >&2
+    echo "round is only closed once whoever opened it has turned it off." >&2
+    echo "Ask them, or set VCCTRL_FORCE=1 if you know it is safe." >&2
+    return 1
+  fi
   # In-flight only catches a command running *right now*. A harness wait loop
   # polls `leds` several times a second between commands, so the instantaneous
   # check sees an idle daemon while a cell is very much running. Recent
