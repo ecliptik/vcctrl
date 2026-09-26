@@ -1826,6 +1826,30 @@ def test_the_page_installs_as_a_web_app_per_profile():
             pass
 
 
+def test_both_pages_ignore_safaris_share_sheet_error():
+    """Safari's Share sheet throws inside its own injected script, in the
+    page's global scope, and the page's boot-failure banner caught it.
+
+    Fixed on the public mirror on 2026-08-28 and missed on the main page
+    until 2026-09-26, when sharing it to add it to the home screen painted
+    "PAGE SCRIPT ERROR ... Script error. :?:?" over it. One filter, two
+    copies: this checks each page's error listener returns on WebKit's
+    opaque form BEFORE it builds the banner.
+    """
+    import re
+    for page in ("kvm.html", "kvm-ro.html"):
+        src = open(os.path.join(HERE, os.pardir, "daemon", page),
+                   encoding="utf-8").read()
+        m = re.search(r"addEventListener\('error', e => \{(.*?)"
+                      r"getElementById\('bootfail'\)", src, re.S)
+        check("%s has a boot-failure error listener" % page, m is not None)
+        body = re.sub(r"//[^\n]*", "", m.group(1)) if m else ""
+        check("%s returns on the opaque Share-sheet error before the banner"
+              % page,
+              "e.message === 'Script error.' && !e.lineno && !e.colno" in body
+              and "return" in body, body.strip()[:200])
+
+
 def test_pwa_icons_match_the_favicon():
     """daemon/pwa/*.png are rendered from favicon.svg and must follow it.
 

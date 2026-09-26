@@ -3281,6 +3281,16 @@
 // stuck on connecting", "the whole UI is unresponsive", "Send does nothing".
 // None named the cause, and there is no console on a phone.
 addEventListener('error', e => {
+  // NOT EVERY GLOBAL 'error' IS THIS PAGE'S. Safari's Share sheet injects
+  // its own link-preview script into this page's global scope, and that
+  // script throws here (it looks for an iframe to preview and finds none).
+  // The listener gets WebKit's opaque form -- the literal message "Script
+  // error." with no line or column -- which this page's own inline script
+  // never produces. Diagnosed on the public mirror with Web Inspector on
+  // 2026-08-28 (kvm-ro.html carries the full account); this copy was missed
+  // until the operator hit it here on 2026-09-26, sharing the page to add
+  // it to the home screen.
+  if (e.message === 'Script error.' && !e.lineno && !e.colno) return;
   const box = document.getElementById('bootfail') || (() => {
     const d = document.createElement('div');
     d.id = 'bootfail';
