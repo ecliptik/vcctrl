@@ -412,6 +412,8 @@ install_profile() {
   sudo install -m 0644 "$SRC/daemon/kvm.html"      "$PREFIX/kvm.html"
   sudo install -m 0644 "$SRC/daemon/themes.css"    "$PREFIX/themes.css"
   sudo install -m 0644 "$SRC/daemon/keycoverage.json" "$PREFIX/keycoverage.json"
+  sudo install -d -m 0755 "$PREFIX/pwa"
+  sudo install -m 0644 "$SRC"/daemon/pwa/*.png "$PREFIX/pwa/"
 
   # THE OPERATOR'S REAL CONFIG, NEVER OVERWRITTEN -- same discipline as
   # vcctrl.yaml itself (see vcctrl-repo-conventions): a redeploy that
@@ -613,6 +615,12 @@ sudo install -m 0644 "$SRC/daemon/themes.css"    "$PREFIX/themes.css"
 # and a genuine absence of data are different facts and this file made them
 # the same JSON for one deploy on 2026-08-25. vcctrld now says which.
 sudo install -m 0644 "$SRC/daemon/keycoverage.json" "$PREFIX/keycoverage.json"
+# THE HOME-SCREEN ICONS (Safari's "Add to Home Screen" / "Add to Dock"). A
+# missing one is not an error anywhere: the install just falls back to a
+# screenshot of the page, which is exactly the symptom this directory exists
+# to fix -- so it is named here like every other file, not left to be noticed.
+sudo install -d -m 0755 "$PREFIX/pwa"
+sudo install -m 0644 "$SRC"/daemon/pwa/*.png "$PREFIX/pwa/"
 sudo install -m 0755 "$SRC/bin/vcctrl-client"    /usr/local/bin/vcctrl
 
 sudo tee /etc/systemd/system/vcctrld.service >/dev/null <<'UNIT'

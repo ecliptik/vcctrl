@@ -447,6 +447,38 @@ No password, per the operator's answer. Tailscale is the authentication
 boundary. Worth one sentence in the README so the choice is on the record:
 anything on the tailnet can power-cycle the g2k.
 
+### 3.1 Installing the page as an app (Safari, iOS and macOS)
+
+Added 2026-09-26. The page installs through Safari's **Share → Add to Home
+Screen** (iOS/iPadOS) and **File → Add to Dock** (macOS 14+), from the
+HTTPS tailnet name only: a raw-IP `http://` origin is not a secure context
+(above). What is served for it:
+
+- `/manifest.webmanifest`, generated per request by vcweb:
+  `display: standalone`, dark theme colour, and `start_url`/`scope`/`id` set
+  to the path the page came from. A second profile's page (`/p/<name>/`)
+  links its own manifest and installs as a **separate** app named
+  `vcctrl <name>`. A static manifest would install every profile as the
+  primary's page.
+- `/pwa/*.png`: a 180px full-bleed `apple-touch-icon` (iOS masks the
+  corners itself and **ignores the SVG icon** the page used before), and
+  192/512 `any` plus 512 `maskable` icons for the manifest. They are rendered
+  from `daemon/favicon.svg` by `tools/make-pwa-icons.py`, and a test fails
+  if the svg changes without the icons being re-rendered.
+- `manifest-src 'self'` in the page's CSP. Without it, `default-src 'none'`
+  blocks the manifest and Safari silently falls back to a screenshot icon
+  and the `<title>`.
+
+**There is no service worker, deliberately.** Safari does not need one to
+install, the page is useless offline, and a cached copy of `kvm.html` would
+bring back the stale-page problem the build-id check exists to catch.
+
+**Not yet verified on a device.** The routes, CSP and icons are covered by
+`test_the_page_installs_as_a_web_app_per_profile`. How iOS and macOS
+actually draw the installed app has not been seen yet. An installed web
+app on iOS also keeps its own storage, separate from Safari's, so saved
+page preferences start fresh in it.
+
 ---
 
 ## 4. `vcctrld` -- the capture streamer

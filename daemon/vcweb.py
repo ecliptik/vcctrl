@@ -447,8 +447,47 @@ class Handler(BaseHTTPRequestHandler):
     # vcweb_public.py's own _serve_html_with_csp: a nonce that could be
     # replayed across requests would not actually prove "the server emitted
     # this specific script tag just now."
+    # The home-screen icons, served by name from a fixed list rather than
+    # from whatever is in the directory: a path from the request is never
+    # joined onto the filesystem. Rendered from favicon.svg by
+    # tools/make-pwa-icons.py.
+    PWA_FILES = ("apple-touch-icon.png", "icon-192.png", "icon-512.png",
+                 "icon-maskable-512.png")
+
+    def _manifest(self):
+        """The web-app manifest Safari (iOS 16.4+, macOS 14+) installs from.
+
+        GENERATED PER REQUEST, NOT A STATIC FILE, because a second profile's
+        page lives under /p/<name>/ and an installed app must open the page
+        it was installed from. A static start_url of "/" would install every
+        profile's page as the primary's. `id` is that path too, so two
+        installed profiles are two apps rather than one app overwriting the
+        other. The name carries the profile for the same reason, and only a
+        routed profile's -- the primary stays plain `vcctrl`.
+        """
+        profile = getattr(self.cap._route_ctx, "profile", None)
+        base = "/p/%s/" % profile if profile else "/"
+        name = "vcctrl %s" % profile if profile else "vcctrl"
+        return {"name": name, "short_name": name, "id": base,
+                "start_url": base, "scope": base, "display": "standalone",
+                "background_color": "#17150F", "theme_color": "#17150F",
+                "icons": [
+                    {"src": "/pwa/icon-192.png", "sizes": "192x192",
+                     "type": "image/png", "purpose": "any"},
+                    {"src": "/pwa/icon-512.png", "sizes": "512x512",
+                     "type": "image/png", "purpose": "any"},
+                    {"src": "/pwa/icon-maskable-512.png", "sizes": "512x512",
+                     "type": "image/png", "purpose": "maskable"}]}
+
     def _serve_page_with_csp(self):
         body = self.cap.page()
+        # A routed profile's page points at ITS manifest, so installing it
+        # installs that profile (see _manifest). The primary's is untouched.
+        profile = getattr(self.cap._route_ctx, "profile", None)
+        if profile:
+            body = body.replace(
+                b'href="/manifest.webmanifest"',
+                ('href="/p/%s/manifest.webmanifest"' % profile).encode(), 1)
         nonce = base64.b64encode(os.urandom(16)).decode("ascii")
         # ONE nonce'd tag: kvm.html has exactly one <script>, no attributes
         # (grep confirms it), so a plain byte-replace is exact and cannot
@@ -487,6 +526,7 @@ class Handler(BaseHTTPRequestHandler):
                "img-src 'self' data: blob:; "
                "connect-src 'self'%s; "
                "media-src 'self'; "
+               "manifest-src 'self'; "
                "base-uri 'none'; "
                "form-action 'none'; "
                "frame-ancestors 'none'" % (nonce, connect_extra))
@@ -586,6 +626,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/themes.css":
                 with open(os.path.join(HERE, "themes.css"), "rb") as f:
                     return self._send(200, f.read(), "text/css; charset=utf-8")
+            if path == "/manifest.webmanifest":
+                return self._send(200, json.dumps(self._manifest()),
+                                  "application/manifest+json")
+            if path.startswith("/pwa/"):
+                name = path[len("/pwa/"):]
+                if name not in self.PWA_FILES:
+                    return self._json({"error": "not found"}, 404)
+                try:
+                    with open(os.path.join(HERE, "pwa", name), "rb") as f:
+                        return self._send(200, f.read(), "image/png")
+                except OSError:
+                    # Listed but not installed: a deploy gap, said as one.
+                    return self._json({"error": "%s is not installed on this "
+                                                "host" % name}, 404)
             if path == "/state.json":
                 # CORS on this endpoint only, and NARROWED (F1). The page is
                 # served from :443 and must be able to ask whether :8443 is

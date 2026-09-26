@@ -244,6 +244,18 @@ if [ "${1:-}" = "--page" ]; then
       || explain_hang
     echo "installed $f (no restart)"
   done
+  # The home-screen icons, read from disk per request like kvm.html. The
+  # ROUTE that serves them lives in vcweb.py, so the first deploy that adds
+  # them has to be a full one; after that an icon change is page-only.
+  if ls "$SRC"/daemon/pwa/*.png >/dev/null 2>&1; then
+    $SSH "$HOST" "rm -rf /tmp/vcctrl-pwa.new && mkdir -p /tmp/vcctrl-pwa.new" \
+      || explain_hang
+    $SCP "$SRC"/daemon/pwa/*.png "$HOST:/tmp/vcctrl-pwa.new/" || explain_hang
+    $SSH "$HOST" "sudo sh -c 'install -d -m 0755 /opt/vcctrl/pwa \
+      && install -m 0644 /tmp/vcctrl-pwa.new/*.png /opt/vcctrl/pwa/' \
+      && rm -rf /tmp/vcctrl-pwa.new" || explain_hang
+    echo "installed pwa/*.png (no restart)"
+  fi
   # Same no-restart ship for the vendored Opus decoder kvm-ro.html loads --
   # vcweb_public.py reads it fresh from disk per request like the files
   # above, and its name carries its version so the browser cache stays
@@ -388,10 +400,11 @@ if [ "${1:-}" = "--profile" ]; then
   python3 -m py_compile "$SRC/daemon/vcctrld.py" || \
     { echo "refusing: daemon/vcctrld.py does not compile" >&2; exit 1; }
   rdir="/tmp/vcctrl-profile-${name}-deploy.$$"
-  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon $rdir/pi" || explain_hang
+  $SSH "$HOST" "rm -rf $rdir && mkdir -p $rdir/daemon/pwa $rdir/pi" || explain_hang
   $SCP "$SRC/daemon/vcctrld.py" "$SRC/daemon/vcweb.py" "$SRC/daemon/vcsysinfo.py" \
     "$SRC/daemon/kvm.html" "$SRC/daemon/themes.css" "$SRC/daemon/keycoverage.json" \
     "$HOST:$rdir/daemon/" || explain_hang
+  $SCP "$SRC"/daemon/pwa/*.png "$HOST:$rdir/daemon/pwa/" || explain_hang
   $SCP "$SRC/pi/install.sh" "$HOST:$rdir/pi/" || explain_hang
   # Ship whichever of the real or example config exists -- install_profile()
   # (running remotely below) makes the same "real one already deployed?"

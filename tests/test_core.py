@@ -1748,6 +1748,113 @@ def test_web_request_binds_cfg_to_its_own_profile():
           plain_seen == ["called"], plain_seen)
 
 
+def test_the_page_installs_as_a_web_app_per_profile():
+    """Safari's Add to Home Screen / Add to Dock, served for real.
+
+    Three things each break the install silently -- it still "works", it
+    just installs a screenshot, or the wrong page:
+      - the CSP was `default-src 'none'` with no manifest-src, so Safari
+        refused the manifest before reading it;
+      - the apple-touch-icon was an SVG data: URI, which iOS ignores;
+      - a static start_url would install /p/<name>/ as the primary's page.
+    """
+    print("\nweb app manifest")
+    import http.client
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+
+    class Reg(object):
+        def execute(self, req):
+            return {"ok": True}
+
+    web = vcweb.WebCapability({None: Reg(), "modernpc": Reg()},
+                              "127.0.0.1", 0)
+    web.start()
+    port = web.httpd.server_address[1]
+
+    def get(path):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request("GET", path)          # raw: no client-side normalisation
+        r = c.getresponse()
+        out = (r.status, dict(r.getheaders()), r.read())
+        c.close()
+        return out
+
+    try:
+        st, hd, body = get("/")
+        check("the page's CSP allows its own manifest",
+              "manifest-src 'self'" in hd.get("Content-Security-Policy", ""),
+              hd.get("Content-Security-Policy"))
+        check("the primary page links the primary manifest",
+              b'rel="manifest" href="/manifest.webmanifest"' in body)
+        check("and a PNG touch icon, not the SVG iOS ignores",
+              b'rel="apple-touch-icon" href="/pwa/apple-touch-icon.png"'
+              in body)
+
+        st, hd, body = get("/manifest.webmanifest")
+        m = json.loads(body)
+        check("the manifest is served as a manifest",
+              st == 200 and hd.get("Content-Type") ==
+              "application/manifest+json", (st, hd.get("Content-Type")))
+        check("the primary installs as itself, standalone",
+              m["start_url"] == m["scope"] == m["id"] == "/"
+              and m["display"] == "standalone" and m["name"] == "vcctrl", m)
+
+        st, hd, body = get("/p/modernpc/")
+        check("a profile's page links ITS manifest",
+              b'href="/p/modernpc/manifest.webmanifest"' in body
+              and b'href="/manifest.webmanifest"' not in body)
+        m2 = json.loads(get("/p/modernpc/manifest.webmanifest")[2])
+        check("which installs that profile, as a separate app",
+              m2["start_url"] == m2["id"] == "/p/modernpc/"
+              and m2["name"] == "vcctrl modernpc", m2)
+
+        for icon in m["icons"] + [{"src": "/pwa/apple-touch-icon.png"}]:
+            st, hd, body = get(icon["src"])
+            check("%s is served as a PNG" % icon["src"],
+                  st == 200 and hd.get("Content-Type") == "image/png"
+                  and body[:8] == b"\x89PNG\r\n\x1a\n", st)
+        check("an unlisted name is refused",
+              get("/pwa/SOURCE.sha256")[0] == 404)
+        check("and so is a path out of the directory",
+              get("/pwa/../vcweb.py")[0] == 404)
+    finally:
+        try:
+            web.httpd.shutdown()
+        except Exception:
+            pass
+
+
+def test_pwa_icons_match_the_favicon():
+    """daemon/pwa/*.png are rendered from favicon.svg and must follow it.
+
+    Same drift as test_favicon_single_source, one step removed: a PNG
+    cannot be compared to an svg, so tools/make-pwa-icons.py records the
+    svg's sha256 when it renders, and an svg edit fails here until the
+    icons are rendered again.
+    """
+    import hashlib
+    import struct
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+    root = os.path.join(HERE, os.pardir, "daemon")
+    svg = open(os.path.join(root, "favicon.svg"), "rb").read()
+    rec = open(os.path.join(root, "pwa", "SOURCE.sha256")).read().split()[0]
+    check("the icons were rendered from the current favicon.svg",
+          rec == hashlib.sha256(svg).hexdigest(),
+          "re-run tools/make-pwa-icons.py")
+    want = {"apple-touch-icon.png": 180, "icon-192.png": 192,
+            "icon-512.png": 512, "icon-maskable-512.png": 512}
+    check("every served name has a size here, and nothing else",
+          set(vcweb.Handler.PWA_FILES) == set(want), vcweb.Handler.PWA_FILES)
+    for name, px in want.items():
+        raw = open(os.path.join(root, "pwa", name), "rb").read()
+        w, h = struct.unpack(">II", raw[16:24])
+        check("%s is %dx%d" % (name, px, px), (w, h) == (px, px), (w, h))
+
+
 def test_page_never_bypasses_the_profile_prefix():
     """Every fetch/img-src/href of the eight endpoints a profile switch must
     reach goes through apiPath(), not a bare absolute path.
