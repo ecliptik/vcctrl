@@ -536,14 +536,18 @@ difference in light or dark.
 
 **Confirmed on the operator's iPhone** on 2026-09-26, after f8b9041 and
 4cffa9d were live: "no more blur", and the installed app "looks much
-better". Not yet tested:
-- the on-screen keyboard with a TYPE-tab field focused (iOS may scroll the
-  document to reveal it, and a fixed #app will not follow);
-- whether the 16px touch size on that field (4cffa9d) stops the auto-zoom
-  on the phone as well as in the simulator. The Settings dropdowns are
-  15px and may still zoom;
-- iPad (WebKit uses a solid "hard" pocket there);
-- the in-page full-screen mode.
+better". The same day, from the operator's phone screenshots:
+- with the TYPE field focused, the field stays visible above the on-screen
+  keyboard, and at 16px (4cffa9d) the page no longer zooms;
+- the 15px Settings dropdowns do not zoom either;
+- iOS still pans the page while typing, so the header is off the top.
+  That is iOS revealing the field, and is left alone;
+- the tab row's home-bar padding was an empty strip above the keyboard.
+  It is now dropped while a typing field has focus on a touch screen
+  (8360d0e, not yet seen on the phone).
+
+Not yet tested: iPad (WebKit uses a solid "hard" pocket there) and the
+in-page full-screen mode.
 
 **There is no service worker, deliberately.** Safari does not need one to
 install, the page is useless offline, and a cached copy of `kvm.html` would
