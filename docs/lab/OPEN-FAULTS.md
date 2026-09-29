@@ -2030,6 +2030,46 @@ only witness that doesn't share the capture stick's own failure mode -- and
 treat "the target hard-hung and power-cycled clean afterward" as the
 actionable fact even when the mechanism isn't nailed down.
 
+**Addendum, 2026-09-16 and 2026-09-17, reported by a peer session (`sdldos`/
+`dosags`) — a specific trigger pattern emerging across two more instances,
+still not root-caused.** Both hit the g2k 486DX2-66 at the `--return` chord
+(`send_file`/`get_file` rebooting back OUT of the NET profile after a file
+transfer), immediately after the FTP session itself completed cleanly (the
+screen sat on mTCP's own "226 Transfer complete" / "221 Goodbye" / "Server
+closed control connection" footer, no prompt after it, a genuine link
+failure rather than a slow chord — the peer session gave the real ~85s
+window per `docs/lab/FINDINGS.md` sec. 7 before concluding anything). No
+SDL3-DOS program was running either time, so `vcctrl_verify_input` was the
+right tool to reach for (see sec. 27's addenda for when it is not) and
+correctly read `verified: false`, "no LED change" both times. **New detail
+worth recording, not yet interpreted:** the second instance (2026-09-17,
+14:30 PDT) had BOTH lock LEDs latched at a fixed, unchanging value —
+`{capslock:1, numlock:0, scrolllock:1}` before and after the round trip —
+raised by the reporting session as a possible clue (a toggle left
+half-done by an earlier round trip?) rather than an established fact.
+Both instances recovered with the standing one-power-cycle policy (sec.
+23's own "workaround known"); the 2026-09-15 S32B5 case (already recorded
+above) shares the identical `verify_input` signature but struck mid-run
+rather than at a `--return` chord, so a peer session's own read is that
+"post-FTP/NET" may be a trigger rather than the cause — **not confirmed
+here, and not this repo's own reproduction**, flagged as a pattern for
+whoever picks up sec. 23's root cause next. Reported alongside a concrete
+ask: `send_file`/`get_file`'s `--return` path has no positive "the reboot
+actually took" witness of its own (the screen leaving the FTP footer and
+reaching the boot banner within a bound sized past the ~85s a working
+chord takes) — today a caller that hits this just gets the same generic
+refusal as any other verify-input failure, and the fault costs exactly as
+long as it takes a human to notice, same shape as sec. 20's own "not yet
+fixed" note about the blind INTO-NET half of this same round trip. **Not
+yet built, flagged rather than implemented**, same sign-off reasoning as
+sec. 18-20: a reboot-took witness plus a distinct named result (rather
+than folding it into the generic refusal) is a real capability addition,
+not a bug fix, and the peer session is shipping the equivalent unattended
+recovery on their own port's side in the meantime
+(`sdl-dos-ports` `975eaf7`, `shared/skills/dos-rig-operations/references/
+power-management.md` — read and confirmed accurate about vcctrl's own
+behavior before being cited here).
+
 ## 24. A `no-reset` that cleared on a plain retry, mechanism unknown — OPEN, NOT DIAGNOSED
 
 **2026-09-11, same evening as sec. 23**, a separate attempt (same rig, same
@@ -2366,6 +2406,39 @@ between samples is not patient enough against a ~20-second-per-frame
 target. The fix was not a better check; it was the same checks, run for
 longer before concluding "flat."
 
+**Third addendum, 2026-09-16, in the `dosags` port repo (commits 5f86091,
+1f9790d there — read and independently verified against this repo's own
+source before being written up here) — root cause found, and it is worse
+than "uninformative":** `SDL_dosevents.c`'s `DOSVESA_InitKeyboard()`
+replaces the BIOS IRQ-1 handler outright for the whole life of an SDL3-DOS
+process, confirming by source (not just by observation) that the earlier
+addendum's `verified: false` against Shards of God was structural, not a
+timing fluke — this round trip **cannot** succeed against any running
+SDL3-DOS title, healthy or hung, for as long as the game holds the
+keyboard. That would only make the check uninformative. The costlier part:
+the Scroll-Lock keypress this probe sends is not a safe no-op just because
+the BIOS never echoes it back to complete the round trip — it still lands
+on the running game's own raw-scancode handler as a real keystroke. Two
+REFUSED reboot-chord attempts (`vcctrl_get_file`'s own reboot, which routes
+through the identical LED check) against a still-running Shards cell were
+immediately followed, in the game's own fetched log, by four
+`on_key_press` events and an unexplained "Quitting the game..." with no
+completion record — a call that reported REFUSED, changing nothing by its
+own account, ended a legitimately-running program as a side effect of
+having been asked. `dosags` has since removed its own standalone
+`verify-input` liveness probe entirely (`1f9790d`) rather than work around
+this. Documented directly in `LedsCapability._verify_input`'s own
+docstring (`daemon/vcctrld.py`) alongside the false-negative caveat above,
+so both are visible from the tool itself: **do not call this as a
+liveness poll against a target that may have a foreground program holding
+the keyboard directly — reach for a channel that injects nothing instead**
+(`vcctrl_shot`/`vcctrl_burst` for screen content, `vcctrl_camera_shot` for
+a genuinely out-of-band witness, `vcctrl_video_state` for raw feed
+health). This probe remains the right, cheap tool for "no program is
+running, is the link alive at all" — the case it was built for, and where
+this hazard does not apply because nothing is listening on the target side
+to misinterpret the keystroke.
+
 ## 28. `vcctrl_shot` returned the identical frame for 50+ seconds while the ring was fresh — OPEN, NOT DIAGNOSED
 
 **2026-09-15**, unrelated to this session's other incidents: `sdldos`
@@ -2412,3 +2485,63 @@ side cache rather than the daemon's own selection) and, if reproducible
 live, add temporary logging to `_select` to see whether `items` genuinely
 differs between calls or whether the ring itself is not advancing the way
 `last_frame_age_s` claims.
+
+## 29. The harness's blocking workflows are doskutsu/profile-shaped, not generic — OPEN, WORKAROUND KNOWN (peer-side)
+
+Reported by a peer session (`sdldos`, handing off two days of real-hardware
+benchmarking on `dosags`, 2026-09-16) working against a different DOS
+program shape than this repo's own `doskutsu` target: an AGS/Allegro game
+launched with real CLI arguments and stdout redirection, run for anywhere
+from 1 to 70 minutes. Two related gaps, not independently confirmed by
+this repo's own hardware (no `dosags`-shaped target exists here to
+reproduce against), but consistent with reading `harness/vcctrl-cell` and
+`harness/vcctrl-collect` directly:
+
+**No blocking, input-free "wait until done."** `vcctrl_run_cell`/
+`vcctrl_run_sweep`/`vcctrl_collect` launch detached and return a `job_id`
+immediately; the caller polls `vcctrl_job_status`. That's a fine shape for
+an agent turn that's still active, but an agent waiting on a 1-70 minute
+run tends to end its turn once it's polled a few times, and nothing wakes
+it back up — the peer session reported burning many coordinator round
+trips on exactly this. What's missing is a single call that blocks (no
+keystrokes sent, nothing else touched) until a named condition is true: a
+file appears or stops growing on the target, the screen returns to a
+known idle state, or a timeout passes. Whether `vcctrl_job_status` already
+covers this well enough for `run_cell`'s own tag-shaped case is untested
+here; the reported gap is specifically the next point.
+
+**`run_cell`/`run_sweep`/`collect` are shaped for a known tag against a
+known profile (`set_vars`/`forbid`/`expect_log`, `profiles/doskutsu.yaml`),
+not "stage this exe and this batch file, run an arbitrary command line
+with redirection, collect one named output."** A target running a
+different program with its own CLI-args-and-redirection launch shape has
+no vcctrl-side primitive for that and has to drive `stage_file`/
+`send_file`/`get_file` by hand around it — which is exactly what cost the
+peer session a lost working directory across a transfer reboot on a first
+hand-driven attempt. Their workaround lives in their own repo
+(`tests/harness/run-probe-rig.sh`, `dosags` commit dca41d9) and is
+reported here, not copied in, since it depends on that port's own layout.
+**Not yet fixed, flagged rather than implemented, same reasoning as sec. 18
+and sec. 19**: whether "stage an exe + a batch file, run it, collect one
+output file" belongs as a generic vcctrl harness primitive (available to
+any port, not just `doskutsu`) is a real capability question, and wants a
+decision on scope before code, not a guess at what a second, unseen target
+shape needs.
+
+## 30. Lock-status age is already exposed; auto-expiry is not — reinforces sec. 18, not a new gap
+
+A peer session (`sdldos`/`dosags`, 2026-09-16) reported hitting an
+orphaned input lock after a wrapper script's own failure-exit path skipped
+its cleanup, and asked (independent of that specific bug, which was
+theirs and is already fixed on their side, commit 48f3948) for `vcctrl` to
+make an orphaned lock more self-healing: a lease/TTL, or `lock_status`
+showing the lock's age prominently. **The second half already exists** —
+`Arbiter.status()` (`daemon/vcctrld.py`) returns `held_s` directly, and
+`vcctrl_lock_status` surfaces it; nothing to add there. The first half
+(auto-expiry) does not exist and is the same gap sec. 18 already names —
+`Arbiter` has no idle logic of its own, by design, so nothing daemon-side
+ever un-sticks a lock left by a dead client except the lightweight
+`vcctrl lock break --as <name>` CLI escape hatch (not yet an MCP tool —
+see sec. 18 for why). This report is corroboration that the gap sec. 18
+already flags is a real cost to more than one caller, not a new finding on
+its own; no code change made here.

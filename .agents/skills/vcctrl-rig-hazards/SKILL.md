@@ -160,6 +160,28 @@ isn't proof the input path is dead — cross-check with a visible on-screen
 response to a keypress (a title-screen dismiss, a sprite moving) before
 trusting the LED check's verdict while a game owns the keyboard.
 
+**`vcctrl_verify_input` is not a safe no-op against that same foreground
+program — it can end its run.** Found and root-caused in the `dosags` port
+repo, 2026-09-16 (commits 5f86091, 1f9790d there; verified against this
+repo's own source before being written up here): any SDL3-DOS title
+replaces the BIOS keyboard IRQ handler for its whole life
+(`DOSVESA_InitKeyboard()`), so the round trip cannot complete while it's
+running — but the Scroll-Lock keypress the probe sends still physically
+reaches the target and lands on the game's own raw-scancode handler as a
+real keystroke. Two REFUSED reboot attempts (`vcctrl_get_file`'s own
+reboot goes through this same check) against a still-running game were
+followed, in the game's own log, by four logged keypresses and an
+unexplained early quit — a call that reported "refused, nothing sent" by
+its own account still ended the run. **Do not call `vcctrl_verify_input`
+as a liveness poll against a target that might have a foreground program
+holding the keyboard directly** (any SDL3-DOS title, likely others) —
+reach for `vcctrl_shot`/`vcctrl_burst` (screen content) or
+`vcctrl_camera_shot` (a genuinely out-of-band witness, see `vcctrl-camera`)
+instead, neither of which sends anything to the target. This probe is
+still the right, cheap tool for "no program is running, is the link alive
+at all" — see `docs/lab/OPEN-FAULTS.md` sec. 27's third addendum for the
+full incident.
+
 Fourth, measured 2026-08-27 after a CPU swap to a 486DX2-50: the daemon's
 own automated typing (`_prove_net()`'s `type_line()` inside `send_file`/
 `get_file`) dropped characters mid-line on a long (~40-char) command,

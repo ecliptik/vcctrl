@@ -133,6 +133,25 @@ deliberate act, not a flag to default on. Supplying it when the task actually
 calls for the action is correct and expected; don't treat the requirement as
 a reason to avoid the action, only as a reason to mean it.
 
+**`vcctrl_verify_input` sends a real keystroke, and a target program can act
+on it even when the call itself reports refused/failed.** It is built for
+"nothing is running, is the PS/2 link alive" and is cheap and safe there.
+It is NOT a safe liveness poll against a target that might have a
+foreground program running (any SDL3-DOS title is confirmed; likely others)
+-- such a program can intercept raw scancodes directly, never chaining
+through the BIOS path this check depends on, so the round trip reads as a
+false `verified: false` AND the Scroll-Lock keystroke it sent still lands
+on the program as real input. Measured in the `dosags` port repo,
+2026-09-16: two calls that this check reported as REFUSED were followed by
+four logged keypresses and an unexplained early quit in the target
+program's own log -- a call whose own account said "nothing changed" ended
+a legitimately-running program anyway. See `vcctrl-rig-hazards` and
+`docs/lab/OPEN-FAULTS.md` sec. 27 for the full incident. If a foreground
+program might be running (a game launched by `run_cell`, anything staged
+and executed by hand), use `vcctrl_shot`/`vcctrl_burst` or
+`vcctrl_camera_shot` for a liveness read instead -- neither sends anything
+to the target.
+
 **A keystroke or click landing is not the same as the tool call succeeding.**
 Because of the input hazards in `vcctrl-rig-hazards` (Caps Lock inversion,
 OCR unreliable on digits, DOS's caret/REM quirks if you're driving the target

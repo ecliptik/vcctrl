@@ -68,7 +68,21 @@ hits this because its directory already exists from the last time.
    has nothing that can hash a file). Nothing is ever deleted from the
    target, so a fetch is always safe to retry. Returns immediately.
 4. `vcctrl_file_status()` -- poll until done, same three-way reading as
-   upload.
+   upload. **If the file list includes anything optional (present for only
+   some classes of target, e.g. a save file or a log only one game variant
+   writes), check the per-file `job.files[].ok` for the names you actually
+   need, not the job's own top-level `ok`/`complete` flags.** Those two
+   answer "did everything I attempted succeed" and "was everything asked
+   for actually fetched" -- both legitimately `False` when even one named
+   file was never going to exist on this target, which makes a caller that
+   waits for `ok` on a request mixing required and optional names time out
+   the full `PULL_JOB_TIMEOUT_S` even after everything it actually needed
+   already arrived. `harness/vcctrl-collect`'s own `save_into_incoming`
+   already gets this right (`{f["name"] for f in job["files"] if f["ok"]}`,
+   read per name) -- a peer port's simpler wrapper reimplemented the
+   top-level check instead and burned a full 5400s timeout on a run that
+   had, in fact, completed (`dosags` 8999f5f, 2026-09-16). Match the
+   existing script's pattern rather than the aggregate flags.
 5. `vcctrl_pulled("list")` -- what landed on the *daemon* host.
 6. `vcctrl_pulled_save(name)` -- copy one fetched file onto the machine
    actually running this MCP server. Skipping this step leaves the file
