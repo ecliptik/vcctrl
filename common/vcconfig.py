@@ -321,6 +321,13 @@ SCHEMA = {
         # 0.750, to give back the machine's own 3:2. A shape, not a crop: it
         # says nothing about where the box sits, only how stretched it is.
         "picture": {"width": int, "height": int},
+        # THE WEB KVM'S STARTING MOUSE SPEED for this machine -- the multiplier
+        # the page applies to pointer movement before sending it. Absent: 1,
+        # as it always was. A browser's own Settings slider, once moved, wins
+        # over this. Added for the Macintosh 512Ke (2026-10-15): it needs
+        # about 5 mouse counts per screen pixel and the page shows it near 2x,
+        # so 1x left the cursor crawling.
+        "mouse_speed": (int, float),
         # usb4vc KINDS ONLY -- which protocol board this machine is, so a
         # future board-driven activation can say which profile a seated
         # board belongs to. Absent for a profile with no protocol board

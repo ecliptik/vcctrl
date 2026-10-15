@@ -12356,7 +12356,9 @@ class Registry(object):
                 "native": ({"width": nat.get("width"),
                            "height": nat.get("height")} if nat else None),
                 "picture": ({"width": pic.get("width"),
-                            "height": pic.get("height")} if pic else None)}
+                            "height": pic.get("height")} if pic else None),
+                # The page's starting Mouse speed; None means 1x.
+                "mouse_speed": m.get("mouse_speed")}
 
     def report(self):
         """Three states, never two.

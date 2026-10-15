@@ -113,6 +113,9 @@ machine:
   # web KVM is told to correct it. Measure yours from `vcctrl shot`: the
   # bounding box of the non-black area. Leave it out if the picture looks right.
   # picture: {width: 511, height: 455}
+  # The web KVM's starting Mouse speed. A 512Ke needed about 5 counts per
+  # pixel, so 1x crawled; 2.5 tracked the hand about 1:1.
+  mouse_speed: 2.5
   board_id: 3
 
 targets:

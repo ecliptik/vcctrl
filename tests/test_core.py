@@ -385,7 +385,7 @@ def test_configured_machine_is_optional_and_a_real_answer_either_way():
           m == {"label": "modernpc", "kind": "hdmi-usb", "os": "linux",
                 "keyboard": "pc-104", "mouse": "relative",
                 "native": {"width": 1920, "height": 1080},
-                "picture": None}, m)
+                "picture": None, "mouse_speed": None}, m)
 
     cfg2 = vcctrld.vcconfig.Config({"machine": {"label": "x"}}, source="test")
     with vcctrld._profile_scope(cfg2):
@@ -406,6 +406,12 @@ def test_configured_machine_is_optional_and_a_real_answer_either_way():
     check("machine.picture comes through beside native",
           m3["picture"] == {"width": 511, "height": 455}
           and m3["native"] == {"width": 512, "height": 342}, m3)
+
+    cfg4 = vcctrld.vcconfig.Config({"machine": {"label": "x", "mouse_speed": 2.5}},
+                                   source="test")
+    with vcctrld._profile_scope(cfg4):
+        m4 = reg.configured_machine()
+    check("machine.mouse_speed comes through for the page", m4["mouse_speed"] == 2.5, m4)
 
 
 def test_a_board_less_profile_still_declares_a_keyboard():
@@ -2705,6 +2711,23 @@ HARNESS = r"""
     emit(`secretplain ${plain ? 1 : 0} 0`);
   }
 
+  // Mouse speed: the browser's own slider choice wins, then the profile's
+  // machine.mouse_speed, then 1x.
+  {
+    const saved = lastState, mine = localStorage.getItem('vcctrl.mousesens');
+    localStorage.removeItem('vcctrl.mousesens');
+    lastState = {machine: {mouse_speed: 2.5}};
+    const prof = mouseSensitivity() === 2.5;
+    localStorage.setItem('vcctrl.mousesens', '1.2');
+    const own = mouseSensitivity() === 1.2;
+    localStorage.removeItem('vcctrl.mousesens');
+    lastState = {machine: {}};
+    const none = mouseSensitivity() === 1;
+    if (mine !== null) localStorage.setItem('vcctrl.mousesens', mine);
+    lastState = saved;
+    emit(`mousespeed ${prof && none ? 1 : 0} ${own ? 1 : 0}`);
+  }
+
   // The resolution comes from the FRAME, not from a constant. A canvas
   // carries 640x480 as an attribute, so reporting before a frame arrives
   // would report the Gateway's geometry on a Macintosh.
@@ -3532,6 +3555,10 @@ def test_zoom_layout_in_a_browser():
           got["secretline"][1] == 1.0, got["secretline"])
     check("control: an ordinary line carries no secret flag",
           got["secretplain"][0] == 1.0, got["secretplain"])
+    check("mouse speed starts at the profile's, and 1x without one",
+          got["mousespeed"][0] == 1.0, got["mousespeed"])
+    check("  and this browser's own slider choice wins over the profile",
+          got["mousespeed"][1] == 1.0, got["mousespeed"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])

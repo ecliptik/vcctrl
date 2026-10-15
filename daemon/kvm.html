@@ -3032,7 +3032,7 @@
 
         <div class="row" style="margin-bottom:4px; margin-top:10px">
           <span id="mousesenslabel" style="flex:1 1 auto">Mouse speed</span>
-          <input id="mousesens" type="range" min="0.25" max="3" step="0.05"
+          <input id="mousesens" type="range" min="0.25" max="6" step="0.05"
                  value="1" aria-labelledby="mousesenslabel"
                  title="How far the target's cursor moves per pixel you move">
         </div>
@@ -5944,8 +5944,17 @@ $('grabbtn').onclick = () => setArmed(!armed);
 // wheel gets the same treatment, for the same reason.
 let mouseAccDx = 0, mouseAccDy = 0, mouseAccWheel = 0, mouseFlushTimer = null;
 
+// This browser's own choice first (the Settings slider, once moved), then the
+// profile's machine.mouse_speed, then 1. The profile default exists because
+// one number cannot suit both machines: the Gateway's PS/2 mouse is right at
+// 1x and the 512Ke needs about 5 counts per screen pixel (2026-10-15).
 function mouseSensitivity() {
-  return parseFloat(localStorage.getItem('vcctrl.mousesens') || '1') || 1;
+  let mine = null, m = {};
+  try { mine = localStorage.getItem('vcctrl.mousesens'); } catch (e) {}
+  // In a try because this first runs at load, ABOVE `let lastState` --
+  // reading a let before its declaration throws and stops the whole script.
+  try { m = (lastState && lastState.machine) || {}; } catch (e) {}
+  return parseFloat(mine || '') || (m.mouse_speed > 0 ? m.mouse_speed : 1);
 }
 
 function flushMouseMove() {
@@ -8196,6 +8205,9 @@ async function pollState() {
   // The correction arrives with the first poll (and changes on a profile
   // switch), after the first frame may already have been sized without it.
   if (captureYScale() !== appliedYScale) applyZoom(false);
+  // The slider shows the speed in force, which until this browser picks one
+  // is the profile's -- and that only arrives with the poll.
+  if (document.activeElement !== $('mousesens')) $('mousesens').value = mouseSensitivity();
   // Only while it is on screen: this rebuilds a dozen rows and nobody is
   // reading them behind a closed drawer.
   if ($('stats').clientHeight) $('stats').innerHTML = statsRows(j);
