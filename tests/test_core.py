@@ -5069,6 +5069,12 @@ KBD_HARNESS = r"""
      .find(b => b.textContent.indexOf('Command') >= 0).click();
   key('Q').click();
   emit('maccmd ' + sent.join(';'));
+  sent.length = 0;
+  [...document.querySelectorAll('#kbdbody .key')]
+     .find(b => b.getAttribute('aria-label') === 'Option'
+             || b.textContent.trim() === '⌥').click();
+  key('Q').click();
+  emit('macopt ' + sent.join(';'));
 
   // WHAT THE LETTER KEYS WILL ACTUALLY TYPE. With Caps Lock lit at the target
   // `key a` produces A, and the keycaps print A either way -- so the panel
@@ -5256,6 +5262,10 @@ def test_keyboard_chords_in_a_browser():
           got.get("mac") == "fkeys=0 arrows=0 nav=0", got.get("mac"))
     check("its Command key goes on the wire as leftmeta",
           got.get("maccmd") == "combo leftmeta+q", got.get("maccmd"))
+    # USB4VC's Mac board turns Alt into Command and Ctrl into Option
+    # (measured in Key Caps on a 512Ke, 2026-10-15) -- so Option must be lctrl.
+    check("its Option key goes on the wire as lctrl, not lalt",
+          got.get("macopt") == "combo lctrl+q", got.get("macopt"))
 
     # Lit-and-trustworthy is the ONLY arm that may speak. The other six are
     # each a reason the reading is not about the target now.

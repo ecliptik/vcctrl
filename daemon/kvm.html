@@ -4704,21 +4704,27 @@ const LAYOUTS = {
        {k:'m',cap:'M'},{k:',',cap:',',sub:'<'},{k:'.',cap:'.',sub:'>'},
        {k:'/',cap:'/',sub:'?'},{mod:'rshift',cap:'Shift',w:2.75}],
     ],
-    // ⌘ is `leftmeta` and ⌥ is `lalt`: the keycap and the wire name are
+    // ⌘ is `leftmeta` and ⌥ is `lctrl`: the keycap and the wire name are
     // genuinely different things here, which is why `cap` exists.
+    // ⌥ IS CTRL, NOT ALT -- MEASURED, not guessed. It used to be `lalt`, and
+    // on USB4VC's Mac board (board 3, fw 0.1.0) Alt is COMMAND: holding each
+    // key with Key Caps open on the 512Ke (2026-10-15), lalt, ralt, leftmeta
+    // and rightmeta all lit the same ⌘ key and changed no glyph, while lctrl
+    // lit ⌥ and turned the letters into the Option layer (™ £ ¢ ∞). So this
+    // panel's Option key had been sending Command all along.
     bottom: [
-      {mod:'lalt',cap:'⌥',aria:'Option',w:1.75},
+      {mod:'lctrl',cap:'⌥',aria:'Option',w:1.75},
       {mod:'leftmeta',cap:'⌘',aria:'Command',w:1.5},
       {k:'space',cap:'Space',w:8.5},
       {mod:'rightmeta',cap:'⌘',aria:'Command',w:1.5},
-      {mod:'ralt',cap:'⌥',aria:'Option',w:1.75},
+      {mod:'rctrl',cap:'⌥',aria:'Option',w:1.75},
     ],
     compact: [
       {k:'tab',cap:'Tab',auto:true},{k:'backspace',cap:'Backspace',auto:true},
       {k:'enter',cap:'Return',auto:true},{k:'space',cap:'Space',auto:true},
       {k:'capslock',cap:'Caps Lock',auto:true},{mod:'lshift',cap:'Shift',auto:true},
       {mod:'leftmeta',cap:'⌘ Command',auto:true},
-      {mod:'lalt',cap:'⌥ Option',auto:true},
+      {mod:'lctrl',cap:'⌥ Option',auto:true},
     ],
     nav: [],
     // Num Lock and Scroll Lock are UNSUPPORTED here, not unmeasured: ADB has
