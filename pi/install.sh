@@ -508,7 +508,34 @@ fi
 # may not have `tailscale` configured yet, or the operator may simply not
 # want the public mirror running, and neither should fail a full install of
 # the thing this file exists for.
+# daemon.web_public.enabled from the config being installed ($SRC's, on a
+# full install) or, failing that, the one already installed (--public-only
+# ships no config). Read with yaml directly rather than common/config.sh,
+# which --public-only does not ship either. Anything unreadable is "yes":
+# the default must stay what it always was.
+public_mirror_wanted() {
+  local f
+  for f in "$SRC/vcctrl.yaml" "$PREFIX/vcctrl.yaml"; do
+    [ -f "$f" ] || continue
+    python3 -c 'import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+v = ((d.get("daemon") or {}).get("web_public") or {}).get("enabled", True)
+print("no" if v is False else "yes")' "$f" 2>/dev/null || echo yes
+    return 0
+  done
+  echo yes
+}
+
 install_public() {
+  # NOT WANTED ON EVERY RIG -- see vcconfig's daemon.web_public.enabled.
+  # Stop and disable rather than uninstall: the files stay, so turning it
+  # back on is setting the key to true and redeploying.
+  if [ "$(public_mirror_wanted)" = "no" ]; then
+    sudo systemctl disable --now vcctrl-web-public.service tailscaled-ro.service \
+      >/dev/null 2>&1 || true
+    echo "vcctrl-web-public: daemon.web_public.enabled is false -- mirror and tailscaled-ro stopped and disabled"
+    return 0
+  fi
   if [ ! -f "$SRC/daemon/vcweb_public.py" ]; then
     echo "vcctrl-web-public: daemon/vcweb_public.py not in this checkout, skipping" >&2
     return 0

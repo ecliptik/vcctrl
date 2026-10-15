@@ -1066,6 +1066,50 @@ def test_key_gap_is_a_floor_between_every_keyboard_event():
         vcctrld.time.sleep, vcctrld.time.monotonic, vcctrld.KEY_GAP_S = real
 
 
+def test_install_reads_whether_the_public_mirror_is_wanted():
+    """pi/install.sh's public_mirror_wanted(): daemon.web_public.enabled:
+    false (a rig that wants no public mirror) is the only thing that says
+    "no". The config being installed wins over the one already installed,
+    and absent, true or unreadable all stay "yes" -- the default must not
+    move for any rig that never set the key. Runs the function itself,
+    extracted from the script, against real files."""
+    import subprocess
+    import tempfile
+    print("\ninstall.sh: public_mirror_wanted")
+    inst = open(os.path.join(HERE, os.pardir, "pi", "install.sh")).read()
+    m = re.search(r"^public_mirror_wanted\(\) \{.*?^\}", inst, re.S | re.M)
+    check("install.sh defines public_mirror_wanted", m)
+    if not m:
+        return
+    with tempfile.TemporaryDirectory() as t:
+        src, prefix = os.path.join(t, "src"), os.path.join(t, "prefix")
+        os.makedirs(src)
+        os.makedirs(prefix)
+
+        def put(d, body):
+            with open(os.path.join(d, "vcctrl.yaml"), "w") as f:
+                f.write(body)
+
+        def run():
+            return subprocess.run(
+                ["bash", "-c", m.group(0) + "\npublic_mirror_wanted"],
+                env=dict(os.environ, SRC=src, PREFIX=prefix),
+                capture_output=True, text=True).stdout.strip()
+
+        off = "daemon:\n  web_public:\n    enabled: false\n"
+        check("no config anywhere -> yes", run() == "yes", run())
+        put(prefix, off)
+        check("installed config says false -> no", run() == "no", run())
+        put(src, "daemon:\n  web_public:\n    enabled: true\n")
+        check("the config being installed wins -> yes", run() == "yes", run())
+        put(src, "version: 1\n")
+        check("key absent -> yes, as it always was", run() == "yes", run())
+        put(src, "daemon: [broken\n")
+        check("unreadable -> yes, never a silent no", run() == "yes", run())
+        put(src, off)
+        check("being installed says false -> no", run() == "no", run())
+
+
 def test_activity_age():
     """'harness has been in ledwait for 14 minutes' is the operator's question
     in one line. Test it reports an in-flight command while it is still

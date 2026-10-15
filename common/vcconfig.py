@@ -232,6 +232,15 @@ SCHEMA = {
             "bind": str,
             "port": int,
             "upstream_port": int,
+            # NOT documentation-only, unlike the three above: pi/install.sh
+            # reads this one. false = this rig does not want the public
+            # mirror, so a full install (or --public) stops and disables
+            # vcctrl-web-public and tailscaled-ro instead of (re)installing
+            # them. Absent or true: installed, as it always was. Added for
+            # the Macintosh rig (2026-10-15), where the operator does not
+            # want a mirror and a Pi 3B has no spare memory for a second
+            # tailscaled waiting on a login that is never coming.
+            "enabled": bool,
         },
     },
 
