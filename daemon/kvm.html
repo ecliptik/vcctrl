@@ -8143,6 +8143,9 @@ async function pollState() {
   showBuffer(j.video);
   showHeat(j);
   lastState = j;
+  // The correction arrives with the first poll (and changes on a profile
+  // switch), after the first frame may already have been sized without it.
+  if (captureYScale() !== appliedYScale) applyZoom(false);
   // Only while it is on screen: this rebuilds a dozen rows and nobody is
   // reading them behind a closed drawer.
   if ($('stats').clientHeight) $('stats').innerHTML = statsRows(j);
@@ -9181,6 +9184,10 @@ function applyZoom(recentre) {
   // interval above owns adoption now, because only it can compare two samples
   // taken at different times.
   const r = crop || {x0: 0, y0: 0, bw: nw, bh: nh};
+  // Vertical correction for a capture that does not keep the machine's
+  // shape (machine.picture -- see captureYScale). 1 everywhere else.
+  const ys = captureYScale();
+  appliedYScale = ys;
 
   // Two passes, because a scrollbar changes the space a fit has to fit into.
   // Coming down from 4x the scrollbars are still there when we measure, so
@@ -9225,7 +9232,7 @@ function applyZoom(recentre) {
   for (let pass = 0; pass < 2; pass++) {
     const W = sc.clientWidth - pad * 2, H = sc.clientHeight - pad * 2;
     if (!W || !H) break;  // BREAK, NOT RETURN -- the camera branch below still needs to run.
-    const want = (vgaMode === 'fit') ? Math.min(W / r.bw, H / r.bh)
+    const want = (vgaMode === 'fit') ? Math.min(W / r.bw, H / (r.bh * ys))
                                       : Number(vgaMode);
     if (want === scale) break;
     scale = want;
@@ -9235,7 +9242,7 @@ function applyZoom(recentre) {
     // up into a real scrollbar that scrolls one pixel. The epsilon is there
     // so the first one does not floor away a whole pixel instead.
     pw = Math.floor(nw * scale + 0.001);
-    ph = Math.floor(nh * scale + 0.001);
+    ph = Math.floor(nh * scale * ys + 0.001);
     // Only when nothing is cropped. A crop fits the DRAWN REGION to the box,
     // which means the full frame is deliberately larger and must be allowed
     // to overflow -- that overflow is the thing you scroll.
@@ -9263,7 +9270,7 @@ function applyZoom(recentre) {
   // used to, rather than scroll to a meaningless negative offset.
   if (recentre && scale) {
     sc.scrollLeft = (r.x0 + r.bw / 2) * scale - sc.clientWidth / 2;
-    sc.scrollTop = (r.y0 + r.bh / 2) * scale - sc.clientHeight / 2;
+    sc.scrollTop = (r.y0 + r.bh / 2) * scale * ys - sc.clientHeight / 2;
   }
   // Scrollbars are the affordance on a desktop and are invisible on a
   // trackpad or a phone until something moves, so the first time a mode
@@ -9366,6 +9373,23 @@ function applyZoom(recentre) {
 // two similar pictures get mistaken for the same one.
 let capW = 0, capH = 0;
 const capSize = () => capW ? capW + '×' + capH : null;
+// HOW MUCH TO SQUEEZE THE CAPTURE VERTICALLY so the machine's screen comes
+// back in its own shape. The page otherwise assumes square capture pixels,
+// which is true of the Gateway's VGA stick and false of the 512Ke's HDMI
+// converter: that draws the 512x342 screen in a 511x455 box, so the Mac
+// looked squeezed sideways (reported 2026-10-15). The profile declares both
+// sizes (machine.native, machine.picture) and the factor is derived here
+// from the pair: (picture w/h) / (native w/h), 0.750 on the 512Ke. Absent,
+// partial or nonsense -> 1, which is exactly the page as it always was.
+let appliedYScale = 1;
+function captureYScale() {
+  const m = (lastState && lastState.machine) || {};
+  const n = m.native, p = m.picture;
+  if (!n || !p || !(n.width > 0 && n.height > 0 && p.width > 0 && p.height > 0)) return 1;
+  const k = (p.width / p.height) / (n.width / n.height);
+  // A factor this far from 1 is a typo in the profile, not a converter.
+  return (k > 0.25 && k < 4) ? k : 1;
+}
 // The menu says the ACTUAL pixel count, because "Original" only means
 // something if you know what the device is producing -- and on a Macintosh
 // Plus, Fit and Original differ by nearly two to one.

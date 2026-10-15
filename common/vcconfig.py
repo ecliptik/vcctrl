@@ -302,6 +302,16 @@ SCHEMA = {
         "keyboard": str,
         "mouse": str,             # absolute | relative | none
         "native": {"width": int, "height": int},
+        # WHERE `native` LANDS IN THE CAPTURE, in capture pixels, when the
+        # video path between the machine and the stick does not keep its
+        # shape. Optional; absent means the capture's pixels are square and
+        # the page scales it uniformly, as it always has. Measured on the
+        # Macintosh 512Ke (2026-10-15): its HDMI converter puts the 512x342
+        # screen in a 511x455 box of a 640x480 frame -- 342 lines drawn 455
+        # tall -- so the page squeezes the height by (511/455)/(512/342),
+        # 0.750, to give back the machine's own 3:2. A shape, not a crop: it
+        # says nothing about where the box sits, only how stretched it is.
+        "picture": {"width": int, "height": int},
         # usb4vc KINDS ONLY -- which protocol board this machine is, so a
         # future board-driven activation can say which profile a seated
         # board belongs to. Absent for a profile with no protocol board

@@ -100,6 +100,12 @@ machine:
   keyboard: mac-plus
   mouse: relative
   native: {width: 512, height: 342}
+  # Where that 512x342 screen lands in the capture, if the video path
+  # stretches it. A 512Ke's HDMI converter was measured drawing it in a
+  # 511x455 box of a 640x480 frame, which looks squeezed sideways until the
+  # web KVM is told to correct it. Measure yours from `vcctrl shot`: the
+  # bounding box of the non-black area. Leave it out if the picture looks right.
+  # picture: {width: 511, height: 455}
   board_id: 3
 
 targets:

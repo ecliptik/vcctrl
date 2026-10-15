@@ -12302,11 +12302,17 @@ class Registry(object):
         if m is vcconfig.ABSENT or m is vcconfig.NONE or not isinstance(m, dict):
             return {}
         nat = m.get("native") or {}
+        # `picture`: where `native` lands in the capture when the video path
+        # stretches it -- see vcconfig's SCHEMA comment. The page derives its
+        # vertical correction from the two; None means square pixels.
+        pic = m.get("picture") or {}
         return {"label": m.get("label"), "kind": m.get("kind"),
                 "os": m.get("os"), "keyboard": m.get("keyboard"),
                 "mouse": m.get("mouse"),
                 "native": ({"width": nat.get("width"),
-                           "height": nat.get("height")} if nat else None)}
+                           "height": nat.get("height")} if nat else None),
+                "picture": ({"width": pic.get("width"),
+                            "height": pic.get("height")} if pic else None)}
 
     def report(self):
         """Three states, never two.

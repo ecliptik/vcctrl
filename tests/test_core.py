@@ -384,13 +384,28 @@ def test_configured_machine_is_optional_and_a_real_answer_either_way():
     check("a configured machine: comes through verbatim",
           m == {"label": "modernpc", "kind": "hdmi-usb", "os": "linux",
                 "keyboard": "pc-104", "mouse": "relative",
-                "native": {"width": 1920, "height": 1080}}, m)
+                "native": {"width": 1920, "height": 1080},
+                "picture": None}, m)
 
     cfg2 = vcctrld.vcconfig.Config({"machine": {"label": "x"}}, source="test")
     with vcctrld._profile_scope(cfg2):
         m2 = reg.configured_machine()
     check("a partial machine: block -- missing keys are None, not absent",
-          m2["keyboard"] is None and m2["native"] is None, m2)
+          m2["keyboard"] is None and m2["native"] is None
+          and m2["picture"] is None, m2)
+
+    # The stretched-capture case the field exists for: the 512Ke's HDMI
+    # converter draws its 512x342 screen 511x455. Both sizes must reach the
+    # page -- it derives the correction from the pair, not from either alone.
+    cfg3 = vcctrld.vcconfig.Config(
+        {"machine": {"label": "512ke", "native": {"width": 512, "height": 342},
+                     "picture": {"width": 511, "height": 455}}},
+        source="test")
+    with vcctrld._profile_scope(cfg3):
+        m3 = reg.configured_machine()
+    check("machine.picture comes through beside native",
+          m3["picture"] == {"width": 511, "height": 455}
+          and m3["native"] == {"width": 512, "height": 342}, m3)
 
 
 def test_a_board_less_profile_still_declares_a_keyboard():
