@@ -5763,8 +5763,19 @@ const CAN_POINTER_LOCK = !!$('stage').requestPointerLock;
 // keyboard that silently stops being captured is worse than one that needs an
 // explicit release, because you find out by typing into the wrong machine.
 const RELEASE = {ctrl:['lctrl','rctrl'], alt:['lalt','ralt'], shift:['lshift','rshift']};
+// A SECOND WAY OUT THAT NEEDS NO ALT. On the operator's Firefox under
+// Cinnamon/X11 (2026-10-15), Alt never reached the page at all: 857 input
+// events in a grabbed session held Ctrl 11 times and Shift 6, and not one
+// Alt, down or up -- so Ctrl+Alt+Shift could not release, and the only way
+// out was Esc (which drops Pointer Lock) and then the button. F12 because
+// neither keyboard this page drives needs it with Ctrl+Shift held: the
+// Gateway's DOS programs do not bind that, and the Mac's M0110 has no
+// function keys at all.
+const RELEASE_ALT = {ctrl:['lctrl','rctrl'], shift:['lshift','rshift'], f12:['f12']};
+const RELEASE_TEXT = 'Ctrl+Alt+Shift or Ctrl+Shift+F12';
 function isReleaseChord() {
-  return Object.values(RELEASE).every(names => names.some(n => pressed.has(n)));
+  const all = set => Object.values(set).every(names => names.some(n => pressed.has(n)));
+  return all(RELEASE) || all(RELEASE_ALT);
 }
 
 function setArmed(v) {
@@ -5815,7 +5826,7 @@ function setArmed(v) {
   // release-all.
   $('grabbtn').querySelector('.bl').textContent = v ? 'Release' : 'Grab';
   $('grabbtn').classList.toggle('on', v);
-  $('grabbtn').title = v ? 'Click or press Ctrl+Alt+Shift to stop'
+  $('grabbtn').title = v ? 'Click or press ' + RELEASE_TEXT + ' to stop'
                          : 'Send what you type straight to ' + targetName();
   if (v) {
     // Must happen synchronously inside the tap handler: iOS ignores focus()
@@ -5831,8 +5842,8 @@ function setArmed(v) {
     // silence, not a bug to surface, since the MOS lamp already says
     // whether it is reachable.
     if (CAN_POINTER_LOCK) $('stage').requestPointerLock().catch(() => {});
-    hint('keyboard and mouse grabbed, Ctrl + Alt + Shift releases');
-    addLine(new Date(), 'ui', 'keyboard and mouse grabbed, Ctrl+Alt+Shift releases'
+    hint('keyboard and mouse grabbed, ' + RELEASE_TEXT + ' releases');
+    addLine(new Date(), 'ui', 'keyboard and mouse grabbed, ' + RELEASE_TEXT + ' releases'
             + (document.activeElement === ghost ? '' : ' (focus refused)'),
             'k-note');
   } else {
@@ -6109,7 +6120,7 @@ function armFromStage(e) {
     // Already grabbed. Do not silently do nothing -- the previous build's
     // real bug was invisible state, so say what is true, over the picture
     // rather than by growing a row.
-    hint('already grabbed, Ctrl + Alt + Shift releases');
+    hint('already grabbed, ' + RELEASE_TEXT + ' releases');
     return;
   }
   setArmed(true);

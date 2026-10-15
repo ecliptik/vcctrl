@@ -2627,6 +2627,22 @@ HARNESS = r"""
     emit(`grab ${still ? 1 : 0} ${lit && !lamp.classList.contains('on') ? 1 : 0}`);
   }
 
+  // Either release chord lets go of a grab, and Ctrl+Shift alone does not.
+  // The second one exists because Alt never reached this page from Firefox
+  // under Cinnamon -- so it must work with no Alt in it at all.
+  {
+    const kd = c => dispatchEvent(new KeyboardEvent('keydown', {code:c, bubbles:true}));
+    const ku = c => dispatchEvent(new KeyboardEvent('keyup', {code:c, bubbles:true}));
+    setArmed(true); kd('ControlLeft'); kd('ShiftLeft'); kd('F12');
+    const altfree = !armed; ku('F12'); ku('ShiftLeft'); ku('ControlLeft');
+    setArmed(true); kd('ControlLeft'); kd('AltLeft'); kd('ShiftLeft');
+    const classic = !armed; ku('ShiftLeft'); ku('AltLeft'); ku('ControlLeft');
+    setArmed(true); kd('ControlLeft'); kd('ShiftLeft');
+    const held = armed; ku('ShiftLeft'); ku('ControlLeft'); setArmed(false);
+    emit(`release ${altfree ? 1 : 0} ${classic ? 1 : 0}`);
+    emit(`releasectl ${held ? 1 : 0} 0`);
+  }
+
   // The resolution comes from the FRAME, not from a constant. A canvas
   // carries 640x480 as an attribute, so reporting before a frame arrives
   // would report the Gateway's geometry on a Macintosh.
@@ -3442,6 +3458,12 @@ def test_zoom_layout_in_a_browser():
           got["grab"][0] == 1.0, got["grab"])
     check("control: and the KBD lamp lights and unlights",
           got["grab"][1] == 1.0, got["grab"])
+    check("Ctrl+Shift+F12 releases a grab -- no Alt needed",
+          got["release"][0] == 1.0, got["release"])
+    check("Ctrl+Alt+Shift still releases it",
+          got["release"][1] == 1.0, got["release"])
+    check("control: Ctrl+Shift alone does not",
+          got["releasectl"][0] == 1.0, got["releasectl"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])

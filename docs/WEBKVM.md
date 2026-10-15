@@ -2072,7 +2072,7 @@ v1 is running on the Pi. `http://<tailnet-ip>:8080/`, tailnet only.
 | Frame size | ~15 KB text console, ~70 KB a full `DIR` listing |
 | `shot` | **0.29 s**, down from ~40 s |
 | Transports | WebSocket preferred; `multipart/x-mixed-replace` fallback |
-| Input | keydown/keyup, full US PS/2 table, click-to-capture, Ctrl+Alt+Shift to release |
+| Input | keydown/keyup, full US PS/2 table, click-to-capture, Ctrl+Alt+Shift or Ctrl+Shift+F12 to release |
 
 ### What measurement changed, which is most of it
 
