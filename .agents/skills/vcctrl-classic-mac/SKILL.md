@@ -83,6 +83,42 @@ Two facts, both measured on the 512Ke with Control Panel → Mouse set to
   labels. **The hotspot is the arrow's tip:** a click with the tip on a
   close box's border misses, so aim a few pixels inside.
 
+## Pointer verbs: use these instead of steering by eye
+
+With `capabilities.pointer` (backend `video-diff`) configured, as on the
+512Ke's profile:
+
+- `vcctrl cursor` (MCP `vcctrl_cursor`) nudges the pointer, diffs the
+  picture, puts it back, and returns its `hotspot` in capture px and
+  `native` in the Mac's own screen px (0..511 × 0..341 on a 512Ke).
+- `vcctrl mouse goto X Y` (MCP `vcctrl_mouse_goto`): park, one computed
+  move, one correction. It lands within about 1 px in ~4 s
+  (`--no-refine`: open loop, within a few px). Follow it with
+  `mouse click`. **This is the normal way to click on something.**
+- `vcctrl pointer-check` (MCP `vcctrl_pointer_check`), and `verify-input`
+  on this board, is the input round trip: `verified: true` means the
+  pointer moved and came back on screen. A `warning` means the scale is
+  off, i.e. tracking is no longer Tablet (a PRAM reset does that). It
+  sends no keystroke.
+- To find a target's native coordinates from a `shot`: native =
+  (capture − picture origin) × native size / picture size. On the 512Ke
+  that's x = (cx − 65) × 512/511, y = (cy − 14) × 342/455.
+- In the web KVM, "Click to point" (Settings, on by default here) makes a
+  click on the picture a goto plus a click. Grab is the button.
+- Limits: the diff assumes the dark arrow on a lighter ground. A blinking
+  insertion point or the Alarm Clock beside the pointer can widen it, and
+  the I-beam and watch cursors have different hotspots.
+
+## Restart, screensaver
+
+- Restart: Special → Restart (press-drag the menu). There is no Power key
+  to send. Hard restart: the plug (`vcctrl power cycle`), but only with the
+  owner's go-ahead, because it cuts power with no shutdown.
+- After Dark is on the disk. If a screensaver is running, the picture
+  changes on its own and `pointer_check` may fail or find nothing. Any
+  mouse move wakes it, so a `mouse move 1 0` / `mouse move -1 0` first is
+  harmless.
+
 ## Easy Access, keypad and Clear
 
 - The keypad reaches the Mac (`kp0`..`kp9` and friends light in Key Caps),
