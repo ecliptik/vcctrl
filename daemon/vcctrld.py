@@ -316,6 +316,12 @@ KEY_GAP_S = float(CFG.default("capabilities.input.settings.key_gap_s", 0) or 0)
 # untouched, so the clip is in the board's firmware. It is also why the web
 # KVM's pointer lagged a fast swipe: each 40 ms batch over the limit was cut.
 MOUSE_MAX_STEP = int(CFG.default("capabilities.input.settings.mouse_max_step", 0) or 0)
+# And the least time between those steps. Splitting alone was not enough:
+# steps 12 ms apart are merged again downstream and clipped as one -- 400
+# counts in 100-count steps moved ~44 px at a 12 ms pace and ~67 px (the
+# full, linear distance) at 25, 40 and 60 ms. Only used between split steps.
+MOUSE_STEP_GAP_S = float(CFG.default(
+    "capabilities.input.settings.mouse_step_gap_s", 0) or 0)
 
 # ---------------------------------------------------------------- key tables
 
@@ -2030,7 +2036,7 @@ class Devices(object):
                     if sy:
                         self.mouse.write(e.EV_REL, e.REL_Y, sy)
                     self.mouse.syn()
-                    time.sleep(pace)
+                    time.sleep(max(pace, MOUSE_STEP_GAP_S) if i < n - 1 else pace)
                 return
             # A HID relative report is one SIGNED BYTE per axis (-127..127),
             # unlike EV_REL which takes any int -- so a move bigger than that

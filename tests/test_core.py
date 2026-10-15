@@ -1060,6 +1060,19 @@ def test_mouse_max_step_splits_a_move_the_board_would_clip():
             check("move %d,%d: no step over 100, sums exact" % (dx, dy),
                   sum(xs) == dx and sum(ys) == dy
                   and all(abs(v) <= 100 for v in xs + ys), (xs, ys))
+        # Steps closer than ~25 ms are merged downstream and clipped again,
+        # so the gap between steps is a floor under the pace -- and only
+        # between steps, not after the last one.
+        slept = []
+        real_sleep, real_gap = vcctrld.time.sleep, vcctrld.MOUSE_STEP_GAP_S
+        vcctrld.time.sleep = lambda s: slept.append(s)
+        vcctrld.MOUSE_STEP_GAP_S = 0.03
+        try:
+            make_devices().mouse_move(400, 0, pace=0.012)
+        finally:
+            vcctrld.time.sleep, vcctrld.MOUSE_STEP_GAP_S = real_sleep, real_gap
+        check("between steps the gap is max(pace, mouse_step_gap_s); the pace after the last",
+              slept == [0.03, 0.03, 0.03, 0.012], slept)
     finally:
         vcctrld.MOUSE_MAX_STEP = real
 

@@ -45,6 +45,9 @@ capabilities:
       # The Mac board clips one relative event at about 100 counts (100..400
       # all moved the same ~17 px on a 512Ke); split larger moves.
       mouse_max_step: 100
+      # ...and at least 30 ms apart: closer steps are merged again and clipped
+      # (400 counts moved ~44 px at 12 ms, ~67 px -- linear -- at 25 ms and up).
+      mouse_step_gap_s: 0.03
 
   video:
     backend: v4l2-ffmpeg
