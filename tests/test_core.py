@@ -2728,6 +2728,19 @@ HARNESS = r"""
     emit(`mousespeed ${prof && none ? 1 : 0} ${own ? 1 : 0}`);
   }
 
+  // The still/moving flap is hidden by default and shown on request, and
+  // losing the picture is never hidden by it.
+  {
+    const was = OPTS.vidstate;
+    OPTS.vidstate = false;
+    const hid = !visible({kind:'video.locked'}) && !visible({kind:'video.frozen'});
+    const lost = visible({kind:'video.nosignal'});
+    OPTS.vidstate = true;
+    const shown = visible({kind:'video.locked'}) && visible({kind:'video.frozen'});
+    OPTS.vidstate = was;
+    emit(`vidstate ${hid && shown ? 1 : 0} ${lost ? 1 : 0}`);
+  }
+
   // The resolution comes from the FRAME, not from a constant. A canvas
   // carries 640x480 as an attribute, so reporting before a frame arrives
   // would report the Gateway's geometry on a Macintosh.
@@ -3559,6 +3572,10 @@ def test_zoom_layout_in_a_browser():
           got["mousespeed"][0] == 1.0, got["mousespeed"])
     check("  and this browser's own slider choice wins over the profile",
           got["mousespeed"][1] == 1.0, got["mousespeed"])
+    check("video locked/frozen lines are hidden by default and shown when ticked",
+          got["vidstate"][0] == 1.0, got["vidstate"])
+    check("  and loss of signal is never hidden with them",
+          got["vidstate"][1] == 1.0, got["vidstate"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])

@@ -3134,6 +3134,11 @@
           rate, and what the daemon says it is actually sending, logged each
           time either one changes -- noisy, and rarely the thing you are
           looking for.</div>
+        <label><input type="checkbox" id="opt-vidstate">
+          Picture still/moving changes</label>
+        <div class="hint">Off by default: the picture switching between
+          moving and still, which a quiet screen does every few seconds. Loss
+          of signal still shows.</div>
         <label><input type="checkbox" id="opt-transport">
           Transport messages</label>
         <div class="hint">Off by default: reconnects, websocket retries,
@@ -3406,7 +3411,7 @@ const LAMP_ATTESTS =
 // falls back to mjpeg by itself if the socket does not deliver, so defaulting
 // on costs nothing when it cannot work and saves a support round when it can.
 const OPTS = {probe:false, poll:false, mine:false, mcp:true, rate:false,
-              transport:false};
+              transport:false, vidstate:false};
 // Settings are versioned. `ws` defaulted to false while the WebSocket could
 // not work, and browsers that saved settings in that period keep the false
 // forever -- a stored preference from an era whose reasoning no longer holds,
@@ -7113,7 +7118,17 @@ function visible(e) {
   if (!OPTS.mcp && isMcp(e)) return false;
   if (!OPTS.rate && e.kind === 'rate') return false;
   if (!OPTS.transport && e.kind === 'transport') return false;
+  if (!OPTS.vidstate && isVidState(e)) return false;
   return true;
+}
+// THE PICTURE GOING STILL AND MOVING AGAIN. On a digital capture of a still
+// desktop (the Macintosh 512Ke, 2026-10-15) the watchdog flips between
+// locked and frozen every few seconds -- each one true, together a column of
+// noise the operator asked to be able to hide. Only these two: no-signal,
+// wedged and the rest of video.* still show, because those are the ones
+// that mean the picture is actually gone.
+function isVidState(e) {
+  return e.kind === 'video.locked' || e.kind === 'video.frozen';
 }
 
 // ------------------------------------------------------------------ log
