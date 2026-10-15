@@ -1036,6 +1036,34 @@ def test_mouse_click_hold_is_a_floor_under_the_pace():
         vcctrld.time.sleep, vcctrld.CLICK_HOLD_S = real_sleep, real_hold
 
 
+def test_mouse_max_step_splits_a_move_the_board_would_clip():
+    """capabilities.input.settings.mouse_max_step: USB4VC's Mac board clips
+    one large relative event (100..400 counts all moved ~17 px on the 512Ke)
+    but carries the same distance split into smaller events. Set, no event
+    exceeds it on either axis and the steps sum EXACTLY to the move, negative
+    and diagonal included; absent, a move is still one event per axis."""
+    print("\nmouse_max_step")
+    real = vcctrld.MOUSE_MAX_STEP
+    try:
+        vcctrld.MOUSE_MAX_STEP = 0
+        d = make_devices()
+        d.mouse_move(400, -7, pace=0)
+        rel = [(c, v) for t, c, v in d.log if t == e.EV_REL]
+        check("absent: one event per axis, as before",
+              rel == [(e.REL_X, 400), (e.REL_Y, -7)], rel)
+        vcctrld.MOUSE_MAX_STEP = 100
+        for dx, dy in ((400, 0), (-250, 37), (99, -100), (0, -301), (7, 3)):
+            d = make_devices()
+            d.mouse_move(dx, dy, pace=0)
+            xs = [v for t, c, v in d.log if t == e.EV_REL and c == e.REL_X]
+            ys = [v for t, c, v in d.log if t == e.EV_REL and c == e.REL_Y]
+            check("move %d,%d: no step over 100, sums exact" % (dx, dy),
+                  sum(xs) == dx and sum(ys) == dy
+                  and all(abs(v) <= 100 for v in xs + ys), (xs, ys))
+    finally:
+        vcctrld.MOUSE_MAX_STEP = real
+
+
 def test_key_gap_is_a_floor_between_every_keyboard_event():
     """capabilities.input.settings.key_gap_s: the 512Ke's keyboard link drops
     transitions it cannot pass on, and a dropped key-up is a key stuck down.

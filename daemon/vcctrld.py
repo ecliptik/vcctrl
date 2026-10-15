@@ -306,6 +306,17 @@ CLICK_HOLD_S = CFG.default("capabilities.input.settings.click_hold_s", None)
 # and the Mac's mouse is already slow.
 KEY_GAP_S = float(CFG.default("capabilities.input.settings.key_gap_s", 0) or 0)
 
+# The largest relative move sent as ONE event; bigger moves are split into
+# steps no larger than this, each its own event. Absent or 0: one event per
+# move, as it always was. WHY IT EXISTS: USB4VC's Mac board CLIPS a large
+# event instead of carrying it. Measured on the 512Ke (Tablet tracking, no
+# acceleration), 2026-10-15: one event of 100 counts moved the pointer ~17
+# px, and 110, 120, 127, 150, 200 and 400 all moved the same ~17 px -- while
+# 200 sent as 4x50, 2x100 or 8x25 moved 30-32 px. rpi_app forwards 16 bits
+# untouched, so the clip is in the board's firmware. It is also why the web
+# KVM's pointer lagged a fast swipe: each 40 ms batch over the limit was cut.
+MOUSE_MAX_STEP = int(CFG.default("capabilities.input.settings.mouse_max_step", 0) or 0)
+
 # ---------------------------------------------------------------- key tables
 
 NAMED_KEYS = {
@@ -1999,12 +2010,27 @@ class Devices(object):
     def mouse_move(self, dx, dy, pace=DEFAULT_PACE_S):
         with self.lock:
             if not self.hid_mode:
-                if dx:
-                    self.mouse.write(e.EV_REL, e.REL_X, int(dx))
-                if dy:
-                    self.mouse.write(e.EV_REL, e.REL_Y, int(dy))
-                self.mouse.syn()
-                time.sleep(pace)
+                if MOUSE_MAX_STEP <= 0:
+                    if dx:
+                        self.mouse.write(e.EV_REL, e.REL_X, int(dx))
+                    if dy:
+                        self.mouse.write(e.EV_REL, e.REL_Y, int(dy))
+                    self.mouse.syn()
+                    time.sleep(pace)
+                    return
+                # Split so no event exceeds MOUSE_MAX_STEP on either axis, in
+                # equal-ish steps that sum exactly to the move asked for.
+                rx, ry = int(dx), int(dy)
+                n = max(1, -(-max(abs(rx), abs(ry)) // MOUSE_MAX_STEP))
+                for i in range(n):
+                    sx = rx * (i + 1) // n - rx * i // n
+                    sy = ry * (i + 1) // n - ry * i // n
+                    if sx:
+                        self.mouse.write(e.EV_REL, e.REL_X, sx)
+                    if sy:
+                        self.mouse.write(e.EV_REL, e.REL_Y, sy)
+                    self.mouse.syn()
+                    time.sleep(pace)
                 return
             # A HID relative report is one SIGNED BYTE per axis (-127..127),
             # unlike EV_REL which takes any int -- so a move bigger than that

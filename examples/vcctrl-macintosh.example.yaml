@@ -42,6 +42,9 @@ capabilities:
       # drops the rest, which can leave a key stuck down. 50 ms between key
       # events was measured clean on a 512Ke; 12 ms was not.
       key_gap_s: 0.05
+      # The Mac board clips one relative event at about 100 counts (100..400
+      # all moved the same ~17 px on a 512Ke); split larger moves.
+      mouse_max_step: 100
 
   video:
     backend: v4l2-ffmpeg
