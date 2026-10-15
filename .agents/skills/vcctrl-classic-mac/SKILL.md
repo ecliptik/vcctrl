@@ -66,10 +66,14 @@ Two facts, both measured on the 512Ke with Control Panel → Mouse set to
   same distance in smaller events moved its full length. The profile's
   `mouse_max_step: 100` splits a move into events of at most 100 counts,
   and `mouse_step_gap_s: 0.03` spaces them, because steps 12 ms apart get
-  merged again downstream and clipped as one. With both set, one
-  `mouse move` is linear: 200 → ~36, 400 → ~68, 800 → ~139 capture px,
-  about **0.17 capture px per count** on both axes. (The capture is
-  stretched vertically: 1 Mac pixel is about 1.33 capture px tall.)
+  merged again downstream and clipped as one. With both set, a move is
+  linear.
+- **Compute in MAC px, never capture px.** About 0.18 Mac px per count on
+  both axes (the profile's `counts_per_px` 5.65 × 5.4). In capture px the
+  axes differ, because the capture stretches the screen vertically: about
+  0.19 across but 0.24 down. A peer computing drags from capture px
+  overshot the bottom edge three times. An earlier version of this skill
+  said "0.17 capture px on both axes", which is wrong for y.
 - So **compute the move, then correct once.** One move from a known spot
   lands within a few pixels. Earlier advice here to "look, don't count"
   was really about the clipping, now fixed. Still look before you click.
@@ -90,7 +94,9 @@ With `capabilities.pointer` (backend `video-diff`) configured, as on the
 
 - `vcctrl cursor` (MCP `vcctrl_cursor`) nudges the pointer, diffs the
   picture, puts it back, and returns its `hotspot` in capture px and
-  `native` in the Mac's own screen px (0..511 × 0..341 on a 512Ke).
+  `native` in the Mac's own screen px (0..511 × 0..341 on a 512Ke), and
+  `shape` (arrow: hotspot at the tip; crosshair / ibeam / watch: the middle;
+  sizes are judged in Mac px because the capture is stretched).
 - `vcctrl mouse goto X Y` (MCP `vcctrl_mouse_goto`): park, one computed
   move, one correction. It lands within about 1 px in ~4 s
   (`--no-refine`: open loop, within a few px). Follow it with
@@ -108,6 +114,46 @@ With `capabilities.pointer` (backend `video-diff`) configured, as on the
 - Limits: the diff assumes the dark arrow on a lighter ground. A blinking
   insertion point or the Alarm Clock beside the pointer can widen it, and
   the I-beam and watch cursors have different hotspots.
+
+## Dragging, selecting, deleting (lessons from the peer that drove it)
+
+- **`vcctrl mouse drag X1 Y1 X2 Y2`** (Mac px): goto the source, press, one
+  computed move with no park, release. It always releases the button.
+  Never `goto` with the button held: it parks in the corner first and drags
+  the icon across the screen. `cursor` is unreliable *mid*-drag, because the
+  icon outline confuses the diff (once ~50 px out), so check with a `shot`.
+- **Select first, then drag.** A press in a gap of an icon's artwork
+  (between Disk Copy's two floppies, or just above an icon) starts a
+  selection rectangle, and its release can select two icons. Goto a solid
+  part of the artwork, click, and zoom-check that only that icon is
+  inverted. Then drag from the same spot.
+- **A click on "empty" space can hit a window behind** and raise it, so the
+  next press grabs that window's title bar. Look before you click.
+- **The Trash's drop target is the can's body**; the lid and label edges
+  don't highlight it. Dropping an application asks "Are you sure you want
+  to remove the application …?" right away, at the drop (Return = OK). Then
+  Special → Empty Trash.
+- The stop alert "The Trash couldn't be emptied…" did NOT take Return:
+  click its OK button.
+- **A file on the share is "busy" while any SMB client holds it open**
+  (fruit:locking = netatalk), so the Mac can't delete it, and the Finder
+  puts it back. Close it on the other machine first.
+- **Get Info** (Command-I on a selected icon) shows a name the window cuts
+  off, plus kind and size. Command-W closes it. Useful when two icons
+  overlap exactly (a copy keeps the original's position).
+- **Timing:** the Finder's redraw after quitting an app took ~30 s, and a
+  24 KB copy from the share ~20 s. Wait before judging.
+
+## Uploads (shared folder)
+
+With `capabilities.share` (backend `smb`): `vcctrl share put <file> [name]`
+(or `-` for stdin: `cat f.bin | ssh <host> vcctrl share put - f.bin`), MCP
+`vcctrl_share_put` / `vcctrl_share_list`, or the web KVM's "Upload file".
+Files land in the share's `Uploads` folder. A MacBinary `.bin` becomes a
+real Mac file (resource fork, type/creator), and `.txt` gets TEXT. On the
+Mac, reopen the Uploads window to see it. Requires an SMB account and a
+credentials file on the daemon host. Not configured on the 512Ke's profile
+as of this writing.
 
 ## Restart, screensaver
 
