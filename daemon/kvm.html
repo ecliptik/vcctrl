@@ -1705,7 +1705,18 @@
      the same thing.
      Declared after the three rules above so it wins on order rather than by
      out-specifying each of them separately. */
-  #cmdbar #filebtn, #cmdbar #filestop, #cmdbar #keysbtn {
+  #cmdbar #secretbtn {
+    border:0; border-right:1px solid var(--edge); border-radius:0;
+    background:rgba(0,0,0,calc(.06 + .16 * var(--dark, 1)));
+    color:var(--muted); min-height:0; font-size:15px;
+  }
+  #cmdbar #secretbtn:hover { background:var(--rule); }
+  /* ON IS SAID BY THE GROUND AND A GREEN EDGE, not by fading the glyph when
+     off -- this page dims nothing by transparency (see that test). */
+  #cmdbar #secretbtn[aria-pressed="true"] {
+    background:var(--rule); box-shadow:inset 0 -2px 0 var(--green);
+  }
+  #cmdbar #filebtn, #cmdbar #filestop, #cmdbar #keysbtn, #cmdbar #secretbtn {
     flex:none; width:42px; min-width:42px; padding:0;
     display:flex; align-items:center; justify-content:center;
   }
@@ -2794,6 +2805,14 @@
               aria-controls="pop-keys"
               title="Keys this field cannot type (Esc, F-keys, Ctrl-Alt-Del)"><span
               class="gly">⌨️</span></button>
+      <!-- SECRET LINE. Typed text is otherwise kept word for word in the
+           daemon's input log and shown in every open Activity panel; a
+           password must be neither. Masks the field, sends the line with
+           secret:true (the daemon logs only its length -- _summarise), and
+           turns itself off after one line so it cannot be left on. -->
+      <button id="secretbtn" aria-pressed="false"
+              title="Hide the next line and keep it out of the logs"><span
+              class="gly">🔒</span></button>
       <input id="line" placeholder="type a command" aria-label="Command to type"
              autocapitalize="off" autocorrect="off" spellcheck="false">
       <!-- THE WORD IS A LUXURY OF WIDTH. On a desktop the row has room and
@@ -5709,12 +5728,26 @@ $('sendline').onclick = sendLine;
 $('line').addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); sendLine(); }
 });
+function setSecretLine(on) {
+  const el = $('line'), b = $('secretbtn');
+  el.type = on ? 'password' : 'text';
+  el.placeholder = on ? 'hidden, not logged' : 'type a command';
+  b.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+$('secretbtn').onclick = () => {
+  setSecretLine($('line').type !== 'password');
+  $('line').focus();
+};
 async function sendLine() {
   const el = $('line'), s = el.value;
+  const secret = el.type === 'password';
   if (!s) { post('key', {keys:['enter']}); return; }
-  await post('type', {text:s});
-  await post('key', {keys:['enter']});
+  // Cleared BEFORE the await, not after: a secret must not sit in the
+  // field while the request is in flight.
   el.value = '';
+  if (secret) setSecretLine(false);
+  await post('type', secret ? {text:s, secret:true} : {text:s});
+  await post('key', {keys:['enter']});
 }
 
 // -- live keyboard ----------------------------------------------------------

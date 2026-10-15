@@ -1066,6 +1066,41 @@ def test_key_gap_is_a_floor_between_every_keyboard_event():
         vcctrld.time.sleep, vcctrld.time.monotonic, vcctrld.KEY_GAP_S = real
 
 
+def test_secret_type_reaches_the_keyboard_and_no_record():
+    """type with secret:true: the text is typed exactly as asked, and it is
+    not in the activity bus, the input log, or an error -- the three places a
+    command's text is otherwise kept. A plain type still logs its text: the
+    operator watching a run needs to see WHAT was typed."""
+    print("\ntype --secret")
+    pw = "Tr0ub4dor&3"
+    reg = vcctrld.Registry(make_devices())
+    vcctrld.handle(reg.devs, reg, {"cmd": "type", "text": pw, "secret": True,
+                                   "pace": 0})
+    typed = [c for t, c, v in reg.devs.log if t == e.EV_KEY and v == 1]
+    check("the text is typed (one press per character, plus shifts)",
+          len([c for c in typed if c != e.KEY_LEFTSHIFT]) == len(pw), typed)
+    blob = json.dumps(reg.input_log.query()) + json.dumps(
+        vcctrld.handle(reg.devs, reg, {"cmd": "events", "since": 0}))
+    check("the secret is in neither the input log nor the events", pw not in blob)
+    ev = [x for x in reg.input_log.query()["events"] if x.get("cmd") == "type"]
+    check("  but the log records that a secret of that length was typed",
+          ev and ev[-1]["detail"] == "(secret, %d chars)" % len(pw), ev)
+
+    try:
+        vcctrld.handle(reg.devs, reg, {"cmd": "type", "text": "abé",
+                                       "secret": True, "pace": 0})
+        err = ""
+    except ValueError as exc:
+        err = str(exc)
+    check("an untypable secret character is not quoted in the error",
+          err and "é" not in err, err)
+
+    vcctrld.handle(reg.devs, reg, {"cmd": "type", "text": "DIR", "pace": 0})
+    ev = [x for x in reg.input_log.query()["events"] if x.get("cmd") == "type"]
+    check("control: a plain type still logs its text",
+          ev and ev[-1]["detail"] == "DIR", ev)
+
+
 def test_install_reads_whether_the_public_mirror_is_wanted():
     """pi/install.sh's public_mirror_wanted(): daemon.web_public.enabled:
     false (a rig that wants no public mirror) is the only thing that says
@@ -2643,6 +2678,33 @@ HARNESS = r"""
     emit(`releasectl ${held ? 1 : 0} 0`);
   }
 
+  // The lock button: one hidden line, sent as secret, then the field is
+  // ordinary again. The value must already be gone while the request is in
+  // flight, and an ordinary line must not carry the flag.
+  {
+    const realPost = window.post, sentS = [];
+    window.post = (c, b) => { sentS.push([c, b]); return Promise.resolve({ok: true}); };
+    const el = document.getElementById('line');
+    document.getElementById('secretbtn').click();
+    const masked = el.type === 'password';
+    el.value = 'hunter2';
+    const p = sendLine();
+    const clearedEarly = el.value === '';
+    await p;
+    const first = sentS[0] || [];
+    const flagged = first[0] === 'type' && first[1].secret === true
+                 && first[1].text === 'hunter2';
+    const off = el.type === 'text'
+             && document.getElementById('secretbtn').getAttribute('aria-pressed') === 'false';
+    sentS.length = 0;
+    el.value = 'DIR';
+    await sendLine();
+    const plain = sentS[0] && sentS[0][1].secret === undefined;
+    window.post = realPost;
+    emit(`secretline ${masked && flagged ? 1 : 0} ${clearedEarly && off ? 1 : 0}`);
+    emit(`secretplain ${plain ? 1 : 0} 0`);
+  }
+
   // The resolution comes from the FRAME, not from a constant. A canvas
   // carries 640x480 as an attribute, so reporting before a frame arrives
   // would report the Gateway's geometry on a Macintosh.
@@ -3464,6 +3526,12 @@ def test_zoom_layout_in_a_browser():
           got["release"][1] == 1.0, got["release"])
     check("control: Ctrl+Shift alone does not",
           got["releasectl"][0] == 1.0, got["releasectl"])
+    check("the lock button masks the line and sends it as secret",
+          got["secretline"][0] == 1.0, got["secretline"])
+    check("  cleared before the request, and off again after one line",
+          got["secretline"][1] == 1.0, got["secretline"])
+    check("control: an ordinary line carries no secret flag",
+          got["secretplain"][0] == 1.0, got["secretplain"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])

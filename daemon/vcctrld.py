@@ -2673,7 +2673,16 @@ class InputCapability(Capability):
         return {"ok": True}
 
     def _type(self, req):
-        self.devs.type_text(req["text"], _pace(req))
+        if not req.get("secret"):
+            self.devs.type_text(req["text"], _pace(req))
+            return {"ok": True}
+        # The error for an untypable character quotes the character, and
+        # dispatch() publishes errors to the bus -- one character of a
+        # password is still a leak. Say where, never what.
+        try:
+            self.devs.type_text(req["text"], _pace(req))
+        except ValueError:
+            raise ValueError("secret text has a character this keyboard cannot type")
         return {"ok": True}
 
     def _hold(self, req):
@@ -12379,6 +12388,13 @@ def _summarise(cmd, req):
     """
     if cmd == "type":
         t = req.get("text", "")
+        # SECRET TEXT IS NEVER THE DETAIL. This string goes to the activity
+        # bus, /events, every open page's Activity panel and the persistent
+        # input log on disk -- so a password typed at the target (an
+        # AppleShare login, 2026-10-15) would be kept in plain text forever.
+        # The length is enough to see that something was typed.
+        if req.get("secret"):
+            return "(secret, %d chars)" % len(t)
         return t if len(t) <= 60 else t[:57] + "..."
     if cmd in ("key", "combo"):
         return " ".join(req.get("keys", []))

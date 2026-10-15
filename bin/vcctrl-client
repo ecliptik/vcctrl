@@ -102,6 +102,8 @@ USAGE = """usage: vcctrl <command> [args]
   status                    device paths, USB4VC hold state, LED state
   key <name>...             tap keys in sequence      (enter esc f1 a 1)
   type <text>               type literal text         (type "CD \\\\DOSKUTSU")
+  type --secret             type text read from stdin, kept out of every log
+                            (pass show x | vcctrl type --secret)
   hold <key> <ms>           press, dwell, release     (hold left 800)
   keydown <key>             press and hold, no release
   keyup <key>               release a key held by keydown
@@ -1358,7 +1360,25 @@ def main(argv):
     elif cmd == "key":
         req = {"cmd": "key", "keys": rest}
     elif cmd == "type":
-        req = {"cmd": "type", "text": " ".join(rest)}
+        if rest and rest[0] == "--secret":
+            # NEVER FROM THE COMMAND LINE: argv is in shell history and in
+            # every `ps` listing. From stdin (`pass show x | vcctrl type
+            # --secret`), or prompted without echo at a terminal. The daemon
+            # keeps it out of every log; see _summarise.
+            if len(rest) > 1:
+                sys.stderr.write("type --secret reads the text from stdin, "
+                                 "never from the command line\n")
+                return 2
+            if sys.stdin.isatty():
+                import getpass
+                text = getpass.getpass("secret text (not echoed): ")
+            else:
+                text = sys.stdin.read()
+                if text.endswith("\n"):
+                    text = text[:-1]
+            req = {"cmd": "type", "text": text, "secret": True}
+        else:
+            req = {"cmd": "type", "text": " ".join(rest)}
     elif cmd == "hold":
         req = {"cmd": "hold", "key": rest[0],
                "ms": float(rest[1].rstrip("ms") or 0)}
