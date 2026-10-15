@@ -35,6 +35,9 @@ capabilities:
       keyboard_product: 0xDEA1
       mouse_product: 0xDEA2
       pace_s: 0.012
+      # The Mac reads the mouse button once per vertical blank (16.7 ms):
+      # a one-pace click can be missed. Hold it for several frames.
+      click_hold_s: 0.1
 
   video:
     backend: v4l2-ffmpeg

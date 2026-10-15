@@ -282,6 +282,15 @@ MOUSE_PRODUCT = int(CFG.default(
 DEFAULT_PACE_S = float(CFG.default(
     "capabilities.input.settings.pace_s", 0.012))
 
+# How long `mouse click` holds the button down. Absent: one pace, as it
+# always was, which is plenty for PS/2 -- the button state rides in every
+# packet. NOT plenty for a classic Macintosh: it reads the mouse button once
+# per vertical blank (60 Hz, 16.7 ms), so a 12 ms press can fall between two
+# reads and never happen. Measured on the 512Ke, 2026-10-15: a plain click
+# was ignored by the Finder, a 250 ms hold selected the icon. A floor, not a
+# replacement: the hold is never shorter than the pace.
+CLICK_HOLD_S = CFG.default("capabilities.input.settings.click_hold_s", None)
+
 # ---------------------------------------------------------------- key tables
 
 NAMED_KEYS = {
@@ -2070,7 +2079,7 @@ class Devices(object):
             raise ValueError("unknown button: %s" % button)
         with self.lock:
             self._mouse_button_press(code)
-            time.sleep(pace)
+            time.sleep(max(pace, float(CLICK_HOLD_S or 0)))
             if reassert:
                 for dx in (1, -1):
                     self._mouse_nudge(dx)

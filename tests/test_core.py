@@ -1005,6 +1005,31 @@ def test_mouse_click_reassert_repeats_each_edge():
           ev and ev[0]["detail"] == "left reassert", ev)
 
 
+def test_mouse_click_hold_is_a_floor_under_the_pace():
+    """capabilities.input.settings.click_hold_s: a classic Mac reads the
+    button once per vertical blank, so a one-pace (12 ms) press can be
+    missed entirely. Absent, the hold is the pace, exactly as before; set,
+    it is the longer of the two -- never shorter than the pace."""
+    print("\nmouse click: click_hold_s")
+    slept = []
+    real_sleep, real_hold = vcctrld.time.sleep, vcctrld.CLICK_HOLD_S
+    vcctrld.time.sleep = lambda s: slept.append(s)
+    try:
+        for hold, pace, want in ((None, 0.012, 0.012), (0.1, 0.012, 0.1),
+                                 (0.005, 0.012, 0.012)):
+            vcctrld.CLICK_HOLD_S = hold
+            slept.clear()
+            d = make_devices()
+            d.mouse_click("left", pace)
+            check("hold %s, pace %s -> held %s" % (hold, pace, want),
+                  slept and slept[0] == want, slept)
+            check("  still exactly press, release",
+                  d.log == [(e.EV_KEY, e.BTN_LEFT, 1),
+                            (e.EV_KEY, e.BTN_LEFT, 0)], d.log)
+    finally:
+        vcctrld.time.sleep, vcctrld.CLICK_HOLD_S = real_sleep, real_hold
+
+
 def test_activity_age():
     """'harness has been in ledwait for 14 minutes' is the operator's question
     in one line. Test it reports an in-flight command while it is still
