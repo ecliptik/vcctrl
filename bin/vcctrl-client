@@ -135,6 +135,16 @@ USAGE = """usage: vcctrl <command> [args]
                             held -- the mouse's own release-all, separate
                             from the keyboard's: releasing one must not
                             drop what the other is mid-operation on
+  mouse goto <x> <y> [--no-refine]
+                            pointer to a NATIVE-pixel position: park in the
+                            corner, one computed move, one correction from
+                            `cursor` (needs capabilities.pointer; classic Mac)
+  cursor                    where the pointer is, found by nudging it and
+                            diffing the picture (capabilities.pointer)
+  pointer-check             input round trip through the picture: nudge,
+                            see it move, put it back. Exit 0/1/2/3 as
+                            verify-input, which it also answers on a target
+                            with no LED channel
   mouse wheel <dy>          scroll -- unmeasured whether PS/2 carries this
                             through to DOS at all, see docs/MOUSE.md sec 7
   leds                      read PS/2 LED return channel
@@ -1409,6 +1419,10 @@ def main(argv):
             req = {"cmd": "mouse_release_all"}
         elif rest[0] == "wheel":
             req = {"cmd": "mouse_wheel", "dy": int(rest[1])}
+        elif rest[0] == "goto":
+            req = {"cmd": "mouse_goto", "x": int(rest[1]), "y": int(rest[2])}
+            if "--no-refine" in rest[3:]:
+                req["refine"] = False
         else:
             sys.stderr.write(USAGE)
             return 2
@@ -1706,6 +1720,10 @@ def main(argv):
             req["timeout"] = float(rest[0])
     elif cmd in ("verify-input", "verify_input"):
         req = {"cmd": "verify_input"}
+    elif cmd in ("pointer-check", "pointer_check"):
+        req = {"cmd": "pointer_check"}
+    elif cmd == "cursor":
+        req = {"cmd": "cursor"}
     elif cmd == "ledwait":
         req = {"cmd": "ledwait",
                "timeout": float(rest[0]) if rest else 5.0}
@@ -1728,8 +1746,9 @@ def main(argv):
     resp = call(req)
     if resp is None:
         return 3 if cmd in ("verify-input", "verify_input",
+                            "pointer-check", "pointer_check",
                             "file-check", "file_check") else 1
-    if cmd in ("verify-input", "verify_input"):
+    if cmd in ("verify-input", "verify_input", "pointer-check", "pointer_check"):
         return verify_input_exit(resp)
     if cmd in ("file-check", "file_check"):
         return file_check_exit(resp)

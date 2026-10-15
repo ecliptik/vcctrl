@@ -1160,6 +1160,42 @@ def vcctrl_combo(keys: "list[str]", confirm: "str | None" = None,
 
 
 @mcp.tool()
+def vcctrl_cursor(profile: "str | None" = None) -> dict:
+    """Where the pointer is: nudges it a few pixels and back, diffs the
+    picture, and returns its hotspot in capture px and in NATIVE px
+    (`native`, the target's own screen coordinates). Needs
+    capabilities.pointer (the classic Mac rig); moves the pointer, so it
+    takes the input lock like any other input."""
+    return _gated_run(["cursor"], profile, timeout=20.0)
+
+
+@mcp.tool()
+def vcctrl_mouse_goto(x: int, y: int, refine: bool = True,
+                      profile: "str | None" = None) -> dict:
+    """Put the pointer at NATIVE pixel (x, y) -- e.g. 0..511 x 0..341 on a
+    Macintosh 512Ke. Parks in the top-left corner, makes one computed move,
+    then (refine) finds the cursor and corrects once. Linear targets only:
+    the classic Mac with Mouse Tracking at Tablet. Needs
+    capabilities.pointer. Follow with vcctrl_mouse_click; check with
+    vcctrl_shot."""
+    args = ["mouse", "goto", x, y]
+    if not refine:
+        args.append("--no-refine")
+    return _gated_run(args, profile, timeout=30.0)
+
+
+@mcp.tool()
+def vcctrl_pointer_check(profile: "str | None" = None) -> dict:
+    """Input round trip through the picture, for a target with no LED
+    channel: nudge the pointer, see it move, put it back. verified true =
+    the input path and the target are answering; false = no movement seen;
+    null = could not look (no picture, no power). A `warning` means the
+    measured scale is off -- the target's mouse tracking may no longer be
+    the linear setting. Sends no keystroke."""
+    return _gated_run(["pointer-check"], profile, timeout=20.0)
+
+
+@mcp.tool()
 def vcctrl_mouse_move(dx: int, dy: int, profile: "str | None" = None) -> dict:
     """Relative move. PS/2 and ADB mice, and the hid-gadget backend, are all
     relative-only -- there is no absolute positioning; home the cursor by
@@ -1223,7 +1259,10 @@ def vcctrl_verify_input(profile: "str | None" = None) -> dict:
     says anything about the FAR end of the wire; every other input status
     describes the Pi's own end. Refuses (exit 2, available: false) on
     boards with no LED channel (ADB / the Mac Plus) rather than reporting a
-    false alarm about working hardware.
+    false alarm about working hardware -- UNLESS the profile configures
+    capabilities.pointer (the classic Mac rig does), in which case it
+    answers with the pointer round trip instead (`method: pointer`; see
+    vcctrl_pointer_check).
 
     ACQUIRES THE LOCK, even though daemon/vcctrld.py does not currently
     require it for this command. _verify_input() sends a real Caps Lock

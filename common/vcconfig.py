@@ -320,7 +320,11 @@ SCHEMA = {
         # tall -- so the page squeezes the height by (511/455)/(512/342),
         # 0.750, to give back the machine's own 3:2. A shape, not a crop: it
         # says nothing about where the box sits, only how stretched it is.
-        "picture": {"width": int, "height": int},
+        "picture": {"width": int, "height": int,
+                    # Where the box's top-left sits in the capture. Read by
+                    # PointerCapability to turn capture px into native px;
+                    # the web KVM needs only the size.
+                    "x": int, "y": int},
         # THE WEB KVM'S STARTING MOUSE SPEED for this machine -- the multiplier
         # the page applies to pointer movement before sending it. Absent: 1,
         # as it always was. A browser's own Settings slider, once moved, wins

@@ -3046,6 +3046,11 @@
         <div class="row" style="margin-bottom:6px">
           <button id="parkbtn" title="Slam the cursor into a corner">Park cursor</button>
         </div>
+        <label id="clickpointrow" hidden><input type="checkbox" id="clickpoint">
+          Click to point</label>
+        <div class="hint" id="clickpointhint" hidden>Click the picture to move
+          the pointer there and click. Grab still takes the keyboard and
+          mouse.</div>
         <div class="hint" style="margin-left:0">The mouse is relative-only, the
           same as a real PS/2 or ADB mouse: there is no "put the cursor here",
           only "move it". Park re-homes it to a known corner when it has
@@ -6117,6 +6122,14 @@ async function parkMouse() {
 // picture) are one action -- see #mouseparkbtn's own markup comment.
 $('parkbtn').onclick = parkMouse;
 $('mouseparkbtn').onclick = parkMouse;
+{
+  let v = null;
+  try { v = localStorage.getItem('vcctrl.clickpoint'); } catch (e) {}
+  $('clickpoint').checked = v !== '0';
+  $('clickpoint').onchange = () => {
+    try { localStorage.setItem('vcctrl.clickpoint', $('clickpoint').checked ? '1' : '0'); } catch (e) {}
+  };
+}
 $('mousesens').value = mouseSensitivity();
 $('mousesens').oninput = () => {
   localStorage.setItem('vcctrl.mousesens', $('mousesens').value);
@@ -6194,6 +6207,46 @@ $('stage').addEventListener('pointercancel', e => {
   touchPointers.delete(e.pointerId);
 });
 
+// CLICK TO POINT. Where the profile has a pointer capability (the classic
+// Mac: linear tracking, and a cursor the daemon can find in the picture), a
+// click on the picture is an ABSOLUTE click at that spot -- mouse_goto, then
+// mouse_click -- instead of a request to grab. Pointer Lock plus relative
+// motion was the only way to point before, and on a 512Ke that meant
+// steering a slow cursor by hand. Grab is still the button beside the
+// command field. `click` only: armFromStage also hears `pointerup`, and
+// answering both would point twice.
+let pointBusy = false;
+function clickPointOn() {
+  const c = lastState && lastState.caps && lastState.caps.pointer;
+  if (!(c && c.configured)) return false;
+  let v = null;
+  try { v = localStorage.getItem('vcctrl.clickpoint'); } catch (e) {}
+  return v !== '0';
+}
+function nativeAt(e) {
+  const m = (lastState && lastState.machine) || {};
+  const p = m.picture, n = m.native, el = mediaEl();
+  if (!p || !n || !capW || !capH) return null;
+  const r = el.getBoundingClientRect();
+  const cx = (e.clientX - r.left) / r.width * capW;
+  const cy = (e.clientY - r.top) / r.height * capH;
+  const x = Math.round((cx - (p.x || 0)) * n.width / p.width);
+  const y = Math.round((cy - (p.y || 0)) * n.height / p.height);
+  if (x < 0 || y < 0 || x >= n.width || y >= n.height) return null;
+  return {x, y};
+}
+async function pointClick(e) {
+  const at = nativeAt(e);
+  if (!at) { hint('outside the screen'); return; }
+  if (pointBusy) { hint('still moving the pointer'); return; }
+  pointBusy = true;
+  hint('pointing at ' + at.x + ', ' + at.y);
+  try {
+    const r = await post('mouse_goto', at);
+    if (r && r.ok !== false) await post('mouse_click', {button: 'left'});
+  } finally { pointBusy = false; }
+}
+
 function armFromStage(e) {
   // THE OVERLAYS ARE NOT THE PICTURE. The scrub panel, the No Signal notice
   // and the update toast all live inside #stage so they can float over it
@@ -6211,6 +6264,10 @@ function armFromStage(e) {
   // its own CSS comment) so this should be unreachable in practice; kept
   // as the second door, the same discipline setArmed's own lock check uses.
   if (curTab === 'mouse') return;
+  if (!armed && clickPointOn()) {
+    if (e && e.type === 'click') pointClick(e);
+    return;
+  }
   if (armed) {
     // Already grabbed. Do not silently do nothing -- the previous build's
     // real bug was invisible state, so say what is true, over the picture
@@ -8271,6 +8328,12 @@ async function pollState() {
   // The slider shows the speed in force, which until this browser picks one
   // is the profile's -- and that only arrives with the poll.
   if (document.activeElement !== $('mousesens')) $('mousesens').value = mouseSensitivity();
+  // Click to point is offered only where the daemon can do it.
+  {
+    const has = !!(j.caps && j.caps.pointer && j.caps.pointer.configured);
+    $('clickpointrow').hidden = !has;
+    $('clickpointhint').hidden = !has;
+  }
   // Only while it is on screen: this rebuilds a dozen rows and nobody is
   // reading them behind a closed drawer.
   if ($('stats').clientHeight) $('stats').innerHTML = statsRows(j);

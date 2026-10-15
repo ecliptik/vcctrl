@@ -2234,6 +2234,8 @@ GATED_COMMANDS = frozenset([
     "key", "type", "hold", "combo", "keydown", "keyup", "release_all",
     "mouse_move", "mouse_click", "mouse_down", "mouse_up",
     "mouse_release_all", "mouse_wheel",
+    # PointerCapability's verbs all move the pointer.
+    "cursor", "pointer_check", "mouse_goto",
 ])
 
 # Power ACTIONS that change the target's state. Gated like input, because
@@ -11921,6 +11923,261 @@ SysinfoCapability.DEFAULT_BACKEND = SysinfoCapability
 SysinfoCapability.DEFAULT_BACKEND_NAME = 'dinspect-pulled'
 
 
+class PointerCapability(Capability):
+    """Where the pointer is, and whether input reaches the target -- by video.
+
+    For a target with NO LED return channel, where the PS/2 round trip in
+    LedsCapability._verify_input cannot exist: the Macintosh on USB4VC's Mac
+    board (board 3) answers nothing on the wire. The picture is the only
+    channel that comes back from the target, so the round trip goes through
+    it: nudge the pointer, see it move in the capture, put it back. Built for
+    the 512Ke, 2026-10-15, where finding the cursor by eye in screenshots and
+    steering by trial was most of the cost of driving the machine at all.
+
+    THREE VERBS, ONE PRIMITIVE (_locate):
+      cursor          where the pointer's hotspot is, in capture and native px
+      pointer_check   the input round trip; also answers `verify_input` when
+                      leds is `none` (and only then -- see commands())
+      mouse_goto      park in the top-left corner, one computed move to a
+                      native-pixel target, then one correction from _locate
+
+    WHAT IT ASSUMES, and the settings that carry it:
+      - the target's pointer is LINEAR (no acceleration). On the 512Ke that
+        is Control Panel -> Mouse at Tablet, and it only holds because
+        mouse_max_step/mouse_step_gap_s stop the Mac board clipping large
+        moves (see MOUSE_MAX_STEP). `counts_per_px` (one number, or [x, y])
+        is mouse counts per NATIVE pixel, measured: ~5.9 x, ~5.6 y.
+      - machine.picture's x/y/width/height place the native screen in the
+        capture, to convert capture pixels to native ones.
+      - the pointer is drawn dark on a lighter ground somewhere it can move
+        `nudge` counts. At a screen edge the nudge is tried the other way.
+
+    WHAT A `verified: False` MEANS: no movement of the pointer was seen in the
+    picture after a real nudge. That is "the input path or the target is not
+    answering" -- or a frozen, blanked (screensaver) or absent picture, which
+    the reply says separately where it can tell. It moves the pointer by a
+    few pixels and back; it sends no keystroke, so unlike the PS/2 probe it
+    cannot type into a running program.
+    """
+
+    name = "pointer"
+    BACKENDS = {}
+    DEFAULT_BACKEND_NAME = None     # explicit opt-in: video-diff
+    DIFF_LEVEL = 60                 # grey-level change that counts as "moved"
+    CURSOR_W = 11                   # the arrow's width in capture px (512Ke)
+
+    def commands(self):
+        cmds = {"cursor": self._cursor, "pointer_check": self._check,
+                "mouse_goto": self._goto}
+        # verify_input BELONGS to LedsCapability wherever LEDs exist. Routes
+        # are last-registered-wins, so claiming it here unconditionally would
+        # shadow the real PS/2 round trip -- and a disabled pointer
+        # capability's refusal would shadow it too. So: only on a configured
+        # instance (the refusal probe has settings None) and only when leds
+        # is switched off.
+        if self.settings is not None:
+            leds = CFG.optional("capabilities.leds.backend")
+            if leds is vcconfig.NONE or leds == "none":
+                cmds["verify_input"] = self._check
+        return cmds
+
+    # -- settings and geometry ---------------------------------------------
+
+    def _s(self, key, default):
+        v = (self.settings or {}).get(key, default)
+        return default if v is None else v
+
+    def _cpp(self):
+        c = self._s("counts_per_px", 5.8)
+        if isinstance(c, (list, tuple)) and len(c) == 2:
+            return float(c[0]), float(c[1])
+        return float(c), float(c)
+
+    def _geometry(self):
+        """((x0, y0, pw, ph), (nw, nh)) or None when the profile lacks them."""
+        m = CFG.optional("machine")
+        if not isinstance(m, dict):
+            return None
+        pic, nat = m.get("picture") or {}, m.get("native") or {}
+        try:
+            box = (int(pic.get("x", 0)), int(pic.get("y", 0)),
+                   int(pic["width"]), int(pic["height"]))
+            return box, (int(nat["width"]), int(nat["height"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _to_native(self, cx, cy):
+        g = self._geometry()
+        if g is None:
+            return None
+        (x0, y0, pw, ph), (nw, nh) = g
+        return (round((cx - x0) * nw / float(pw)),
+                round((cy - y0) * nh / float(ph)))
+
+    # -- the primitive -------------------------------------------------------
+
+    def _frame_after(self, t0, timeout=3.0):
+        """The newest frame captured after t0 + settle, as a PIL L image."""
+        from PIL import Image
+        video = self.registry.caps.get("video")
+        if video is None:
+            raise RuntimeError("video is not configured")
+        settle = float(self._s("settle_s", 0.45))
+        deadline = time.time() + timeout
+        time.sleep(settle)
+        while True:
+            items = video._recent(1)
+            if items and items[-1][0] >= t0 + settle * 0.8:
+                frame = items[-1][2]
+                try:
+                    im = Image.open(io.BytesIO(frame)).convert("L")
+                except Exception as exc:
+                    video._decoded("pointer", exc, frame=frame)
+                    raise
+                video._decoded("pointer")
+                return im
+            if time.time() > deadline:
+                raise RuntimeError("no fresh frame from the capture")
+            time.sleep(0.05)
+
+    def _diff(self, a, b):
+        from PIL import ImageChops
+        return ImageChops.difference(a, b).point(
+            lambda v: 255 if v > self.DIFF_LEVEL else 0).getbbox()
+
+    def _locate(self):
+        """Nudge right and back (left and back at the right edge).
+
+        Returns a dict: found, hotspot (capture px), native, moved_px,
+        expected_px, returned, direction -- or found False with a reason.
+        """
+        n = int(self._s("nudge", 60))
+        cx, _cy = self._cpp()
+        expected = n / cx * self._xscale()
+        a = self._frame_after(time.time())
+        for sign in (1, -1):
+            self.devs.mouse_move(sign * n, 0)
+            b = self._frame_after(time.time())
+            self.devs.mouse_move(-sign * n, 0)
+            c = self._frame_after(time.time())
+            moved = self._diff(a, b)
+            if moved is None:
+                continue
+            back = self._diff(a, c)
+            width = moved[2] - moved[0]
+            # The arrow's hotspot is its tip: the left/top of the cursor as
+            # it was in frame A. Moving right, A's cursor is the left edge of
+            # the union; moving left it sits `moved_px` in from it.
+            moved_px = max(0, width - self.CURSOR_W)
+            hx = moved[0] if sign > 0 else moved[0] + moved_px
+            hy = moved[1]
+            return {"found": True, "hotspot": [hx, hy],
+                    "native": self._to_native(hx, hy),
+                    "moved_px": moved_px, "expected_px": round(expected, 1),
+                    "returned": back is None or (back[2] - back[0]) <= 2,
+                    "direction": "right" if sign > 0 else "left",
+                    "bbox": list(moved)}
+        return {"found": False,
+                "reason": "no change in the picture after a nudge either way"}
+
+    def _xscale(self):
+        g = self._geometry()
+        if g is None:
+            return 1.0
+        (_x0, _y0, pw, _ph), (nw, _nh) = g
+        return pw / float(nw)
+
+    def _picture_or_why(self):
+        video = self.registry.caps.get("video")
+        if video is None:
+            return "video is not configured"
+        r = video._shot({"n": 8})
+        if not r.get("picture"):
+            return r.get("reason") or "no picture"
+        return None
+
+    # -- verbs ---------------------------------------------------------------
+
+    def _cursor(self, req):
+        why = self._picture_or_why()
+        if why:
+            return {"ok": True, "found": False, "reason": why}
+        r = self._locate()
+        r["ok"] = True
+        return r
+
+    def _check(self, req):
+        """The input round trip, through the picture.
+
+            {"verified": true,  "method": "pointer", "detail": {...}}
+            {"verified": false, "method": "pointer", "reason": "..."}
+            {"verified": null,  "available": false, "why": "unpowered", ...}
+            {"verified": null,  "available": false, "why": "no_picture", ...}
+
+        The `why` set here is NOT CLOSED: `unpowered` (the plug says off, so
+        nothing could answer) and `no_picture` (nothing to look through --
+        screensaver, display off, no signal) are the two today. A consumer
+        maps `why` to presentation and shows `reason` as written. `warning`
+        is separate from `verified`: the pointer DID move, by the wrong
+        amount, which on a classic Mac means its tracking is no longer the
+        linear Tablet setting.
+        """
+        _epoch, powered, _changed = TARGET.state()
+        if powered is False:
+            return {"ok": True, "verified": None, "available": False,
+                    "why": "unpowered", "method": "pointer",
+                    "reason": "the target has no power"}
+        why = self._picture_or_why()
+        if why:
+            return {"ok": True, "verified": None, "available": False,
+                    "why": "no_picture", "method": "pointer",
+                    "reason": why,
+                    "note": ("not attempted -- the round trip goes through "
+                             "the picture, and there is none (screensaver, "
+                             "display off, or no signal)")}
+        r = self._locate()
+        out = {"ok": True, "available": True, "method": "pointer",
+               "verified": bool(r.get("found")), "detail": r}
+        if not r.get("found"):
+            out["reason"] = ("the pointer did not move in the picture after a "
+                             "real nudge: the input path or the target is not "
+                             "answering, or the screen is not updating")
+            return out
+        exp, got = r["expected_px"], r["moved_px"]
+        if exp and not (0.6 * exp <= got <= 1.6 * exp):
+            out["warning"] = (
+                "the pointer moved %d px for %d counts where %.0f was expected "
+                "-- is the target's mouse tracking still the linear setting "
+                "(Tablet on a classic Mac)? mouse_goto will be inaccurate"
+                % (got, int(self._s("nudge", 60)), exp))
+        return out
+
+    def _goto(self, req):
+        tx, ty = int(req["x"]), int(req["y"])
+        cx, cy = self._cpp()
+        park = int(self._s("park_counts", 4000))
+        self.devs.mouse_move(-park, -park)
+        self.devs.mouse_move(round(tx * cx), round(ty * cy))
+        out = {"ok": True, "target": [tx, ty], "refined": False}
+        if not req.get("refine", self._s("refine", True)):
+            return out
+        if self._picture_or_why():
+            out["note"] = "no picture to correct against; open-loop only"
+            return out
+        r = self._locate()
+        out["located"] = r
+        if r.get("found") and r.get("native"):
+            ex, ey = tx - r["native"][0], ty - r["native"][1]
+            if abs(ex) > 1 or abs(ey) > 1:
+                self.devs.mouse_move(round(ex * cx), round(ey * cy))
+                out["refined"] = True
+                out["correction_px"] = [ex, ey]
+        return out
+
+
+PointerCapability.BACKENDS = {"video-diff": PointerCapability}
+
+
 class NoteCapability(Capability):
     """The one-sentence 'what is happening right now', either narrated by
     whoever is driving the rig -- typically a Claude Code session, not a
@@ -12061,6 +12318,8 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 # runs), only that it is the honest place to put a
                 # capability whose data depends on another's.
                 SysinfoCapability,
+                # After video and input, whose ring and devices it drives.
+                PointerCapability,
                 NoteCapability,
                 PublicTelemetryCapability]
 
@@ -12388,7 +12647,9 @@ class Registry(object):
                 "native": ({"width": nat.get("width"),
                            "height": nat.get("height")} if nat else None),
                 "picture": ({"width": pic.get("width"),
-                            "height": pic.get("height")} if pic else None),
+                            "height": pic.get("height"),
+                            "x": pic.get("x"), "y": pic.get("y")}
+                            if pic else None),
                 # The page's starting Mouse speed; None means 1x.
                 "mouse_speed": m.get("mouse_speed")}
 

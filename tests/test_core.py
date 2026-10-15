@@ -404,7 +404,7 @@ def test_configured_machine_is_optional_and_a_real_answer_either_way():
     with vcctrld._profile_scope(cfg3):
         m3 = reg.configured_machine()
     check("machine.picture comes through beside native",
-          m3["picture"] == {"width": 511, "height": 455}
+          m3["picture"] == {"width": 511, "height": 455, "x": None, "y": None}
           and m3["native"] == {"width": 512, "height": 342}, m3)
 
     cfg4 = vcctrld.vcconfig.Config({"machine": {"label": "x", "mouse_speed": 2.5}},
@@ -1034,6 +1034,112 @@ def test_mouse_click_hold_is_a_floor_under_the_pace():
                             (e.EV_KEY, e.BTN_LEFT, 0)], d.log)
     finally:
         vcctrld.time.sleep, vcctrld.CLICK_HOLD_S = real_sleep, real_hold
+
+
+def test_pointer_capability_finds_moves_and_checks_by_video():
+    """PointerCapability, hermetically: a fake capture draws an arrow where a
+    fake linear mouse has put it, in the 512Ke's real geometry (512x342
+    native in a 511x455 box at (65,14) of 640x480). _locate must find the
+    hotspot to a pixel and convert it to native px; at the right edge it must
+    nudge the other way; mouse_goto must land on target; pointer_check must
+    verify a moving pointer and NOT verify a frozen one; and verify_input is
+    claimed only by a configured instance on a rig whose leds are `none`."""
+    print("\npointer capability")
+    import io as _io
+    from PIL import Image, ImageDraw
+    NW, NH, BOX = 512, 342, (65, 14, 511, 455)
+    CPP = 5.8
+
+    class FakeDevs(object):
+        def __init__(self):
+            self.x, self.y, self.frozen = 200.0, 150.0, False
+        def mouse_move(self, dx, dy, pace=None):
+            if self.frozen:
+                return
+            self.x = min(max(self.x + dx / CPP, 0), NW - 1)
+            self.y = min(max(self.y + dy / CPP, 0), NH - 1)
+
+    def capture_of(devs):
+        im = Image.new("L", (640, 480), 0)
+        d = ImageDraw.Draw(im)
+        d.rectangle([BOX[0], BOX[1], BOX[0] + BOX[2] - 1, BOX[1] + BOX[3] - 1],
+                    fill=170)
+        cx = BOX[0] + round(devs.x * BOX[2] / NW)
+        cy = BOX[1] + round(devs.y * BOX[3] / NH)
+        d.polygon([(cx, cy), (cx, cy + 15), (cx + 10, cy + 10)], fill=0)
+        b = _io.BytesIO()
+        im.save(b, "PNG")
+        return b.getvalue(), (cx, cy)
+
+    class FakeVideo(object):
+        def __init__(self, devs):
+            self.devs = devs
+        def _recent(self, n):
+            return [(time.time() + 1, 0, capture_of(self.devs)[0])]
+        def _shot(self, req):
+            return {"ok": True, "picture": True}
+        def _decoded(self, *a, **k):
+            pass
+
+    class FakeReg(object):
+        pass
+
+    cfg = vcctrld.vcconfig.Config(
+        {"capabilities": {"leds": {"backend": "none"},
+                          "pointer": {"backend": "video-diff"}},
+         "machine": {"native": {"width": NW, "height": NH},
+                     "picture": {"x": 65, "y": 14, "width": 511, "height": 455}}},
+        source="test")
+    with vcctrld._profile_scope(cfg):
+        devs = FakeDevs()
+        cap = vcctrld.PointerCapability(devs)
+        cap.registry = FakeReg()
+        cap.registry.caps = {"video": FakeVideo(devs)}
+        cap.settings = {"nudge": 60, "counts_per_px": CPP, "settle_s": 0,
+                        "park_counts": 4000}
+
+        check("a configured instance on a no-LED rig answers verify_input",
+              "verify_input" in cap.commands())
+        probe = vcctrld.PointerCapability(devs)        # the refusal probe
+        check("  the refusal probe never claims it (would shadow PS/2's)",
+              "verify_input" not in probe.commands())
+
+        want = capture_of(devs)[1]
+        r = cap._cursor({})
+        check("cursor finds the hotspot to a pixel", r.get("found")
+              and abs(r["hotspot"][0] - want[0]) <= 1
+              and abs(r["hotspot"][1] - want[1]) <= 1, (r, want))
+        check("  and converts it to native px",
+              r.get("native") and abs(r["native"][0] - 200) <= 1
+              and abs(r["native"][1] - 150) <= 1, r)
+        check("  and puts the pointer back", abs(devs.x - 200) < 0.5, devs.x)
+
+        devs.x = NW - 1
+        r = cap._cursor({})
+        check("at the right edge it nudges left instead",
+              r.get("found") and r.get("direction") == "left", r)
+
+        r = cap._goto({"x": 100, "y": 250})
+        check("mouse_goto lands on the native target",
+              abs(devs.x - 100) <= 1 and abs(devs.y - 250) <= 1,
+              (devs.x, devs.y, r))
+
+        r = cap._check({})
+        check("pointer_check verifies a pointer that moves",
+              r.get("verified") is True and r.get("method") == "pointer"
+              and "warning" not in r, r)
+        devs.frozen = True
+        r = cap._check({})
+        check("  and does not verify one that cannot move",
+              r.get("verified") is False, r)
+
+    cfg2 = vcctrld.vcconfig.Config(
+        {"capabilities": {"leds": {"backend": "ps2-sysfs"}}}, source="test")
+    with vcctrld._profile_scope(cfg2):
+        c2 = vcctrld.PointerCapability(FakeDevs())
+        c2.settings = {}
+        check("control: with LEDs configured it leaves verify_input alone",
+              "verify_input" not in c2.commands())
 
 
 def test_mouse_max_step_splits_a_move_the_board_would_clip():
@@ -2782,6 +2888,39 @@ HARNESS = r"""
     emit(`vidstate ${hid && shown ? 1 : 0} ${lost ? 1 : 0}`);
   }
 
+  // Click to point: with a pointer capability, a click on the picture posts
+  // mouse_goto at the NATIVE spot and then a click, and does not grab;
+  // without one, the same click still grabs.
+  {
+    const realPost = window.post, sentP = [], saved = lastState;
+    const sW = capW, sH = capH, sF = frames;
+    window.post = (c, b) => { sentP.push([c, b]); return Promise.resolve({ok: true}); };
+    lastState = {caps: {pointer: {configured: true}},
+                 machine: {native: {width: 512, height: 342},
+                           picture: {x: 65, y: 14, width: 511, height: 455}}};
+    frames = 1; capW = 640; capH = 480;
+    const el = mediaEl(), r = el.getBoundingClientRect();
+    // Capture pixel (65 + 256, 14 + 227.5) is native (256, 171): the middle.
+    const ev = new MouseEvent('click', {bubbles: true, cancelable: true,
+      clientX: r.left + (65 + 256) / 640 * r.width,
+      clientY: r.top + (14 + 227.5) / 480 * r.height});
+    try { localStorage.removeItem('vcctrl.clickpoint'); } catch (e) {}
+    armFromStage(Object.assign(ev, {}));
+    await new Promise(res => setTimeout(res, 30));
+    const g = sentP[0] || [];
+    const pointed = g[0] === 'mouse_goto' && Math.abs(g[1].x - 256) <= 1
+                 && Math.abs(g[1].y - 171) <= 1
+                 && (sentP[1] || [])[0] === 'mouse_click' && !armed;
+    sentP.length = 0;
+    lastState = {caps: {}, machine: {}};
+    armFromStage(ev);
+    const grabbed = armed && sentP.length === 0;
+    setArmed(false);
+    window.post = realPost; lastState = saved;
+    capW = sW; capH = sH; frames = sF;
+    emit(`clickpoint ${pointed ? 1 : 0} ${grabbed ? 1 : 0}`);
+  }
+
   // The resolution comes from the FRAME, not from a constant. A canvas
   // carries 640x480 as an attribute, so reporting before a frame arrives
   // would report the Gateway's geometry on a Macintosh.
@@ -3617,6 +3756,10 @@ def test_zoom_layout_in_a_browser():
           got["vidstate"][0] == 1.0, got["vidstate"])
     check("  and loss of signal is never hidden with them",
           got["vidstate"][1] == 1.0, got["vidstate"])
+    check("click to point posts mouse_goto at the native spot, then a click",
+          got["clickpoint"][0] == 1.0, got["clickpoint"])
+    check("control: without a pointer capability the click still grabs",
+          got["clickpoint"][1] == 1.0, got["clickpoint"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])
