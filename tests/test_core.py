@@ -1049,6 +1049,9 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
     from PIL import Image, ImageDraw
     NW, NH, BOX = 512, 342, (65, 14, 511, 455)
     CPP = 5.8
+    # VC_TEST_NOISE_FRAMES=0 is the negative control: with masking off, the
+    # blinker check below must FAIL (it did, 2026-10-15), or it proves nothing.
+    NOISE = int(os.environ.get("VC_TEST_NOISE_FRAMES", "2"))
 
     class FakeDevs(object):
         def __init__(self):
@@ -1059,11 +1062,20 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
             self.x = min(max(self.x + dx / CPP, 0), NW - 1)
             self.y = min(max(self.y + dy / CPP, 0), NH - 1)
 
+    blink = {"on": False, "at": None}
+
     def capture_of(devs):
         im = Image.new("L", (640, 480), 0)
         d = ImageDraw.Draw(im)
         d.rectangle([BOX[0], BOX[1], BOX[0] + BOX[2] - 1, BOX[1] + BOX[3] - 1],
                     fill=170)
+        # A blinker that toggles on every frame, like the Control Panel's
+        # insertion-point demo that fooled the first version live.
+        if blink["at"] is not None:
+            blink["on"] = not blink["on"]
+            if blink["on"]:
+                bx, by = blink["at"]
+                d.rectangle([bx, by, bx + 1, by + 15], fill=0)
         cx = BOX[0] + round(devs.x * BOX[2] / NW)
         cy = BOX[1] + round(devs.y * BOX[3] / NH)
         d.polygon([(cx, cy), (cx, cy + 15), (cx + 10, cy + 10)], fill=0)
@@ -1095,7 +1107,7 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
         cap = vcctrld.PointerCapability(devs)
         cap.registry = FakeReg()
         cap.registry.caps = {"video": FakeVideo(devs)}
-        cap.settings = {"nudge": 60, "counts_per_px": CPP, "settle_s": 0,
+        cap.settings = {"nudge": 60, "counts_per_px": CPP, "settle_s": 0, "noise_frames": NOISE,
                         "park_counts": 4000}
 
         check("a configured instance on a no-LED rig answers verify_input",
@@ -1113,6 +1125,18 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
               r.get("native") and abs(r["native"][0] - 200) <= 1
               and abs(r["native"][1] - 150) <= 1, r)
         check("  and puts the pointer back", abs(devs.x - 200) < 0.5, devs.x)
+
+        # A blinker 30 px LEFT of the pointer, toggling every frame: unmasked,
+        # it would become the left edge of the change and pull the hotspot
+        # onto itself.
+        devs.x, devs.y = 200.0, 150.0
+        cx0, cy0 = capture_of(devs)[1]
+        blink["at"] = (cx0 - 30, cy0)
+        r = cap._cursor({})
+        check("a blinker beside the pointer is masked, not mistaken for it",
+              r.get("found") and abs(r["hotspot"][0] - cx0) <= 1
+              and abs(r["hotspot"][1] - cy0) <= 1, (r, (cx0, cy0)))
+        blink["at"] = None
 
         devs.x = NW - 1
         r = cap._cursor({})

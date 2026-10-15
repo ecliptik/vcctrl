@@ -12040,10 +12040,40 @@ class PointerCapability(Capability):
                 raise RuntimeError("no fresh frame from the capture")
             time.sleep(0.05)
 
-    def _diff(self, a, b):
+    def _mask(self, a, b):
+        """Where two frames differ, as a 0/255 L image."""
         from PIL import ImageChops
         return ImageChops.difference(a, b).point(
-            lambda v: 255 if v > self.DIFF_LEVEL else 0).getbbox()
+            lambda v: 255 if v > self.DIFF_LEVEL else 0)
+
+    def _diff(self, a, b, noise=None):
+        """The bounding box of what changed between a and b, ignoring anything
+        in `noise` -- pixels seen changing with nobody touching the mouse."""
+        from PIL import ImageChops
+        m = self._mask(a, b)
+        if noise is not None:
+            m = ImageChops.subtract(m, noise)
+        return m.getbbox()
+
+    def _noise(self, first):
+        """What changes on its own: a blinking insertion point, the Alarm
+        Clock, the Control Panel's own blink demo. Found live on the 512Ke,
+        2026-10-15: with the Control Panel open, `cursor` reported a 1 px wide
+        "pointer" that was the insertion-point demo blinking beside it. Two
+        more frames are taken without moving anything; whatever differs
+        between the three is masked, grown by a few pixels so a blinker's
+        edges cannot leak through."""
+        from PIL import ImageChops, ImageFilter
+        acc = None
+        prev = first
+        for _ in range(int(self._s("noise_frames", 2))):
+            nxt = self._frame_after(time.time())
+            m = self._mask(prev, nxt)
+            acc = m if acc is None else ImageChops.lighter(acc, m)
+            prev = nxt
+        if acc is None or acc.getbbox() is None:
+            return None, prev
+        return acc.filter(ImageFilter.MaxFilter(5)), prev
 
     def _locate(self):
         """Nudge right and back (left and back at the right edge).
@@ -12054,16 +12084,19 @@ class PointerCapability(Capability):
         n = int(self._s("nudge", 60))
         cx, _cy = self._cpp()
         expected = n / cx * self._xscale()
-        a = self._frame_after(time.time())
+        noise, a = self._noise(self._frame_after(time.time()))
         for sign in (1, -1):
             self.devs.mouse_move(sign * n, 0)
             b = self._frame_after(time.time())
             self.devs.mouse_move(-sign * n, 0)
             c = self._frame_after(time.time())
-            moved = self._diff(a, b)
-            if moved is None:
+            moved = self._diff(a, b, noise)
+            # A pointer is not a sliver: whatever is left must be at least
+            # cursor-sized, or it is noise the mask did not catch.
+            if (moved is None or moved[3] - moved[1] < 6
+                    or moved[2] - moved[0] < 4):
                 continue
-            back = self._diff(a, c)
+            back = self._diff(a, c, noise)
             width = moved[2] - moved[0]
             # The arrow's hotspot is its tip: the left/top of the cursor as
             # it was in frame A. Moving right, A's cursor is the left edge of
@@ -12078,7 +12111,9 @@ class PointerCapability(Capability):
                     "direction": "right" if sign > 0 else "left",
                     "bbox": list(moved)}
         return {"found": False,
-                "reason": "no change in the picture after a nudge either way"}
+                "reason": ("no cursor-sized change in the picture after a "
+                           "nudge either way"),
+                "noise": list(noise.getbbox()) if noise is not None else None}
 
     def _xscale(self):
         g = self._geometry()
