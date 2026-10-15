@@ -139,6 +139,10 @@ USAGE = """usage: vcctrl <command> [args]
                             pointer to a NATIVE-pixel position: park in the
                             corner, one computed move, one correction from
                             `cursor` (needs capabilities.pointer; classic Mac)
+  mouse drag <x1> <y1> <x2> <y2>
+                            press at one NATIVE-pixel point, release at
+                            another (a Finder drag): goto the source, down,
+                            one computed move, up (capabilities.pointer)
   cursor                    where the pointer is, found by nudging it and
                             diffing the picture (capabilities.pointer)
   capslock [set on|off|unknown]
@@ -146,6 +150,11 @@ USAGE = """usage: vcctrl <command> [args]
                             LED channel (capabilities.capstrack): counted from
                             presses on every keyboard, never read from the
                             target -- `set` it once from what Key Caps shows
+  share put <file|-> [name] upload into the shared folder the target mounts
+                            (capabilities.share; an AppleShare volume for the classic Mac).
+                            A MacBinary .bin arrives as a real Mac file. From
+                            another host: cat f.bin | ssh <host> vcctrl share put - f.bin
+  share ls | status         what is in the upload folder / the last upload
   pointer-check             input round trip through the picture: nudge,
                             see it move, put it back. Exit 0/1/2/3 as
                             verify-input, which it also answers on a target
@@ -586,7 +595,7 @@ def write_burst(resp, outdir):
     return 0
 
 
-def stage_file(path, as_name=None, replace=False):
+def stage_file(path, as_name=None, replace=False, cmd="file_stage"):
     """Read a local file and hand it to the daemon in chunks.
 
     CHUNKED BECAUSE THE SIZE POLICY ADMITS FILES FAR LARGER THAN ONE MESSAGE
@@ -602,6 +611,21 @@ def stage_file(path, as_name=None, replace=False):
     """
     import base64 as _b64
     import hashlib as _hl
+    if path == "-":
+        # STDIN, for a file that lives on another machine:
+        #   cat app.bin | ssh <daemon-host> vcctrl share put - app.bin
+        # Spooled to a private temp file so the chunking below is unchanged.
+        if not as_name:
+            sys.stderr.write("reading stdin needs a file name after the -\n")
+            return 3
+        import tempfile
+        spool = tempfile.NamedTemporaryFile(prefix="vcctrl-stdin-", delete=False)
+        try:
+            spool.write(sys.stdin.buffer.read())
+            spool.close()
+            return stage_file(spool.name, as_name, replace, cmd)
+        finally:
+            os.unlink(spool.name)
     if not os.path.isfile(path):
         sys.stderr.write("stage-file: %s is not a file\n" % path)
         return 3
@@ -616,7 +640,7 @@ def stage_file(path, as_name=None, replace=False):
                 block = f.read(CHUNK)
                 h.update(block)
                 final = sent + len(block) >= total
-                req = {"cmd": "file_stage", "name": name, "total": total,
+                req = {"cmd": cmd, "name": name, "total": total,
                        "offset": sent,
                        "data": _b64.b64encode(block).decode("ascii"),
                        "final": final}
@@ -1424,6 +1448,9 @@ def main(argv):
             req = {"cmd": "mouse_release_all"}
         elif rest[0] == "wheel":
             req = {"cmd": "mouse_wheel", "dy": int(rest[1])}
+        elif rest[0] == "drag":
+            req = {"cmd": "mouse_drag", "x1": int(rest[1]), "y1": int(rest[2]),
+                   "x2": int(rest[3]), "y2": int(rest[4])}
         elif rest[0] == "goto":
             req = {"cmd": "mouse_goto", "x": int(rest[1]), "y": int(rest[2])}
             if "--no-refine" in rest[3:]:
@@ -1586,6 +1613,19 @@ def main(argv):
         req = {"cmd": "file_queue", "action": rest[0] if rest else "list"}
         if len(rest) > 1:
             req["name"] = rest[1]
+    elif cmd == "share":
+        sub = rest[0] if rest else "status"
+        if sub == "put":
+            if len(rest) < 2:
+                sys.stderr.write("usage: share put <file|-> [name]\n")
+                return 3
+            put = {"cmd": "share_stage"}     # chunked by stage_file
+            return stage_file(rest[1], rest[2] if len(rest) > 2 else None,
+                              cmd=put["cmd"])
+        if sub in ("ls", "list"):
+            req = {"cmd": "share_list"}
+        else:
+            req = {"cmd": "share_status"}
     elif cmd in ("stage-file", "file_stage"):
         if not rest:
             sys.stderr.write("stage-file needs a local file to stage\n")

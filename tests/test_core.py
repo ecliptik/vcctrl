@@ -1057,7 +1057,13 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
         def __init__(self):
             self.x, self.y, self.frozen = 200.0, 150.0, False
             self.shape = "arrow"
+        def mouse_down(self, button):
+            self.events = getattr(self, "events", []) + [("down", self.x, self.y)]
+        def mouse_up(self, button):
+            self.events = getattr(self, "events", []) + [("up", self.x, self.y)]
         def mouse_move(self, dx, dy, pace=None):
+            if getattr(self, "fail_moves", False):
+                raise OSError("uinput went away")
             if self.frozen:
                 return
             self.x = min(max(self.x + dx / CPP, 0), NW - 1)
@@ -1084,7 +1090,11 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
             d.line([(cx - 7, cy), (cx + 7, cy)], fill=0, width=2)
             d.line([(cx, cy - 7), (cx, cy + 7)], fill=0, width=2)
         else:
-            d.polygon([(cx, cy), (cx, cy + 15), (cx + 10, cy + 10)], fill=0)
+            # The arrow AS CAPTURED: 11x16 Mac px, stretched vertically by
+            # 455/342 to ~21 capture px tall. The first version of this fake
+            # drew it unstretched, so it could not catch the regression where
+            # a real arrow failed the size test and was called a crosshair.
+            d.polygon([(cx, cy), (cx, cy + 20), (cx + 10, cy + 13)], fill=0)
         b = _io.BytesIO()
         im.save(b, "PNG")
         return b.getvalue(), (cx, cy)
@@ -1124,6 +1134,8 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
 
         want = capture_of(devs)[1]
         r = cap._cursor({})
+        check("a stretched arrow is still called an arrow (hotspot at the tip)",
+              r.get("shape") == "arrow", r)
         check("cursor finds the hotspot to a pixel", r.get("found")
               and abs(r["hotspot"][0] - want[0]) <= 1
               and abs(r["hotspot"][1] - want[1]) <= 1, (r, want))
@@ -1165,6 +1177,33 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
         check("mouse_goto lands on the native target",
               abs(devs.x - 100) <= 1 and abs(devs.y - 250) <= 1,
               (devs.x, devs.y, r))
+
+        devs.events = []
+        cap.settings["drag_settle_s"] = 0
+        cap.settings["drag_hover_s"] = 0
+        cap._drag({"x1": 100, "y1": 250, "x2": 400, "y2": 120})
+        ev = devs.events
+        check("mouse_drag: down at the source, up at the destination",
+              len(ev) == 2 and ev[0][0] == "down" and ev[1][0] == "up"
+              and abs(ev[0][1] - 100) <= 1 and abs(ev[0][2] - 250) <= 1
+              and abs(ev[1][1] - 400) <= 2 and abs(ev[1][2] - 120) <= 2, ev)
+        devs.events = []
+        real_move = devs.mouse_move
+        moves = [0]
+        def fail_second(dx, dy, pace=None, _m=real_move):
+            moves[0] += 1
+            if devs.events and devs.events[-1][0] == "down":
+                raise OSError("uinput went away")
+            return _m(dx, dy, pace)
+        devs.mouse_move = fail_second
+        try:
+            cap._drag({"x1": 100, "y1": 250, "x2": 400, "y2": 120})
+            raised = False
+        except OSError:
+            raised = True
+        devs.mouse_move = real_move
+        check("  and the button is released even when the move fails",
+              raised and devs.events and devs.events[-1][0] == "up", devs.events)
 
         r = cap._check({})
         check("pointer_check verifies a pointer that moves",
@@ -1215,6 +1254,117 @@ def test_capstrack_counts_presses_and_never_claims_a_reading():
               d["state"] is False and d["presses"] == 2, d)
         check("a bad state is refused",
               c._set({"state": "maybe"})["ok"] is False)
+
+
+def _macbinary(name, ftype, creator, data, rsrc, version=2, flags=0x2100):
+    """Build a MacBinary II (with CRC) or I (without) file for tests."""
+    import struct as _st
+    h = bytearray(128)
+    nb = name.encode("mac_roman")
+    h[1] = len(nb)
+    h[2:2 + len(nb)] = nb
+    h[65:69], h[69:73] = ftype, creator
+    h[73] = flags >> 8
+    h[83:87] = _st.pack(">I", len(data))
+    h[87:91] = _st.pack(">I", len(rsrc))
+    if version >= 2:
+        h[101] = flags & 0xFF
+        h[122], h[123] = 129, 129
+        h[124:126] = _st.pack(">H", vcctrld._crc16_xmodem(bytes(h[:124])))
+    pad = lambda b: b + b"\x00" * ((-len(b)) % 128)
+    return bytes(h) + pad(data) + pad(rsrc)
+
+
+def test_share_upload_unpacks_macbinary_and_writes_streams():
+    """ShareCapability: MacBinary II/I are recognised (II by its CRC), and a
+    .bin that is NOT MacBinary is left alone; AfpInfo is the 60-byte fruit
+    layout; Mac names are SFM-mapped and checked; and a chunked upload writes
+    the data fork, AFP_Resource and AFP_AfpInfo into the upload folder --
+    asserted on the exact smbclient commands, with no network."""
+    print("\nshare upload")
+    data, rsrc = b"DATA" * 10, b"\x00\x00\x01\x00RSRC" * 30
+    mb2 = vcctrld.macbinary_parse(_macbinary("Disk Copy 4.2*", b"APPL", b"dCpy",
+                                             data, rsrc))
+    check("MacBinary II: name, type, creator and both forks",
+          mb2 and mb2["version"] == "II" and mb2["name"] == "Disk Copy 4.2*"
+          and mb2["type"] == b"APPL" and mb2["creator"] == b"dCpy"
+          and mb2["data"] == data and mb2["rsrc"] == rsrc
+          and mb2["flags"] == 0x2100, mb2 and {k: v for k, v in mb2.items()
+                                               if k not in ("data", "rsrc")})
+    mb1 = vcctrld.macbinary_parse(_macbinary("Note", b"TEXT", b"ttxt",
+                                             b"hello", b"", version=1, flags=0))
+    check("MacBinary I (no CRC) when the structure fits exactly",
+          mb1 and mb1["version"] == "I" and mb1["data"] == b"hello", mb1)
+    import random as _r
+    junk = bytes(_r.Random(1).getrandbits(8) for _ in range(4096))
+    check("a .bin that is not MacBinary is not unpacked",
+          vcctrld.macbinary_parse(b"\x00" + junk[1:]) is None)
+
+    ai = vcctrld.afpinfo(b"APPL", b"dCpy", 0x2100)
+    check("AfpInfo is 60 bytes: AFP\\0, version 1, FinderInfo at 16",
+          len(ai) == 60 and ai[:4] == b"AFP\x00" and ai[4:8] == b"\x00\x01\x00\x00"
+          and ai[16:20] == b"APPL" and ai[20:24] == b"dCpy", ai[:28])
+    check("a Mac name's * travels as U+F021, the mapping seen on the share",
+          vcctrld.mac_name_for_smb("Disk Copy 4.2*") == "Disk Copy 4.2\uf021")
+    for bad in ("a:b", "x" * 32, ""):
+        try:
+            vcctrld.mac_name_for_smb(bad)
+            ok = False
+        except ValueError:
+            ok = True
+        check("refused as a Mac name: %r" % bad[:12], ok)
+
+    cap = vcctrld.ShareCapability(make_devices())
+    cap.settings = {"host": "fileserver", "share": "share",
+                    "credentials": "/dev/null", "folder": "Uploads"}
+    sent = []
+    cap._smb = lambda cmds, timeout=120: sent.append(cmds) or ""
+
+    def upload(name, blob, chunk=100, sha=True):
+        import hashlib as _h
+        r = None
+        for off in range(0, len(blob), chunk):
+            part = blob[off:off + chunk]
+            final = off + len(part) >= len(blob)
+            r = cap._stage({"name": name, "total": len(blob), "offset": off,
+                            "data": base64.b64encode(part).decode(),
+                            "final": final,
+                            "sha256": _h.sha256(blob).hexdigest() if final and sha else None})
+        return r
+
+    r = upload("Disk Copy.bin", _macbinary("Disk Copy 4.2*", b"APPL", b"dCpy",
+                                           data, rsrc))
+    cmds = sent[-1] if sent else ""
+    check("a MacBinary upload is unpacked and written as one Mac file",
+          r.get("ok") and r.get("kind") == "macbinary-II"
+          and r.get("mac_name") == "Disk Copy 4.2*", r)
+    check("  data fork, AFP_Resource and AFP_AfpInfo, into Uploads",
+          cmds.startswith('cd "Uploads"')
+          and '"Disk Copy 4.2\uf021"' in cmds
+          and '"Disk Copy 4.2\uf021:AFP_Resource"' in cmds
+          and '"Disk Copy 4.2\uf021:AFP_AfpInfo"' in cmds, cmds)
+    r = upload("readme.txt", b"hello mac\r")
+    cmds = sent[-1]
+    check("a plain .txt gets TEXT/ttxt and no resource fork",
+          r.get("ok") and r.get("kind") == "plain" and r.get("type") == "TEXT"
+          and ":AFP_AfpInfo" in cmds and ":AFP_Resource" not in cmds, (r, cmds))
+    n = len(sent)
+    r = upload("other.bin", junk)
+    check("control: a non-MacBinary .bin goes up as a plain file",
+          r.get("ok") and r.get("kind") == "plain" and len(sent) == n + 1, r)
+    blob = b"abc" * 100
+    r = cap._stage({"name": "x.txt", "total": len(blob), "offset": 0,
+                    "data": base64.b64encode(blob).decode(), "final": True,
+                    "sha256": "0" * 64})
+    check("a SHA mismatch is refused, nothing written",
+          r.get("why") == "sha-mismatch" and len(sent) == n + 1, r)
+    r = cap._stage({"name": "y.txt", "total": 10, "offset": 5,
+                    "data": base64.b64encode(b"12345").decode()})
+    check("a chunk at the wrong offset is refused",
+          r.get("why") == "offset-mismatch", r)
+    cap.settings["max_bytes"] = 1000
+    r = cap._stage({"name": "big.txt", "total": 5000, "offset": 0, "data": ""})
+    check("over max_bytes is refused up front", r.get("why") == "too-large", r)
 
 
 def test_mouse_max_step_splits_a_move_the_board_would_clip():
@@ -3020,10 +3170,37 @@ HARNESS = r"""
   {
     const st = document.getElementById('stage');
     setInputHeld('retromac');
-    const on = st.classList.contains('heldby') && /retromac/.test(st.title);
+    // All four sides, ABOVE the picture: drawn by ::after, absolutely
+    // positioned over the stage, not an outline the picture can paint over.
+    const cs = getComputedStyle(st, '::after');
+    const fourSides = cs.position === 'absolute' && cs.borderBottomStyle === 'dashed'
+                   && cs.borderLeftStyle === 'dashed' && cs.borderRightStyle === 'dashed'
+                   && Number(cs.zIndex) > 5 && cs.pointerEvents === 'none';
+    const on = st.classList.contains('heldby') && /retromac/.test(st.title) && fourSides;
     setInputHeld(null);
     const off = !st.classList.contains('heldby');
     emit(`heldby ${on ? 1 : 0} ${off ? 1 : 0}`);
+  }
+
+  // A share upload: with caps.share the Upload item is enabled even though
+  // files (FTP) is not, and a picked file goes to share_stage -- never
+  // file_stage, never file_send (which would reboot the target).
+  {
+    const realPost = window.post, realConfirm = window.confirm, sentS2 = [];
+    const saved = lastState;
+    window.post = (c, b) => { sentS2.push(c);
+      return Promise.resolve(c === 'share_stage' && b.final
+        ? {ok: true, folder: 'Uploads', mac_name: b.name, kind: 'plain'}
+        : {ok: true}); };
+    window.confirm = () => true;
+    lastState = {caps: {share: {configured: true}}};
+    showFiles({available: false, why: 'not_configured', reason: 'no ftp'});
+    const enabled = !document.getElementById('fi-xfer').classList.contains('off');
+    await shareUpload([new File(['hello'], 'readme.txt')]);
+    const routed = sentS2.includes('share_stage') && !sentS2.includes('file_stage')
+                && !sentS2.includes('file_send');
+    window.post = realPost; window.confirm = realConfirm; lastState = saved;
+    emit(`shareup ${enabled ? 1 : 0} ${routed ? 1 : 0}`);
   }
 
   // The resolution comes from the FRAME, not from a constant. A canvas
@@ -3872,6 +4049,10 @@ def test_zoom_layout_in_a_browser():
     check("another lock holder draws the amber border, named in the tooltip",
           got["heldby"][0] == 1.0, got["heldby"])
     check("  and releasing the lock removes it", got["heldby"][1] == 1.0, got["heldby"])
+    check("with a share, Upload file is enabled though FTP is not",
+          got["shareup"][0] == 1.0, got["shareup"])
+    check("  and a file goes to share_stage, never file_stage or file_send",
+          got["shareup"][1] == 1.0, got["shareup"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])

@@ -1199,6 +1199,49 @@ def vcctrl_capslock(state: "str | None" = None,
 
 
 @mcp.tool()
+def vcctrl_share_put(name: str, content_b64: str,
+                     profile: "str | None" = None) -> dict:
+    """Upload a file into the shared folder the target mounts (the classic
+    Mac's AppleShare volume, capabilities.share) -- its Uploads folder. `name`
+    is the file's name; a MacBinary `.bin` is unpacked into a real Mac file
+    (resource fork, type/creator). `content_b64` is the whole file, base64.
+    The target sees it in the share's Uploads window (reopen it). Nothing is
+    typed at the target and nothing reboots."""
+    import base64 as _b64
+    import tempfile as _tf
+    try:
+        raw = _b64.b64decode(content_b64, validate=True)
+    except Exception as exc:
+        return {"ok": False, "exit_code": 3, "error": "content_b64: %s" % exc}
+    with _tf.NamedTemporaryFile(prefix="vcctrl-mcp-share-", delete=False) as f:
+        f.write(raw)
+        tmp = f.name
+    try:
+        return _run_vcctrl_p(["share", "put", tmp, name], profile)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+@mcp.tool()
+def vcctrl_share_list(profile: "str | None" = None) -> dict:
+    """What is in the shared folder's Uploads directory (name and bytes)."""
+    return _run_vcctrl_p(["share", "ls"], profile)
+
+
+@mcp.tool()
+def vcctrl_mouse_drag(x1: int, y1: int, x2: int, y2: int,
+                      profile: "str | None" = None) -> dict:
+    """A Finder drag in NATIVE px: goto (x1,y1), press, one computed move to
+    (x2,y2), release -- copying an icon to a disk, or into the Trash (aim at
+    the can's body). Do NOT use vcctrl_mouse_goto with the button held: it
+    parks in the corner first. Check the result with vcctrl_shot."""
+    return _gated_run(["mouse", "drag", x1, y1, x2, y2], profile, timeout=40.0)
+
+
+@mcp.tool()
 def vcctrl_pointer_check(profile: "str | None" = None) -> dict:
     """Input round trip through the picture, for a target with no LED
     channel: nudge the pointer, see it move, put it back. verified true =

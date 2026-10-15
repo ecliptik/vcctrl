@@ -2235,7 +2235,7 @@ GATED_COMMANDS = frozenset([
     "mouse_move", "mouse_click", "mouse_down", "mouse_up",
     "mouse_release_all", "mouse_wheel",
     # PointerCapability's verbs all move the pointer.
-    "cursor", "pointer_check", "mouse_goto",
+    "cursor", "pointer_check", "mouse_goto", "mouse_drag",
 ])
 
 # Power ACTIONS that change the target's state. Gated like input, because
@@ -11972,7 +11972,7 @@ class PointerCapability(Capability):
 
     def commands(self):
         cmds = {"cursor": self._cursor, "pointer_check": self._check,
-                "mouse_goto": self._goto}
+                "mouse_goto": self._goto, "mouse_drag": self._drag}
         # verify_input BELONGS to LedsCapability wherever LEDs exist. Routes
         # are last-registered-wins, so claiming it here unconditionally would
         # shadow the real PS/2 round trip -- and a disabled pointer
@@ -12110,16 +12110,34 @@ class PointerCapability(Capability):
         x0, y0, x1, y1 = fp
         w, h = x1 - x0, y1 - y0
         tip = mask.crop((x0, y0, x0 + 3, y0 + 3)).getbbox() is not None
-        if 8 <= w <= 13 and 11 <= h <= 20 and tip:
+        # SIZES ARE MAC PIXELS, not capture pixels. The capture stretches the
+        # 512Ke's screen vertically (342 lines drawn 455 tall), so the Mac's
+        # 16-px arrow is ~21 capture px tall -- and judged in capture px it
+        # failed the arrow test, was called a crosshair, and got its hotspot
+        # put at its middle: every mouse_goto then corrected ~10 Mac px too
+        # high (found by the peer driving it, 2026-10-15, the commit after
+        # shapes were added).
+        sx, sy = self._native_scale()
+        wn, hn = w * sx, h * sy
+        if 8 <= wn <= 13 and 11 <= hn <= 20 and tip:
             return (x0, y0), "arrow"
+        w, h = wn, hn
         # A crosshair and the watch are both about 15 px square; the watch is
         # mostly ink and the crosshair mostly air.
         hist = mask.crop((x0, y0, x1, y1)).histogram()
-        fill = hist[255] / float(max(1, w * h))
+        fill = hist[255] / float(max(1, (x1 - x0) * (y1 - y0)))
         shape = ("ibeam" if w <= 8 else
                  "watch" if w >= 14 and h >= 14 and fill >= 0.4 else
                  "crosshair")
-        return (x0 + w // 2, y0 + h // 2), shape
+        return (x0 + (x1 - x0) // 2, y0 + (y1 - y0) // 2), shape
+
+    def _native_scale(self):
+        """Native px per capture px, (x, y); (1, 1) without a geometry."""
+        g = self._geometry()
+        if g is None:
+            return 1.0, 1.0
+        (_x0, _y0, pw, ph), (nw, nh) = g
+        return nw / float(pw), nh / float(ph)
 
     def _locate(self):
         """Nudge right and back (left and back at the right edge).
@@ -12267,6 +12285,38 @@ class PointerCapability(Capability):
                 self.devs.mouse_move(round(ex * cx), round(ey * cy))
                 out["refined"] = True
                 out["correction_px"] = [ex, ey]
+        return out
+
+
+    def _drag(self, req):
+        """Press at one native-pixel point, release at another: a Finder drag.
+
+        Asked for by the peer driving the 512Ke (2026-10-15): `mouse_goto`
+        cannot be used with the button held, because it parks in the
+        top-left corner first and would drag the icon across the screen, so
+        every drag was down, raw move, shot, correct, up. This is goto to the
+        source (park and correction, button up), press, ONE computed move
+        to the destination (no park), dwell, release. There is no correction
+        mid-drag: _locate cannot see the pointer while an icon outline is
+        dragged with it (the same peer saw it report a position ~50 px out).
+        The button is released whatever happens, so a failure can never leave
+        it held down on the target.
+        """
+        x1, y1 = int(req["x1"]), int(req["y1"])
+        x2, y2 = int(req["x2"]), int(req["y2"])
+        cx, cy = self._cpp()
+        out = {"ok": True, "from": [x1, y1], "to": [x2, y2]}
+        out["source"] = self._goto({"x": x1, "y": y1})
+        pressed = False
+        try:
+            self.devs.mouse_down("left")
+            pressed = True
+            time.sleep(float(self._s("drag_settle_s", 0.4)))
+            self.devs.mouse_move(round((x2 - x1) * cx), round((y2 - y1) * cy))
+            time.sleep(float(self._s("drag_hover_s", 0.8)))
+        finally:
+            if pressed:
+                self.devs.mouse_up("left")
         return out
 
 
@@ -12427,6 +12477,294 @@ class CapsTrackCapability(Capability):
 CapsTrackCapability.BACKENDS = {"evdev-latch": CapsTrackCapability}
 
 
+# --------------------------------------------------- classic Mac file helpers
+
+def _crc16_xmodem(data):
+    crc = 0
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) if crc & 0x8000 else (crc << 1)
+            crc &= 0xFFFF
+    return crc
+
+
+def macbinary_parse(blob):
+    """A MacBinary I/II/III file -> dict, or None if it is not one.
+
+    128-byte header: name (len at 1, up to 63 at 2), type 65-68, creator
+    69-72, Finder flags (high byte 73; low byte 101 in II+), data fork length
+    83-86, resource fork length 87-90 (big-endian), and in II+ a CRC-16/XMODEM
+    of bytes 0-123 at 124. The forks follow, each padded to 128 bytes.
+    II/III are recognised by their CRC; plain MacBinary I (no CRC) only when
+    every structural check passes and the forks fit the file exactly to the
+    padding -- a guess at an unmarked format must not unpack an ordinary
+    .bin download into garbage.
+    """
+    if len(blob) < 128:
+        return None
+    h = blob[:128]
+    nlen = h[1]
+    if h[0] != 0 or h[74] != 0 or not (1 <= nlen <= 63):
+        return None
+    dlen = struct.unpack(">I", h[83:87])[0]
+    rlen = struct.unpack(">I", h[87:91])[0]
+    pad = lambda n: (n + 127) // 128 * 128
+    if 128 + pad(dlen) + pad(rlen) > len(blob) + 128:     # forks must fit
+        return None
+    crc_ok = struct.unpack(">H", h[124:126])[0] == _crc16_xmodem(h[:124])
+    if not crc_ok:
+        if h[82] != 0 or any(h[99:126]):
+            return None
+        if len(blob) not in (128 + pad(dlen) + pad(rlen),
+                             128 + pad(dlen) + rlen, 128 + dlen + rlen):
+            return None
+    sec = struct.unpack(">H", h[120:122])[0] if crc_ok else 0
+    start = 128 + pad(sec)
+    data = blob[start:start + dlen]
+    rsrc_at = start + pad(dlen)
+    rsrc = blob[rsrc_at:rsrc_at + rlen]
+    if len(data) != dlen or len(rsrc) != rlen:
+        return None
+    flags = (h[73] << 8) | (h[101] if crc_ok else 0)
+    return {"name": h[2:2 + nlen].decode("mac_roman"),
+            "type": h[65:69], "creator": h[69:73], "flags": flags,
+            "data": data, "rsrc": rsrc,
+            "version": ("III" if h[102:106] == b"mBIN" else
+                        "II" if crc_ok else "I")}
+
+
+def afpinfo(ftype, creator, flags=0):
+    """Samba vfs_fruit's 60-byte AFP_AfpInfo stream: 'AFP\\0' magic, version
+    0x00010000, reserved, backup time, then the 32-byte FinderInfo (type,
+    creator, Finder flags, ...), ProDOS info and padding. This is what makes
+    a file written over SMB arrive on the Mac with its type and creator --
+    the path proven by hand on the operator's share, 2026-10-15."""
+    finder = (bytes(ftype)[:4].ljust(4, b"?") + bytes(creator)[:4].ljust(4, b"?")
+              + struct.pack(">H", flags & 0xFEFF) + b"\x00" * 22)
+    return (b"AFP\x00" + struct.pack(">I", 0x00010000) + b"\x00" * 4
+            + struct.pack(">I", 0x80000000) + finder + b"\x00" * 12)
+
+
+# Services-for-Macintosh mapping: characters a Mac name may hold but an SMB
+# path may not travel in, sent as private-use code points that netatalk's
+# fruit maps back. `*` -> U+F021 was SEEN on the operator's share (2026-10-15); the
+# rest are the same table's neighbours.
+_SFM = {'"': "", "*": "", "/": "", "<": "",
+        ">": "", "?": "", "\\": "", "|": ""}
+
+
+def mac_name_for_smb(name):
+    """A classic Mac file name as it must be written over SMB, or raise.
+    HFS names are 1-31 characters and may not contain a colon (the Mac's own
+    path separator)."""
+    if not name or len(name) > 31:
+        raise ValueError("a Mac file name is 1-31 characters")
+    if ":" in name:
+        raise ValueError("a Mac file name cannot contain ':'")
+    out = "".join(_SFM.get(c, c) for c in name)
+    return "".join(c if ord(c) >= 0x20 else chr(0xF000 + ord(c)) for c in out)
+
+
+# Plain uploads that are obviously one kind of Mac document get that type,
+# so the Finder can open them; anything else arrives as a generic document.
+_PLAIN_TYPES = {".txt": (b"TEXT", b"ttxt"), ".text": (b"TEXT", b"ttxt"),
+                ".md": (b"TEXT", b"ttxt"), ".pict": (b"PICT", b"ttxt"),
+                ".pct": (b"PICT", b"ttxt")}
+
+
+class ShareCapability(Capability):
+    """Upload into a shared folder the TARGET mounts -- the classic Mac's way
+    to receive a file, since it has no FTP client and no packet driver.
+
+    The Macintosh 512Ke reaches its shared folder over LocalTalk/AppleShare
+    (netatalk on a separate host); the same folder is served over SMB with
+    netatalk-compatible streams. So "upload to the Mac" is: receive the
+    bytes here (chunked and SHA-checked exactly like FilesCapability's
+    file_stage), then write them over SMB into the share's upload folder --
+    and the Mac sees them in the share. Asked for by the operator,
+    2026-10-15: plain files as they are, and MacBinary (.bin) unpacked into a
+    real Mac file -- data fork, resource fork (AFP_Resource stream) and
+    type/creator (AFP_AfpInfo stream) -- so applications arrive runnable.
+
+    Writes with `smbclient`, using a credentials file that lives only on the
+    daemon host (settings.credentials, root-only). The caller sends a name,
+    never a path: everything lands in settings.folder.
+    """
+
+    name = "share"
+    BACKENDS = {}
+    DEFAULT_BACKEND_NAME = None     # explicit opt-in: smb
+
+    def __init__(self, devs):
+        super(ShareCapability, self).__init__(devs)
+        self.lock = threading.Lock()
+        self.partial = {}           # name -> bytearray
+        self.last = None            # the last finished upload, for status
+
+    def commands(self):
+        return {"share_stage": self._stage, "share_list": self._list,
+                "share_status": self._status}
+
+    def _s(self, key, default=None):
+        v = (self.settings or {}).get(key, default)
+        return default if v is None else v
+
+    def _smb(self, cmds, timeout=120):
+        host, share = self._s("host"), self._s("share")
+        cred = self._s("credentials")
+        if not (host and share and cred):
+            raise RuntimeError("share needs settings.host, .share and "
+                               ".credentials")
+        argv = [self._s("smbclient", "smbclient"), "//%s/%s" % (host, share),
+                "-A", cred, "-c", cmds]
+        p = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=timeout)
+        out = (p.stdout or "") + (p.stderr or "")
+        if p.returncode != 0 or "NT_STATUS_" in out:
+            raise RuntimeError("smbclient: " + out.strip()[-300:])
+        return out
+
+    @staticmethod
+    def _q(s):
+        # smbclient's -c takes quoted words; a double quote cannot appear in a
+        # mapped Mac name (it is SFM-mapped), so quoting is enough.
+        return '"%s"' % s
+
+    def _put(self, name, data, rsrc=None, ftype=None, creator=None, flags=0):
+        """Write one Mac file over SMB: data fork, then the streams."""
+        import tempfile
+        remote = mac_name_for_smb(name)
+        folder = self._s("folder", "Uploads")
+        tmp = []
+        try:
+            def spill(b):
+                f = tempfile.NamedTemporaryFile(prefix="vcctrl-share-",
+                                                delete=False)
+                f.write(b)
+                f.close()
+                tmp.append(f.name)
+                return f.name
+            cmds = ["cd %s" % self._q(folder),
+                    "put %s %s" % (self._q(spill(data)), self._q(remote))]
+            if rsrc:
+                cmds.append("put %s %s" % (self._q(spill(rsrc)),
+                                           self._q(remote + ":AFP_Resource")))
+            if ftype and creator:
+                cmds.append("put %s %s" % (
+                    self._q(spill(afpinfo(ftype, creator, flags))),
+                    self._q(remote + ":AFP_AfpInfo")))
+            self._smb("; ".join(cmds))
+        finally:
+            for t in tmp:
+                try:
+                    os.unlink(t)
+                except OSError:
+                    pass
+        return remote
+
+    def _stage(self, req):
+        """Chunked like file_stage: name, total, offset, data (base64),
+        final, sha256 (on the final chunk). On the final chunk the file is
+        checked and written to the share.
+
+        REFUSALS, and the set is NOT CLOSED. The caller must change something
+        for the first three; the rest went wrong in transit or at the share:
+
+            bad-name         empty, over 31 characters, or containing ':'
+            bad-request      total/offset not numbers, data not base64
+            too-large        over settings.max_bytes (LocalTalk is slow)
+            offset-mismatch  a chunk did not start where the last one ended
+            short            the final chunk arrived and the file is undersized
+            sha-mismatch     the bytes do not hash to what the caller sent
+            smb-failed       smbclient refused or the share did not answer
+        """
+        name = os.path.basename(str(req.get("name") or ""))
+        if not name:
+            return {"ok": False, "why": "bad-name", "error": "no file name"}
+        try:
+            total = int(req.get("total"))
+            offset = int(req.get("offset") or 0)
+            chunk = base64.b64decode(req.get("data") or "", validate=True)
+        except Exception as exc:
+            return {"ok": False, "why": "bad-request", "error": str(exc)}
+        cap = int(self._s("max_bytes", 8 * 1024 * 1024))
+        if total > cap:
+            return {"ok": False, "why": "too-large",
+                    "error": "%d bytes is over the %d-byte limit (LocalTalk "
+                             "is slow)" % (total, cap)}
+        with self.lock:
+            buf = self.partial.setdefault(name, bytearray())
+            if offset == 0:
+                del buf[:]
+            if offset != len(buf):
+                return {"ok": False, "why": "offset-mismatch",
+                        "error": "chunk at %d, have %d" % (offset, len(buf))}
+            buf.extend(chunk)
+            if not req.get("final"):
+                return {"ok": True, "received": len(buf)}
+            blob = bytes(self.partial.pop(name))
+        if len(blob) != total:
+            return {"ok": False, "why": "short",
+                    "error": "%d of %d bytes" % (len(blob), total)}
+        if req.get("sha256") and hashlib.sha256(blob).hexdigest() != req["sha256"]:
+            return {"ok": False, "why": "sha-mismatch",
+                    "error": "the file changed in transit"}
+        return self._deliver(name, blob)
+
+    def _deliver(self, name, blob):
+        mb = macbinary_parse(blob) if name.lower().endswith(".bin") else None
+        try:
+            if mb:
+                remote = self._put(mb["name"], mb["data"], mb["rsrc"],
+                                   mb["type"], mb["creator"], mb["flags"])
+                out = {"ok": True, "kind": "macbinary-" + mb["version"],
+                       "mac_name": mb["name"],
+                       "type": mb["type"].decode("mac_roman"),
+                       "creator": mb["creator"].decode("mac_roman"),
+                       "data_bytes": len(mb["data"]),
+                       "rsrc_bytes": len(mb["rsrc"])}
+            else:
+                stem, ext = os.path.splitext(name)
+                tc = _PLAIN_TYPES.get(ext.lower())
+                remote = self._put(name, blob, None,
+                                   tc[0] if tc else None, tc[1] if tc else None)
+                out = {"ok": True, "kind": "plain", "mac_name": name,
+                       "data_bytes": len(blob),
+                       "type": tc[0].decode() if tc else None}
+        except ValueError as exc:
+            return {"ok": False, "why": "bad-name", "error": str(exc)}
+        except Exception as exc:
+            return {"ok": False, "why": "smb-failed", "error": str(exc)[:300]}
+        out["folder"] = self._s("folder", "Uploads")
+        out["remote_name"] = remote
+        out["note"] = ("in the share's %s folder -- on the Mac, open (or close "
+                       "and reopen) that folder's window to see it"
+                       % out["folder"])
+        self.last = dict(out, at=time.time())
+        return out
+
+    def _list(self, req):
+        try:
+            out = self._smb("cd %s; ls" % self._q(self._s("folder", "Uploads")))
+        except Exception as exc:
+            return {"ok": False, "why": "smb-failed", "error": str(exc)[:300]}
+        names = []
+        for line in out.splitlines():
+            m = re.match(r"^\s{2}(.+?)\s+[A-Z]*\s+(\d+)\s+\w{3} \w{3}", line)
+            if m and m.group(1) not in (".", ".."):
+                names.append({"name": m.group(1), "bytes": int(m.group(2))})
+        return {"ok": True, "folder": self._s("folder", "Uploads"),
+                "files": names}
+
+    def _status(self, req):
+        return {"ok": True, "configured_folder": self._s("folder", "Uploads"),
+                "last": self.last}
+
+
+ShareCapability.BACKENDS = {"smb": ShareCapability}
+
+
 class NoteCapability(Capability):
     """The one-sentence 'what is happening right now', either narrated by
     whoever is driving the rig -- typically a Claude Code session, not a
@@ -12570,6 +12908,7 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 # After video and input, whose ring and devices it drives.
                 PointerCapability,
                 CapsTrackCapability,
+                ShareCapability,
                 NoteCapability,
                 PublicTelemetryCapability]
 

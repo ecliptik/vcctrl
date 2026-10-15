@@ -818,14 +818,24 @@
     position:relative; flex:1 1 auto; min-height:0; background:var(--well);
     overflow:hidden;
   }
-  #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
+  /* BOTH STAGE BORDERS ARE AN OVERLAY, NOT AN OUTLINE. An outline drawn
+     inside #stage (negative offset) is painted UNDER its children, and
+     #stage clips them (overflow:hidden) -- so whenever the picture filled
+     the stage, it covered the sides and bottom and only the top edge showed
+     (operator, 2026-10-15). ::after sits above the picture and the in-stage
+     overlays (z-index 1-5) and below every popup (50+), and passes clicks
+     through. */
+  #stage.armed::after, #stage.heldby::after {
+    content:""; position:absolute; inset:0; z-index:6; pointer-events:none;
+  }
+  #stage.armed::after { border:1px solid var(--green); }
   /* SOMEONE ELSE HAS THE MACHINE. The green outline means "this browser
      grabbed it"; when an agent takes the input lock that grab is released
      and the outline went with it, leaving no sign over the picture itself
      that the machine is being driven (asked for, 2026-10-15). Amber and
      DASHED -- the page's mark for "held / not yours" -- and wider than the
      green one so the two can never be confused. */
-  #stage.heldby { outline:2px dashed var(--yellow); outline-offset:-2px; }
+  #stage.heldby::after { border:2px dashed var(--yellow); }
   /* THE PICTURE SCROLLS, THE OVERLAYS DO NOT. The no-signal notice and the
      phone's tap-target are absolutely positioned against the stage, so if the
      stage itself were the scroller they would slide away with the picture.
@@ -5420,9 +5430,23 @@ $('fileinput').onchange = () => {
 // goes silent through the slow one it cannot.
 let filesNow = {available: false, why: null};
 
+// A SHARED FOLDER THE TARGET MOUNTS (ShareCapability): the classic Mac
+// receives files through an AppleShare volume, not FTP. Where it is configured,
+// "Upload file" puts files there -- no reboot, nothing typed at the target.
+function shareOn() {
+  const c = lastState && lastState.caps && lastState.caps.share;
+  return !!(c && c.configured);
+}
 function showFiles(f) {
   filesNow = f || {available: false, why: 'not_configured'};
   const item = $('fi-xfer'), why = $('fi-why');
+  if (shareOn()) {
+    item.classList.remove('off');
+    item.setAttribute('aria-disabled', 'false');
+    item.title = 'Put files in the shared folder ' + targetName() + ' mounts';
+    why.hidden = true;
+    return;
+  }
   const ok = filesNow.available === true;
   item.classList.toggle('off', !ok);
   item.setAttribute('aria-disabled', ok ? 'false' : 'true');
@@ -5458,7 +5482,7 @@ async function sha256Hex(buf) {
 
 const CHUNK = 4 * 1024 * 1024;
 
-async function stageOne(file) {
+async function stageOne(file, cmd) {
   const buf = await file.arrayBuffer();
   const sha = await sha256Hex(buf);
   const bytes = new Uint8Array(buf);
@@ -5471,7 +5495,7 @@ async function stageOne(file) {
       bin += String.fromCharCode.apply(null, slice.subarray(i, i + 0x8000));
     }
     const final = off + slice.length >= bytes.length;
-    const r = await post('file_stage', {
+    const r = await post(cmd || 'file_stage', {
       name: file.name, total: bytes.length, offset: off,
       data: btoa(bin), final: final, sha256: final ? sha : undefined,
     });
@@ -5485,6 +5509,7 @@ $('xferinput').onchange = async () => {
   const picked = [...$('xferinput').files];
   if (!picked.length) return;
   closePop();
+  if (shareOn()) { await shareUpload(picked); $('xferinput').value = ''; return; }
   if (!filesNow.available) { hint(filesNow.reason || 'not available'); return; }
 
   const total = picked.reduce((n, f) => n + f.size, 0);
@@ -5543,6 +5568,29 @@ $('xferinput').onchange = async () => {
           'k-cmd');
   watchTransfer();
 };
+
+// Into the shared folder, one file at a time. A MacBinary .bin is unpacked
+// by the daemon into a real Mac file (resource fork, type and creator).
+async function shareUpload(picked) {
+  const names = picked.map(f => f.name).join(', ');
+  if (!confirm('Put ' + names + ' in the shared folder?\n\n'
+               + 'It appears in its Uploads folder on ' + targetName() + '.')) return;
+  for (const f of picked) {
+    addLine(new Date(), 'file', 'uploading ' + f.name + ' to the share', 'k-cmd');
+    const r = await stageOne(f, 'share_stage');
+    if (!r || !r.ok) {
+      addLine(new Date(), 'file', 'refused ' + f.name + ': '
+              + ((r && r.error) || 'no answer'), 'k-warn');
+      hint('refused: ' + ((r && r.error) || 'no answer'));
+      return;
+    }
+    addLine(new Date(), 'file', 'in ' + r.folder + ': ' + r.mac_name
+            + (r.kind && r.kind.startsWith('macbinary')
+               ? ' (unpacked: ' + r.type + '/' + r.creator + ', '
+                 + fmtBytes(r.rsrc_bytes) + ' resource fork)' : ''), 'k-vid');
+  }
+  hint('in the share\'s Uploads folder -- reopen its window on the Mac');
+}
 
 // ── FETCH FILES FROM THE TARGET ───────────────────────────────────────────
 // The mirror of the upload, and it costs the same two reboots -- so the list
