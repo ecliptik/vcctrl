@@ -1181,6 +1181,21 @@ class WebCapability(object):
         # Nothing here moves data or touches the target -- the commands that
         # do are deliberately NOT exposed yet.
         "files", "file_name", "file_check",
+        # POINTER BY VIDEO (PointerCapability, the classic Mac). Click to
+        # point posts mouse_goto; `cursor`, `pointer_check` and `mouse_drag`
+        # move the pointer the same way the mouse verbs above already do and
+        # are gated by the same input lock. Missing here at first: the page
+        # answered every click with "command not exposed: 'mouse_goto'"
+        # (operator, Safari, 2026-10-15) while the headless test, which stubs
+        # post(), passed -- which is why the guard below now checks this list
+        # against every command the page source posts.
+        "mouse_goto", "mouse_drag", "cursor", "pointer_check",
+        # The TRACKED Caps Lock, read-only here; setting it is a CLI/MCP act.
+        "capslock",
+        # Uploads into the shared folder the target mounts (ShareCapability).
+        # Bounded like file_stage: a name, never a path; a size cap; the
+        # folder decided by the profile, not the caller.
+        "share_stage", "share_list", "share_status",
         # Staging WRITES, and is exposed anyway because the browser upload is
         # the whole point of the feature. What bounds it: the caller sends a
         # NAME and never a path, the name is forced to DOS 8.3, the size

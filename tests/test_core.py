@@ -1367,6 +1367,40 @@ def test_share_upload_unpacks_macbinary_and_writes_streams():
     check("over max_bytes is refused up front", r.get("why") == "too-large", r)
 
 
+def test_every_command_the_page_posts_is_allowed_by_the_web_server():
+    """The web KVM can only call commands in vcweb's ALLOWED set; anything
+    else answers 403 "command not exposed". Click to point shipped posting
+    mouse_goto with no ALLOWED entry, and every click failed in the browser
+    (2026-10-15) while the headless test -- which stubs post() -- passed. So
+    the page SOURCE is the witness: every literal post('<cmd>' it contains
+    must be allowed."""
+    print("\npage commands vs web allowlist")
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(HERE, os.pardir, "daemon"))
+    import vcweb
+    page = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html")).read()
+    posted = set(re.findall(r"post\('([a-z_]+)'", page))
+    posted |= set(re.findall(r"post\(cmd \|\| '([a-z_]+)'", page))
+    posted |= set(re.findall(r"stageOne\([^,()]+, '([a-z_]+)'\)", page))
+    check("the scan found the page's commands, not a handful",
+          len(posted) > 20, sorted(posted))
+    allowed = vcweb.WebCapability.ALLOWED
+    # KNOWN GAPS, NAMED, found by this guard's first run (2026-10-15): the
+    # page posts these and the web server refuses them, so those controls
+    # cannot work from a browser today. Whether a browser SHOULD be able to
+    # mount disk images and rescan the card is an operator decision, not a
+    # test fix -- so they are listed here, and any NEW omission still fails.
+    known = {"file_scan", "msd_eject", "msd_list", "msd_mount", "msd_stage",
+             "msd_status"}
+    missing = sorted(posted - allowed - known)
+    check("control: the known gaps are still gaps (remove them when fixed)",
+          known <= posted and not (known & allowed), sorted(known & allowed))
+    check("every command the page posts is in vcweb.ALLOWED", not missing,
+          missing)
+    for c in ("mouse_goto", "share_stage"):
+        check("  including %s" % c, c in posted and c in allowed)
+
+
 def test_mouse_max_step_splits_a_move_the_board_would_clip():
     """capabilities.input.settings.mouse_max_step: USB4VC's Mac board clips
     one large relative event (100..400 counts all moved ~17 px on the 512Ke)
