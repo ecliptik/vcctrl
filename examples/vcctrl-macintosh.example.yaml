@@ -38,6 +38,10 @@ capabilities:
       # The Mac reads the mouse button once per vertical blank (16.7 ms):
       # a one-pace click can be missed. Hold it for several frames.
       click_hold_s: 0.1
+      # The Mac's keyboard link drains ~15-20 key transitions a second and
+      # drops the rest, which can leave a key stuck down. 50 ms between key
+      # events was measured clean on a 512Ke; 12 ms was not.
+      key_gap_s: 0.05
 
   video:
     backend: v4l2-ffmpeg

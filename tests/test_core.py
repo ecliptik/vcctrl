@@ -1030,6 +1030,42 @@ def test_mouse_click_hold_is_a_floor_under_the_pace():
         vcctrld.time.sleep, vcctrld.CLICK_HOLD_S = real_sleep, real_hold
 
 
+def test_key_gap_is_a_floor_between_every_keyboard_event():
+    """capabilities.input.settings.key_gap_s: the 512Ke's keyboard link drops
+    transitions it cannot pass on, and a dropped key-up is a key stuck down.
+    With the floor set, no two keyboard events -- from type, key, or the raw
+    keydown/keyup the browser sends unpaced -- are closer than it; absent,
+    nothing waits at all. Asserted on a fake clock that sleep advances."""
+    print("\nkey_gap_s")
+    clock = [1000.0]
+    real = (vcctrld.time.sleep, vcctrld.time.monotonic, vcctrld.KEY_GAP_S)
+
+    def fake_sleep(s):
+        clock[0] += s
+    vcctrld.time.sleep, vcctrld.time.monotonic = fake_sleep, lambda: clock[0]
+    try:
+        stamps = []
+        for gap in (0, 0.05):
+            vcctrld.KEY_GAP_S = gap
+            d = make_devices()
+            orig_write = d.kbd.write
+            stamps = []
+            d.kbd.write = lambda *a, _w=orig_write: (stamps.append(clock[0]),
+                                                     _w(*a))
+            d.type_text("Ab", pace=0)            # shift, a, a-up, shift-up, b, b-up
+            d.keydown("x"); d.keyup("x")         # the browser's unpaced path
+            gaps = [round(b - a, 6) for a, b in zip(stamps, stamps[1:])]
+            if gap == 0:
+                check("absent: nothing waits", all(g == 0 for g in gaps), gaps)
+            else:
+                check("every gap is at least key_gap_s",
+                      gaps and min(gaps) >= gap - 1e-9, gaps)
+                check("  across type and raw keydown/keyup alike",
+                      len(stamps) == 8, stamps)
+    finally:
+        vcctrld.time.sleep, vcctrld.time.monotonic, vcctrld.KEY_GAP_S = real
+
+
 def test_activity_age():
     """'harness has been in ledwait for 14 minutes' is the operator's question
     in one line. Test it reports an in-flight command while it is still

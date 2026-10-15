@@ -291,6 +291,21 @@ DEFAULT_PACE_S = float(CFG.default(
 # replacement: the hold is never shorter than the pace.
 CLICK_HOLD_S = CFG.default("capabilities.input.settings.click_hold_s", None)
 
+# The least time between any two keyboard events (press or release), from
+# ANY caller -- type, key, combo, hold, and the browser's raw keydown/keyup,
+# which arrive at the operator's own typing speed and are never paced at all.
+# Absent or 0: no floor, as it always was. WHY IT EXISTS: a classic Mac's
+# M0110 keyboard link carries one key transition per poll, and USB4VC's Mac
+# board drops transitions it cannot pass on. Measured on the 512Ke,
+# 2026-10-15: `type` at the 12 ms pace lost most characters AND lost key-ups,
+# leaving Shift and four keys held down on the Mac (Key Caps showed them
+# lit, and `?` auto-repeated) while the daemon believed nothing was held. At
+# 50 ms every character arrived, the last ones a second or more after `type`
+# returned -- the link drains at roughly 15-20 transitions a second. A floor
+# here rather than a bigger pace_s, because pace_s also paces mouse moves,
+# and the Mac's mouse is already slow.
+KEY_GAP_S = float(CFG.default("capabilities.input.settings.key_gap_s", 0) or 0)
+
 # ---------------------------------------------------------------- key tables
 
 NAMED_KEYS = {
@@ -1815,7 +1830,17 @@ class Devices(object):
     # and UNCHANGED in shape from before hid-gadget existed; only the two
     # primitives underneath it differ.
 
+    def _key_gap(self):
+        """Wait out KEY_GAP_S since the last keyboard event. Caller holds
+        self.lock, so the floor holds across concurrent callers too."""
+        if KEY_GAP_S > 0:
+            wait = getattr(self, "_last_key_t", 0.0) + KEY_GAP_S - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_key_t = time.monotonic()
+
     def _press(self, code):
+        self._key_gap()
         if not self.hid_mode:
             self.kbd.write(e.EV_KEY, code, 1)
             self.kbd.syn()
@@ -1841,6 +1866,7 @@ class Devices(object):
         self._write_hid_kbd_report()
 
     def _release(self, code):
+        self._key_gap()
         if not self.hid_mode:
             self.kbd.write(e.EV_KEY, code, 0)
             self.kbd.syn()
