@@ -1460,7 +1460,29 @@ class WebCapability(object):
         # reason. On ADB the round trip is not a failed check, it is a check
         # that does not apply -- and a Macintosh must not render like a
         # Gateway with a dead PS/2 lead.
-        if leds_cap is None:
+        # A TARGET WITH NO LEDS CAN STILL BE PROVEN, through the picture:
+        # PointerCapability's round trip (the classic Mac). Same three-state
+        # shape and the same power-epoch voiding, plus `method` so the page
+        # can say how it was proven.
+        pointer_cap = self.registry.caps.get("pointer")
+        if leds_cap is None and pointer_cap is not None:
+            at = getattr(pointer_cap, "verified_at", None)
+            if at is None:
+                verified = {"available": False, "why": "unknown",
+                            "method": "pointer",
+                            "reason": "the input path has not been verified "
+                                      "yet -- Verify nudges the pointer"}
+            elif _verification_is_void(at):
+                verified = {"available": False, "why": "unproven",
+                            "method": "pointer",
+                            "reason": ("the target's power changed after "
+                                       "this was proven -- verify again")}
+            else:
+                verified = {"available": True, "why": None, "reason": None,
+                            "method": "pointer",
+                            "ok": pointer_cap.verified_ok,
+                            "age_s": round(time.time() - at, 1)}
+        elif leds_cap is None:
             _why, _reason = self._absent_reason("leds")
             verified = {"available": False, "why": _why, "reason": _reason}
         elif leds.get("why") == "unsupported":
@@ -1489,6 +1511,11 @@ class WebCapability(object):
                 # Every other input status describes the Pi's own end of the
                 # wire. This is the only field that means the target answered.
                 "input_verified": verified,
+                # Caps Lock where no LED reports it: COUNTED from presses,
+                # never read from the target. None where not configured.
+                "capslock_tracked": (self.registry.caps["capstrack"].snapshot()
+                                     if "capstrack" in self.registry.caps
+                                     else None),
                 "inflight": act.get("inflight"),
                 "lock": act.get("lock"),
                 "last_event_age_s": act.get("last_event_age_s"),

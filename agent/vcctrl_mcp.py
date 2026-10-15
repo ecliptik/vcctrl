@@ -1185,6 +1185,20 @@ def vcctrl_mouse_goto(x: int, y: int, refine: bool = True,
 
 
 @mcp.tool()
+def vcctrl_capslock(state: "str | None" = None,
+                    profile: "str | None" = None) -> dict:
+    """The TRACKED Caps Lock latch, for a target with no LED channel (the
+    classic Mac): counted from every Caps Lock press on every keyboard, NOT
+    read from the target. `state` is on/off/null(unknown), with set_at and
+    presses_since_set to judge it by. Pass state="on"/"off" to set it from
+    what the target shows (Key Caps draws capitals while it is on) --
+    setting sends nothing to the target."""
+    if state is None:
+        return _run_vcctrl_p(["capslock"], profile)
+    return _run_vcctrl_p(["capslock", "set", state], profile)
+
+
+@mcp.tool()
 def vcctrl_pointer_check(profile: "str | None" = None) -> dict:
     """Input round trip through the picture, for a target with no LED
     channel: nudge the pointer, see it move, put it back. verified true =

@@ -11963,6 +11963,10 @@ class PointerCapability(Capability):
     name = "pointer"
     BACKENDS = {}
     DEFAULT_BACKEND_NAME = None     # explicit opt-in: video-diff
+    # The last completed round trip, read by vcweb's snapshot() for the
+    # page's `input_verified` -- the same two fields LedsCapability keeps.
+    verified_at = None
+    verified_ok = None
     DIFF_LEVEL = 60                 # grey-level change that counts as "moved"
     CURSOR_W = 11                   # the arrow's width in capture px (512Ke)
 
@@ -12228,6 +12232,7 @@ class PointerCapability(Capability):
         r = self._locate()
         out = {"ok": True, "available": True, "method": "pointer",
                "verified": bool(r.get("found")), "detail": r}
+        self.verified_at, self.verified_ok = time.time(), out["verified"]
         if not r.get("found"):
             out["reason"] = ("the pointer did not move in the picture after a "
                              "real nudge: the input path or the target is not "
@@ -12266,6 +12271,160 @@ class PointerCapability(Capability):
 
 
 PointerCapability.BACKENDS = {"video-diff": PointerCapability}
+
+
+class CapsTrackCapability(Capability):
+    """Caps Lock on a target that never reports it: TRACKED, not measured.
+
+    The Macintosh on USB4VC's Mac board has no LED channel at all -- its last
+    LED request in rpi_app's log is from the IBM PC board in August -- and
+    its M0110 Caps Lock is a LATCH that lives in the protocol board and
+    survives rpi_app restarts and Pi reboots (measured in Key Caps,
+    2026-10-15: on before a USB4VC restart, still on after). So "Caps Lock
+    came up on" was a press nobody saw, not a reset default.
+
+    What CAN be seen: every press. rpi_app opens each keyboard without
+    grabbing it, so this daemon can read the same event nodes -- the
+    operator's physical keyboards and our own uinput keyboard alike -- and
+    flip a latch on each Caps Lock press. The latch is saved under
+    state_dir, so it outlives a daemon restart.
+
+    WHAT IT IS NOT, said in every reply: a reading from the target. It is
+    `unknown` until somebody sets it once from what the Mac shows (Key Caps
+    draws capitals while the latch is on): `vcctrl capslock set on|off`.
+    It goes wrong if a press is missed -- one made while this daemon was
+    down, or one the Mac board dropped (vcctrl's own presses are paced by
+    key_gap_s; a fast physical typist is not) -- and the reply carries when
+    it was last set and how many presses it has counted since, so a reader
+    can judge how far to trust it.
+    """
+
+    name = "capstrack"
+    BACKENDS = {}
+    DEFAULT_BACKEND_NAME = None     # explicit opt-in: evdev-latch
+
+    def __init__(self, devs):
+        super(CapsTrackCapability, self).__init__(devs)
+        self.lock = threading.Lock()
+        self.state = None           # True / False / None (unknown)
+        self.set_at = None
+        self.presses = 0            # since set_at
+        self.watching = {}          # path -> name
+        self._stop = threading.Event()
+
+    def _path(self):
+        name = CFG.default("daemon.profile_name", None) or "primary"
+        return os.path.join(STATE_DIR, "capslock-%s.json" % name)
+
+    def start(self):
+        # Resolved HERE, inside the profile's config scope: the watcher
+        # thread that saves later does not run inside it.
+        self.statefile = self._path()
+        try:
+            with open(self.statefile) as f:
+                d = json.load(f)
+            self.state, self.set_at = d.get("state"), d.get("set_at")
+            self.presses = int(d.get("presses") or 0)
+        except Exception:
+            pass
+        threading.Thread(target=self._run, name="capstrack",
+                         daemon=True).start()
+
+    def stop(self):
+        self._stop.set()
+
+    def _save(self):
+        try:
+            path = getattr(self, "statefile", None) or self._path()
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"state": self.state, "set_at": self.set_at,
+                           "presses": self.presses}, f)
+            os.replace(tmp, path)
+        except Exception as exc:
+            sys.stderr.write("capstrack: could not save: %s\n" % exc)
+
+    def press(self):
+        """One Caps Lock press seen on any keyboard: flip the latch."""
+        with self.lock:
+            self.presses += 1
+            if self.state is not None:
+                self.state = not self.state
+            self._save()
+
+    def _run(self):
+        import select
+        import evdev
+        devices = {}
+        last_scan = 0.0
+        while not self._stop.is_set():
+            now = time.time()
+            if now - last_scan > 5.0:
+                last_scan = now
+                for path in evdev.list_devices():
+                    if path in devices:
+                        continue
+                    try:
+                        d = evdev.InputDevice(path)
+                        keys = d.capabilities().get(e.EV_KEY, [])
+                        if e.KEY_CAPSLOCK in keys and e.KEY_A in keys:
+                            devices[path] = d
+                            self.watching[path] = d.name
+                        else:
+                            d.close()
+                    except Exception:
+                        pass
+            if not devices:
+                self._stop.wait(1.0)
+                continue
+            try:
+                ready, _, _ = select.select(list(devices.values()), [], [], 1.0)
+            except Exception:
+                ready = []
+            for d in ready:
+                try:
+                    for ev in d.read():
+                        if (ev.type == e.EV_KEY and ev.code == e.KEY_CAPSLOCK
+                                and ev.value == 1):
+                            self.press()
+                except Exception:
+                    # Gone (unplugged, or our own uinput recreated).
+                    devices.pop(d.path, None)
+                    self.watching.pop(d.path, None)
+                    try:
+                        d.close()
+                    except Exception:
+                        pass
+
+    def snapshot(self):
+        with self.lock:
+            st, at, n = self.state, self.set_at, self.presses
+        return {"source": "tracked",
+                "state": None if st is None else ("on" if st else "off"),
+                "set_at": at, "presses_since_set": n,
+                "watching": sorted(self.watching.values()),
+                "note": ("counted from Caps Lock presses, not read from the "
+                         "target -- set it from Key Caps with `capslock set`")}
+
+    def commands(self):
+        return {"capslock": self._read, "capslock_set": self._set}
+
+    def _read(self, req):
+        return {"ok": True, "capslock": self.snapshot()}
+
+    def _set(self, req):
+        v = str(req.get("state", "")).lower()
+        if v not in ("on", "off", "unknown"):
+            return {"ok": False, "error": "state must be on, off or unknown"}
+        with self.lock:
+            self.state = None if v == "unknown" else (v == "on")
+            self.set_at = time.time()
+            self.presses = 0
+            self._save()
+        return {"ok": True, "capslock": self.snapshot()}
+
+
+CapsTrackCapability.BACKENDS = {"evdev-latch": CapsTrackCapability}
 
 
 class NoteCapability(Capability):
@@ -12410,6 +12569,7 @@ CAPABILITIES = [InputCapability, LedsCapability, PowerCapability,
                 SysinfoCapability,
                 # After video and input, whose ring and devices it drives.
                 PointerCapability,
+                CapsTrackCapability,
                 NoteCapability,
                 PublicTelemetryCapability]
 

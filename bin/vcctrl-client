@@ -141,6 +141,11 @@ USAGE = """usage: vcctrl <command> [args]
                             `cursor` (needs capabilities.pointer; classic Mac)
   cursor                    where the pointer is, found by nudging it and
                             diffing the picture (capabilities.pointer)
+  capslock [set on|off|unknown]
+                            the TRACKED Caps Lock latch on a target with no
+                            LED channel (capabilities.capstrack): counted from
+                            presses on every keyboard, never read from the
+                            target -- `set` it once from what Key Caps shows
   pointer-check             input round trip through the picture: nudge,
                             see it move, put it back. Exit 0/1/2/3 as
                             verify-input, which it also answers on a target
@@ -1724,6 +1729,14 @@ def main(argv):
         req = {"cmd": "pointer_check"}
     elif cmd == "cursor":
         req = {"cmd": "cursor"}
+    elif cmd == "capslock":
+        if rest and rest[0] == "set":
+            if len(rest) < 2:
+                sys.stderr.write("usage: capslock set on|off|unknown\n")
+                return 2
+            req = {"cmd": "capslock_set", "state": rest[1]}
+        else:
+            req = {"cmd": "capslock"}
     elif cmd == "ledwait":
         req = {"cmd": "ledwait",
                "timeout": float(rest[0]) if rest else 5.0}

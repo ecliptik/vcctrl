@@ -5965,7 +5965,13 @@ $('reloadbtn').onclick = () => location.reload(true);
 // Sends a Caps Lock and watches for the LED to come back. The only check that
 // says anything about the wire rather than about this end of it.
 $('verifybtn').onclick = async () => {
-  addLine(new Date(), 'verify', 'sending a keystroke and watching for the LED…', 'k-note');
+  // On a target with no LEDs the daemon answers by moving the pointer
+  // instead (PointerCapability), so say which round trip is being run.
+  const byPointer = !!(lastState && lastState.input_verified
+                       && lastState.input_verified.method === 'pointer');
+  addLine(new Date(), 'verify', byPointer
+          ? 'nudging the pointer and watching for it to move…'
+          : 'sending a keystroke and watching for the LED…', 'k-note');
   const j = await post('verify_input', {});
   if (j) addLine(new Date(), 'verify',
                  j.verified ? 'link proven, the target answered'
@@ -8384,7 +8390,7 @@ async function pollState() {
   if (j.build && BUILD !== '__' + 'BUILD__' && j.build !== BUILD)
     $('stalebar').classList.add('show');
 
-  lamps(j.leds, v.state, j.input_verified);
+  lamps(j.leds, v.state, j.input_verified, j.capslock_tracked);
   // Only while HELD. "input free · link unproven" was two facts in one chip,
   // one of them permanent and neither urgent -- and the operator read it as
   // "Linux Unproven", which is what a label nobody can parse looks like from
@@ -10395,7 +10401,7 @@ const LEDLOOK = {
   unproven:    'warn',    // there IS a channel, it has not spoken this epoch
   error:       'bad',     // a Gateway with a dead PS/2 lead: a fault
 };
-function lamps(leds, videoState, verified) {
+function lamps(leds, videoState, verified, capsT) {
   const why   = leds && leds.available === false ? (leds.why || 'unknown') : null;
   const look  = why ? (LEDLOOK[why] || 'na') : null;
   // Present, claiming to be readable, and carrying nothing. Not a state the
@@ -10416,6 +10422,24 @@ function lamps(leds, videoState, verified) {
                            ['scrolllock','lamp-scroll']]) {
     const el = $(id);
     if (!el) continue;
+    // TRACKED CAPS LOCK, where no LED exists to read (the classic Mac). Drawn
+    // lit or dark from the daemon's count of presses, and ALWAYS dashed:
+    // dashed is this page's word for "not a live reading", and a count is
+    // not one. Unknown until somebody sets it from what Key Caps shows.
+    if (key === 'capslock' && why && capsT) {
+      const on = capsT.state === 'on';
+      el.classList.toggle('on', on);
+      el.classList.toggle('stale', true);
+      el.classList.toggle('warn', false);
+      el.classList.toggle('bad', false);
+      el.classList.toggle('na', capsT.state == null);
+      el.title = 'Caps Lock: ' + (capsT.state == null
+        ? 'unknown -- check Key Caps, then vcctrl capslock set on|off'
+        : capsT.state + ' (tracked, not read from ' + targetName() + ': '
+          + capsT.presses_since_set + ' presses since it was set '
+          + fmtAge((Date.now() / 1000) - capsT.set_at) + ' ago)');
+      continue;
+    }
     const v = why || blind ? null : leds[key];
     el.classList.toggle('on', v === 1);
     // Dashed as well as yellow: `warn` here is not a fault, it is an
@@ -10446,13 +10470,26 @@ function lamps(leds, videoState, verified) {
   const capsPanel = $('kbdcaps');
   if (capsPanel) {
     const lit = !why && !blind && !stale && leds && leds.capslock === 1;
-    capsPanel.hidden = !lit;
+    // Tracked, so "probably": the warning is worth giving -- typing in
+    // capitals was what the operator hit -- but not as a measurement.
+    const tracked = !lit && why && capsT && capsT.state === 'on';
+    capsPanel.hidden = !(lit || tracked);
     capsPanel.textContent = lit
       ? 'Caps Lock is lit at ' + targetName() + '. The letter keys will type capitals.'
+      : tracked
+      ? 'Caps Lock is probably on at ' + targetName()
+        + ' (counted, not read). The letter keys will type capitals.'
       : '';
   }
+  const viaPointer = verified && verified.method === 'pointer';
   $('lamps').title =
-    why ? (leds.reason || why)
+    why && viaPointer
+    ? (verified.available
+       ? `Link proven ${fmtAge(verified.age_s)} ago by moving the pointer: `
+         + (verified.ok ? 'answered.' : 'NO ANSWER.')
+       : (verified.reason || 'Link not proven yet. Tap VERIFY.'))
+      + (capsT ? '\n\nCaps Lock is tracked, not read: there is no LED to read.' : '')
+    : why ? (leds.reason || why)
     : LAMP_ATTESTS
       + (noVerify
          ? '\n\n' + (verified.reason || 'No round-trip verification.')

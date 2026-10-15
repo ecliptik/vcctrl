@@ -1184,6 +1184,39 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
               "verify_input" not in c2.commands())
 
 
+def test_capstrack_counts_presses_and_never_claims_a_reading():
+    """CapsTrackCapability: a press flips a latch that is `unknown` until it
+    is set from what the target shows; set resets the count; the state
+    survives a restart through its file; and every reply says `tracked`."""
+    print("\ncapstrack")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        c = vcctrld.CapsTrackCapability(make_devices())
+        c.statefile = os.path.join(td, "capslock-test.json")
+        c.press()
+        s = c.snapshot()
+        check("unknown until set: a press counts but claims no state",
+              s["state"] is None and s["presses_since_set"] == 1, s)
+        check("  and every reply says it is tracked, not read",
+              s["source"] == "tracked", s)
+        r = c._set({"state": "off"})
+        check("set off: state off, count reset",
+              r["capslock"]["state"] == "off"
+              and r["capslock"]["presses_since_set"] == 0, r)
+        c.press()
+        check("one press flips it on", c.snapshot()["state"] == "on")
+        c.press()
+        check("a second press flips it back off", c.snapshot()["state"] == "off")
+        c2 = vcctrld.CapsTrackCapability(make_devices())
+        c2.statefile = c.statefile
+        with open(c2.statefile) as f:
+            d = json.load(f)
+        check("the latch is saved for a restart",
+              d["state"] is False and d["presses"] == 2, d)
+        check("a bad state is refused",
+              c._set({"state": "maybe"})["ok"] is False)
+
+
 def test_mouse_max_step_splits_a_move_the_board_would_clip():
     """capabilities.input.settings.mouse_max_step: USB4VC's Mac board clips
     one large relative event (100..400 counts all moved ~17 px on the 512Ke)
@@ -2963,6 +2996,25 @@ HARNESS = r"""
     emit(`clickpoint ${pointed ? 1 : 0} ${grabbed ? 1 : 0}`);
   }
 
+  // Tracked Caps Lock where there are no LEDs: the C lamp is lit AND dashed,
+  // the key panel warns "probably", and the lamps' title shows the pointer
+  // proof rather than only "leds not configured".
+  {
+    const noLeds = {available: false, why: 'not_configured', reason: 'no leds'};
+    const ver = {available: true, method: 'pointer', ok: true, age_s: 5};
+    lamps(noLeds, 'locked', ver,
+          {state: 'on', set_at: Date.now() / 1000 - 60, presses_since_set: 1,
+           source: 'tracked'});
+    const c = document.getElementById('lamp-caps');
+    const lampOk = c.classList.contains('on') && c.classList.contains('stale');
+    const panel = document.getElementById('kbdcaps');
+    const warned = panel && !panel.hidden && /probably/.test(panel.textContent);
+    const titled = /moving the pointer/.test(document.getElementById('lamps').title);
+    lamps(noLeds, 'locked', ver, {state: null, presses_since_set: 0});
+    const unknownNa = c.classList.contains('na') && !c.classList.contains('on');
+    emit(`capstracked ${lampOk && warned ? 1 : 0} ${titled && unknownNa ? 1 : 0}`);
+  }
+
   // The resolution comes from the FRAME, not from a constant. A canvas
   // carries 640x480 as an attribute, so reporting before a frame arrives
   // would report the Gateway's geometry on a Macintosh.
@@ -3802,6 +3854,10 @@ def test_zoom_layout_in_a_browser():
           got["clickpoint"][0] == 1.0, got["clickpoint"])
     check("control: without a pointer capability the click still grabs",
           got["clickpoint"][1] == 1.0, got["clickpoint"])
+    check("tracked Caps Lock lights the C lamp dashed and warns 'probably'",
+          got["capstracked"][0] == 1.0, got["capstracked"])
+    check("  the title shows the pointer proof; unknown draws as n/a",
+          got["capstracked"][1] == 1.0, got["capstracked"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])
