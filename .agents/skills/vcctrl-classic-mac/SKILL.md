@@ -119,6 +119,32 @@ With `capabilities.pointer` (backend `video-diff`) configured, as on the
   mouse move wakes it, so a `mouse move 1 0` / `mouse move -1 0` first is
   harmless.
 
+## Caps Lock: tracked, never read
+
+- The M0110's Caps Lock is a latch inside USB4VC's Mac board. It survives
+  USB4VC restarts and Pi reboots, and the board reports no LEDs, so
+  nothing can read it from the target.
+- With `capabilities.capstrack` (backend `evdev-latch`), vcctrld counts
+  every Caps Lock press on every keyboard (the operator's and its own) and
+  flips a saved latch: `vcctrl capslock` (MCP `vcctrl_capslock`). It is
+  `unknown` until set from what Key Caps shows: `vcctrl capslock set
+  on|off`. Re-set it whenever you've checked in Key Caps.
+- The KVM's C lamp shows it dashed (not a live reading). The key panel
+  says "probably on" when it's on.
+- Trust it in proportion to `presses_since_set`. A missed press (while the
+  daemon was down, or dropped by the board) desyncs it until the next set.
+
+## The link lamp and verify on the page
+
+The web KVM's Verify button and the lamps' tooltip use the pointer round
+trip on this board ("Link proven Ns ago by moving the pointer"), with the
+same rules as the PS/2 check: a power change voids an old proof.
+
+## No sound
+
+The 512Ke's video goes through an RGB2HDMI, which carries no audio, so
+there is nothing to capture. `audio: none` is the hardware, not a gap.
+
 ## Easy Access, keypad and Clear
 
 - The keypad reaches the Mac (`kp0`..`kp9` and friends light in Key Caps),
@@ -176,6 +202,7 @@ Anything sent with `type` is kept word for word in the activity bus,
 ## Not supported here
 
 - No power control on a rig without a plug. Power and reset are done by hand.
-- No LEDs, no file transfer channel (`files: none`), no audio.
+- No LEDs (Caps Lock is tracked, see above), no file transfer channel
+  (`files: none`; AppleShare is the way), and no audio through the RGB2HDMI.
 - Ctrl+Alt+Shift may not release a web-KVM grab where the desktop takes
   Alt (seen on Cinnamon/X11). Ctrl+Shift+F12 does.
