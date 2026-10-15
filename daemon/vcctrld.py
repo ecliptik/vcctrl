@@ -12542,8 +12542,13 @@ def afpinfo(ftype, creator, flags=0):
     the path proven by hand on the operator's share, 2026-10-15."""
     finder = (bytes(ftype)[:4].ljust(4, b"?") + bytes(creator)[:4].ljust(4, b"?")
               + struct.pack(">H", flags & 0xFEFF) + b"\x00" * 22)
-    return (b"AFP\x00" + struct.pack(">I", 0x00010000) + b"\x00" * 4
-            + struct.pack(">I", 0x80000000) + finder + b"\x00" * 12)
+    # VERSION IS 00 00 01 00. The first version of this wrote 00 01 00 00
+    # (a guess from the AFP spec), and Samba refuses that stream outright --
+    # `cli_push returned NT_STATUS_NOT_SUPPORTED` -- as the peer that owns the
+    # file server found writing by hand. The bytes below match Samba's own
+    # read-back of an AFP-written original, verified there 2026-10-15.
+    return (b"AFP\x00" + b"\x00\x00\x01\x00" + b"\x00" * 4
+            + b"\x80\x00\x00\x00" + finder + b"\x00" * 12)
 
 
 # Services-for-Macintosh mapping: characters a Mac name may hold but an SMB
@@ -12617,7 +12622,7 @@ class ShareCapability(Capability):
             raise RuntimeError("share needs settings.host, .share and "
                                ".credentials")
         argv = [self._s("smbclient", "smbclient"), "//%s/%s" % (host, share),
-                "-A", cred, "-c", cmds]
+                "-A", cred, "-m", str(self._s("protocol", "SMB3")), "-c", cmds]
         p = subprocess.run(argv, capture_output=True, text=True,
                            timeout=timeout)
         out = (p.stdout or "") + (p.stderr or "")
@@ -12645,8 +12650,12 @@ class ShareCapability(Capability):
                 f.close()
                 tmp.append(f.name)
                 return f.name
-            cmds = ["cd %s" % self._q(folder),
-                    "put %s %s" % (self._q(spill(data)), self._q(remote))]
+            # An empty folder means the SHARE ITSELF is the upload folder --
+            # a share scoped to one directory, so the account can see nothing
+            # else (how the operator's file server is set up).
+            cmds = ["cd %s" % self._q(folder)] if folder else []
+            # Data fork FIRST: the streams belong to a file that must exist.
+            cmds.append("put %s %s" % (self._q(spill(data)), self._q(remote)))
             if rsrc:
                 cmds.append("put %s %s" % (self._q(spill(rsrc)),
                                            self._q(remote + ":AFP_Resource")))
@@ -12746,7 +12755,8 @@ class ShareCapability(Capability):
 
     def _list(self, req):
         try:
-            out = self._smb("cd %s; ls" % self._q(self._s("folder", "Uploads")))
+            folder = self._s("folder", "Uploads")
+            out = self._smb(("cd %s; ls" % self._q(folder)) if folder else "ls")
         except Exception as exc:
             return {"ok": False, "why": "smb-failed", "error": str(exc)[:300]}
         names = []

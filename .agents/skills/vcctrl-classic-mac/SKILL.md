@@ -155,6 +155,31 @@ Mac, reopen the Uploads window to see it. Requires an SMB account and a
 credentials file on the daemon host. Not configured on the 512Ke's profile
 as of this writing.
 
+## Shutting down (the measured sequence)
+
+Done on the 512Ke on 2026-10-15, at the owner's request. Use exactly this:
+
+1. Check nobody is driving (lock, recent `browser` input), take the lock,
+   and narrate with `note-set`.
+2. `mouse goto 184 8` (Special, in Mac px), then `mouse down left`.
+3. With the button held: `mouse move 0 540` (Shut Down is the LAST item,
+   ~116 Mac px down; 626 counts overshot into the window below). Take a
+   `shot` and check the Shut Down row is inverted and Restart is not. If
+   nothing is highlighted you're off the menu, so move back by ±90.
+4. `mouse up left`. The Finder closes windows and unmounts AppleShare
+   volumes over LocalTalk, with the watch cursor up for **30-60 s**.
+5. Wait for **"You may now switch off your Macintosh safely."** (a dialog
+   with a Restart button; the 512Ke has no soft power-off). Only then:
+6. `vcctrl power off` (the plug; owner's go-ahead). Proof it's off:
+   `power state` shows `on: false` and **0 mW**. NOT the video: with the Mac
+   off, the RGB2HDMI emits a flat WHITE frame, which `shot` still calls a
+   picture.
+7. Closing `note-set` ("… shut down and powered off at the plug"), release
+   the lock, and tell any peer.
+
+To start it again: `vcctrl power on` (owner's OK). It boots from its
+BlueSCSI. Any AppleShare volume needs a fresh Chooser login after boot.
+
 ## Restart, screensaver
 
 - Restart: Special → Restart (press-drag the menu). There is no Power key

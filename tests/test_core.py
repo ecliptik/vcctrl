@@ -1301,9 +1301,17 @@ def test_share_upload_unpacks_macbinary_and_writes_streams():
           vcctrld.macbinary_parse(b"\x00" + junk[1:]) is None)
 
     ai = vcctrld.afpinfo(b"APPL", b"dCpy", 0x2100)
-    check("AfpInfo is 60 bytes: AFP\\0, version 1, FinderInfo at 16",
-          len(ai) == 60 and ai[:4] == b"AFP\x00" and ai[4:8] == b"\x00\x01\x00\x00"
-          and ai[16:20] == b"APPL" and ai[20:24] == b"dCpy", ai[:28])
+    # The 16 header bytes exactly as Samba reads back an AFP-written file
+    # (verified on the operator's file server). 00 01 00 00 as the version
+    # -- this file's first guess -- makes Samba refuse the stream.
+    check("AfpInfo is 60 bytes with Samba's header, FinderInfo at 16",
+          len(ai) == 60
+          and ai[:16] == bytes.fromhex("41465000 00000100 00000000 80000000")
+          and ai[16:20] == b"APPL" and ai[20:24] == b"dCpy"
+          # 0x2100 in, 0x2000 out: the "has been inited" bit (0x0100) is
+          # cleared on purpose, the MacBinary convention, so the Finder
+          # places an uploaded icon itself instead of stacking it on another.
+          and ai[24:26] == b"\x20\x00" and ai[48:] == b"\x00" * 12, ai.hex())
     check("a Mac name's * travels as U+F021, the mapping seen on the share",
           vcctrld.mac_name_for_smb("Disk Copy 4.2*") == "Disk Copy 4.2\uf021")
     for bad in ("a:b", "x" * 32, ""):
@@ -1365,6 +1373,13 @@ def test_share_upload_unpacks_macbinary_and_writes_streams():
     cap.settings["max_bytes"] = 1000
     r = cap._stage({"name": "big.txt", "total": 5000, "offset": 0, "data": ""})
     check("over max_bytes is refused up front", r.get("why") == "too-large", r)
+    cap.settings["max_bytes"] = 8 * 1024 * 1024
+    cap.settings["folder"] = ""
+    upload("note.txt", b"hi")
+    check("an empty folder means the share itself: no cd, data fork first",
+          not sent[-1].startswith("cd ") and sent[-1].startswith('put ')
+          and sent[-1].index('"note.txt"') < sent[-1].index(":AFP_AfpInfo"),
+          sent[-1])
 
 
 def test_every_command_the_page_posts_is_allowed_by_the_web_server():
