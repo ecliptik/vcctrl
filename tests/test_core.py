@@ -3015,6 +3015,17 @@ HARNESS = r"""
     emit(`capstracked ${lampOk && warned ? 1 : 0} ${titled && unknownNa ? 1 : 0}`);
   }
 
+  // Another holder of the input lock draws an amber dashed border over the
+  // picture, and its release takes the border away again.
+  {
+    const st = document.getElementById('stage');
+    setInputHeld('retromac');
+    const on = st.classList.contains('heldby') && /retromac/.test(st.title);
+    setInputHeld(null);
+    const off = !st.classList.contains('heldby');
+    emit(`heldby ${on ? 1 : 0} ${off ? 1 : 0}`);
+  }
+
   // The resolution comes from the FRAME, not from a constant. A canvas
   // carries 640x480 as an attribute, so reporting before a frame arrives
   // would report the Gateway's geometry on a Macintosh.
@@ -3858,6 +3869,9 @@ def test_zoom_layout_in_a_browser():
           got["capstracked"][0] == 1.0, got["capstracked"])
     check("  the title shows the pointer proof; unknown draws as n/a",
           got["capstracked"][1] == 1.0, got["capstracked"])
+    check("another lock holder draws the amber border, named in the tooltip",
+          got["heldby"][0] == 1.0, got["heldby"])
+    check("  and releasing the lock removes it", got["heldby"][1] == 1.0, got["heldby"])
 
     check("no frame yet means no resolution claimed",
           got["res"][0] == 1.0, got["res"])

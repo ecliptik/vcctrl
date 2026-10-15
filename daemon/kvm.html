@@ -819,6 +819,13 @@
     overflow:hidden;
   }
   #stage.armed { outline:1px solid var(--green); outline-offset:-1px; }
+  /* SOMEONE ELSE HAS THE MACHINE. The green outline means "this browser
+     grabbed it"; when an agent takes the input lock that grab is released
+     and the outline went with it, leaving no sign over the picture itself
+     that the machine is being driven (asked for, 2026-10-15). Amber and
+     DASHED -- the page's mark for "held / not yours" -- and wider than the
+     green one so the two can never be confused. */
+  #stage.heldby { outline:2px dashed var(--yellow); outline-offset:-2px; }
   /* THE PICTURE SCROLLS, THE OVERLAYS DO NOT. The no-signal notice and the
      phone's tap-target are absolutely positioned against the stage, so if the
      stage itself were the scroller they would slide away with the picture.
@@ -8668,6 +8675,8 @@ function setInputLamps(held, inputCap) {
 function setInputHeld(owner) {
   if (owner === inputHeldBy) return;
   inputHeldBy = owner;
+  $('stage').classList.toggle('heldby', !!owner);
+  $('stage').title = owner ? 'Input held by "' + owner + '"' : '';
   const why = owner
     ? 'Input locked by "' + owner + '"'
     : '';
