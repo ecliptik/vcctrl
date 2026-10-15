@@ -6,7 +6,7 @@ description: Driving a classic Macintosh (System 6/7 on a 512Ke, Plus or similar
 # Driving a classic Mac with vcctrl
 
 Everything here was measured on a Macintosh 512Ke running System 6.0.8,
-2026-10-15, through USB4VC's Lisa/Mac/ADB board (board 3, fw 0.1.0) and an
+2026-10-15 (Mouse Tracking: Tablet), through USB4VC's Lisa/Mac/ADB board (board 3, fw 0.1.0) and an
 HDMI capture. A Plus or a System 7 Mac on the same board should behave the
 same way. Where that is a guess, it says so.
 
@@ -56,17 +56,54 @@ held down on the Mac, and vcctrl has no way to know:
   `mouse up`. The drop target highlights when you're over it. Dropping on
   another disk or volume copies, and the source stays.
 
-## The pointer: look, don't count
+## The pointer: linear once nothing clips it
 
-- It's relative and the Mac accelerates: the same counts move it
-  different distances depending on packet size and speed. As a rough
-  guide, 100 counts per call moved about 18 px of the 640x480 capture.
-- **For a known position, park it:** about 20× `mouse move -100 -100` pins
-  it in the top-left corner. The Apple menu is then about +125, +40 counts away.
-- Find the cursor by eye in a `shot`. Automatic scans for "a run of black
-  pixels" latch onto window title bars and inverted labels. When in doubt,
-  crop and zoom the region.
-- Screen edges clamp, so overshooting into an edge is a safe way to align.
+Two facts, both measured on the 512Ke with Control Panel → Mouse set to
+**Very Slow (Tablet)**, which turns acceleration off:
+
+- **The Mac board clips one large event.** A single relative event of
+  110-400 counts moved the pointer the same ~17 px as 100 counts, while the
+  same distance in smaller events moved its full length. The profile's
+  `mouse_max_step: 100` splits a move into events of at most 100 counts,
+  and `mouse_step_gap_s: 0.03` spaces them, because steps 12 ms apart get
+  merged again downstream and clipped as one. With both set, one
+  `mouse move` is linear: 200 → ~36, 400 → ~68, 800 → ~139 capture px,
+  about **0.17 capture px per count** on both axes. (The capture is
+  stretched vertically: 1 Mac pixel is about 1.33 capture px tall.)
+- So **compute the move, then correct once.** One move from a known spot
+  lands within a few pixels. Earlier advice here to "look, don't count"
+  was really about the clipping, now fixed. Still look before you click.
+- **For a known position, park it:** a few `mouse move -2000 -2000` pins it
+  in the top-left corner (edges clamp). The Apple menu is then about
+  +125, +40 counts away.
+- If tracking is set faster than Tablet, the Mac accelerates and none of
+  the arithmetic holds. Check Control Panel → Mouse.
+- Find the cursor by eye in a `shot`, cropped and zoomed. Automatic scans
+  for "a run of black pixels" latch onto window title bars and inverted
+  labels. **The hotspot is the arrow's tip:** a click with the tip on a
+  close box's border misses, so aim a few pixels inside.
+
+## Easy Access, keypad and Clear
+
+- The keypad reaches the Mac (`kp0`..`kp9` and friends light in Key Caps),
+  and `numlock` is the Mac's **Clear** key.
+- Mouse Keys (⌘⇧Clear: `combo leftmeta lshift numlock`) did **not** turn
+  on, on this 512Ke's System 6.0.8, probably because the Easy Access INIT
+  isn't installed. With it installed, the keypad would move the pointer
+  pixel by pixel. Untested.
+- CloseView is installed (in Control Panel). It magnifies the screen,
+  which doesn't help a fixed-resolution capture.
+
+## AppleShare (a worked menu-and-dialog flow)
+
+Chooser (Apple menu, press-drag) → click AppleShare → click the server
+name → Return (OK) → the login dialog. **Click into the Password field
+first**, then type it with `type --secret` (see Passwords) → Return. The
+login can take about 10 s over LocalTalk, so wait before judging. Pick the
+volume → Return. The volume appears on the desktop, and the Chooser closes
+from its close box. If the server's file server restarted, an open
+Chooser fails: close and reopen it, then dismiss the "file server has
+closed down" alert with Return.
 
 ## Finder and desk accessories
 
