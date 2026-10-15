@@ -1416,6 +1416,45 @@ def test_every_command_the_page_posts_is_allowed_by_the_web_server():
         check("  including %s" % c, c in posted and c in allowed)
 
 
+def test_key_remap_translates_once_and_only_when_configured():
+    """capabilities.input.settings.key_remap: a synthetic target (Snow) maps
+    keys differently from the real board it stands in for, so the profile
+    translates names before they reach the keyboard. Applied once (lctrl ->
+    lalt must NOT go on to lalt -> leftmeta); absent, nothing changes; an
+    unknown name is refused rather than ignored."""
+    print("\nkey_remap")
+    d = make_devices()
+    d.key(["lctrl"], pace=0)
+    check("absent: identity", [c for t_, c, v in d.log if v == 1] == [e.KEY_LEFTCTRL])
+    cfg = vcctrld.vcconfig.Config(
+        {"capabilities": {"input": {"backend": "usb4vc-uinput", "settings": {
+            "key_remap": {"lctrl": "lalt", "lalt": "leftmeta",
+                          "ralt": "rightmeta", "rctrl": "ralt"}}}}},
+        source="test")
+    with vcctrld._profile_scope(cfg):
+        d = make_devices()
+        d.key(["lctrl"], pace=0)
+        d.combo(["lalt", "o"], pace=0)
+        downs = [c for t_, c, v in d.log if t_ == e.EV_KEY and v == 1]
+        check("Ctrl -> Option (lalt), once, not on to Command",
+              downs[0] == e.KEY_LEFTALT, downs)
+        check("Alt -> Command (leftmeta), as on the real Mac board",
+              e.KEY_LEFTMETA in downs and e.KEY_O in downs, downs)
+        ups = [c for t_, c, v in d.log if t_ == e.EV_KEY and v == 0]
+        check("  releases are remapped the same way", ups[0] == e.KEY_LEFTALT
+              and e.KEY_LEFTMETA in ups, ups)
+    bad = vcctrld.vcconfig.Config(
+        {"capabilities": {"input": {"backend": "usb4vc-uinput", "settings": {
+            "key_remap": {"lctrl": "hyperkey"}}}}}, source="test")
+    with vcctrld._profile_scope(bad):
+        try:
+            vcctrld._remap_table()
+            refused = False
+        except ValueError:
+            refused = True
+    check("an unknown key name in key_remap is refused", refused)
+
+
 def test_mouse_max_step_splits_a_move_the_board_would_clip():
     """capabilities.input.settings.mouse_max_step: USB4VC's Mac board clips
     one large relative event (100..400 counts all moved ~17 px on the 512Ke)
@@ -8457,6 +8496,53 @@ def test_no_rig_identifiers_in_the_code():
     sample = "addr " + "192." + "168." + "7." + "46 here"
     check("control: the patterns do match when present",
           bool(re.search(pats["the lab subnet"], sample)), sample)
+
+
+def test_shell_power_needs_no_host_through_the_capability():
+    """A `shell` power backend has no plug address -- its commands are the
+    mechanism -- but PowerCapability asked only settings.host and answered
+    "no power host configured" to every action (found wiring the synthetic
+    512Ke, whose power is starting and stopping the emulator). Through the
+    real Registry and dispatch: state, on and off all work with no host."""
+    print("\nshell power through the capability, no host")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "power")
+        # Board 3, declared statically, so the board-scope guard (which
+        # refuses a power action on an unknown board) is satisfied exactly as
+        # on the synthetic profile -- and the only thing left that could
+        # refuse is the host lookup this test is about.
+        cfg = vcctrld.vcconfig.Config({"capabilities": {
+            "board": {"backend": "static", "settings": {"board_id": 3}},
+            "power": {"backend": "shell", "settings": {
+                "on_cmd": "echo on > %s" % f, "off_cmd": "echo off > %s" % f,
+                "state_cmd": "cat %s 2>/dev/null || echo off" % f,
+                "boards": [3]}}}},
+            source="test")
+        real_pb = vcctrld.POWER_BOARDS
+        # POWER_BOARDS is read from the ROOT config at import; set it to what
+        # this profile declares, as the synthetic rig's root config does.
+        vcctrld.POWER_BOARDS = [3]
+        try:
+            _shell_power_steps(cfg)
+        finally:
+            vcctrld.POWER_BOARDS = real_pb
+
+
+def _shell_power_steps(cfg):
+    with vcctrld._profile_scope(cfg):
+        check("a static board is the installed board, as declared",
+              vcctrld.installed_board_id() == 3, vcctrld.installed_board_id())
+        reg = vcctrld.Registry(make_devices())
+        st = vcctrld.handle(reg.devs, reg, {"cmd": "power", "action": "state"})
+        check("state answers, off", st.get("ok") and st["power"]["on"] is False, st)
+        r = vcctrld.handle(reg.devs, reg, {"cmd": "power", "action": "on"})
+        check("on succeeds with no host configured", r.get("ok") is True, r)
+        st = vcctrld.handle(reg.devs, reg, {"cmd": "power", "action": "state"})
+        check("  and the state follows: on", st["power"]["on"] is True, st)
+        vcctrld.handle(reg.devs, reg, {"cmd": "power", "action": "off"})
+        st = vcctrld.handle(reg.devs, reg, {"cmd": "power", "action": "state"})
+        check("off, and it reads off", st["power"]["on"] is False, st)
 
 
 def test_shell_power_backend_never_invents_off():

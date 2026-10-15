@@ -316,6 +316,25 @@ KEY_GAP_S = float(CFG.default("capabilities.input.settings.key_gap_s", 0) or 0)
 # untouched, so the clip is in the board's firmware. It is also why the web
 # KVM's pointer lagged a fast swipe: each 40 ms batch over the limit was cut.
 MOUSE_MAX_STEP = int(CFG.default("capabilities.input.settings.mouse_max_step", 0) or 0)
+
+# Translate key names before they reach the keyboard: {from: to}, applied
+# ONCE per key (not chained). Absent: identity, as it always was. WHY: a
+# synthetic target must behave like the real one it stands in for. The
+# Macintosh 512Ke on USB4VC's Mac board turns Ctrl into Option and Alt/Meta
+# into Command (measured in Key Caps); the Snow emulator maps Ctrl to
+# Control, Alt to Option and Super to Command. Remapping lctrl->lalt,
+# lalt->leftmeta, ralt->rightmeta, rctrl->ralt on the Snow profile makes
+# `combo leftmeta o` and the KVM's Ctrl-as-Option mean the same thing on
+# both, so the same skills and recipes hold (2026-10-15).
+def _remap_table():
+    raw = CFG.default("capabilities.input.settings.key_remap", None) or {}
+    out = {}
+    for a, b in dict(raw).items():
+        ca, cb = NAMED_KEYS.get(str(a).lower()), NAMED_KEYS.get(str(b).lower())
+        if ca is None or cb is None:
+            raise ValueError("key_remap: unknown key %r -> %r" % (a, b))
+        out[ca] = cb
+    return out
 # And the least time between those steps. Splitting alone was not enough:
 # steps 12 ms apart are merged again downstream and clipped as one -- 400
 # counts in 100-count steps moved ~44 px at a 12 ms pace and ~67 px (the
@@ -1856,7 +1875,14 @@ class Devices(object):
                 time.sleep(wait)
             self._last_key_t = time.monotonic()
 
+    def _remapped(self, code):
+        table = getattr(self, "_remap", None)
+        if table is None:
+            table = self._remap = _remap_table()
+        return table.get(code, code)
+
     def _press(self, code):
+        code = self._remapped(code)
         self._key_gap()
         if not self.hid_mode:
             self.kbd.write(e.EV_KEY, code, 1)
@@ -1883,6 +1909,7 @@ class Devices(object):
         self._write_hid_kbd_report()
 
     def _release(self, code):
+        code = self._remapped(code)
         self._key_gap()
         if not self.hid_mode:
             self.kbd.write(e.EV_KEY, code, 0)
@@ -2998,6 +3025,15 @@ def installed_board_id():
     _board_backend = CFG.optional("capabilities.board.backend")
     if _board_backend is vcconfig.NONE or _board_backend == "none":
         return None
+    # A `static` board IS the profile's own declaration -- the synthetic
+    # 512Ke (an emulator, no USB4VC hat, no board file) says board 3 in its
+    # config, and that is an answer, not a guess. Without this, every
+    # board-scoped capability (power above all) refused there as "board
+    # unknown" (found wiring it up, 2026-10-15).
+    if _board_backend == "static":
+        st = CFG.optional("capabilities.board.settings")
+        bid = st.get("board_id") if isinstance(st, dict) else None
+        return int(bid) if bid is not None else None
     # BoardCapability.FILE, the class attribute -- NOT CFG.default(
     # "daemon.usb4vc.board_file", ...), which was tried and reverted: that
     # key has a built-in DEFAULT ("/run/usb4vc/board.json" in vcconfig.py's
@@ -3672,9 +3708,27 @@ class PowerCapability(Capability):
             self._refresh()
             time.sleep(self.REFRESH_S)
 
+    def _host(self):
+        """What this capability's backend dials, or None.
+
+        power_host() reads capabilities.power.settings.host, and the `shell`
+        backend has no host: its commands ARE the mechanism. Asking only
+        power_host() made every shell-backed rig answer "no power host
+        configured" (found wiring the synthetic 512Ke, whose "power" is
+        starting and stopping the emulator, 2026-10-15). The backend's own
+        host() already answers that -- ShellPower returns its state_cmd.
+        """
+        host = power_host()
+        if host:
+            return host
+        try:
+            return self._protocol().host()
+        except Exception:
+            return None
+
     def _refresh(self):
         try:
-            host = power_host()
+            host = self._host()
             if host:
                 self._remember(host, self._protocol().state())
                 self._fail = None
@@ -3732,7 +3786,7 @@ class PowerCapability(Capability):
         """
         cfg_host = None
         try:
-            cfg_host = power_host()
+            cfg_host = self._host()
         except Exception:
             pass
         # Informational, never gating: `board_match` tells a caller (a
@@ -3834,7 +3888,7 @@ class PowerCapability(Capability):
         # rather than in a listener because the invalidation must not be able
         # to arrive after the reboot it describes.
         PROFILE.invalidate("power %s" % (req.get("action") or "action"))
-        host = req.get("host") or power_host()
+        host = req.get("host") or self._host()
         if not host:
             return {"ok": False, "error":
                     "no power host configured -- set "
