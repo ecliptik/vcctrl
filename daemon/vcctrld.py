@@ -12173,7 +12173,20 @@ class PointerCapability(Capability):
         # shapes were added).
         sx, sy = self._native_scale()
         wn, hn = w * sx, h * sy
-        if 8 <= wn <= 13 and 11 <= hn <= 20 and tip:
+        # CLIPPED BY THE SCREEN EDGE: a cursor near the right or bottom edge is
+        # drawn only partly, so its size on that axis says nothing -- an arrow
+        # cut down to a few px read as an I-beam and got a middle hotspot
+        # (2026-10-15). The arrow's TIP is its top-left and stays on screen,
+        # so with the size untrustworthy, the tip decides.
+        g = self._geometry()
+        clip_r = clip_b = False
+        if g is not None:
+            (bx, by, bw, bh), _n = g
+            clip_r = x1 >= bx + bw - 1
+            clip_b = y1 >= by + bh - 1
+        w_ok = clip_r or 8 <= wn <= 13
+        h_ok = clip_b or 11 <= hn <= 20
+        if tip and w_ok and h_ok and (clip_r or clip_b or (8 <= wn <= 13 and 11 <= hn <= 20)):
             return (x0, y0), "arrow"
         w, h = wn, hn
         # A crosshair and the watch are both about 15 px square; the watch is
@@ -12203,23 +12216,38 @@ class PointerCapability(Capability):
         cx, _cy = self._cpp()
         expected = n / cx * self._xscale()
         noise, a = self._noise(self._frame_after(time.time()))
+        fallback = None
         for sign in (1, -1):
             self.devs.mouse_move(sign * n, 0)
             b = self._frame_after(time.time())
-            self.devs.mouse_move(-sign * n, 0)
-            c = self._frame_after(time.time())
             m = self._mask(a, b)
             if noise is not None:
                 from PIL import ImageChops
                 m = ImageChops.subtract(m, noise)
             moved = m.getbbox()
+            fps = self._footprints(m, moved) if moved else []
+            # RETURN BY HOW FAR IT ACTUALLY WENT, not by the nudge. Near an
+            # edge the nudge is clamped, and coming back the full distance
+            # left the pointer short of where it began -- so every `cursor`
+            # call near the right edge dragged the pointer left, verification
+            # included (2026-10-15). Two blobs: it travelled the full nudge.
+            # Overlap: it travelled about the union's width less one cursor.
+            if len(fps) >= 2:
+                back_counts = n
+            elif moved:
+                est_px = max(0, (moved[2] - moved[0]) - self.CURSOR_W)
+                back_counts = int(round(est_px / max(1e-6, expected) * n))
+            else:
+                back_counts = 0     # nothing seen: assume it did not move
+            self.devs.mouse_move(-sign * back_counts, 0)
+            c = self._frame_after(time.time())
             # A pointer is not a sliver: whatever is left must be at least
             # cursor-sized, or it is noise the mask did not catch.
             if (moved is None or moved[3] - moved[1] < 6
                     or moved[2] - moved[0] < 4):
+                a = c
                 continue
             back = self._diff(a, c, noise)
-            fps = self._footprints(m, moved)
             if len(fps) >= 2:
                 # Two blobs: the cursor as it was (left, when moving right)
                 # and where it went. Its outline gives the shape, and the
@@ -12228,19 +12256,39 @@ class PointerCapability(Capability):
                 (hx, hy), shape = self._hotspot(m, before)
                 moved_px = abs(after[0] - before[0])
             else:
-                # Overlapping (a nudge shorter than the cursor): the old
-                # estimate -- the arrow's tip at the union's leading edge.
+                # Overlapping: the nudge did not carry the cursor clear of
+                # itself -- a short nudge, OR A SCREEN EDGE that clamped it
+                # (found 2026-10-15 on the emulated Mac: at native x 500 the
+                # rightward nudge moved 11 px, the estimate below was ~100 px
+                # out, and mouse_goto "corrected" on it). Try the other
+                # direction before settling for the estimate.
                 width = moved[2] - moved[0]
                 moved_px = max(0, width - self.CURSOR_W)
                 hx = moved[0] if sign > 0 else moved[0] + moved_px
                 hy = moved[1]
                 shape = "unknown"
+                if fallback is None:
+                    fallback = {"found": True, "hotspot": [hx, hy],
+                                "native": self._to_native(hx, hy),
+                                "shape": shape, "moved_px": moved_px,
+                                "expected_px": round(expected, 1),
+                                "returned": back is None or (back[2] - back[0]) <= 2,
+                                "direction": "right" if sign > 0 else "left",
+                                "bbox": list(moved), "estimated": True}
+                # The pointer may not be where it started: a nudge clamped by
+                # the edge comes back the FULL distance, so it ends up short
+                # of where it was. Frame C is where it is now -- that is the
+                # baseline for the other direction, not frame A.
+                a = c
+                continue
             return {"found": True, "hotspot": [hx, hy],
                     "native": self._to_native(hx, hy), "shape": shape,
                     "moved_px": moved_px, "expected_px": round(expected, 1),
                     "returned": back is None or (back[2] - back[0]) <= 2,
                     "direction": "right" if sign > 0 else "left",
                     "bbox": list(moved)}
+        if fallback is not None:
+            return fallback
         return {"found": False,
                 "reason": ("no cursor-sized change in the picture after a "
                            "nudge either way"),

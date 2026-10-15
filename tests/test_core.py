@@ -1172,6 +1172,24 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
         r = cap._cursor({})
         check("at the right edge it nudges left instead",
               r.get("found") and r.get("direction") == "left", r)
+        # NEAR, not at, the right edge: the rightward nudge moves the cursor a
+        # few px before clamping, so before/after overlap. It must try left
+        # rather than return the overlap estimate (which was ~100 px out live).
+        # A clamped nudge comes back the full distance, so the pointer ends up
+        # short of where it began: what must be right is where it IS after
+        # the call -- that is what mouse_goto corrects from.
+        devs.x, devs.y = NW - 6.0, 150.0
+        r = cap._cursor({})
+        now = capture_of(devs)[1]
+        check("5 px from the right edge: found by the left nudge, where it now is",
+              r.get("found") and r.get("direction") == "left"
+              and not r.get("estimated")
+              and abs(r["hotspot"][0] - now[0]) <= 1
+              and abs(r["hotspot"][1] - now[1]) <= 1, (r, now))
+        r = cap._goto({"x": NW - 12, "y": 150})
+        check("  and goto near the right edge lands on target",
+              abs(devs.x - (NW - 12)) <= 1.5 and abs(devs.y - 150) <= 1.5,
+              (devs.x, devs.y, r))
 
         r = cap._goto({"x": 100, "y": 250})
         check("mouse_goto lands on the native target",
