@@ -390,7 +390,8 @@
     body #pop-keys .kbrow .key { width:auto; height:auto;
                                  min-height:46px; padding:0 9px;
                                  font:500 15px/1 var(--sans); }
-    body #pop-keys .kcluster .key, body #pop-keys .karrows .key {
+    body #pop-keys .kcluster .key, body #pop-keys .karrows .key,
+    body #pop-keys .kpad .key {
       min-width:52px; padding:0;
     }
     /* CLAMPED, NOT CUT. The coverage sentence is four lines here and it cost
@@ -1859,6 +1860,12 @@
   #pop-keys .kcluster {
     display:grid; gap:var(--kgap);
     grid-template-columns:repeat(3, auto);
+  }
+  /* A NUMERIC KEYPAD, four wide (Clear = / * over 7 8 9 -, ...), for a
+     layout that declares one -- the Mac M0110A. Same row as the arrows. */
+  #pop-keys .kpad {
+    display:grid; gap:var(--kgap); margin-left:auto;
+    grid-template-columns:repeat(4, auto);
   }
   #pop-keys .krow { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
   /* The locks and the arrow cluster share a row, and the cluster is two rows
@@ -4767,7 +4774,42 @@ const LAYOUTS = {
       // distrust the panel rather than the control.
     ],
   },
+  // THE M0110A: the Macintosh Plus's usual keyboard, which adds arrow keys
+  // and a numeric keypad to the M0110. Added 2026-10-15 for coverage, at the
+  // operator's request, BEFORE any M0110A was connected -- so everything here
+  // is unverified, and says so. The main block is the M0110's (above) as it
+  // stands; the keypad's keys are the ones measured reaching a 512Ke through
+  // USB4VC's Mac board (kp0-kp9 lit in Key Caps; numlock arrives as Clear).
+  // Keypad `=` is NOT drawn: vcctrl has no key name for it yet (adding one
+  // means a keycoverage.json row as well). Arrows are wired as named keys;
+  // whether the Mac board sends them as the M0110A's arrows is untested.
+  'mac-m0110a': {
+    name: 'Apple M0110A',
+    unverified: 'This layout has not been checked against a real M0110A. The '
+              + 'main block is copied from the M0110; the arrow keys are '
+              + 'untested through this rig, and the keypad has no = key.',
+    absent: 'No function row and no Home/End/PgUp/PgDn. Restart is '
+          + 'Command-Control-Power, and there is no Power key for vcctrl to send.',
+    main: null,          // filled from mac-plus below, so the two cannot drift
+    bottom: null,
+    compact: null,
+    nav: [],
+    locks: [],
+    arrows: true,
+    keypad: [
+      [{k:'numlock',cap:'Clear'},{w:1},{k:'kpslash',cap:'/'},{k:'kpasterisk',cap:'*'}],
+      [{k:'kp7',cap:'7'},{k:'kp8',cap:'8'},{k:'kp9',cap:'9'},{k:'kpminus',cap:'−'}],
+      [{k:'kp4',cap:'4'},{k:'kp5',cap:'5'},{k:'kp6',cap:'6'},{k:'kpplus',cap:'+'}],
+      [{k:'kp1',cap:'1'},{k:'kp2',cap:'2'},{k:'kp3',cap:'3'},{k:'kpenter',cap:'Enter'}],
+      [{k:'kp0',cap:'0'},{w:1},{k:'kpdot',cap:'.'},{w:1}],
+    ],
+    chords: null,
+  },
 };
+// The M0110A's typing keys ARE the M0110's: share them rather than keep a
+// second copy that can go stale against the first.
+for (const f of ['main', 'bottom', 'compact', 'chords'])
+  LAYOUTS['mac-m0110a'][f] = LAYOUTS['mac-plus'][f];
 
 // THREE OUTCOMES, AND ONLY ONE OF THEM GREYS A KEY:
 //   arrives === false   measured, and it does not reach the target -> grey
@@ -5088,6 +5130,12 @@ function drawKeyboard(id) {
       a.appendChild(b);
     }
     nav.appendChild(a);
+  }
+  if (L.keypad && L.keypad.length) {
+    const p = document.createElement('div');
+    p.className = 'kpad';
+    for (const row of L.keypad) for (const s of row) p.appendChild(keyButton(s));
+    nav.appendChild(p);
   }
   if (nav.children.length) body.appendChild(nav);
 

@@ -5279,7 +5279,13 @@ KBD_HARNESS = r"""
   emit('unknownid keys=' + document.querySelectorAll('#kbdbody [data-latch]').length);
 
   // A different machine is a different keyboard, not a subset of this one.
+  applyLayout({id:3, target:'Macintosh Plus', keyboard:'mac-m0110a'});
+  emit('m0110a arrows=' + document.querySelectorAll('#kbdbody .karrows').length
+       + ' pad=' + document.querySelectorAll('#kbdbody .kpad .key').length
+       + ' letters=' + [...document.querySelectorAll('#kbdbody .key')]
+           .filter(b => b.dataset.latch === 'q').length);
   applyLayout({id:3, target:'Macintosh Plus', keyboard:'mac-plus'});
+  emit('macpad pad=' + document.querySelectorAll('#kbdbody .kpad .key').length);
   emit('mac fkeys=' + document.querySelectorAll('#kbdbody .kfrow').length
        + ' arrows=' + document.querySelectorAll('#kbdbody .karrows').length
        + ' nav=' + document.querySelectorAll('#kbdbody .kcluster').length);
@@ -5481,6 +5487,10 @@ def test_keyboard_chords_in_a_browser():
           got.get("mac") == "fkeys=0 arrows=0 nav=0", got.get("mac"))
     check("its Command key goes on the wire as leftmeta",
           got.get("maccmd") == "combo leftmeta+q", got.get("maccmd"))
+    check("the M0110A draws arrows and a 17-key keypad over the M0110's letters",
+          got.get("m0110a") == "arrows=1 pad=17 letters=1", got.get("m0110a"))
+    check("control: the M0110 draws no keypad", got.get("macpad") == "pad=0",
+          got.get("macpad"))
     # USB4VC's Mac board turns Alt into Command and Ctrl into Option
     # (measured in Key Caps on a 512Ke, 2026-10-15) -- so Option must be lctrl.
     check("its Option key goes on the wire as lctrl, not lalt",
