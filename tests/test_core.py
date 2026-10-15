@@ -1056,6 +1056,7 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
     class FakeDevs(object):
         def __init__(self):
             self.x, self.y, self.frozen = 200.0, 150.0, False
+            self.shape = "arrow"
         def mouse_move(self, dx, dy, pace=None):
             if self.frozen:
                 return
@@ -1078,7 +1079,12 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
                 d.rectangle([bx, by, bx + 1, by + 15], fill=0)
         cx = BOX[0] + round(devs.x * BOX[2] / NW)
         cy = BOX[1] + round(devs.y * BOX[3] / NH)
-        d.polygon([(cx, cy), (cx, cy + 15), (cx + 10, cy + 10)], fill=0)
+        if devs.shape == "cross":
+            # The Mac's thin crosshair: hotspot in the MIDDLE, not top-left.
+            d.line([(cx - 7, cy), (cx + 7, cy)], fill=0, width=2)
+            d.line([(cx, cy - 7), (cx, cy + 7)], fill=0, width=2)
+        else:
+            d.polygon([(cx, cy), (cx, cy + 15), (cx + 10, cy + 10)], fill=0)
         b = _io.BytesIO()
         im.save(b, "PNG")
         return b.getvalue(), (cx, cy)
@@ -1107,7 +1113,7 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
         cap = vcctrld.PointerCapability(devs)
         cap.registry = FakeReg()
         cap.registry.caps = {"video": FakeVideo(devs)}
-        cap.settings = {"nudge": 60, "counts_per_px": CPP, "settle_s": 0, "noise_frames": NOISE,
+        cap.settings = {"nudge": 120, "counts_per_px": CPP, "settle_s": 0, "noise_frames": NOISE,
                         "park_counts": 4000}
 
         check("a configured instance on a no-LED rig answers verify_input",
@@ -1137,6 +1143,18 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
               r.get("found") and abs(r["hotspot"][0] - cx0) <= 1
               and abs(r["hotspot"][1] - cy0) <= 1, (r, (cx0, cy0)))
         blink["at"] = None
+
+        devs.shape = "cross"
+        cx1, cy1 = capture_of(devs)[1]
+        r = cap._cursor({})
+        check("a crosshair is found by its middle, not its corner",
+              r.get("found") and r.get("shape") == "crosshair"
+              and abs(r["hotspot"][0] - cx1) <= 1
+              and abs(r["hotspot"][1] - cy1) <= 1, (r, (cx1, cy1)))
+        r = cap._cursor({})
+        check("  and the move is measured between the two blobs, not guessed",
+              r.get("found") and abs(r["moved_px"] - 120 / CPP * 511 / 512) <= 1.5, r)
+        devs.shape = "arrow"
 
         devs.x = NW - 1
         r = cap._cursor({})

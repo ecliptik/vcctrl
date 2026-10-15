@@ -12075,13 +12075,55 @@ class PointerCapability(Capability):
             return None, prev
         return acc.filter(ImageFilter.MaxFilter(5)), prev
 
+    def _footprints(self, mask, box):
+        """Split a nudge's change into column runs: with a nudge longer than
+        the cursor is wide, the cursor-before and cursor-after are two
+        separate blobs. Returns [(x0, y0, x1, y1), ...] left to right."""
+        x0, y0, x1, y1 = box
+        runs, start = [], None
+        for x in range(x0, x1 + 1):
+            hit = x < x1 and mask.crop((x, y0, x + 1, y1)).getbbox() is not None
+            if hit and start is None:
+                start = x
+            elif not hit and start is not None:
+                runs.append((start, x))
+                start = None
+        out = []
+        for a, b in runs:
+            bb = mask.crop((a, y0, b, y1)).getbbox()
+            if bb:
+                out.append((a, y0 + bb[1], b, y0 + bb[3]))
+        return out
+
+    def _hotspot(self, mask, fp):
+        """Where a cursor's hotspot is, from its outline in the frame.
+
+        The arrow's hotspot is its tip, top-left. The I-beam's, the
+        crosshair's and the watch's are their middles. Found live,
+        2026-10-15: over the Control Panel the Mac showed a thin crosshair,
+        and taking the top-left of that put the "pointer" 7 px away from
+        where a click would land."""
+        x0, y0, x1, y1 = fp
+        w, h = x1 - x0, y1 - y0
+        tip = mask.crop((x0, y0, x0 + 3, y0 + 3)).getbbox() is not None
+        if 8 <= w <= 13 and 11 <= h <= 20 and tip:
+            return (x0, y0), "arrow"
+        # A crosshair and the watch are both about 15 px square; the watch is
+        # mostly ink and the crosshair mostly air.
+        hist = mask.crop((x0, y0, x1, y1)).histogram()
+        fill = hist[255] / float(max(1, w * h))
+        shape = ("ibeam" if w <= 8 else
+                 "watch" if w >= 14 and h >= 14 and fill >= 0.4 else
+                 "crosshair")
+        return (x0 + w // 2, y0 + h // 2), shape
+
     def _locate(self):
         """Nudge right and back (left and back at the right edge).
 
-        Returns a dict: found, hotspot (capture px), native, moved_px,
+        Returns a dict: found, hotspot (capture px), native, shape, moved_px,
         expected_px, returned, direction -- or found False with a reason.
         """
-        n = int(self._s("nudge", 60))
+        n = int(self._s("nudge", 120))
         cx, _cy = self._cpp()
         expected = n / cx * self._xscale()
         noise, a = self._noise(self._frame_after(time.time()))
@@ -12090,22 +12132,35 @@ class PointerCapability(Capability):
             b = self._frame_after(time.time())
             self.devs.mouse_move(-sign * n, 0)
             c = self._frame_after(time.time())
-            moved = self._diff(a, b, noise)
+            m = self._mask(a, b)
+            if noise is not None:
+                from PIL import ImageChops
+                m = ImageChops.subtract(m, noise)
+            moved = m.getbbox()
             # A pointer is not a sliver: whatever is left must be at least
             # cursor-sized, or it is noise the mask did not catch.
             if (moved is None or moved[3] - moved[1] < 6
                     or moved[2] - moved[0] < 4):
                 continue
             back = self._diff(a, c, noise)
-            width = moved[2] - moved[0]
-            # The arrow's hotspot is its tip: the left/top of the cursor as
-            # it was in frame A. Moving right, A's cursor is the left edge of
-            # the union; moving left it sits `moved_px` in from it.
-            moved_px = max(0, width - self.CURSOR_W)
-            hx = moved[0] if sign > 0 else moved[0] + moved_px
-            hy = moved[1]
+            fps = self._footprints(m, moved)
+            if len(fps) >= 2:
+                # Two blobs: the cursor as it was (left, when moving right)
+                # and where it went. Its outline gives the shape, and the
+                # distance between them is the real move, not an estimate.
+                before, after = (fps[0], fps[-1]) if sign > 0 else (fps[-1], fps[0])
+                (hx, hy), shape = self._hotspot(m, before)
+                moved_px = abs(after[0] - before[0])
+            else:
+                # Overlapping (a nudge shorter than the cursor): the old
+                # estimate -- the arrow's tip at the union's leading edge.
+                width = moved[2] - moved[0]
+                moved_px = max(0, width - self.CURSOR_W)
+                hx = moved[0] if sign > 0 else moved[0] + moved_px
+                hy = moved[1]
+                shape = "unknown"
             return {"found": True, "hotspot": [hx, hy],
-                    "native": self._to_native(hx, hy),
+                    "native": self._to_native(hx, hy), "shape": shape,
                     "moved_px": moved_px, "expected_px": round(expected, 1),
                     "returned": back is None or (back[2] - back[0]) <= 2,
                     "direction": "right" if sign > 0 else "left",
@@ -12184,7 +12239,7 @@ class PointerCapability(Capability):
                 "the pointer moved %d px for %d counts where %.0f was expected "
                 "-- is the target's mouse tracking still the linear setting "
                 "(Tablet on a classic Mac)? mouse_goto will be inaccurate"
-                % (got, int(self._s("nudge", 60)), exp))
+                % (got, int(self._s("nudge", 120)), exp))
         return out
 
     def _goto(self, req):
