@@ -1423,11 +1423,11 @@ def test_every_command_the_page_posts_is_allowed_by_the_web_server():
     # cannot work from a browser today. Whether a browser SHOULD be able to
     # mount disk images and rescan the card is an operator decision, not a
     # test fix -- so they are listed here, and any NEW omission still fails.
-    known = {"file_scan", "msd_eject", "msd_list", "msd_mount", "msd_stage",
-             "msd_status"}
+    # None left: file_scan and msd_* were allowed at the operator's choice.
+    known = set()
     missing = sorted(posted - allowed - known)
-    check("control: the known gaps are still gaps (remove them when fixed)",
-          known <= posted and not (known & allowed), sorted(known & allowed))
+    for c in ("file_scan", "msd_mount"):
+        check("  %s, once a known gap, is allowed now" % c, c in allowed)
     check("every command the page posts is in vcweb.ALLOWED", not missing,
           missing)
     for c in ("mouse_goto", "share_stage"):

@@ -1192,6 +1192,18 @@ class WebCapability(object):
         "mouse_goto", "mouse_drag", "cursor", "pointer_check",
         # The TRACKED Caps Lock, read-only here; setting it is a CLI/MCP act.
         "capslock",
+        # THE GATEWAY'S "Re-scan hardware" BUTTON (DOS System panel): reboots
+        # DOS twice to run dinspect -- the same class of action as file_send
+        # and file_pull above, behind its own confirm(). Missing until the
+        # page-vs-allowlist guard found it (2026-10-15); the operator chose to
+        # allow it.
+        "file_scan",
+        # USB mass storage (MsdCapability). The page offers these only on a
+        # profile that configures `msd` (none live today); the operator chose
+        # to allow them so they work wherever it is (2026-10-15). Mounting is
+        # bounded by the capability: images staged by name into its own
+        # directory, never a caller-supplied path.
+        "msd_list", "msd_status", "msd_mount", "msd_eject", "msd_stage",
         # Uploads into the shared folder the target mounts (ShareCapability).
         # Bounded like file_stage: a name, never a path; a size cap; the
         # folder decided by the profile, not the caller.
