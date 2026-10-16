@@ -360,7 +360,11 @@ are the same as of that day. Changes on either side don't carry over to the
 other. It's on the same LocalTalk network (LocalTalk over UDP to the same
 router).
 Differences:
-- `power on`/`off` start and stop the emulator, not a plug.
+- `power on`/`off` start and stop the emulator, not a plug. **It's off when
+  unused:** check `power state` and `power on` first, wait ~15 s for the
+  Finder, and `power off` when you're done. A timer switches it off after 30
+  min with no input and no lock (2026-10-16: it cost ~1.8 of the host's
+  cores and kept it hot). Its display and capture start and stop with it.
 - The pointer is absolute and exact: `goto` lands within 1 px. Within
   ~12 px of the screen's right-hand rounded corners the cursor's shape
   can misread.
