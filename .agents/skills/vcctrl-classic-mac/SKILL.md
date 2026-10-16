@@ -73,11 +73,11 @@ Two facts, both measured on the 512Ke with Control Panel → Mouse set to
   merged again downstream and clipped as one. With both set, a move is
   linear.
 - **Compute in MAC px, never capture px.** About 0.18 Mac px per count on
-  both axes (the profile's `counts_per_px` 5.65 × 5.4). In capture px the
-  axes differ, because the capture stretches the screen vertically: about
-  0.19 across but 0.24 down. A peer computing drags from capture px
-  overshot the bottom edge three times. An earlier version of this skill
-  said "0.17 capture px on both axes", which is wrong for y.
+  both axes (the profile's `counts_per_px` 5.65 × 5.4). Where a capture
+  stretches the screen, capture px differ per axis: with the 512Ke's old
+  511x455 picture it was about 0.19 across but 0.24 down, and a peer
+  computing drags from capture px overshot the bottom edge three times.
+  The 512Ke's capture is 1:1 now (see Video), but Mac px stays the rule.
 - So **compute the move, then correct once.** One move from a known spot
   lands within a few pixels. Earlier advice here to "look, don't count"
   was really about the clipping, now fixed. Still look before you click.
