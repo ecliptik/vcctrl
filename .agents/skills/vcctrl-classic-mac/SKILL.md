@@ -160,7 +160,11 @@ Mac, close and reopen the Uploads window to see it (the System 6 Finder
 doesn't refresh an open server folder). Replacing a file works the same
 way: quit the old copy, `share put` the new one under the same name, close
 and reopen Uploads, and the Mac runs the new version (no remount
-needed). Apps run straight from the share, even on a 512K machine. A name
+needed). Apps run straight from the share, even on a 512K machine (the
+real 512Ke's About the Finder: System 224K, 288K left for the app). After
+an app quits, the Finder takes **~45 s** to come back while it rereads
+open AppleShare windows. That's normal: wait for it before the next
+step, or close server windows first to make it quicker. A name
 with no `.txt` and no
 MacBinary wrapper arrives with no type, as a blank generic document.
 Requires an SMB account, `smbclient` and a credentials file on the daemon
