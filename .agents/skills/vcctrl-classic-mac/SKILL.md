@@ -84,6 +84,13 @@ Two facts, both measured on the 512Ke with Control Panel → Mouse set to
 - **For a known position, park it:** a few `mouse move -2000 -2000` pins it
   in the top-left corner (edges clamp). The Apple menu is then about
   +125, +40 counts away.
+- **Small events are NOT linear** (measured 2026-10-16, the same at any
+  spacing): 1 count moves nothing, 2 counts 1 px, 3-6 counts ~1.5 px, 12
+  counts 3 px, 20 counts 4 px; from ~30 counts on it's the linear 0.177
+  px/count. So 40 `mouse move 3 0` go 62 px, not 21. For small steps use
+  `mouse px DX DY` (native px): the daemon picks each event's counts from
+  the profile's measured curve (`pointer.settings.event_px`). 40 × `px 1 0`
+  went 41 px.
 - If tracking is set faster than Tablet, the Mac accelerates and none of
   the arithmetic holds. Check Control Panel → Mouse.
 - Find the cursor by eye in a `shot`, cropped and zoomed. Automatic scans
@@ -114,8 +121,12 @@ With `capabilities.pointer` (backend `video-diff`) configured, as on the
   (capture − picture origin) × native size / picture size. On the 512Ke
   the converter now outputs 640x480 at 1x, so that's just x = cx − 65,
   y = cy − 70.
-- In the web KVM, "Click to point" (Settings, on by default here) makes a
-  click on the picture a goto plus a click. Grab is the button.
+- In the web KVM a click on the picture **grabs** it, like any KVM: the
+  pointer is captured and the Mac's pointer moves with your hand, 1:1 with
+  the picture as drawn (Grab sends `mouse_px`, one move in flight at a
+  time, buttons after the pending move). "Click to point" (Settings) is
+  opt-in since 2026-10-16: it makes a click a goto plus a click, ~4 s each
+  with a jump to the corner first, which the owner found unlike a KVM.
 - Limits: the diff assumes the dark arrow on a lighter ground. A blinking
   insertion point or the Alarm Clock beside the pointer can widen it, and
   the I-beam and watch cursors have different hotspots.
