@@ -6340,6 +6340,48 @@ def _client():
     return mod
 
 
+def test_record_passes_the_daemons_refusal_through():
+    """`record --since` over HTTP: the daemon's 409 body names the refusal,
+    and the client must carry it through to exit 4 and its --clip advice.
+    fetch_avi dropped the body and returned only "HTTP 409 from ...", so a
+    peer got exit 1 and no reason (2026-10-16)."""
+    print("\nclient: record's refusal over HTTP")
+    import http.server, threading
+    body = json.dumps({"ok": False, "error": "window precedes caller",
+                       "refused": "window_precedes_caller", "foreign_frames": 7,
+                       "frames": 20, "older_by_s": 1.25, "first_t": 100.0,
+                       "since": 101.25, "first_seq": 1, "last_seq": 20}).encode()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    old = os.environ.get("VCCTRL_WEB")
+    os.environ["VCCTRL_WEB"] = "http://127.0.0.1:%d" % srv.server_port
+    try:
+        data, meta = _client().fetch_avi(None, None, since=101.25)
+    finally:
+        srv.shutdown()
+        if old is None:
+            os.environ.pop("VCCTRL_WEB", None)
+        else:
+            os.environ["VCCTRL_WEB"] = old
+    check("a 409 keeps the daemon's reason, so record can exit 4 and say --clip",
+          data is None and meta.get("refused") == "window_precedes_caller"
+          and meta.get("foreign_frames") == 7, meta)
+    check("  and still says which HTTP status it was",
+          "error" in meta, meta)
+
+
 def test_verify_input_exit_codes():
     """The exit code carries the READING, so a script can branch without
     parsing JSON -- and could-not-look must not read as a failure.

@@ -1001,7 +1001,20 @@ def fetch_avi(first, last, since=None, clip=False):
             data = r.read()
             raw = r.headers.get("X-Buffer-Meta") or "{}"
     except urllib.error.HTTPError as exc:
-        return None, {"error": "HTTP %s from %s" % (exc.code, url)}
+        # THE REFUSAL IS IN THE BODY. A 409 is the daemon refusing the window
+        # (it opens before --since), and its JSON names the reason, the
+        # overlap and the seq range -- the very thing `record` turns into its
+        # exit 4 and its "re-run with --clip". Dropping the body here left
+        # only "HTTP 409 from ..." with exit 1 (a peer hit it, 2026-10-16).
+        meta = {}
+        try:
+            meta = json.loads(exc.read().decode("utf-8", "replace") or "{}")
+        except Exception:
+            meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.setdefault("error", "HTTP %s from %s" % (exc.code, url))
+        return None, meta
     except Exception as exc:
         return None, {"error": "%s: %s" % (type(exc).__name__, exc)}
     try:
