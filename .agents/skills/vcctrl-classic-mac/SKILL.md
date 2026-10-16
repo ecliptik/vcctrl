@@ -354,8 +354,11 @@ A true Macintosh 512Ke in the Snow emulator (an HD20 build) on the control
 host, for trying things without the real machine: its own vcctrld profile,
 driven with the usual verbs and MCP tools. The same recipes hold.
 `key_remap` makes Ctrl Option and Alt/Meta Command, exactly as on the
-512Ke. Its System Folder is trimmed to fit 512K (AppleShare kept), and it's
-on the same LocalTalk network (LocalTalk over UDP to the same router).
+512Ke. Since 2026-10-16 it boots a scratch copy of the real 512Ke's own
+disk, copied off the Floppy Emu's SD card, so the files and System Folder
+are the same as of that day. Changes on either side don't carry over to the
+other. It's on the same LocalTalk network (LocalTalk over UDP to the same
+router).
 Differences:
 - `power on`/`off` start and stop the emulator, not a plug.
 - The pointer is absolute and exact: `goto` lands within 1 px. Within
