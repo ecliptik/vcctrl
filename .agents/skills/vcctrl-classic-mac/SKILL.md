@@ -123,8 +123,9 @@ With `capabilities.pointer` (backend `video-diff`) configured, as on the
   y = cy − 70.
 - In the web KVM a click on the picture **grabs** it, like any KVM: the
   pointer is captured and the Mac's pointer moves with your hand, 1:1 with
-  the picture as drawn (Grab sends `mouse_px`, one move in flight at a
-  time, buttons after the pending move). "Click to point" (Settings) is
+  the picture as drawn (Grab sends `mouse_px` with `queue: true` every
+  tick; the daemon merges whatever arrives while it's busy and sends it in
+  diagonal steps; a button waits until those moves are sent). "Click to point" (Settings) is
   opt-in since 2026-10-16: it makes a click a goto plus a click, ~4 s each
   with a jump to the corner first, which the owner found unlike a KVM.
 - Limits: the diff assumes the dark arrow on a lighter ground. A blinking
