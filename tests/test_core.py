@@ -6142,6 +6142,23 @@ def test_wrapper_out_is_the_callers_disk():
           (r.returncode, r.stderr.strip()[:120]))
 
 
+def test_a_bad_argument_is_a_usage_error_not_a_traceback():
+    """`mouse drag --help` crashed the client with a ValueError traceback
+    (2026-10-15): every verb parses with int(rest[i]). A bad or missing
+    argument must exit 2 with the usage text, before any socket is touched."""
+    print("\nclient: bad arguments")
+    import subprocess
+    path = os.path.join(HERE, os.pardir, "bin", "vcctrl-client")
+    for argv in (["mouse", "drag", "--help"], ["mouse", "goto", "10"],
+                 ["mouse", "move", "x", "1"]):
+        r = subprocess.run([sys.executable, path] + argv,
+                           capture_output=True, text=True, timeout=30)
+        check("%s -> exit 2, usage, no traceback" % " ".join(argv),
+              r.returncode == 2 and "usage error" in r.stderr
+              and "Traceback" not in r.stderr,
+              (r.returncode, r.stderr[:200]))
+
+
 def _client():
     import importlib.util
     from importlib.machinery import SourceFileLoader

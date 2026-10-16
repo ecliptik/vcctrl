@@ -1850,4 +1850,18 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (ValueError, IndexError) as exc:
+        # A bad or missing ARGUMENT (`mouse drag --help`, `goto 10`): every
+        # verb parses with int(rest[i]), so either raises in main's own
+        # frame. Anything raised deeper (a JSON decode, a socket) is a real
+        # fault and keeps its traceback.
+        tb = exc.__traceback__
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        if tb.tb_frame.f_code is not main.__code__:
+            raise
+        sys.stderr.write("usage error: %s\n\n" % exc)
+        sys.stderr.write(USAGE)
+        sys.exit(2)
