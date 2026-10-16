@@ -326,6 +326,11 @@ Differences:
   ~12 px of the screen's right-hand rounded corners the cursor's shape
   can misread.
 - A 1.4 MB AppleShare copy runs at about 17 KB/s, like real LocalTalk.
+- A `shot` taken right after an input usually still shows the screen from
+  before it. On 2026-10-16 the Apple menu first showed in a `shot` a median
+  374 ms (336-433) after `mouse down` was sent: the Mac draws the menu, then the
+  capture chain adds ~100-150 ms. Wait about 0.5 s, or shoot again until two
+  shots agree, before you judge. Not measured on the real 512Ke.
 - It does **not** model the serial chip's (SCC) receive timing. A LocalTalk
   listener that passed every emulator run lost 43 of 57 frames to SCC
   overruns on the real 512Ke, until it read the rest of each frame first.
