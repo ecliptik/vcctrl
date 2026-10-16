@@ -303,6 +303,10 @@ closed down" alert with Return.
 
 - The capture is a digital HDMI path (`analog: false`). `state: frozen` on
   a still desktop is normal, not a fault.
+- **To record a clip** (a window opening, a glitch): `T=$(date +%s.%N)` just
+  before the action, then afterwards `vcctrl record --out f.avi --since $T
+  --clip`. Without `--clip`, a `--since` later than the ring's oldest frame
+  (it holds ~30 s) is refused with exit 4 rather than mixing in older frames.
 - An HDMI converter may stretch the 512x342 screen, for example to 511x455
   of a 640x480 frame. The profile's `machine.picture` lets the web KVM
   restore 3:2. `shot` coordinates are in capture pixels, stretch included.
