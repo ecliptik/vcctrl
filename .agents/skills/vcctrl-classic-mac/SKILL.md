@@ -223,7 +223,27 @@ Setup and Repair) lists it as "Floppy Emu (Startup Disk)" and warns that a
 startup disk can only be verified. Verify then reports "This is not an HFS
 disk" and stops, although the Mac boots and reads that volume fine
 (2026-10-16). That's could-not-look, not damage. Check a copy of the image
-offline instead.
+offline instead:
+
+1. Shut the Mac down and power it off (above). The owner pulls the Floppy
+   Emu's SD card. The image is `macos608-512ke.dsk` (1,971,322,880 bytes,
+   a raw HFS volume). Mount the card read-only (`mount -o ro`), stream the
+   file to a private path, and compare sha256 on both ends. The image is
+   private, so keep it out of git and notes.
+2. `hfsck -n -v <copy>` (hfsutils): the volume header and both B-trees.
+   Debian ships no hfsck. Build it from the hfsutils 3.2.6 source, and patch
+   main.c, because upstream `-n` never opens the volume and fails with
+   "Input/output error". Then walk the catalog (`hmount`, `hls -R -a -l :`)
+   and check the counts against the header's drFilCnt/drDirCnt.
+3. `tools/hfs-alloc-check.py <copy>`: the bitmap against every fork's
+   extents (hfsck doesn't check that). Exit 1 means cross-linked blocks, a
+   used block marked free, or a short fork.
+
+Result on 2026-10-16: clean. 2776 files and 457 folders, matching the header;
+the bitmap's free count matched; nothing cross-linked. 53 blocks (~1.6 MB) are
+leaked: marked used but owned by no file, which is harmless and also on the
+older delivered image. So the bomb that day was the Floppy Emu, not the
+disk.
 
 ## Restart, screensaver
 
