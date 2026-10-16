@@ -1291,10 +1291,47 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
             devs.mouse_move = real_move
         check("  a small move is one event with both axes, signs kept",
               one == [(12, -2)], one)
-        check("  a move the split would cut goes axis by axis, so the small "
-              "axis is not cut into 0- and 1-count steps",
-              split == [(round(60 * CPP), 0), (0, 8)], split)
+        # 60 x 2 px is 348 counts across: four diagonal steps, the 2 px of y
+        # spread as 1 px (2 counts) in two of them -- not all x then all y,
+        # which zig-zagged a diagonal Grab live (2026-10-16).
+        check("  a big move goes in DIAGONAL steps under mouse_max_step, the "
+              "small axis spread through them, never cut to 0/1 counts",
+              split == [(round(15 * CPP), 0), (round(15 * CPP), 2)] * 2, split)
         check("  and nothing to move sends nothing", none == [], none)
+
+        # The queue MERGES: moves queued while one is being sent go as one,
+        # and a sync call returns only after everything before it is sent.
+        sent = []
+        def slow(dx, dy, pace=None):
+            sent.append((dx, dy))
+            time.sleep(0.2)
+        devs.mouse_move = slow
+        try:
+            cap._px({"dx": 10, "dy": 0, "queue": True})
+            time.sleep(0.05)
+            for _ in range(5):
+                cap._px({"dx": 1, "dy": 0, "queue": True})
+            r = cap._px({"dx": 0, "dy": 0})
+            merged = list(sent)
+            # A pending move is dropped if the lock has gone to someone else.
+            class Arb(object):
+                owner = "someone-else"
+                def check(self, who):
+                    return None if who == self.owner else {"locked_by": self.owner}
+            cap.registry.arbiter = Arb()
+            sent[:] = []
+            cap._px({"dx": 3, "dy": 0, "as": "browser"})
+            dropped = list(sent)
+            cap._px({"dx": 3, "dy": 0, "as": "someone-else"})
+            owned = list(sent)
+        finally:
+            devs.mouse_move = real_move
+            del cap.registry.arbiter
+        check("  queued moves that arrive while one is sent are MERGED into one",
+              merged == [(cap._event_counts(10, 0), 0), (cap._event_counts(5, 0), 0)]
+              and r.get("sent") is True, (merged, r))
+        check("  a pending move is dropped when the input lock belongs to someone else",
+              dropped == [] and owned == [(12, 0)], (dropped, owned))
         cap.settings.pop("event_px")
         check("  without a curve: linear, at least one count",
               cap._event_counts(1, 0) == round(CPP)
@@ -3340,9 +3377,10 @@ HARNESS = r"""
   }
 
   // Grab on a pointer target moves in NATIVE px scaled from the picture as
-  // drawn (mouse_px), sends nothing new while a move is in flight (the rest
-  // accumulates), and a button goes after the pending move. Without a
-  // pointer capability it is mouse_move, as before.
+  // drawn (mouse_px, queue: true), posts every tick WITHOUT waiting for the
+  // last reply (the daemon merges), and a button waits for the queued posts,
+  // then a synchronous mouse_px, then goes. Without a pointer capability it
+  // is mouse_move, one in flight, as before.
   {
     const realPost = window.post, sentG = [], saved = lastState;
     const sW = capW, sH = capH, sF = frames;
@@ -3350,7 +3388,7 @@ HARNESS = r"""
     localStorage.removeItem('vcctrl.mousegain');
     let release = null;
     window.post = (c, b) => { sentG.push([c, b]);
-      return c === 'mouse_px' && !release
+      return c === 'mouse_px' && b.queue && !release
         ? new Promise(res => { release = res; }) : Promise.resolve({ok: true}); };
     lastState = {caps: {pointer: {configured: true}},
                  machine: {native: {width: 512, height: 342},
@@ -3358,23 +3396,26 @@ HARNESS = r"""
     frames = 1; capW = 640; capH = 480;
     const r = mediaEl().getBoundingClientRect();
     mouseAccDx = mouseAccDy = 0; moveInFlight = false; mouseChain = Promise.resolve();
+    movesOut.clear();
     // 100 capture px across is 100 native px at 1:1, whatever the zoom.
     mouseAccumulate(100 / 640 * r.width, 50 / 480 * r.height);
     flushMouseMove();
     await new Promise(res => setTimeout(res, 0));
     const first = sentG.length === 1 && sentG[0][0] === 'mouse_px'
+               && sentG[0][1].queue === true
                && sentG[0][1].dx === 100 && sentG[0][1].dy === 50;
     mouseAccumulate(10 / 640 * r.width, 0);
     flushMouseMove();
     await new Promise(res => setTimeout(res, 0));
-    const held = sentG.length === 1 && Math.round(mouseAccDx) === 10;
+    const piped = sentG.length === 2 && sentG[1][0] === 'mouse_px'
+               && sentG[1][1].dx === 10 && sentG[1][1].queue === true;
     mouseButton('mouse_down', 'left');
     await new Promise(res => setTimeout(res, 0));
-    const queued = sentG.length === 1;
+    const waits = sentG.length === 2;
     release({ok: true});
     await new Promise(res => setTimeout(res, 10));
-    const order = sentG.length === 3 && sentG[1][0] === 'mouse_px'
-               && sentG[1][1].dx === 10 && sentG[2][0] === 'mouse_down';
+    const order = sentG.length === 4 && sentG[2][0] === 'mouse_px'
+               && !sentG[2][1].queue && sentG[3][0] === 'mouse_down';
     sentG.length = 0; release = () => {};
     lastState = {caps: {}, machine: {}};
     mouseAccDx = mouseAccDy = 0; moveInFlight = false;
@@ -3383,10 +3424,11 @@ HARNESS = r"""
     await new Promise(res => setTimeout(res, 0));
     const plain = sentG.length === 1 && sentG[0][0] === 'mouse_move';
     mouseAccDx = mouseAccDy = 0; moveInFlight = false; mouseChain = Promise.resolve();
+    movesOut.clear();
     if (gainWas !== null) localStorage.setItem('vcctrl.mousegain', gainWas);
     window.post = realPost; lastState = saved;
     capW = sW; capH = sH; frames = sF;
-    emit(`grabpx ${first ? 1 : 0} ${held && queued ? 1 : 0}`);
+    emit(`grabpx ${first ? 1 : 0} ${piped && waits ? 1 : 0}`);
     emit(`grabpx2 ${order ? 1 : 0} ${plain ? 1 : 0}`);
   }
 
@@ -4045,6 +4087,23 @@ HARNESS = r"""
 """
 
 
+def _quiet_chrome(d):
+    """Flags and environment that keep a test's headless Chromium off the desktop.
+
+    Without them Chromium opens the user's default profile and asks the
+    desktop keyring for its password store, and on a machine with a logged-in
+    GNOME session that raised "Unlock Login Keyring" on DISPLAY :0 on every
+    run, grabbing input from whoever was using that display (another session
+    found it, 2026-10-16). A throwaway profile, the basic password store, and
+    no session bus or display: the headless page needs none of them.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "WAYLAND_DISPLAY")}
+    flags = ["--password-store=basic",
+             "--user-data-dir=" + os.path.join(d, "chrome-profile")]
+    return flags, env
+
+
 def test_zoom_layout_in_a_browser():
     """Lay the page out in a real engine and measure the picture.
 
@@ -4090,14 +4149,16 @@ def test_zoom_layout_in_a_browser():
             f.write(page + HARNESS.replace("CAPSRC", cap)
                     .replace("KEYMAPJSON", _json.dumps(vcctrld.keymap())))
 
+        _qflags, _qenv = _quiet_chrome(d)
         r = subprocess.run(
-            [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+            [chrome] + _qflags + ["--headless", "--disable-gpu", "--no-sandbox",
              "--hide-scrollbars", "--window-size=1580,900",
              # 6000 was not enough once the harness started awaiting a
              # typing loop: it reported "no output", which reads as a broken
              # page rather than a clock that ran out.
              "--virtual-time-budget=30000", "--dump-dom",
              "file://" + os.path.join(d, "page.html")],
+            env=_qenv,
             capture_output=True, text=True, timeout=90)
         m = re.search(r'<pre id="harness-out">([^<]*)</pre>', r.stdout)
         if not m or not m.group(1).strip():
@@ -4290,9 +4351,9 @@ def test_zoom_layout_in_a_browser():
           got["clickpointdefault"][0] == 1.0, got["clickpointdefault"])
     check("Grab on a pointer target posts mouse_px in native px, 1:1 with the picture",
           got["grabpx"][0] == 1.0, got["grabpx"])
-    check("  and sends nothing new while a move is in flight; a button waits behind it",
+    check("  and posts every tick without waiting for the last reply; a button waits for them",
           got["grabpx"][1] == 1.0, got["grabpx"])
-    check("  then the held move goes, then the button, in that order",
+    check("  then a synchronous mouse_px, then the button, in that order",
           got["grabpx2"][0] == 1.0, got["grabpx2"])
     check("control: without a pointer capability Grab still posts mouse_move",
           got["grabpx2"][1] == 1.0, got["grabpx2"])
@@ -6069,11 +6130,13 @@ def test_keyboard_chords_in_a_browser():
         with open(os.path.join(d, "page.html"), "w", encoding="utf-8") as f:
             f.write(page + KBD_HARNESS.replace(
                 "KEYMAPJSON", _json.dumps(vcctrld.keymap())))
+        _qflags, _qenv = _quiet_chrome(d)
         r = subprocess.run(
-            [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+            [chrome] + _qflags + ["--headless", "--disable-gpu", "--no-sandbox",
              "--hide-scrollbars", "--window-size=1580,900",
              "--virtual-time-budget=30000", "--dump-dom",
              "file://" + os.path.join(d, "page.html")],
+            env=_qenv,
             capture_output=True, text=True, timeout=90)
         m = re.search(r'<pre id="harness-out">(.*?)</pre>', r.stdout, re.S)
         if not m or not m.group(1).strip():
@@ -10013,11 +10076,13 @@ window.addEventListener('load', () => { (async () => {
         with open(os.path.join(d, "page.html"), "w", encoding="utf-8") as f:
             f.write(page + script)
 
+        _qflags, _qenv = _quiet_chrome(d)
         r = subprocess.run(
-            [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+            [chrome] + _qflags + ["--headless", "--disable-gpu", "--no-sandbox",
              "--hide-scrollbars", "--window-size=1400,900",
              "--virtual-time-budget=3000", "--dump-dom",
              "file://" + os.path.join(d, "page.html")],
+            env=_qenv,
             capture_output=True, text=True, timeout=90)
     finally:
         shutil.rmtree(d, ignore_errors=True)

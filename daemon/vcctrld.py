@@ -12449,29 +12449,102 @@ class PointerCapability(Capability):
                     return int(round(c0 + f * (c1 - c0)))
         return max(1, int(round(px * cpp)))
 
-    def _px(self, req):
-        """Move by (dx, dy) NATIVE px: each axis encoded for the board.
+    def _send_px(self, dx, dy):
+        """Send (dx, dy) native px now, in DIAGONAL steps the board carries.
 
-        Each axis gets the counts that move it that far (_event_counts).
-        When both fit in one event they go together; when either would be
-        split (over mouse_max_step), the axes go as separate moves, because
-        the split divides BOTH axes into the same number of steps and would
-        cut the small one into 0- and 1-count events, which do not move the
-        512Ke's pointer at all.
+        Each step is a share of BOTH axes, each encoded through
+        _event_counts, and no step's counts exceed mouse_max_step, so the
+        board neither clips one (see MOUSE_MAX_STEP) nor gets a 0/1-count
+        slice of the small axis. The first version sent a split move axis by
+        axis instead, and the owner saw the pointer zig-zag on a diagonal
+        (2026-10-16): each Grab batch went across, then down.
         """
-        dx, dy = int(req.get("dx", 0)), int(req.get("dy", 0))
+        cpp = self._cpp()
         def enc(p, axis):
             if not p:
                 return 0
             c = self._event_counts(abs(p), axis)
             return c if p > 0 else -c
-        cx, cy = enc(dx, 0), enc(dy, 1)
-        if MOUSE_MAX_STEP > 0 and cx and cy and max(abs(cx), abs(cy)) > MOUSE_MAX_STEP:
-            self.devs.mouse_move(cx, 0)
-            self.devs.mouse_move(0, cy)
-        elif cx or cy:
-            self.devs.mouse_move(cx, cy)
-        return {"ok": True, "px": [dx, dy], "counts": [cx, cy]}
+        total = max(abs(dx) * cpp[0], abs(dy) * cpp[1])
+        n = 1
+        if MOUSE_MAX_STEP > 0 and total > MOUSE_MAX_STEP:
+            n = int(math.ceil(total / float(MOUSE_MAX_STEP)))
+        sent = [0, 0]
+        for i in range(n):
+            sx = dx * (i + 1) // n - dx * i // n
+            sy = dy * (i + 1) // n - dy * i // n
+            cx, cy = enc(sx, 0), enc(sy, 1)
+            if cx or cy:
+                self.devs.mouse_move(cx, cy)
+                sent[0] += cx
+                sent[1] += cy
+            if i < n - 1:
+                time.sleep(max(0.0, MOUSE_STEP_GAP_S - DEFAULT_PACE_S))
+        return sent
+
+    def _px(self, req):
+        """Move by (dx, dy) NATIVE px, through a queue that MERGES.
+
+        Requests add to one pending move; a worker sends whatever is pending
+        as fast as the board takes it, so moves that arrive while it is busy
+        go as one and never queue up behind each other. WHY: the web KVM
+        waited for each move's reply before sending the next, which paced
+        Grab at the network round trip -- moves arrived a median 124 ms
+        apart where 40 was meant, and the owner found it laggy (2026-10-16).
+        `queue: true` returns at once (the page, every tick); without it the
+        call returns once everything pending, its own move included, is sent
+        (the CLI, and the page before a button, so a click lands after the
+        moves that came before it). The pending move belongs to whoever sent
+        it last, and is dropped if the input lock has passed to someone else
+        before it goes.
+        """
+        dx, dy = int(req.get("dx", 0)), int(req.get("dy", 0))
+        self._pq_start()
+        with self._pq_cv:
+            self._pq[0] += dx
+            self._pq[1] += dy
+            self._pq_who = req.get("as")
+            self._pq_seq += 1
+            mine = self._pq_seq
+            self._pq_cv.notify_all()
+            if req.get("queue"):
+                return {"ok": True, "px": [dx, dy], "queued": True}
+            deadline = time.time() + 15.0
+            while self._pq_done < mine and time.time() < deadline:
+                self._pq_cv.wait(0.5)
+            done = self._pq_done >= mine
+        out = {"ok": True, "px": [dx, dy], "sent": done}
+        if not done:
+            out["note"] = "still moving after 15 s"
+        return out
+
+    def _pq_start(self):
+        if getattr(self, "_pq_cv", None) is not None:
+            return
+        self._pq_cv = threading.Condition()
+        self._pq, self._pq_who = [0, 0], None
+        self._pq_seq = self._pq_done = 0
+        t = threading.Thread(target=self._pq_run, name="pointer-px", daemon=True)
+        t.start()
+
+    def _pq_run(self):
+        while True:
+            with self._pq_cv:
+                while self._pq == [0, 0]:
+                    self._pq_done = self._pq_seq
+                    self._pq_cv.notify_all()
+                    self._pq_cv.wait()
+                (dx, dy), who, seq = self._pq, self._pq_who, self._pq_seq
+                self._pq = [0, 0]
+            try:
+                arb = getattr(self.registry, "arbiter", None)
+                if arb is None or arb.check(who) is None:
+                    self._send_px(dx, dy)
+            except Exception as exc:
+                sys.stderr.write("pointer-px: %s: %s\n" % (type(exc).__name__, exc))
+            with self._pq_cv:
+                self._pq_done = max(self._pq_done, seq)
+                self._pq_cv.notify_all()
 
 
     def _drag(self, req):

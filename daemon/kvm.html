@@ -6116,14 +6116,21 @@ function mouseAccumulate(dx, dy) {
   mouseAccDy += dy * sens * k.y;
 }
 
-// ONE MOVE IN FLIGHT, AND MOUSE INPUT IN ORDER. A move used to be posted
-// every 40 ms tick whether or not the last had finished; on the 512Ke a
-// big move takes longer than a tick to deliver (100-count steps 30 ms
-// apart), so they queued and the pointer caught up seconds later. Now a
-// tick only sends when nothing is in flight -- the rest keeps accumulating
-// and goes as one -- and buttons go through the same chain after whatever
-// move was pending, so a click lands where the pointer was sent.
+// MOUSE INPUT IN ORDER, AND NEVER A QUEUE OF MOVES. Two ways, by target:
+// - mouse_move (counts, synchronous): a tick only sends when nothing is in
+//   flight; the rest accumulates and goes as one. Posting every tick
+//   regardless queued moves on the 512Ke (a big move takes longer than a
+//   tick) and the pointer caught up seconds later.
+// - mouse_px (a pointer target): every tick posts with `queue: true`, which
+//   the daemon MERGES into one pending move and answers at once
+//   (PointerCapability._px). Waiting for each reply instead paced Grab at
+//   the network round trip -- a median 124 ms between moves, laggy
+//   (2026-10-16). Moves add up, so their order does not matter.
+// A button goes through the chain after every earlier move: it waits for
+// the queued posts to land, then a synchronous mouse_px that returns once
+// the daemon has sent them all, so a click lands where the pointer went.
 let mouseChain = Promise.resolve(), moveInFlight = false;
+const movesOut = new Set();
 function mouseSend(cmd, body) {
   const p = mouseChain.then(() => post(cmd, body));
   mouseChain = p.catch(() => {});
@@ -6138,18 +6145,31 @@ function takeMove() {
   return (dx || dy) ? {dx, dy} : null;
 }
 function sendMove(m) {
+  if (pxMode()) {
+    const p = Promise.resolve(post('mouse_px', Object.assign({queue: true}, m)));
+    movesOut.add(p);
+    p.finally(() => movesOut.delete(p));
+    return p;
+  }
   moveInFlight = true;
-  return mouseSend(pxMode() ? 'mouse_px' : 'mouse_move', m)
-    .finally(() => { moveInFlight = false; });
+  return mouseSend('mouse_move', m).finally(() => { moveInFlight = false; });
 }
 function mouseButton(cmd, button) {
   const m = takeMove();
+  if (pxMode()) {
+    const out = Array.from(movesOut);
+    const p = mouseChain.then(() => Promise.all(out))
+      .then(() => post('mouse_px', Object.assign({dx: 0, dy: 0}, m || {})))
+      .then(() => post(cmd, {button}));
+    mouseChain = p.catch(() => {});
+    return p;
+  }
   if (m) sendMove(m);
   return mouseSend(cmd, {button});
 }
 
 function flushMouseMove() {
-  if (!moveInFlight) {
+  if (pxMode() || !moveInFlight) {
     const m = takeMove();
     if (m) sendMove(m);
   }
