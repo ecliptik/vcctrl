@@ -206,6 +206,13 @@ later. The owner tapped the Floppy Emu's button, it restarted, and the Mac
 booted. No vcctrl verb reaches that button, so ask the owner. Don't blame
 the app that was running until the boot device is ruled out.
 
+**Disk First Aid can't check the HD20 volume.** DFA v7.2.2 (macos608 ›
+Setup and Repair) lists it as "Floppy Emu (Startup Disk)" and warns that a
+startup disk can only be verified. Verify then reports "This is not an HFS
+disk" and stops, although the Mac boots and reads that volume fine
+(2026-10-16). That's could-not-look, not damage. Check a copy of the image
+offline instead.
+
 ## Restart, screensaver
 
 - Restart: Special → Restart (press-drag the menu). There is no Power key
