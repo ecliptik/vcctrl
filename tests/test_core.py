@@ -1011,6 +1011,34 @@ def test_mouse_click_reassert_repeats_each_edge():
           ev and ev[0]["detail"] == "left reassert", ev)
 
 
+def test_mouse_button_nudge_setting_reasserts_every_edge():
+    """capabilities.input.settings.mouse_button_nudge: Snow in absolute mouse
+    mode applies a button change only with a motion event, so on that
+    profile EVERY edge -- click, down, up -- is followed by the nudge."""
+    print("\nmouse_button_nudge")
+    nudge = [(e.EV_REL, e.REL_X, 1), (e.EV_REL, e.REL_X, -1)]
+    d = make_devices()
+    d.mouse_down("left"); d.mouse_up("left")
+    check("CONTROL: off by default, down/up are bare edges",
+          d.log == [(e.EV_KEY, e.BTN_LEFT, 1), (e.EV_KEY, e.BTN_LEFT, 0)],
+          d.log)
+    orig = vcctrld.MOUSE_BUTTON_NUDGE
+    vcctrld.MOUSE_BUTTON_NUDGE = True
+    try:
+        d = make_devices()
+        d.mouse_down("left"); d.mouse_up("left")
+        check("on: down and up are each followed by a nudge",
+              d.log == [(e.EV_KEY, e.BTN_LEFT, 1)] + nudge
+              + [(e.EV_KEY, e.BTN_LEFT, 0)] + nudge, d.log)
+        d = make_devices()
+        d.mouse_click("left", 0)
+        check("on: a plain click reasserts both edges",
+              d.log == [(e.EV_KEY, e.BTN_LEFT, 1)] + nudge
+              + [(e.EV_KEY, e.BTN_LEFT, 0)] + nudge, d.log)
+    finally:
+        vcctrld.MOUSE_BUTTON_NUDGE = orig
+
+
 def test_mouse_click_hold_is_a_floor_under_the_pace():
     """capabilities.input.settings.click_hold_s: a classic Mac reads the
     button once per vertical blank, so a one-pace (12 ms) press can be

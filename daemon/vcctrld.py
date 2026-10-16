@@ -342,6 +342,15 @@ def _remap_table():
 MOUSE_STEP_GAP_S = float(CFG.default(
     "capabilities.input.settings.mouse_step_gap_s", 0) or 0)
 
+# Follow EVERY button edge (click, down, up) with a 1-count nudge right and
+# back -- the `reassert` that mouse_click offers per call, made the profile's
+# default. Absent/false: off, as it always was. WHY: the Snow emulator in
+# absolute mouse mode applies a button change only together with a motion
+# event; a press or release with no movement lands late or at the old
+# position, which starts drags (found by the snow session, 2026-10-15).
+MOUSE_BUTTON_NUDGE = bool(CFG.default(
+    "capabilities.input.settings.mouse_button_nudge", False))
+
 # ---------------------------------------------------------------- key tables
 
 NAMED_KEYS = {
@@ -2162,6 +2171,7 @@ class Devices(object):
         code = MOUSE_BUTTONS.get(button.lower())
         if code is None:
             raise ValueError("unknown button: %s" % button)
+        reassert = reassert or MOUSE_BUTTON_NUDGE
         with self.lock:
             self._mouse_button_press(code)
             time.sleep(max(pace, float(CLICK_HOLD_S or 0)))
@@ -2187,6 +2197,8 @@ class Devices(object):
         with self.lock:
             self._mouse_button_press(code)
             self.held_mouse.add(code)
+            if MOUSE_BUTTON_NUDGE:
+                self._reassert_edge()
 
     def mouse_up(self, button):
         code = MOUSE_BUTTONS.get(button.lower())
@@ -2195,6 +2207,16 @@ class Devices(object):
         with self.lock:
             self._mouse_button_release(code)
             self.held_mouse.discard(code)
+            if MOUSE_BUTTON_NUDGE:
+                self._reassert_edge()
+
+    def _reassert_edge(self, pace=DEFAULT_PACE_S):
+        """The 1-count nudge right and back after a button edge (see
+        mouse_click's `reassert`). Caller holds self.lock."""
+        time.sleep(pace)
+        for dx in (1, -1):
+            self._mouse_nudge(dx)
+            time.sleep(pace)
 
 
 def usb4vc_holds_us():
