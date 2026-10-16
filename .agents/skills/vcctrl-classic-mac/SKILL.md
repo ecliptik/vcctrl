@@ -298,6 +298,11 @@ Differences:
   ~12 px of the screen's right-hand rounded corners the cursor's shape
   can misread.
 - A 1.4 MB AppleShare copy runs at about 17 KB/s, like real LocalTalk.
+- It does **not** model the serial chip's (SCC) receive timing. A LocalTalk
+  listener that passed every emulator run lost 43 of 57 frames to SCC
+  overruns on the real 512Ke, until it read the rest of each frame first.
+  A pass on the twin isn't a pass on the hardware for timing-sensitive
+  serial or network code: rerun it on the real Mac.
 
 ## Not supported here
 
