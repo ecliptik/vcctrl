@@ -12252,10 +12252,20 @@ class PointerCapability(Capability):
             # edge the nudge is clamped, and coming back the full distance
             # left the pointer short of where it began -- so every `cursor`
             # call near the right edge dragged the pointer left, verification
-            # included (2026-10-15). Two blobs: it travelled the full nudge.
-            # Overlap: it travelled about the union's width less one cursor.
+            # included (2026-10-15). Two blobs: the distance between their
+            # left edges -- NOT the full nudge, which a clamp 61 px short of
+            # it still separates into two blobs (that left every goto past
+            # native x ~390 at 391, 2026-10-15). Overlap: about the union's
+            # width less one cursor.
             if len(fps) >= 2:
-                back_counts = n
+                travel_px = abs(fps[-1][0] - fps[0][0])
+                # Within 2 px of the full nudge IS the full nudge: the blobs
+                # are whole pixels, `expected` is not, and a count short
+                # would drift the pointer on every call.
+                if travel_px >= expected - 2:
+                    back_counts = n
+                else:
+                    back_counts = int(round(travel_px / max(1e-6, expected) * n))
             elif moved:
                 est_px = max(0, (moved[2] - moved[0]) - self.CURSOR_W)
                 back_counts = int(round(est_px / max(1e-6, expected) * n))

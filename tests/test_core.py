@@ -1219,6 +1219,19 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
               abs(devs.x - (NW - 12)) <= 1.5 and abs(devs.y - 150) <= 1.5,
               (devs.x, devs.y, r))
 
+        # FURTHER than a cursor's width from the edge but closer than the
+        # nudge: the clamped nudge still separates into two blobs, and coming
+        # back the full nudge left every goto past x ~390 at 391 (live).
+        devs.x, devs.y = NW - 60.0, 150.0
+        r = cap._cursor({})
+        check("60 px from the right edge: the pointer stays where it was",
+              r.get("found") and abs(devs.x - (NW - 60)) <= 1.5,
+              (devs.x, r))
+        r = cap._goto({"x": NW - 62, "y": 300})
+        check("  and goto there lands on target",
+              abs(devs.x - (NW - 62)) <= 1.5 and abs(devs.y - 300) <= 1.5,
+              (devs.x, devs.y, r))
+
         r = cap._goto({"x": 100, "y": 250})
         check("mouse_goto lands on the native target",
               abs(devs.x - 100) <= 1 and abs(devs.y - 250) <= 1,
