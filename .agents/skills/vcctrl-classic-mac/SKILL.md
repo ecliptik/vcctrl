@@ -208,8 +208,10 @@ Done on the 512Ke on 2026-10-15, at the owner's request. Use exactly this:
    the lock, and tell any peer.
 
 To start it again: `vcctrl power on` (owner's OK). The 512Ke boots from a
-Floppy Emu in HD20 mode (it has no SCSI port). Any AppleShare volume needs
-a fresh Chooser login after boot.
+Floppy Emu in HD20 mode (it has no SCSI port). AppleShare volumes are not
+remounted at boot: no volume is set to open at startup, and the owner wants
+it kept that way (2026-10-16). Mount by hand when needed (Chooser login, see
+AppleShare below); don't tick "open at system startup" or save the password.
 
 **If it stops at a plain disk icon:** a grey pattern with a static floppy
 icon in the middle, no question mark, and `framestats` showing one
