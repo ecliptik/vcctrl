@@ -135,6 +135,9 @@ USAGE = """usage: vcctrl <command> [args]
                             held -- the mouse's own release-all, separate
                             from the keyboard's: releasing one must not
                             drop what the other is mid-operation on
+  mouse px <dx> <dy>        move by NATIVE px, counts picked per event for
+                            the board's measured curve (capabilities.pointer
+                            event_px; the web KVM's Grab on a classic Mac)
   mouse goto <x> <y> [--no-refine]
                             pointer to a NATIVE-pixel position: park in the
                             corner, one computed move, one correction from
@@ -1451,6 +1454,8 @@ def main(argv):
         elif rest[0] == "drag":
             req = {"cmd": "mouse_drag", "x1": int(rest[1]), "y1": int(rest[2]),
                    "x2": int(rest[3]), "y2": int(rest[4])}
+        elif rest[0] == "px":
+            req = {"cmd": "mouse_px", "dx": int(rest[1]), "dy": int(rest[2])}
         elif rest[0] == "goto":
             req = {"cmd": "mouse_goto", "x": int(rest[1]), "y": int(rest[2])}
             if "--no-refine" in rest[3:]:

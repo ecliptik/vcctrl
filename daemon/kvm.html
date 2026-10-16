@@ -4488,7 +4488,8 @@ const INPUT_CMDS = new Set(['key', 'type', 'hold', 'combo', 'keydown',
                             'mouse_release_all',
                             // PointerCapability's verbs move the pointer too,
                             // so a lock refusal is said, not swallowed.
-                            'mouse_goto', 'cursor', 'pointer_check']);
+                            'mouse_goto', 'cursor', 'pointer_check',
+                            'mouse_px']);
 async function post(cmd, body) {
   try {
     const r = await fetch(apiPath('/cmd'), {method:'POST',
@@ -6072,20 +6073,86 @@ let mouseAccDx = 0, mouseAccDy = 0, mouseAccWheel = 0, mouseFlushTimer = null;
 // 1x and the 512Ke needs about 5 counts per screen pixel (2026-10-15).
 function mouseSensitivity() {
   let mine = null, m = {};
-  try { mine = localStorage.getItem('vcctrl.mousesens'); } catch (e) {}
+  // A separate key in px mode: there 1 means "with the picture", and a
+  // counts multiplier saved before (the 512Ke's was 2.5) would be 2.5x fast.
+  try { mine = localStorage.getItem(mouseSensKey()); } catch (e) {}
   // In a try because this first runs at load, ABOVE `let lastState` --
   // reading a let before its declaration throws and stops the whole script.
   try { m = (lastState && lastState.machine) || {}; } catch (e) {}
+  if (pxMode()) return parseFloat(mine || '') || 1;
   return parseFloat(mine || '') || (m.mouse_speed > 0 ? m.mouse_speed : 1);
 }
+function mouseSensKey() {
+  return pxMode() ? 'vcctrl.mousegain' : 'vcctrl.mousesens';
+}
 
-function flushMouseMove() {
+// NATIVE-PX MOVES where the daemon can encode them: a pointer capability
+// (the classic Mac). There Grab sends the target's own pixels, scaled from
+// the picture as drawn, and the daemon picks the counts per event
+// (PointerCapability._px). WHY: the 512Ke's board is not linear below ~30
+// counts -- 3 counts move 1.5 px, 1 count nothing (2026-10-16) -- so a slow
+// hand, which sends small moves every tick, moved the pointer unevenly or
+// not at all, and no single speed could be right.
+function pxMode() {
+  try {
+    const c = lastState && lastState.caps && lastState.caps.pointer;
+    const m = (lastState && lastState.machine) || {};
+    return !!(c && c.configured && m.picture && m.native && capW && capH);
+  } catch (e) { return false; }
+}
+// Native px per CSS px of the picture as it is drawn now (zoom, letterbox).
+function nativePerCss() {
+  const m = lastState.machine, p = m.picture, n = m.native;
+  const r = mediaEl().getBoundingClientRect();
+  if (!r.width || !r.height) return {x: 1, y: 1};
+  return {x: capW / r.width * n.width / p.width,
+          y: capH / r.height * n.height / p.height};
+}
+// Accumulate a pointer delta in CSS px, in whatever unit the flush sends.
+function mouseAccumulate(dx, dy) {
+  const sens = mouseSensitivity();
+  const k = pxMode() ? nativePerCss() : {x: 1, y: 1};
+  mouseAccDx += dx * sens * k.x;
+  mouseAccDy += dy * sens * k.y;
+}
+
+// ONE MOVE IN FLIGHT, AND MOUSE INPUT IN ORDER. A move used to be posted
+// every 40 ms tick whether or not the last had finished; on the 512Ke a
+// big move takes longer than a tick to deliver (100-count steps 30 ms
+// apart), so they queued and the pointer caught up seconds later. Now a
+// tick only sends when nothing is in flight -- the rest keeps accumulating
+// and goes as one -- and buttons go through the same chain after whatever
+// move was pending, so a click lands where the pointer was sent.
+let mouseChain = Promise.resolve(), moveInFlight = false;
+function mouseSend(cmd, body) {
+  const p = mouseChain.then(() => post(cmd, body));
+  mouseChain = p.catch(() => {});
+  return p;
+}
+function takeMove() {
   const dx = Math.round(mouseAccDx), dy = Math.round(mouseAccDy);
   // KEEP THE REMAINDER, DON'T DROP IT. Truncating every tick throws away a
   // fraction of a pixel each time -- at high sensitivity, or a slow
   // trackpad, that adds up to a cursor that visibly lags a fast swipe.
   mouseAccDx -= dx; mouseAccDy -= dy;
-  if (dx || dy) post('mouse_move', {dx, dy});
+  return (dx || dy) ? {dx, dy} : null;
+}
+function sendMove(m) {
+  moveInFlight = true;
+  return mouseSend(pxMode() ? 'mouse_px' : 'mouse_move', m)
+    .finally(() => { moveInFlight = false; });
+}
+function mouseButton(cmd, button) {
+  const m = takeMove();
+  if (m) sendMove(m);
+  return mouseSend(cmd, {button});
+}
+
+function flushMouseMove() {
+  if (!moveInFlight) {
+    const m = takeMove();
+    if (m) sendMove(m);
+  }
   const wheel = Math.round(mouseAccWheel);
   mouseAccWheel -= wheel;
   if (wheel) post('mouse_wheel', {dy: wheel});
@@ -6115,9 +6182,7 @@ document.addEventListener('pointerlockchange', () => {
 
 $('stage').addEventListener('pointermove', e => {
   if (!armed || document.pointerLockElement !== $('stage')) return;
-  const sens = mouseSensitivity();
-  mouseAccDx += e.movementX * sens;
-  mouseAccDy += e.movementY * sens;
+  mouseAccumulate(e.movementX, e.movementY);
 });
 // TRACKPAD SCROLL AND A PHYSICAL WHEEL BOTH ARRIVE AS 'wheel'. deltaMode
 // distinguishes pixels (0, a trackpad) from lines (1, most wheel mice) --
@@ -6161,12 +6226,12 @@ $('stage').addEventListener('pointerdown', e => {
   }
   e.preventDefault();
   const b = MOUSE_BTN_NAME[e.button];
-  if (b) post('mouse_down', {button: b});
+  if (b) mouseButton('mouse_down', b);
 });
 $('stage').addEventListener('pointerup', e => {
   if (!armed || onOverlay(e) || document.pointerLockElement !== $('stage')) return;
   const b = MOUSE_BTN_NAME[e.button];
-  if (b) post('mouse_up', {button: b});
+  if (b) mouseButton('mouse_up', b);
 });
 // RIGHT-CLICK MUST REACH THE TARGET, NOT THIS PAGE. Without this the
 // browser's own context menu opens over the picture on every right mouse_down.
@@ -6189,14 +6254,14 @@ $('mouseparkbtn').onclick = parkMouse;
 {
   let v = null;
   try { v = localStorage.getItem('vcctrl.clickpoint'); } catch (e) {}
-  $('clickpoint').checked = v !== '0';
+  $('clickpoint').checked = v === '1';
   $('clickpoint').onchange = () => {
     try { localStorage.setItem('vcctrl.clickpoint', $('clickpoint').checked ? '1' : '0'); } catch (e) {}
   };
 }
 $('mousesens').value = mouseSensitivity();
 $('mousesens').oninput = () => {
-  localStorage.setItem('vcctrl.mousesens', $('mousesens').value);
+  try { localStorage.setItem(mouseSensKey(), $('mousesens').value); } catch (e) {}
 };
 
 // ── THE MOUSE TAB: TOUCH AS A TRACKPAD, RELATIVE TARGETS ONLY ───────────
@@ -6247,9 +6312,7 @@ function mouseTabMove(e) {
   // its delta in too would send the cursor wherever the average of two
   // independently-moving fingers happens to land.
   if (touchPointers.size !== 1) return;
-  const sens = mouseSensitivity();
-  mouseAccDx += dx * sens;
-  mouseAccDy += dy * sens;
+  mouseAccumulate(dx, dy);
 }
 function mouseTabUp(e) {
   if (!touchPointers.has(e.pointerId)) return;
@@ -6285,7 +6348,11 @@ function clickPointOn() {
   if (!(c && c.configured)) return false;
   let v = null;
   try { v = localStorage.getItem('vcctrl.clickpoint'); } catch (e) {}
-  return v !== '0';
+  // OPT-IN (2026-10-16). The owner, on the 512Ke: it "doesn't follow the
+  // pointer and jumps around" -- each click parks in the corner and takes
+  // ~4 s -- and "doesn't behave at all like I would expect from a regular
+  // kvm". So a click on the picture grabs, like any KVM, unless ticked.
+  return v === '1';
 }
 function nativeAt(e) {
   const m = (lastState && lastState.machine) || {};

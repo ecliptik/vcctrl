@@ -2284,7 +2284,7 @@ GATED_COMMANDS = frozenset([
     "mouse_move", "mouse_click", "mouse_down", "mouse_up",
     "mouse_release_all", "mouse_wheel",
     # PointerCapability's verbs all move the pointer.
-    "cursor", "pointer_check", "mouse_goto", "mouse_drag",
+    "cursor", "pointer_check", "mouse_goto", "mouse_drag", "mouse_px",
 ])
 
 # Power ACTIONS that change the target's state. Gated like input, because
@@ -12048,7 +12048,8 @@ class PointerCapability(Capability):
 
     def commands(self):
         cmds = {"cursor": self._cursor, "pointer_check": self._check,
-                "mouse_goto": self._goto, "mouse_drag": self._drag}
+                "mouse_goto": self._goto, "mouse_drag": self._drag,
+                "mouse_px": self._px}
         # verify_input BELONGS to LedsCapability wherever LEDs exist. Routes
         # are last-registered-wins, so claiming it here unconditionally would
         # shadow the real PS/2 round trip -- and a disabled pointer
@@ -12420,6 +12421,57 @@ class PointerCapability(Capability):
                 out["refined"] = True
                 out["correction_px"] = [ex, ey]
         return out
+
+    # -- relative moves in NATIVE px (the web KVM's Grab) --------------------
+
+    def _event_counts(self, px, axis):
+        """Counts for ONE event that moves the pointer `px` native px (> 0).
+
+        WHY A TABLE: below ~30 counts the 512Ke's board is not linear.
+        Measured 2026-10-16 (Tablet tracking, 10 events per size, both
+        directions, the same at 20-250 ms spacing): 1 count moved nothing, 2
+        moved 1 px, 3-6 moved ~1.5, 8 ~1.9, 12 3.0, 20 4.0, 30 5.5, and from
+        there it is the linear 0.177 px/count `counts_per_px` describes. So
+        40 events of 3 counts went 62 px where 21 were expected, and the
+        web KVM's Grab -- many small events, one per 40 ms tick -- moved the
+        pointer unevenly or not at all. `event_px` is that curve as
+        [[counts, px], ...]; a move inside it is the interpolated inverse,
+        and beyond it (or without it) counts_per_px.
+        """
+        cpp = self._cpp()[axis]
+        table = sorted((float(c), float(p)) for c, p in self._s("event_px", []))
+        if table and px <= table[-1][1]:
+            if px <= table[0][1]:
+                return int(round(table[0][0]))
+            for (c0, p0), (c1, p1) in zip(table, table[1:]):
+                if p0 <= px <= p1:
+                    f = (px - p0) / (p1 - p0) if p1 > p0 else 0.0
+                    return int(round(c0 + f * (c1 - c0)))
+        return max(1, int(round(px * cpp)))
+
+    def _px(self, req):
+        """Move by (dx, dy) NATIVE px: each axis encoded for the board.
+
+        Each axis gets the counts that move it that far (_event_counts).
+        When both fit in one event they go together; when either would be
+        split (over mouse_max_step), the axes go as separate moves, because
+        the split divides BOTH axes into the same number of steps and would
+        cut the small one into 0- and 1-count events, which do not move the
+        512Ke's pointer at all.
+        """
+        dx, dy = int(req.get("dx", 0)), int(req.get("dy", 0))
+        def enc(p, axis):
+            if not p:
+                return 0
+            c = self._event_counts(abs(p), axis)
+            return c if p > 0 else -c
+        cx, cy = enc(dx, 0), enc(dy, 1)
+        if MOUSE_MAX_STEP > 0 and cx and cy and max(abs(cx), abs(cy)) > MOUSE_MAX_STEP:
+            self.devs.mouse_move(cx, 0)
+            self.devs.mouse_move(0, cy)
+        elif cx or cy:
+            self.devs.mouse_move(cx, cy)
+        return {"ok": True, "px": [dx, dy], "counts": [cx, cy]}
 
 
     def _drag(self, req):

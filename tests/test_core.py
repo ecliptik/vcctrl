@@ -1264,6 +1264,42 @@ def test_pointer_capability_finds_moves_and_checks_by_video():
         check("  and the button is released even when the move fails",
               raised and devs.events and devs.events[-1][0] == "up", devs.events)
 
+        # mouse_px: native px encoded through the board's small-event curve
+        # (the 512Ke's, measured 2026-10-16), linear beyond it.
+        cap.settings["event_px"] = [
+            [2, 1.0], [3, 1.3], [4, 1.45], [5, 1.55], [8, 1.9], [10, 2.55],
+            [12, 3.0], [16, 3.55], [20, 4.0], [30, 5.5], [50, 8.75]]
+        got_c = [cap._event_counts(p, 0) for p in (1, 2, 3, 4, 5, 6)]
+        check("mouse_px: 1..6 px use the measured curve's counts, not px x counts_per_px",
+              got_c == [2, 8, 12, 20, 27, 33], got_c)
+        check("  and beyond the curve it is linear",
+              cap._event_counts(20, 0) == round(20 * CPP), cap._event_counts(20, 0))
+        sent = []
+        real_move = devs.mouse_move
+        devs.mouse_move = lambda dx, dy, pace=None: sent.append((dx, dy))
+        real_step = vcctrld.MOUSE_MAX_STEP
+        vcctrld.MOUSE_MAX_STEP = 100
+        try:
+            cap._px({"dx": 3, "dy": -1})
+            one = list(sent); sent[:] = []
+            cap._px({"dx": 60, "dy": 2})
+            split = list(sent); sent[:] = []
+            cap._px({"dx": 0, "dy": 0})
+            none = list(sent)
+        finally:
+            vcctrld.MOUSE_MAX_STEP = real_step
+            devs.mouse_move = real_move
+        check("  a small move is one event with both axes, signs kept",
+              one == [(12, -2)], one)
+        check("  a move the split would cut goes axis by axis, so the small "
+              "axis is not cut into 0- and 1-count steps",
+              split == [(round(60 * CPP), 0), (0, 8)], split)
+        check("  and nothing to move sends nothing", none == [], none)
+        cap.settings.pop("event_px")
+        check("  without a curve: linear, at least one count",
+              cap._event_counts(1, 0) == round(CPP)
+              and cap._event_counts(0.1, 0) == 1)
+
         r = cap._check({})
         check("pointer_check verifies a pointer that moves",
               r.get("verified") is True and r.get("method") == "pointer"
@@ -3260,9 +3296,10 @@ HARNESS = r"""
     emit(`vidstate ${hid && shown ? 1 : 0} ${lost ? 1 : 0}`);
   }
 
-  // Click to point: with a pointer capability, a click on the picture posts
+  // Click to point: OPT-IN since 2026-10-16 (the owner found it unlike a
+  // KVM). Ticked, with a pointer capability, a click on the picture posts
   // mouse_goto at the NATIVE spot and then a click, and does not grab;
-  // without one, the same click still grabs.
+  // unticked, or without one, the same click grabs.
   {
     const realPost = window.post, sentP = [], saved = lastState;
     const sW = capW, sH = capH, sF = frames;
@@ -3276,7 +3313,13 @@ HARNESS = r"""
     const ev = new MouseEvent('click', {bubbles: true, cancelable: true,
       clientX: r.left + (65 + 256) / 640 * r.width,
       clientY: r.top + (14 + 227.5) / 480 * r.height});
-    try { localStorage.removeItem('vcctrl.clickpoint'); } catch (e) {}
+    const cpWas = localStorage.getItem('vcctrl.clickpoint');
+    localStorage.removeItem('vcctrl.clickpoint');
+    armFromStage(ev);
+    const grabDefault = armed && sentP.length === 0;
+    setArmed(false);
+    sentP.length = 0;
+    localStorage.setItem('vcctrl.clickpoint', '1');
     armFromStage(Object.assign(ev, {}));
     await new Promise(res => setTimeout(res, 30));
     const g = sentP[0] || [];
@@ -3288,9 +3331,63 @@ HARNESS = r"""
     armFromStage(ev);
     const grabbed = armed && sentP.length === 0;
     setArmed(false);
+    if (cpWas === null) localStorage.removeItem('vcctrl.clickpoint');
+    else localStorage.setItem('vcctrl.clickpoint', cpWas);
     window.post = realPost; lastState = saved;
     capW = sW; capH = sH; frames = sF;
     emit(`clickpoint ${pointed ? 1 : 0} ${grabbed ? 1 : 0}`);
+    emit(`clickpointdefault ${grabDefault ? 1 : 0} 0`);
+  }
+
+  // Grab on a pointer target moves in NATIVE px scaled from the picture as
+  // drawn (mouse_px), sends nothing new while a move is in flight (the rest
+  // accumulates), and a button goes after the pending move. Without a
+  // pointer capability it is mouse_move, as before.
+  {
+    const realPost = window.post, sentG = [], saved = lastState;
+    const sW = capW, sH = capH, sF = frames;
+    const gainWas = localStorage.getItem('vcctrl.mousegain');
+    localStorage.removeItem('vcctrl.mousegain');
+    let release = null;
+    window.post = (c, b) => { sentG.push([c, b]);
+      return c === 'mouse_px' && !release
+        ? new Promise(res => { release = res; }) : Promise.resolve({ok: true}); };
+    lastState = {caps: {pointer: {configured: true}},
+                 machine: {native: {width: 512, height: 342},
+                           picture: {x: 65, y: 70, width: 512, height: 342}}};
+    frames = 1; capW = 640; capH = 480;
+    const r = mediaEl().getBoundingClientRect();
+    mouseAccDx = mouseAccDy = 0; moveInFlight = false; mouseChain = Promise.resolve();
+    // 100 capture px across is 100 native px at 1:1, whatever the zoom.
+    mouseAccumulate(100 / 640 * r.width, 50 / 480 * r.height);
+    flushMouseMove();
+    await new Promise(res => setTimeout(res, 0));
+    const first = sentG.length === 1 && sentG[0][0] === 'mouse_px'
+               && sentG[0][1].dx === 100 && sentG[0][1].dy === 50;
+    mouseAccumulate(10 / 640 * r.width, 0);
+    flushMouseMove();
+    await new Promise(res => setTimeout(res, 0));
+    const held = sentG.length === 1 && Math.round(mouseAccDx) === 10;
+    mouseButton('mouse_down', 'left');
+    await new Promise(res => setTimeout(res, 0));
+    const queued = sentG.length === 1;
+    release({ok: true});
+    await new Promise(res => setTimeout(res, 10));
+    const order = sentG.length === 3 && sentG[1][0] === 'mouse_px'
+               && sentG[1][1].dx === 10 && sentG[2][0] === 'mouse_down';
+    sentG.length = 0; release = () => {};
+    lastState = {caps: {}, machine: {}};
+    mouseAccDx = mouseAccDy = 0; moveInFlight = false;
+    mouseAccumulate(7, 0);
+    flushMouseMove();
+    await new Promise(res => setTimeout(res, 0));
+    const plain = sentG.length === 1 && sentG[0][0] === 'mouse_move';
+    mouseAccDx = mouseAccDy = 0; moveInFlight = false; mouseChain = Promise.resolve();
+    if (gainWas !== null) localStorage.setItem('vcctrl.mousegain', gainWas);
+    window.post = realPost; lastState = saved;
+    capW = sW; capH = sH; frames = sF;
+    emit(`grabpx ${first ? 1 : 0} ${held && queued ? 1 : 0}`);
+    emit(`grabpx2 ${order ? 1 : 0} ${plain ? 1 : 0}`);
   }
 
   // Tracked Caps Lock where there are no LEDs: the C lamp is lit AND dashed,
@@ -4189,6 +4286,16 @@ def test_zoom_layout_in_a_browser():
           got["clickpoint"][0] == 1.0, got["clickpoint"])
     check("control: without a pointer capability the click still grabs",
           got["clickpoint"][1] == 1.0, got["clickpoint"])
+    check("  click to point is opt-in: by default a click on the picture grabs",
+          got["clickpointdefault"][0] == 1.0, got["clickpointdefault"])
+    check("Grab on a pointer target posts mouse_px in native px, 1:1 with the picture",
+          got["grabpx"][0] == 1.0, got["grabpx"])
+    check("  and sends nothing new while a move is in flight; a button waits behind it",
+          got["grabpx"][1] == 1.0, got["grabpx"])
+    check("  then the held move goes, then the button, in that order",
+          got["grabpx2"][0] == 1.0, got["grabpx2"])
+    check("control: without a pointer capability Grab still posts mouse_move",
+          got["grabpx2"][1] == 1.0, got["grabpx2"])
     check("tracked Caps Lock lights the C lamp dashed and warns 'probably'",
           got["capstracked"][0] == 1.0, got["capstracked"])
     check("  the title shows the pointer proof; unknown draws as n/a",

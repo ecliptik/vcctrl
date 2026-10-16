@@ -1190,6 +1190,9 @@ class WebCapability(object):
         # post(), passed -- which is why the guard below now checks this list
         # against every command the page source posts.
         "mouse_goto", "mouse_drag", "cursor", "pointer_check",
+        # Grab's moves on a pointer target: native px, encoded for the board
+        # (PointerCapability._px). Gated like mouse_move.
+        "mouse_px",
         # The TRACKED Caps Lock, read-only here; setting it is a CLI/MCP act.
         "capslock",
         # THE GATEWAY'S "Re-scan hardware" BUTTON (DOS System panel): reboots
