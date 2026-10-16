@@ -156,7 +156,11 @@ With `capabilities.share` (backend `smb`): `vcctrl share put <file> [name]`
 Files land in the share's `Uploads` folder. A MacBinary `.bin` becomes a
 real Mac file (resource fork, type/creator), and `.txt` gets TEXT. On the
 Mac, close and reopen the Uploads window to see it (the System 6 Finder
-doesn't refresh an open server folder). A name with no `.txt` and no
+doesn't refresh an open server folder). Replacing a file works the same
+way: quit the old copy, `share put` the new one under the same name, close
+and reopen Uploads, and the Mac runs the new version (no remount
+needed). Apps run straight from the share, even on a 512K machine. A name
+with no `.txt` and no
 MacBinary wrapper arrives with no type, as a blank generic document.
 Requires an SMB account, `smbclient` and a credentials file on the daemon
 host. Configured on the 512Ke's profile and on the synthetic twin (both
