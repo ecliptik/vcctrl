@@ -52,6 +52,10 @@ held down on the Mac, and vcctrl has no way to know:
   opens and stays open while held), `mouse move` down with the button
   still held, `shot` to see which item is highlighted, then
   `mouse up left`. Release over nothing to cancel.
+- **Never `mouse goto` while a menu is held open.** goto parks the
+  pointer in a corner and nudges it to find the cursor, which drags off
+  the menu, so the release lands on nothing. `goto` to the menu TITLE
+  first, press, then use a relative `mouse move` to the item.
 - **Drag to copy:** `mouse down` on the icon, moves, `shot`, then
   `mouse up`. The drop target highlights when you're over it. Dropping on
   another disk or volume copies, and the source stays.
@@ -151,9 +155,12 @@ With `capabilities.share` (backend `smb`): `vcctrl share put <file> [name]`
 `vcctrl_share_put` / `vcctrl_share_list`, or the web KVM's "Upload file".
 Files land in the share's `Uploads` folder. A MacBinary `.bin` becomes a
 real Mac file (resource fork, type/creator), and `.txt` gets TEXT. On the
-Mac, reopen the Uploads window to see it. Requires an SMB account and a
-credentials file on the daemon host. Not configured on the 512Ke's profile
-as of this writing.
+Mac, close and reopen the Uploads window to see it (the System 6 Finder
+doesn't refresh an open server folder). A name with no `.txt` and no
+MacBinary wrapper arrives with no type, as a blank generic document.
+Requires an SMB account, `smbclient` and a credentials file on the daemon
+host. Configured on the 512Ke's profile and on the synthetic twin (both
+upload to the same AppleShare server's share).
 
 ## Shutting down (the measured sequence)
 
@@ -232,7 +239,10 @@ there is nothing to capture. `audio: none` is the hardware, not a gap.
 Chooser (Apple menu, press-drag) → click AppleShare → click the server
 name → Return (OK) → the login dialog. **Click into the Password field
 first**, then type it with `type --secret` (see Passwords) → Return. The
-login can take about 10 s over LocalTalk, so wait before judging. Pick the
+login can take about 10 s over LocalTalk, so wait before judging. If
+nothing has happened after ~15 s, click OK instead (once on the
+synthetic twin Return did nothing there, and clicking OK went straight
+through). Pick the
 volume → Return. The volume appears on the desktop, and the Chooser closes
 from its close box. If the server's file server restarted, an open
 Chooser fails: close and reopen it, then dismiss the "file server has
@@ -269,6 +279,21 @@ Anything sent with `type` is kept word for word in the activity bus,
 - web KVM: the lock button beside the command field, for one line.
 - MCP: there's no secret mode, deliberately. A secret handed to a tool is
   already in the agent's context, so use the shell pipe instead.
+
+## The synthetic twin (profile snow512)
+
+A true Macintosh 512Ke in the Snow emulator (an HD20 build) on the control
+host, for trying things without the real machine: its own vcctrld profile,
+driven with the usual verbs and MCP tools. The same recipes hold.
+`key_remap` makes Ctrl Option and Alt/Meta Command, exactly as on the
+512Ke. Its System Folder is trimmed to fit 512K (AppleShare kept), and it's
+on the same LocalTalk network (LocalTalk over UDP to the same router).
+Differences:
+- `power on`/`off` start and stop the emulator, not a plug.
+- The pointer is absolute and exact: `goto` lands within 1 px. Within
+  ~12 px of the screen's right-hand rounded corners the cursor's shape
+  can misread.
+- A 1.4 MB AppleShare copy runs at about 17 KB/s, like real LocalTalk.
 
 ## Not supported here
 
