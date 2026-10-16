@@ -194,6 +194,8 @@ Done on the 512Ke on 2026-10-15, at the owner's request. Use exactly this:
    ~116 Mac px down; 626 counts overshot into the window below). Take a
    `shot` and check the Shut Down row is inverted and Restart is not. If
    nothing is highlighted you're off the menu, so move back by ±90.
+   If Restart is highlighted (2026-10-16: 540 stopped there), `mouse move 0 60`
+   and shot again. The shot lags ~0.4 s, so wait a second before judging.
 4. `mouse up left`. The Finder closes windows and unmounts AppleShare
    volumes over LocalTalk, with the watch cursor up for **30-60 s**.
 5. Wait for **"You may now switch off your Macintosh safely."** (a dialog
