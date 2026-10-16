@@ -193,8 +193,18 @@ Done on the 512Ke on 2026-10-15, at the owner's request. Use exactly this:
 7. Closing `note-set` ("… shut down and powered off at the plug"), release
    the lock, and tell any peer.
 
-To start it again: `vcctrl power on` (owner's OK). It boots from its
-BlueSCSI. Any AppleShare volume needs a fresh Chooser login after boot.
+To start it again: `vcctrl power on` (owner's OK). The 512Ke boots from a
+Floppy Emu in HD20 mode (it has no SCSI port). Any AppleShare volume needs
+a fresh Chooser login after boot.
+
+**If it stops at a plain disk icon:** a grey pattern with a static floppy
+icon in the middle, no question mark, and `framestats` showing one
+distinct frame. The boot device isn't answering. On 2026-10-16 the Floppy
+Emu showed a checksum error. Before that, the Finder sat on the watch
+cursor after an app quit and the Mac bombed ("address error") ~6 min
+later. The owner tapped the Floppy Emu's button, it restarted, and the Mac
+booted. No vcctrl verb reaches that button, so ask the owner. Don't blame
+the app that was running until the boot device is ruled out.
 
 ## Restart, screensaver
 
