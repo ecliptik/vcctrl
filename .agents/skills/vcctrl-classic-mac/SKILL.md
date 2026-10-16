@@ -112,7 +112,8 @@ With `capabilities.pointer` (backend `video-diff`) configured, as on the
   sends no keystroke.
 - To find a target's native coordinates from a `shot`: native =
   (capture − picture origin) × native size / picture size. On the 512Ke
-  that's x = (cx − 65) × 512/511, y = (cy − 14) × 342/455.
+  the converter now outputs 640x480 at 1x, so that's just x = cx − 65,
+  y = cy − 70.
 - In the web KVM, "Click to point" (Settings, on by default here) makes a
   click on the picture a goto plus a click. Grab is the button.
 - Limits: the diff assumes the dark arrow on a lighter ground. A blinking
@@ -272,6 +273,12 @@ closed down" alert with Return.
 - An HDMI converter may stretch the 512x342 screen, for example to 511x455
   of a 640x480 frame. The profile's `machine.picture` lets the web KVM
   restore 3:2. `shot` coordinates are in capture pixels, stretch included.
+- A non-integer stretch bands 1-px lines: title-bar stripes look uneven or
+  "shifted" (342 lines on ~455 rows alternate solid black and grey pairs).
+  It isn't the Mac. Set the RGB2HDMI's Resolution to 640x480 with Integer
+  scaling (Main Menu, Save Configuration, exit: it restarts), then
+  re-measure `machine.picture`. On the 512Ke that gave 512x342 1:1 at
+  (65,70) (2026-10-15).
 
 ## Passwords
 
