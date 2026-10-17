@@ -17,11 +17,12 @@ moved 23 px for 21 expected, so its tracking is linear too. About the
 Finder: System 6.0.8, Finder 6.1.8, MultiFinder on, 4,096K total, System
 845K, largest unused block 3,091K. It boots from its own disks ("System 6",
 "Data"), not the Floppy Emu's lean608. After Dark's Flying Toasters is its
-screensaver. **AppleShare doesn't work on it yet:** with its System Folder's
-AppleTalk 58.0 (Phase 2) the Chooser finds no servers or zones through
-TashRouter. Without AppleTalk 58 it finds tashtalk, but then AppleShare
-reports resources not installed at startup (retromac, 2026-10-16). So
-`share put` can't reach the Plus for now.
+screensaver. Its System Folder has AppleTalk 58.0 (Phase 2), and it mounts
+TashTalk Share with it, so `share put` reaches it as it does the 512Ke.
+Once, the Chooser found no servers or zones although the router could
+see the Plus. A restart of TashRouter, atalkd and netatalk on the server
+(not anything on the Mac) fixed it; the cause is unknown (retromac,
+2026-10-16).
 
 ## Modifier keys: Ctrl is Option, Alt is Command
 
