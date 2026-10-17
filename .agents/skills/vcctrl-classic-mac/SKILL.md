@@ -10,6 +10,15 @@ Everything here was measured on a Macintosh 512Ke running System 6.0.8,
 HDMI capture. A Plus or a System 7 Mac on the same board should behave the
 same way. Where that is a guess, it says so.
 
+**The Macintosh Plus (on the same cables since 2026-10-16).** It uses the same board, keymap,
+converter and plug; `internal/navi/switch-mac.sh plus` relabels the profile.
+Measured: the capture is still 1:1 at (65,70), 512x342, and `pointer-check`
+moved 23 px for 21 expected, so its tracking is linear too. About the
+Finder: System 6.0.8, Finder 6.1.8, MultiFinder on, 4,096K total, System
+845K, largest unused block 3,091K. It boots from its own disks ("System 6",
+"Data"), not the Floppy Emu's lean608. After Dark's Flying Toasters is its
+screensaver.
+
 ## Modifier keys: Ctrl is Option, Alt is Command
 
 USB4VC's Mac board does not map keys the way the keycaps suggest:
@@ -246,7 +255,14 @@ of any memory measurement, so record it. The owner picks the disk in the
 Floppy Emu's menu; no vcctrl verb can.
 
 **The bench camera:** the 512Ke's rig has a room camera on its logic board
-(`vcctrl camera`, and the web KVM's camera panel), 1080p MJPEG.
+(`vcctrl camera`, and the web KVM's camera panel), 1080p MJPEG. Filming the
+CRT in auto exposure, it showed a dark bar rolling down the screen. That's
+the camera's exposure beating against the 60.15 Hz refresh, not a sync
+fault in the Mac or the capture. The profile's
+`capabilities.camera.settings.controls` now fixes the exposure at one CRT
+frame (`exposure_time_absolute: 166`) with 60 Hz anti-flicker. The daemon
+sets them before each spawn, and `camera state` shows `controls_error` if
+one is refused.
 
 **Disk First Aid can't check the HD20 volume.** DFA v7.2.2 (macos608 ›
 Setup and Repair) lists it as "Floppy Emu (Startup Disk)" and warns that a
@@ -281,9 +297,12 @@ disk.
   to send. Hard restart: the plug (`vcctrl power cycle`), but only with the
   owner's go-ahead, because it cuts power with no shutdown.
 - After Dark is on the disk. If a screensaver is running, the picture
-  changes on its own and `pointer_check` may fail or find nothing. Any
-  mouse move wakes it, so a `mouse move 1 0` / `mouse move -1 0` first is
-  harmless.
+  changes on its own and `pointer_check` may fail or find nothing. Wake it
+  with `mouse move 40 0` then `mouse move -40 0`: **a 1-count move does
+  nothing** on this board (see `event_px`), so it doesn't wake anything. Wake
+  it right before the step. Once on the Plus it blanked again between a wake
+  and a `pointer-check`, which then reported a whole-screen diff and a scale
+  warning; a rerun passed.
 
 ## Caps Lock: tracked, never read
 
@@ -366,6 +385,12 @@ closed down" alert with Return.
   scaling (Main Menu, Save Configuration, exit: it restarts), then
   re-measure `machine.picture`. On the 512Ke that gave 512x342 1:1 at
   (65,70) (2026-10-15).
+- **A scaled view of the grey desktop shows a coarse checkerboard.** The
+  System 6 desktop is a 1-px 50% dither, and any downscale (an image viewer,
+  the web KVM at a non-integer size) aliases it into big diagonal checks.
+  That isn't the converter mis-sampling: check the raw `shot` at pixel level
+  (rows should alternate `#.#.` / `.#.#`). On the Plus (2026-10-16) it was
+  exact.
 
 ## Passwords
 
