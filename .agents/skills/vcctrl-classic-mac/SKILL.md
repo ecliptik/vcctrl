@@ -222,6 +222,20 @@ later. The owner tapped the Floppy Emu's button, it restarted, and the Mac
 booted. No vcctrl verb reaches that button, so ask the owner. Don't blame
 the app that was running until the boot device is ruled out.
 
+**If the Finder loops while opening its windows at startup:** the desktop
+comes up, the Finder opens the first saved window, then the screen goes
+white with an empty window outline that keeps flashing under the watch
+cursor. Left alone it ends in a frozen screen of repeating garbage that
+looks like a hardware fault but isn't (2026-10-16, three boots in a row). The
+Finder is out of memory: this volume has ~2,800 files in 512K. Fix: power
+on, `keydown leftmeta` and `keydown lctrl` (Command+Option) once "Welcome to
+Macintosh" shows, hold until "Are you sure you want the desktop rebuilt…",
+`keyup` both, Return. On this disk the rebuild ran ~4 min and ended with
+"could not be completely rebuilt (out of Finder memory)" (click OK, it
+didn't take Return); the Finder then came up with no windows open. Shut
+down with as few windows open as you can, because the Finder reopens them
+all at the next boot.
+
 **Disk First Aid can't check the HD20 volume.** DFA v7.2.2 (macos608 ›
 Setup and Repair) lists it as "Floppy Emu (Startup Disk)" and warns that a
 startup disk can only be verified. Verify then reports "This is not an HFS
