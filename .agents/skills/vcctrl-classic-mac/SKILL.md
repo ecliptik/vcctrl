@@ -236,6 +236,18 @@ didn't take Return); the Finder then came up with no windows open. Shut
 down with as few windows open as you can, because the Finder reopens them
 all at the next boot.
 
+**Two boot disks (2026-10-16):** the Floppy Emu card holds the big original
+`macos608` (about 2,800 files, so the Finder's memory is tight) and a lean
+`lean608` built for real-hardware app tests: the System Folder without
+the 512K extras, which sit in `Optional (512K)` with MacTCP and the TalkIP
+Driver, and only the apps under test. About the Finder: System 186K and
+326K free on lean608, against 224K/288K on macos608. Which one booted is part
+of any memory measurement, so record it. The owner picks the disk in the
+Floppy Emu's menu; no vcctrl verb can.
+
+**The bench camera:** the 512Ke's rig has a room camera on its logic board
+(`vcctrl camera`, and the web KVM's camera panel), 1080p MJPEG.
+
 **Disk First Aid can't check the HD20 volume.** DFA v7.2.2 (macos608 ›
 Setup and Repair) lists it as "Floppy Emu (Startup Disk)" and warns that a
 startup disk can only be verified. Verify then reports "This is not an HFS
