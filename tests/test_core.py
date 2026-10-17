@@ -16255,3 +16255,71 @@ def test_send_dest_normalises_and_validates():
             pass
         else:
             raise AssertionError("%r was accepted; it would time out" % bad)
+
+
+def test_camera_controls_are_set_in_order_and_a_refusal_is_kept():
+    """capabilities.camera.settings.controls: the Mac rig's bench camera
+    filmed the CRT with a rolling dark bar until its exposure was fixed at
+    one CRT frame (2026-10-16). A UVC camera forgets controls on every
+    re-enumeration, so the daemon sets them before each ffmpeg spawn.
+    auto_exposure must go first (a manual time is ignored until it is 1),
+    and one refused control must not stop the camera."""
+    print("\nCameraCapability: controls applied in order, refusals recorded")
+    p = _tmp_yaml(
+        "version: 1\n"
+        "capabilities:\n"
+        "  camera:\n"
+        "    backend: v4l2-ffmpeg\n"
+        "    settings:\n"
+        "      device: /dev/null\n"
+        "      controls:\n"
+        "        power_line_frequency: 2\n"
+        "        auto_exposure: 1\n"
+        "        exposure_time_absolute: 166\n")
+    old = os.environ.get("VCCTRL_CONFIG")
+    try:
+        os.environ["VCCTRL_CONFIG"] = p
+        import importlib.util as _u
+        spec = _u.spec_from_file_location("vcctrld_camctl", DAEMON)
+        m = _u.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        calls = []
+
+        class R:
+            def __init__(self, rc, err=""):
+                self.returncode, self.stderr, self.stdout = rc, err, ""
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            if argv[-1].startswith("power_line_frequency"):
+                return R(255, "VIDIOC_S_EXT_CTRLS: failed: Invalid argument")
+            return R(0)
+
+        cam = m.CameraCapability(None)
+        real = m.subprocess.run
+        m.subprocess.run = fake_run
+        try:
+            cam._set_controls()
+        finally:
+            m.subprocess.run = real
+        sent = [a[-1] for a in calls]
+        check("every control is sent, in the configured order",
+              sent == ["power_line_frequency=2", "auto_exposure=1",
+                       "exposure_time_absolute=166"], sent)
+        check("each goes to the configured device",
+              all(a[:3] == ["v4l2-ctl", "-d", "/dev/null"] for a in calls),
+              calls)
+        check("the refused control is named in controls_error",
+              cam.controls_error is not None
+              and cam.controls_error.startswith("power_line_frequency"),
+              cam.controls_error)
+        check("state reports what was configured and what was refused",
+              cam._state()["controls"]["exposure_time_absolute"] == 166
+              and cam._state()["controls_error"] == cam.controls_error,
+              cam._state())
+    finally:
+        if old is None:
+            os.environ.pop("VCCTRL_CONFIG", None)
+        else:
+            os.environ["VCCTRL_CONFIG"] = old
+        os.unlink(p)

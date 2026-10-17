@@ -6574,11 +6574,23 @@ class CameraCapability(Capability):
     # triggers a respawn -- see _watchdog.
     NOSIGNAL_AFTER_S = 2.0
 
+    # UVC controls to set before each spawn, as {name: value} in the order
+    # given (v4l2-ctl names: auto_exposure, exposure_time_absolute, ...).
+    # A camera forgets them whenever it re-enumerates, so a hand-run
+    # v4l2-ctl does not survive a replug or reboot; setting them here does.
+    # Order matters: a manual exposure time is ignored until auto_exposure
+    # is 1, so list auto_exposure first. Measured on the Mac rig 2026-10-16:
+    # a camera filming a CRT in auto exposure shows a dark roll bar; a fixed
+    # exposure of one CRT frame (1/60.15 s = exposure_time_absolute 166)
+    # all but removes it.
+    CONTROLS = CFG.default("capabilities.camera.settings.controls", {})
+
     def __init__(self, devs, bus=None):
         Capability.__init__(self, devs)
         self.bus = bus
         self.lock = threading.Lock()
         self.proc = None
+        self.controls_error = None
         self.reader = None
         self.running = False
         self.owned = False
@@ -6606,10 +6618,30 @@ class CameraCapability(Capability):
         self.running = False
         self._release()
 
+    def _set_controls(self):
+        """Apply CONTROLS one at a time, in order. A refused control is
+        recorded in controls_error and the rest still run: a camera that
+        streams with its own exposure is more use than no camera."""
+        errors = []
+        for name, value in (self.CONTROLS or {}).items():
+            try:
+                r = subprocess.run(
+                    ["v4l2-ctl", "-d", self.DEVICE,
+                     "-c", "%s=%s" % (name, value)],
+                    capture_output=True, text=True, timeout=5)
+                if r.returncode != 0:
+                    errors.append("%s: %s" % (
+                        name, (r.stderr or r.stdout).strip()[:120]))
+            except Exception as exc:
+                errors.append("%s: %s" % (name, errstr(exc)))
+        self.controls_error = "; ".join(errors) or None
+
     def _acquire(self):
         with self.lock:
             if self.owned:
                 return True
+            if self.CONTROLS:
+                self._set_controls()
             try:
                 self.proc = subprocess.Popen(
                     ["ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -6763,6 +6795,8 @@ class CameraCapability(Capability):
                     "frames": self.frames_total, "spawns": self.spawns,
                     "fast_failures": self.fast_failures,
                     "last_error": self.last_error,
+                    "controls": dict(self.CONTROLS or {}),
+                    "controls_error": self.controls_error,
                     "device_present": os.path.exists(self.DEVICE),
                     "device": self.DEVICE,
                     "last_frame_age_s": round(age, 3) if age else None}
