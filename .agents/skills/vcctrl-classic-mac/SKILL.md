@@ -18,15 +18,15 @@ Finder: System 6.0.8, Finder 6.1.8, MultiFinder on, 4,096K total, System
 845K, largest unused block 3,091K. It boots from its own disks ("System 6",
 "Data"), not the Floppy Emu's lean608. After Dark's Flying Toasters is its
 screensaver. **Its AppleTalk 58.0 (Phase 2) drops most incoming frames to
-user sockets**: the Chooser's lookup replies and talkip's MacIP alike, even
-with every INIT set aside. AEP echoes still get through. So the Chooser
-often lists no servers or zones, and mounting TashTalk Share is hit or
-miss: it worked once, after a restart of TashRouter, atalkd and netatalk,
-and failed again later despite another one. With AppleTalk 58 moved out
-of the System Folder, the ROM's AppleTalk gives talkip clean results
-(ping 8/8, Fetch as fast as on the 512Ke), but AppleShare then complains of
-resources not installed at startup (retromac, 2026-10-16/17). Don't count
-on `share put` reaching the Plus.
+user sockets** (Chooser lookup replies and talkip's MacIP; AEP echoes get
+through), even with every INIT set aside. So it stays out of the System
+Folder, in "AppleTalk 58 (off)" at the disk root, with AppleShare Prep, and
+the Plus runs the ROM's AppleTalk v19 as the 512Ke does. AppleShare then
+needs the `.XPP` driver (DRVR 40) in the System file, added with AppleShare's
+XPP Install (2026-10-17). With that, the Chooser lists tashtalk, TashTalk
+Share mounts, and talkip works (Fetch 5,639 bytes in 2.45 s, as on the
+512Ke), so `share put` reaches the Plus. MacTCP is on LocalTalk, not the
+Ethernet Built-In it had. Don't move AppleTalk 58 back (retromac).
 
 ## Modifier keys: Ctrl is Option, Alt is Command
 
