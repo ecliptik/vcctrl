@@ -16323,3 +16323,36 @@ def test_camera_controls_are_set_in_order_and_a_refusal_is_kept():
         else:
             os.environ["VCCTRL_CONFIG"] = old
         os.unlink(p)
+
+
+def test_a_hidden_tab_closes_its_picture_streams():
+    """Reported 2026-10-18: returning to a web KVM tab replayed every frame
+    it had missed, fast, until it caught up with now. Measured on the live
+    stream: a reader that stopped reading for 20 s got 4.5 MB / 90 frames in
+    the 1.5 s after it resumed (a live reader gets ~22), because the
+    multipart <img> stream is queued by every buffer on the way and nothing
+    drops it. The fix is that a hidden tab closes its picture streams and a
+    visible one opens fresh ones -- so these must stay wired together."""
+    import re
+    print("\nkvm.html: a hidden tab closes its picture streams")
+    src = open(os.path.join(HERE, os.pardir, "daemon", "kvm.html"),
+               encoding="utf-8").read()
+    m = re.search(r"addEventListener\('visibilitychange',\s*\(\)\s*=>\s*\{(.*?)\n\}\);",
+                  src, re.S)
+    check("there is a visibilitychange handler", m is not None)
+    body = m.group(1) if m else ""
+    check("it suspends the streams when the page is not visible, "
+          "and resumes them when it is",
+          re.search(r"!==\s*'visible'\)\s*\{\s*suspendStreams\(\);\s*return;", body)
+          and "resumeAll();" in body, body)
+    fn = re.search(r"function suspendStreams\(\)\s*\{(.*?)\n\}", src, re.S)
+    check("suspendStreams exists", fn is not None)
+    fb = fn.group(1) if fn else ""
+    for what in ("dropSocket();", "dropH264Socket();", "img.src = ''",
+                 "$('camimg').src = ''"):
+        check("suspendStreams closes %s" % what, what in fb, fb)
+    check("the <img>'s error handler is detached before its src is cleared "
+          "(or the cleared stream would restart itself)",
+          fb.index("img.onerror = null") < fb.index("img.src = ''"), fb)
+    check("audio is not touched (it has its own bounded socket)",
+          "aws" not in fb and "ac." not in fb, fb)

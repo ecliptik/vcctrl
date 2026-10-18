@@ -4445,9 +4445,34 @@ function resumeAll() {
 // picture without a manual reload -- a KVM you have to reload is one you
 // cannot trust to be showing now.
 addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+  if (document.visibilityState !== 'visible') { suspendStreams(); return; }
   resumeAll();
 });
+
+// A HIDDEN TAB STOPS READING, AND NOTHING BETWEEN THE DAEMON AND THE BROWSER
+// DROPS WHAT IT CANNOT DELIVER. The video <img> is a multipart stream the
+// server writes to as fast as frames arrive; with the reader stalled, the
+// frames queue in every buffer on the way (the browser's flow-control window,
+// the proxy, the kernel). Measured against the live stream: a reader that
+// read nothing for 20 s got 4.5 MB, 90 frames, in the 1.5 s after it started
+// again, against ~22 for a live one. Returning to the tab then played that
+// backlog back fast until it caught up with now -- a KVM replaying the past
+// as if it were the present.
+//
+// So a hidden tab closes its picture streams (video socket, H.264 socket,
+// the <img> streams, the camera) and resumeAll() opens fresh ones on return:
+// the first frame it shows is the current one. A tab nobody can see costs the
+// daemon and the link nothing. Audio is left alone: it has its own socket,
+// drops what is too far ahead (MAX_AHEAD), and a hidden tab may be listened to.
+function suspendStreams() {
+  if (firstFrameTimer) { clearTimeout(firstFrameTimer); firstFrameTimer = null; }
+  dropSocket();
+  dropH264Socket();
+  // Detach before clearing, or the cleared stream's error handler restarts it.
+  img.onerror = null;
+  img.src = '';
+  $('camimg').src = '';
+}
 addEventListener('pageshow', e => { if (e.persisted) resumeAll(); });
 addEventListener('online', resumeAll);
 
