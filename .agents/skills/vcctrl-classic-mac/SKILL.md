@@ -334,6 +334,11 @@ pointer move into a menu sometimes lands a row long or short (Control Panel
 instead of Chooser), so both scripts check which row is highlighted and
 correct before releasing.
 
+**The AppleShare login's first OK click is often ignored on the real 512Ke**
+(retromac: 5 of 5 on 2026-10-19 and again in a later run; it didn't happen in
+the helper's own run). Look for the dialog to go; if it is still up after
+~15 s, click OK once more (the helper does).
+
 **Cold-boot pointer check (2026-10-19, real 512Ke, no PRAM battery):** about
 25 s after power-on `pointer-check` was verified (moved 22 px for 21.2
 expected) and `goto 23 9` + `mouse px 27 100` hit Chooser 3 of 3. The
