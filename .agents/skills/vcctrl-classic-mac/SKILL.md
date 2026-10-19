@@ -18,15 +18,21 @@ Finder: System 6.0.8, Finder 6.1.8, MultiFinder on, 4,096K total, System
 845K, largest unused block 3,091K. It boots from its own disks ("System 6",
 "Data"), not the Floppy Emu's lean608. After Dark's Flying Toasters is its
 screensaver. **Its AppleTalk 58.0 (Phase 2) drops most incoming frames to
-user sockets** (Chooser lookup replies and talkip's MacIP; AEP echoes get
-through), even with every INIT set aside. So it stays out of the System
-Folder, in "AppleTalk 58 (off)" at the disk root, with AppleShare Prep, and
-the Plus runs the ROM's AppleTalk v19 as the 512Ke does. AppleShare then
-needs the `.XPP` driver (DRVR 40) in the System file, added with AppleShare's
-XPP Install (2026-10-17). With that, the Chooser lists tashtalk, TashTalk
-Share mounts, and talkip works (Fetch 5,639 bytes in 2.45 s, as on the
-512Ke), so `share put` reaches the Plus. MacTCP is on LocalTalk, not the
-Ethernet Built-In it had. Don't move AppleTalk 58 back (retromac).
+user sockets over LocalTalk** (Chooser lookup replies and talkip's MacIP;
+AEP echoes get through), even with every INIT set aside. Two setups work
+(retromac, 2026-10-17/18):
+- **LocalTalk:** AppleTalk 58 and AppleShare Prep moved out to "AppleTalk 58
+  (off)" at the disk root, so the Plus runs the ROM's AppleTalk v19 as the
+  512Ke does, with AppleShare's `.XPP` driver (DRVR 40) added to the System
+  file (XPP Install). Chooser lists tashtalk, the share mounts, talkip is as
+  fast as on the 512Ke (Fetch 5,639 bytes in ~2.4 s).
+- **EtherTalk over the BlueSCSI's Wi-Fi:** AppleTalk 58 back in, "EtherTalk
+  Alternative" in the Network control panel, LocalTalk idle. The share mounts
+  straight to afpd, not through TashRouter; Hypercard.dsk (1,474,560 B)
+  copied in ~79 s (18.7 KB/s), talkip's fetch took 2.9-3.4 s, and MacTCP
+  over Wi-Fi works alongside.
+Check which is configured before relying on `share put` or talkip. The owner
+chooses which to keep.
 
 ## Modifier keys: Ctrl is Option, Alt is Command
 
