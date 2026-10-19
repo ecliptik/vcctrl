@@ -438,7 +438,12 @@ Differences:
 - The pointer is absolute and exact: `goto` lands within 1 px. Within
   ~12 px of the screen's right-hand rounded corners the cursor's shape
   can misread.
-- A 1.4 MB AppleShare copy runs at about 17 KB/s, like real LocalTalk.
+- A 1.4 MB AppleShare copy from TashTalk Share (measured 2026-10-18, the same
+  1,400,000-byte file each time): the real 512Ke on LocalTalk took 116.6 s and
+  113.5 s (~12 KB/s); the twin on the pacing build (snowemu-next) took ~44 s
+  (~32 KB/s, so it is faster than the real wire); the twin on the same build
+  without the pacing patch took ~728 s. The older "~17 KB/s, like real
+  LocalTalk" figure was never measured on a real Mac.
 - A `shot` taken right after an input usually still shows the screen from
   before it. On 2026-10-16 the Apple menu first showed in a `shot` a median
   374 ms (336-433) after `mouse down` was sent: the Mac draws the menu, then the
