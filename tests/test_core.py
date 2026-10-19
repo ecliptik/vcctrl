@@ -2465,6 +2465,46 @@ def test_shot_can_wait_out_a_blank():
           r["picture"] is False and time.time() - t0 < 1, r)
 
 
+def test_classic_mac_helper_reads_a_menu():
+    """tools/classic-mac.py finds the inverted menu row from the menu's left
+    margin, not from average brightness (a row of black text on white and an
+    inverted row of white text on black average about the same), and refuses
+    to run without its environment."""
+    print("\nclassic-mac helper")
+    import importlib.util
+    import subprocess
+    from PIL import Image, ImageDraw
+    path = os.path.join(HERE, os.pardir, "tools", "classic-mac.py")
+    spec = importlib.util.spec_from_file_location("classic_mac", path)
+    cm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+
+    img = Image.new("L", (512, 342), 128)            # the grey desktop
+    d = ImageDraw.Draw(img)
+    d.rectangle((0, 0, 511, 19), fill=255)           # the menu bar
+    d.rectangle((153, 20, 295, 135), fill=255)       # an open menu
+    for y in (30, 50, 70, 100):                      # black text rows
+        d.rectangle((168, y, 250, y + 8), fill=0)
+    d.rectangle((153, 117, 295, 131), fill=0)        # the highlighted row...
+    d.rectangle((168, 120, 215, 128), fill=255)      # ...with white text in it
+    band = cm.highlighted_band(img, 150, 300)
+    check("the inverted row is found, and only it",
+          band is not None and band[0] <= 118 and band[1] >= 130, band)
+    img2 = img.copy()
+    ImageDraw.Draw(img2).rectangle((153, 117, 295, 131), fill=255)
+    check("no row is found when none is inverted",
+          cm.highlighted_band(img2, 150, 300) is None)
+    check("a label read badly still counts as the volume",
+          cm.fuzzy_has("lean608 a T sshT alt Shar Trash", "TashTalk Share"))
+    check("a different label does not",
+          not cm.fuzzy_has("lean608 Trash", "TashTalk Share"))
+    r = subprocess.run([sys.executable, path, "mount-share"], capture_output=True,
+                       text=True, env={"PATH": os.environ.get("PATH", ""),
+                                       "VCCTRL": "false"})
+    check("mount-share refuses without its settings, before touching anything",
+          r.returncode == 3 and "MAC_SERVER" in r.stdout, (r.returncode, r.stdout))
+
+
 def test_web_request_binds_cfg_to_its_own_profile():
     """A `/p/<name>/` request must resolve `CFG.*` reads to THAT profile's
     config for the request in flight, not whichever profile a previous
@@ -5197,6 +5237,7 @@ if __name__ == "__main__":
     test_shot_out_contract()
     test_stall_tracker_three_states()
     test_shot_can_wait_out_a_blank()
+    test_classic_mac_helper_reads_a_menu()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)
