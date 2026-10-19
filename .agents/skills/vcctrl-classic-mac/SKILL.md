@@ -366,6 +366,9 @@ there is nothing to capture. `audio: none` is the hardware, not a gap.
 **On the bare 512Ke, AppleTalk is Inactive at every cold boot** (no PRAM
 battery, so the setting is lost): click Active in the Chooser first, each time.
 That is expected, not a rig fault.
+Since 2026-10-19 lean608's System Folder has talkip's "AppleTalk On" INIT
+(talkip 623ba17), so on lean608 it comes up Active and the Chooser step is
+not needed; on any other boot disk, click Active first.
 
 Chooser (Apple menu, press-drag) → click AppleShare → click the server
 name → Return (OK) → the login dialog. **Click into the Password field
