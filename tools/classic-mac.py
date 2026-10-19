@@ -245,14 +245,14 @@ def pick_menu(title_x, x0, x1, pattern):
         if target is None:
             die("the menu has no row matching %r: %s" % (pattern, text_of(words)))
         # Move to the row, then correct from what is highlighted. A move can
-        # land short (the first one often does on the synthetic Mac), and the
-        # rows that are greyed out never highlight, so "nothing highlighted"
-        # means "keep going a little", up to a limit.
-        moved = 0
+        # land a row short or a row long (seen on the real 512Ke), and greyed
+        # rows and the space below the menu never highlight. So with nothing
+        # highlighted, search around the spot: a little up, then well back
+        # down.
+        search = [-10, -10, -10, 36, 10, 10, 10]
         step = int(round(target - 9))
-        for _ in range(14):
+        for _ in range(16):
             drive("mouse", "px", "0", str(step))
-            moved += step
             time.sleep(0.6)
             nat = to_native(shot("menu-row"))
             band = highlighted_band(nat, x0, x1)
@@ -268,10 +268,10 @@ def pick_menu(title_x, x0, x1, pattern):
                     done = True
                     return
                 step = int(round(target - centre))
+            elif search:
+                step = search.pop(0)
             else:
-                if moved > (target - 9) + 40:
-                    break
-                step = 12
+                break
         die("could not land on the %r row; the menu was cancelled" % pattern)
     finally:
         if not done:

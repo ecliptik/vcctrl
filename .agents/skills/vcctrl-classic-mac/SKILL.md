@@ -311,6 +311,40 @@ leaked: marked used but owned by no file, which is harmless and also on the
 older delivered image. So the bomb that day was the Floppy Emu, not the
 disk.
 
+## Helper script: shutdown and mount-share
+
+`tools/classic-mac.py` does the two chores every session repeated by hand,
+reading the screen (tesseract) before each step and stopping with its saved
+pictures when it is not what it expects. It needs python3 with PIL and
+tesseract on the machine running it; `VCCTRL="ssh HOST vcctrl"` points it at a
+remote rig, `VCCTRL_AS` is the lock name.
+
+- `classic-mac.py shutdown [--power-off]`: takes the lock (and refuses if
+  someone else holds it), Special → Shut Down, waits for "You may now switch
+  off", and with `--power-off` cuts the plug and checks 0 mW. It never cuts
+  power unless it read that message.
+- `classic-mac.py mount-share` with `MAC_SERVER`, `MAC_VOLUME` and
+  `MAC_PASSWORD_CMD` (a command that prints the password; it is streamed into
+  `type --secret`): Chooser → AppleShare → server → login → volume → closes
+  the Chooser and checks the volume is on the desktop. It never ticks
+  open-at-startup or saves the password.
+
+Tried on the real 512Ke and the twin, 2026-10-19: the real Mac's first
+pointer move into a menu sometimes lands a row long or short (Control Panel
+instead of Chooser), so both scripts check which row is highlighted and
+correct before releasing.
+
+**Cold-boot pointer check (2026-10-19, real 512Ke, no PRAM battery):** about
+25 s after power-on `pointer-check` was verified (moved 22 px for 21.2
+expected) and `goto 23 9` + `mouse px 27 100` hit Chooser 3 of 3. The
+Calculator misses seen earlier were with a loose video connector, when `goto`
+was working blind. So a cold boot does not lose the pointer scale; a
+capture that is white or rolled does break `goto`.
+
+**A blank frame does not have to fail `shot`:** `capabilities.video.settings.
+shot_retry_s` (navi: 8) makes `shot` wait that long for a real picture when
+the stick emits a flat blank, and the refusal then says it waited.
+
 ## Restart, screensaver
 
 - Restart: Special → Restart (press-drag the menu). There is no Power key
