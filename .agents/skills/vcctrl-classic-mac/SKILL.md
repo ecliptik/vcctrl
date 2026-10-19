@@ -31,8 +31,12 @@ AEP echoes get through), even with every INIT set aside. Two setups work
   straight to afpd, not through TashRouter; Hypercard.dsk (1,474,560 B)
   copied in ~79 s (18.7 KB/s), talkip's fetch took 2.9-3.4 s, and MacTCP
   over Wi-Fi works alongside.
-Check which is configured before relying on `share put` or talkip. The owner
-chooses which to keep.
+**EtherTalk works only after a live switch:** starting up with EtherTalk
+selected bombs ("address error", right after "Welcome to Macintosh") with
+every AppleTalk 58 version tried, so the owner made LocalTalk the default.
+Switch to EtherTalk in the Network control panel once it is running, and
+back to LocalTalk before every Shut Down or Restart.
+Check which is configured before relying on `share put` or talkip.
 
 ## Modifier keys: Ctrl is Option, Alt is Command
 
