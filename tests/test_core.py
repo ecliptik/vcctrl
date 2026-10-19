@@ -3115,7 +3115,23 @@ HARNESS = r"""
     // can appear at all is the overflow style, not the content size.
     const scrollable = getComputedStyle(sc).overflow !== 'hidden' ? 1 : 0;
     emit(`fitcrop ${scrollable} 0`);
-    crop = null;
+    // WHERE THE CROPPED REGION LANDS, in a stage narrower and taller than it
+    // (a phone). It was centred by scrolling, so a taller-than-needed stage
+    // left the black bands visible above and below, and a stale scroll
+    // pushed the picture sideways (reported 2026-10-18, Mac Plus). The
+    // region's centre must be the stage's centre, and the bands clipped.
+    const keep = [sc.style.inset, sc.style.width, sc.style.height];
+    sc.style.inset = 'auto'; sc.style.width = '300px'; sc.style.height = '700px';
+    crop = {x0: 65, y0: 70, bw: 512, bh: 342};
+    sc.scrollLeft = 37;                      // a stale scroll, as after a resize
+    applyZoom(false);
+    const fb = cv.getBoundingClientRect(), sb = sc.getBoundingClientRect(), k = fb.width / 640;
+    emit(`cropc ${(fb.left + (65 + 256) * k - (sb.left + sb.width / 2)).toFixed(2)} ` +
+         `${(fb.top + (70 + 171) * k - (sb.top + sb.height / 2)).toFixed(2)}`);
+    emit(`cropw ${(512 * k).toFixed(2)} ${(sb.width - 20).toFixed(2)}`);
+    emit(`cropclip ${parseFloat((document.getElementById('frame').style.clipPath.match(/inset\(([\d.]+)px/) || [0, -1])[1])} 0`);
+    sc.style.inset = keep[0]; sc.style.width = keep[1]; sc.style.height = keep[2];
+    crop = null; applyZoom(true);
   }
   // RECENTRING ON A WIDTH CHANGE, not just resizing. showPanel() used to call
   // applyZoom() with no recentre argument, so opening or closing the side
@@ -4240,6 +4256,13 @@ def test_zoom_layout_in_a_browser():
     # border, and fit no longer offers it as something to pan to.
     check("fit with an adopted crop is not scrollable",
           got["fitcrop"][0] == 0.0, got["fitcrop"])
+    check("a fitted crop is centred in a phone-shaped stage",
+          abs(got["cropc"][0]) <= 1.0 and abs(got["cropc"][1]) <= 1.0,
+          got["cropc"])
+    check("a fitted crop fills the stage's width and no more",
+          abs(got["cropw"][0] - got["cropw"][1]) <= 1.0, got["cropw"])
+    check("a fitted crop clips the letterbox above it", got["cropclip"][0] > 0,
+          got["cropclip"])
 
     check("original is exactly 640x480 on screen",
           abs(got["1"][0] - 640) < 0.5 and abs(got["1"][1] - 480) < 0.5,

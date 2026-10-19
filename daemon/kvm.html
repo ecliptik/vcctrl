@@ -9624,6 +9624,30 @@ function applyZoom(recentre) {
     }
   }
 
+  // A FITTED CROP IS PLACED, NOT SCROLLED TO. The cropped frame used to be
+  // brought into view by scrolling #scroll to the region's centre, and only
+  // when the zoom or the crop changed. On a phone the stage is taller than the
+  // region, so there was nothing to scroll vertically: the black bands above
+  // and below showed and the picture sat in the middle of them, and a width
+  // that settled after that scroll left it sideways off-centre and clipped
+  // (reported 2026-10-18, Mac Plus on a phone). Fit has no scrollbar anyway,
+  // so the region is centred with margins and the rest of the frame is
+  // clipped, which is recomputed on every resize.
+  const placed = vgaMode === 'fit' && crop && scale;
+  if (placed) {
+    const W = sc.clientWidth - pad * 2, H = sc.clientHeight - pad * 2;
+    const rw = r.bw * scale, rh = r.bh * scale * ys;
+    const left = r.x0 * scale, top = r.y0 * scale * ys;
+    fr.style.margin = Math.round((H - rh) / 2 - top) + 'px 0 0 '
+                    + Math.round((W - rw) / 2 - left) + 'px';
+    fr.style.clipPath = 'inset(' + [Math.floor(top), Math.max(0, Math.floor(pw - left - rw)),
+                                    Math.max(0, Math.floor(ph - top - rh)), Math.floor(left)]
+                                    .map(v => v + 'px').join(' ') + ')';
+    sc.scrollLeft = 0; sc.scrollTop = 0;
+  } else {
+    fr.style.margin = ''; fr.style.clipPath = '';
+  }
+
   const over = canScroll && (pw > sc.clientWidth - pad * 2 + 1 || ph > sc.clientHeight - pad * 2 + 1);
   // HORIZONTAL SPECIFICALLY, not `over` -- the small corner box (whichever
   // of #camoverlay/#scroll is currently the thumbnail) sits at the same
@@ -9638,7 +9662,7 @@ function applyZoom(recentre) {
   // when the pass loop above broke on a not-yet-laid-out #scroll (width or
   // height still 0) -- skip, the same as the old unconditional `return`
   // used to, rather than scroll to a meaningless negative offset.
-  if (recentre && scale) {
+  if (recentre && scale && !placed) {
     sc.scrollLeft = (r.x0 + r.bw / 2) * scale - sc.clientWidth / 2;
     sc.scrollTop = (r.y0 + r.bh / 2) * scale * ys - sc.clientHeight / 2;
   }
