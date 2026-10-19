@@ -36,6 +36,9 @@ selected bombs ("address error", right after "Welcome to Macintosh") with
 every AppleTalk 58 version tried, so the owner made LocalTalk the default.
 Switch to EtherTalk in the Network control panel once it is running, and
 back to LocalTalk before every Shut Down or Restart.
+With the patched DaynaPORT driver (retromac, 2026-10-18) a cold boot and a
+restart with EtherTalk selected both reach the Finder; EtherTalk is the
+startup default once the owner confirms it.
 Check which is configured before relying on `share put` or talkip.
 
 ## Modifier keys: Ctrl is Option, Alt is Command
