@@ -31,14 +31,12 @@ AEP echoes get through), even with every INIT set aside. Two setups work
   straight to afpd, not through TashRouter; Hypercard.dsk (1,474,560 B)
   copied in ~79 s (18.7 KB/s), talkip's fetch took 2.9-3.4 s, and MacTCP
   over Wi-Fi works alongside.
-**EtherTalk works only after a live switch:** starting up with EtherTalk
-selected bombs ("address error", right after "Welcome to Macintosh") with
-every AppleTalk 58 version tried, so the owner made LocalTalk the default.
-Switch to EtherTalk in the Network control panel once it is running, and
-back to LocalTalk before every Shut Down or Restart.
-With the patched DaynaPORT driver (retromac, 2026-10-18) a cold boot and a
-restart with EtherTalk selected both reach the Finder; EtherTalk is the
-startup default once the owner confirms it.
+**EtherTalk is the Plus's startup default** (owner, 2026-10-19), on a patched
+DaynaPORT driver (retromac). With the stock driver, starting up with EtherTalk
+selected bombed ("address error", right after "Welcome to Macintosh"); with
+the patch a cold boot and a restart both reach the Finder, the share mounts
+and talkip works. If the Plus bombs there again, suspect the driver and fall
+back to LocalTalk (the first setup above) before anything else.
 Check which is configured before relying on `share put` or talkip.
 
 ## Modifier keys: Ctrl is Option, Alt is Command
