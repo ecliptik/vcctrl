@@ -363,6 +363,10 @@ there is nothing to capture. `audio: none` is the hardware, not a gap.
 
 ## AppleShare (a worked menu-and-dialog flow)
 
+**On the bare 512Ke, AppleTalk is Inactive at every cold boot** (no PRAM
+battery, so the setting is lost): click Active in the Chooser first, each time.
+That is expected, not a rig fault.
+
 Chooser (Apple menu, press-drag) → click AppleShare → click the server
 name → Return (OK) → the login dialog. **Click into the Password field
 first**, then type it with `type --secret` (see Passwords) → Return. The
