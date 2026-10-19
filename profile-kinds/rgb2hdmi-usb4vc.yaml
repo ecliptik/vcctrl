@@ -55,6 +55,10 @@ capabilities:
       # the original analog signal, so it has no analog sampling-noise
       # floor and "frozen" must not be read as "no signal" for it.
       analog: false
+      # Optional: seconds `shot` waits for a real picture when the stick
+      # emits a flat blank (a loose cable does, for a few seconds). 0, the
+      # default, answers at once.
+      # shot_retry_s: 8
 
   leds:
     backend: none

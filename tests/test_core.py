@@ -2404,6 +2404,67 @@ def test_a_digital_sources_duplicates_are_not_a_no_signal():
           best is None and "uniform constant" in (reason or ""), reason)
 
 
+def test_shot_can_wait_out_a_blank():
+    """`shot` answers at once by default; with shot_retry_s it waits for a
+    real picture, but only when the frames were a flat blank.
+
+    A stick on a loose cable emits blanks for a few seconds and recovers
+    (seen 2026-10-19: one `shot` refused, fine ten seconds later). A caller
+    that would only retry can ask the daemon to; after the wait the answer is
+    still the honest "no picture", and it says it waited.
+    """
+    print("\nshot waiting out a blank")
+    import io
+    import threading
+    from PIL import Image
+
+    def jpeg(level, scene=False):
+        im = Image.new("RGB", (64, 48), (level,) * 3)
+        if scene:
+            for x in range(8, 40):
+                for y in range(8, 20):
+                    im.putpixel((x, y), (240, 240, 240))
+        b = io.BytesIO()
+        im.save(b, "JPEG", quality=90)
+        return b.getvalue()
+
+    def cap(retry):
+        c = vcctrld.VideoCapability(None, vcctrld.Bus())
+        c.ANALOG = False
+        c.SHOT_RETRY_S = retry
+        c.ring.extend([(time.time() - 2, 1, jpeg(7)), (time.time() - 1, 2, jpeg(8))])
+        return c
+
+    r = cap(0)._shot({})
+    check("default: a blank is refused at once, with no wait",
+          r["picture"] is False and "waited_s" not in r, r)
+
+    c = cap(5)
+    threading.Timer(1.0, lambda: c.ring.append((time.time(), 3, jpeg(7, True)))).start()
+    t0 = time.time()
+    r = c._shot({})
+    check("a picture that arrives during the wait is returned",
+          r["picture"] is True, r.get("reason"))
+    check("and the wait ended when it did, not at the limit",
+          time.time() - t0 < 4, time.time() - t0)
+
+    c = cap(1)
+    r = c._shot({})
+    check("still blank after the wait: the same refusal, naming the wait",
+          r["picture"] is False and r.get("waited_s", 0) >= 1
+          and "still blank after waiting" in r["reason"]
+          and c.BLANK_REASON in r["reason"], r)
+
+    c = vcctrld.VideoCapability(None, vcctrld.Bus())
+    c.ANALOG = False
+    c.SHOT_RETRY_S = 5
+    c.ring.extend([(time.time(), 1, b"not a jpeg")])
+    t0 = time.time()
+    r = c._shot({})
+    check("a decode failure is not waited for",
+          r["picture"] is False and time.time() - t0 < 1, r)
+
+
 def test_web_request_binds_cfg_to_its_own_profile():
     """A `/p/<name>/` request must resolve `CFG.*` reads to THAT profile's
     config for the request in flight, not whichever profile a previous
@@ -5135,6 +5196,7 @@ if __name__ == "__main__":
     test_favicon_single_source()
     test_shot_out_contract()
     test_stall_tracker_three_states()
+    test_shot_can_wait_out_a_blank()
     print("\n%s" % ("ALL PASS" if not FAILURES
                     else "FAILED: %s" % ", ".join(FAILURES)))
     sys.exit(1 if FAILURES else 0)

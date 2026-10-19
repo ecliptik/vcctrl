@@ -4370,6 +4370,13 @@ class VideoCapability(Capability):
     # result that was false. My selector is the algorithm theirs was ported
     # from and had the same gap by construction.
     MIN_RANGE = 4
+    # How long `shot` waits for a real picture when the only thing it found
+    # was a flat blank. 0 (the default) answers at once, as it always did. A
+    # stick on a loose cable emits blanks for a few seconds and then recovers,
+    # so a caller that would only retry can ask the daemon to. After the wait
+    # the answer is the same honest "no picture", with the wait named.
+    SHOT_RETRY_S = float(CFG.default("capabilities.video.settings.shot_retry_s", 0))
+    BLANK_REASON = "the stick is emitting a blank"
 
     def __init__(self, devs, bus=None):
         Capability.__init__(self, devs)
@@ -5430,8 +5437,9 @@ class VideoCapability(Capability):
                 # different facts, and the second one names a specific hardware
                 # state worth recognising.
                 return None, None, ("all %d non-repeated frames were a uniform "
-                                    "constant -- the stick is emitting a blank, "
-                                    "not capturing a dark screen" % flat)
+                                    "constant -- %s, "
+                                    "not capturing a dark screen"
+                                    % (flat, self.BLANK_REASON))
             return None, None, "all %d candidate decodes failed: %s" % (
                 len(live), errs[0] if errs else "unknown")
         return best, best_mean, len(live)
@@ -5465,10 +5473,25 @@ class VideoCapability(Capability):
             return {"ok": True, "picture": False, "state": state,
                     "reason": "no frames in the ring"}
         best, mean, live = self._select(items)
+        waited = 0.0
+        # Only a blank is worth waiting out: a stick that has no signal, or a
+        # decode that failed, will not be cured by waiting.
+        if best is None and self.SHOT_RETRY_S > 0 and self.BLANK_REASON in str(live):
+            t0 = time.time()
+            while best is None and time.time() - t0 < self.SHOT_RETRY_S:
+                time.sleep(0.5)
+                items = self._recent(int(req.get("n", 16)))
+                if items:
+                    best, mean, live = self._select(items)
+            waited = round(time.time() - t0, 1)
         if best is None:
             # `live` carries the actual reason in this branch.
-            return {"ok": True, "picture": False, "state": state,
-                    "reason": live, "considered": len(items)}
+            out = {"ok": True, "picture": False, "state": state,
+                   "reason": live, "considered": len(items)}
+            if waited:
+                out["reason"] = "%s (still blank after waiting %.1f s)" % (live, waited)
+                out["waited_s"] = waited
+            return out
         t, frame = best
         with self.lock:
             self.last_good = (t, frame, mean)
