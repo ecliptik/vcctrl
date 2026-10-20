@@ -293,10 +293,11 @@ def shutdown(power_off):
         while time.time() < deadline:
             time.sleep(5)
             im = shot("wait")
-            try:
+            # the shutdown screen is a small dialog on black: read the whole frame
+            box = im.point(lambda v: 255 if v > 24 else 0).getbbox()
+            if box and (box[2] - box[0]) >= 200 and (box[3] - box[1]) >= 150:
                 nat = to_native(im)
-            except SystemExit:
-                # the shutdown screen is a small dialog on black: read the whole frame
+            else:
                 nat = im
             text = text_of(ocr(nat, psm=6))
             if re.search(r"switch\s*off", text, re.I) and re.search(r"safely|macintosh", text, re.I):
