@@ -296,7 +296,8 @@ def shutdown(power_off):
             try:
                 nat = to_native(im)
             except SystemExit:
-                continue
+                # the shutdown screen is a small dialog on black: read the whole frame
+                nat = im
             text = text_of(ocr(nat, psm=6))
             if re.search(r"switch\s*off", text, re.I) and re.search(r"safely|macintosh", text, re.I):
                 say("the Mac says it can be switched off")
