@@ -17,9 +17,8 @@ This project was built agentically using [Claude Code](https://claude.com/claude
 
 ![The web KVM driving a real Macintosh 512Ke: About the Finder on System 6.0.8, with the status panel and the bench camera inset](./docs/images/webkvm-512ke-about-finder.png)
 
-*A real Macintosh 512Ke, 512K of RAM and System 6.0.8, in vcctrl's web
-KVM: the live capture, link and power lamps, the status panel, and the
-bench camera on the bare logic board.*
+*A real Macintosh 512Ke in vcctrl's web KVM: the live capture, status
+pane and bench camera on the bare logic board.*
 
 ## Examples
 
