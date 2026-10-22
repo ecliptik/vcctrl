@@ -199,7 +199,12 @@ With `capabilities.share` (backend `smb`): `vcctrl share put <file> [name]`
 (or `-` for stdin: `cat f.bin | ssh <host> vcctrl share put - f.bin`), MCP
 `vcctrl_share_put` / `vcctrl_share_list`, or the web KVM's "Upload file".
 Files land in the share's `Uploads` folder. A MacBinary `.bin` becomes a
-real Mac file (resource fork, type/creator), and `.txt` gets TEXT. On the
+real Mac file (resource fork, type/creator), and `.txt` gets TEXT. **The
+Mac name:** with a CLI `[name]` (always, for stdin) it's that name less
+`.bin`, so `share put - "Geomys 512Ke.bin"` lands as "Geomys 512Ke"; with
+no name (and from MCP or the web KVM) it's the name in the MacBinary
+header. An upload over an existing name replaces it, and the reply says
+`"replaced": true`. List first if that matters. On the
 Mac, close and reopen the Uploads window to see it (the System 6 Finder
 doesn't refresh an open server folder). Replacing a file works the same
 way: quit the old copy, `share put` the new one under the same name, close

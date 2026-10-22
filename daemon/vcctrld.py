@@ -13035,16 +13035,36 @@ class ShareCapability(Capability):
         if req.get("sha256") and hashlib.sha256(blob).hexdigest() != req["sha256"]:
             return {"ok": False, "why": "sha-mismatch",
                     "error": "the file changed in transit"}
-        return self._deliver(name, blob)
+        return self._deliver(name, blob, bool(req.get("named")))
 
-    def _deliver(self, name, blob):
+    def _exists(self, remote):
+        """Whether the upload folder already holds this (mapped) name."""
+        folder = self._s("folder", "Uploads")
+        cd = ("cd %s; " % self._q(folder)) if folder else ""
+        try:
+            self._smb(cd + "ls %s" % self._q(remote))
+            return True
+        except RuntimeError as exc:
+            if "NO_SUCH_FILE" in str(exc) or "OBJECT_NAME_NOT_FOUND" in str(exc):
+                return False
+            raise
+
+    def _deliver(self, name, blob, named=False):
+        """`named`: the caller chose the name on purpose (the CLI's
+        `share put <file> <name>`), so a MacBinary file takes THAT name, less
+        its .bin, rather than the one in its header. Without it the header
+        wins, as before. It used to win always, so an upload asked to land as
+        "Geomys-512Ke-eeb8376" landed as "Geomys" and silently replaced the
+        file already there (2026-10-22). A replacement is now reported."""
         mb = macbinary_parse(blob) if name.lower().endswith(".bin") else None
         try:
             if mb:
-                remote = self._put(mb["name"], mb["data"], mb["rsrc"],
+                mac = name[:-4] if named else mb["name"]
+                replaced = self._exists(mac_name_for_smb(mac))
+                remote = self._put(mac, mb["data"], mb["rsrc"],
                                    mb["type"], mb["creator"], mb["flags"])
                 out = {"ok": True, "kind": "macbinary-" + mb["version"],
-                       "mac_name": mb["name"],
+                       "mac_name": mac, "header_name": mb["name"],
                        "type": mb["type"].decode("mac_roman"),
                        "creator": mb["creator"].decode("mac_roman"),
                        "data_bytes": len(mb["data"]),
@@ -13052,6 +13072,7 @@ class ShareCapability(Capability):
             else:
                 stem, ext = os.path.splitext(name)
                 tc = _PLAIN_TYPES.get(ext.lower())
+                replaced = self._exists(mac_name_for_smb(name))
                 remote = self._put(name, blob, None,
                                    tc[0] if tc else None, tc[1] if tc else None)
                 out = {"ok": True, "kind": "plain", "mac_name": name,
@@ -13063,9 +13084,13 @@ class ShareCapability(Capability):
             return {"ok": False, "why": "smb-failed", "error": str(exc)[:300]}
         out["folder"] = self._s("folder", "Uploads")
         out["remote_name"] = remote
-        out["note"] = ("in the share's %s folder -- on the Mac, open (or close "
-                       "and reopen) that folder's window to see it"
-                       % out["folder"])
+        out["replaced"] = replaced
+        where = ("the share's %s folder" % out["folder"]) if out["folder"] \
+            else "the share's upload folder"
+        out["note"] = (("REPLACED the file already named %r; " % out["mac_name"])
+                       if replaced else "") + (
+                      "in %s -- on the Mac, open (or close and reopen) that "
+                      "folder's window to see it" % where)
         self.last = dict(out, at=time.time())
         return out
 

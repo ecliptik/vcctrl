@@ -165,11 +165,21 @@ def take_lock():
         die("could not read the lock")
     if owner and owner != WHO:
         die("the input lock is held by %r; not driving" % owner, 2)
-    run(["lock", "acquire", "--as", WHO])
+    # Already ours means a caller took it before running us: leave it held
+    # afterwards. Dropping it anyway left a session driving unlocked
+    # (2026-10-22, the real 512Ke).
+    _took[0] = not owner
+    if _took[0]:
+        run(["lock", "acquire", "--as", WHO])
+
+
+_took = [False]
 
 
 def drop_lock():
-    run(["lock", "release", "--as", WHO], check=False)
+    if _took[0]:
+        run(["lock", "release", "--as", WHO], check=False)
+        _took[0] = False
 
 
 # -- menus ----------------------------------------------------------------

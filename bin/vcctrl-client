@@ -155,7 +155,9 @@ USAGE = """usage: vcctrl <command> [args]
                             target -- `set` it once from what Key Caps shows
   share put <file|-> [name] upload into the shared folder the target mounts
                             (capabilities.share; an AppleShare volume for the classic Mac).
-                            A MacBinary .bin arrives as a real Mac file. From
+                            A MacBinary .bin arrives as a real Mac file, named
+                            [name] less .bin if given, else from its header; a
+                            file already there is replaced and says so. From
                             another host: cat f.bin | ssh <host> vcctrl share put - f.bin
   share ls | status         what is in the upload folder / the last upload
   pointer-check             input round trip through the picture: nudge,
@@ -647,6 +649,10 @@ def stage_file(path, as_name=None, replace=False, cmd="file_stage"):
                        "offset": sent,
                        "data": _b64.b64encode(block).decode("ascii"),
                        "final": final}
+                # A name typed on purpose is the Mac name, even for MacBinary
+                # (whose header carries its own); a defaulted basename is not.
+                if cmd == "share_stage" and as_name:
+                    req["named"] = True
                 if replace:
                     req["replace"] = True
                 if final:

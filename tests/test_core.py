@@ -1457,19 +1457,33 @@ def test_share_upload_unpacks_macbinary_and_writes_streams():
     cap = vcctrld.ShareCapability(make_devices())
     cap.settings = {"host": "fileserver", "share": "share",
                     "credentials": "/dev/null", "folder": "Uploads"}
-    sent = []
-    cap._smb = lambda cmds, timeout=120: sent.append(cmds) or ""
+    sent, present = [], set()
 
-    def upload(name, blob, chunk=100, sha=True):
+    def fake_smb(cmds, timeout=120):
+        # `ls "<name>"` is the existence probe: answer it the way smbclient
+        # does for a missing file, and keep it out of `sent` (the writes).
+        m = re.search(r'(?:^|; )ls "([^"]*)"$', cmds)
+        if m:
+            if m.group(1) not in present:
+                raise RuntimeError("smbclient: NT_STATUS_NO_SUCH_FILE listing")
+            return ""
+        sent.append(cmds)
+        present.update(re.findall(r'put "[^"]*" "([^":]*)"', cmds))
+        return ""
+    cap._smb = fake_smb
+
+    def upload(name, blob, chunk=100, sha=True, named=False):
         import hashlib as _h
         r = None
         for off in range(0, len(blob), chunk):
             part = blob[off:off + chunk]
             final = off + len(part) >= len(blob)
-            r = cap._stage({"name": name, "total": len(blob), "offset": off,
-                            "data": base64.b64encode(part).decode(),
-                            "final": final,
-                            "sha256": _h.sha256(blob).hexdigest() if final and sha else None})
+            req = {"name": name, "total": len(blob), "offset": off,
+                   "data": base64.b64encode(part).decode(), "final": final,
+                   "sha256": _h.sha256(blob).hexdigest() if final and sha else None}
+            if named:
+                req["named"] = True
+            r = cap._stage(req)
         return r
 
     r = upload("Disk Copy.bin", _macbinary("Disk Copy 4.2*", b"APPL", b"dCpy",
@@ -1483,6 +1497,27 @@ def test_share_upload_unpacks_macbinary_and_writes_streams():
           and '"Disk Copy 4.2\uf021"' in cmds
           and '"Disk Copy 4.2\uf021:AFP_Resource"' in cmds
           and '"Disk Copy 4.2\uf021:AFP_AfpInfo"' in cmds, cmds)
+    check("  a new name is not reported as replacing anything",
+          r.get("replaced") is False, r)
+    # THE NAME ASKED FOR, when it was asked for on purpose. The header used
+    # to win always, so "Geomys-512Ke-eeb8376.bin" landed as "Geomys" and
+    # silently replaced the file of that name (2026-10-22, real 512Ke).
+    r = upload("Geomys 512Ke.bin", _macbinary("Geomys", b"APPL", b"GEOM",
+                                               b"", rsrc), named=True)
+    check("a named MacBinary upload takes that name, less .bin",
+          r.get("ok") and r.get("mac_name") == "Geomys 512Ke"
+          and r.get("header_name") == "Geomys" and '"Geomys 512Ke"' in sent[-1]
+          and '"Geomys"' not in sent[-1], (r, sent[-1]))
+    r = upload("Geomys-1.bin", _macbinary("Geomys", b"APPL", b"GEOM", b"", rsrc))
+    check("  control: unnamed, the header's name, as before",
+          r.get("mac_name") == "Geomys" and r.get("replaced") is False, r)
+    r = upload("Geomys-2.bin", _macbinary("Geomys", b"APPL", b"GEOM", b"", rsrc))
+    check("  and landing on an existing name says it replaced it",
+          r.get("replaced") is True and "REPLACED" in r.get("note", ""), r)
+    r = upload("x" * 32 + ".bin", _macbinary("ok", b"APPL", b"GEOM", b"", rsrc),
+               named=True)
+    check("  a named Mac name over 31 characters is refused",
+          r.get("why") == "bad-name", r)
     r = upload("readme.txt", b"hello mac\r")
     cmds = sent[-1]
     check("a plain .txt gets TEXT/ttxt and no resource fork",
@@ -2487,6 +2522,27 @@ def test_classic_mac_helper_reads_a_menu():
         d.rectangle((168, y, 250, y + 8), fill=0)
     d.rectangle((153, 117, 295, 131), fill=0)        # the highlighted row...
     d.rectangle((168, 120, 215, 128), fill=255)      # ...with white text in it
+    # A LOCK IT DID NOT TAKE IS NOT ITS TO DROP. mount-share run by a caller
+    # already holding the lock under the same name released it on the way
+    # out, and the caller drove on unlocked (2026-10-22, real 512Ke).
+    for owner, want in ((cm.WHO, []), (None, ["acquire", "release"])):
+        calls = []
+
+        def fake_run(args, stdin=None, check=True, owner=owner):
+            if args[:2] == ["lock", "status"]:
+                return 0, json.dumps({"owner": owner})
+            calls.append(args[1])
+            return 0, "{}"
+        keep = cm.run
+        cm.run = fake_run
+        try:
+            cm.take_lock()
+            cm.drop_lock()
+        finally:
+            cm.run = keep
+        check("lock already %s: the helper sends %s" % (
+                  "ours" if owner else "free", want or "nothing"),
+              calls == want, calls)
     band = cm.highlighted_band(img, 150, 300)
     check("the inverted row is found, and only it",
           band is not None and band[0] <= 118 and band[1] >= 130, band)
