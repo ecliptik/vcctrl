@@ -3231,6 +3231,14 @@ HARNESS = r"""
          `${(fb.top + (70 + 171) * k - (sb.top + sb.height / 2)).toFixed(2)}`);
     emit(`cropw ${(512 * k).toFixed(2)} ${(sb.width - 20).toFixed(2)}`);
     emit(`cropclip ${parseFloat((document.getElementById('frame').style.clipPath.match(/inset\(([\d.]+)px/) || [0, -1])[1])} 0`);
+    // A WIDE STAGE, the other way round: the picture is taller than the box,
+    // so a stretched #frame came out SHORTER than the picture and the bottom
+    // clip cut the Mac's last rows off (reported 2026-10-22, 512Ke). The
+    // frame must be as tall as the picture it clips.
+    sc.style.width = '1100px'; sc.style.height = '740px';
+    applyZoom(true);
+    emit(`cropframe ${document.getElementById('frame').getBoundingClientRect().height.toFixed(1)} ` +
+         `${cv.getBoundingClientRect().height.toFixed(1)}`);
     sc.style.inset = keep[0]; sc.style.width = keep[1]; sc.style.height = keep[2];
     crop = null; applyZoom(true);
   }
@@ -4364,6 +4372,8 @@ def test_zoom_layout_in_a_browser():
           abs(got["cropw"][0] - got["cropw"][1]) <= 1.0, got["cropw"])
     check("a fitted crop clips the letterbox above it", got["cropclip"][0] > 0,
           got["cropclip"])
+    check("a fitted crop's frame is as tall as the picture (wide stage)",
+          abs(got["cropframe"][0] - got["cropframe"][1]) <= 1.0, got["cropframe"])
 
     check("original is exactly 640x480 on screen",
           abs(got["1"][0] - 640) < 0.5 and abs(got["1"][1] - 480) < 0.5,

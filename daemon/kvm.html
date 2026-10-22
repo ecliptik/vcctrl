@@ -9640,12 +9640,18 @@ function applyZoom(recentre) {
     const left = r.x0 * scale, top = r.y0 * scale * ys;
     fr.style.margin = Math.round((H - rh) / 2 - top) + 'px 0 0 '
                     + Math.round((W - rw) / 2 - left) + 'px';
+    // FLEX-START, or the clip lands in the wrong place. Fixed margins replace
+    // margin:auto, and without an auto margin a flex item STRETCHES to the
+    // row: #frame became the stage's height, not the picture's, and the
+    // bottom inset below (measured from the picture) cut the Mac's last ~60
+    // rows off a wide window (reported 2026-10-22, 512Ke).
+    fr.style.alignSelf = 'flex-start';
     fr.style.clipPath = 'inset(' + [Math.floor(top), Math.max(0, Math.floor(pw - left - rw)),
                                     Math.max(0, Math.floor(ph - top - rh)), Math.floor(left)]
                                     .map(v => v + 'px').join(' ') + ')';
     sc.scrollLeft = 0; sc.scrollTop = 0;
   } else {
-    fr.style.margin = ''; fr.style.clipPath = '';
+    fr.style.margin = ''; fr.style.clipPath = ''; fr.style.alignSelf = '';
   }
 
   const over = canScroll && (pw > sc.clientWidth - pad * 2 + 1 || ph > sc.clientHeight - pad * 2 + 1);
