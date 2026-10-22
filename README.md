@@ -1,5 +1,11 @@
 # vcctrl
 
+![The web KVM driving a real Macintosh 512Ke: About the Finder on System 6.0.8, with the status panel and the bench camera inset](./docs/images/webkvm-512ke-about-finder.png)
+
+*A real Macintosh 512Ke, 512K of RAM and System 6.0.8, in vcctrl's web
+KVM: the live capture, link and power lamps, the status panel, and the
+bench camera on the bare logic board.*
+
 Remote control of a real, physical retro or legacy machine: keyboard,
 mouse, screen, audio, power and file transfer, driven by a CLI, an MCP
 server, or a browser KVM. It exists to let automated tests run against
@@ -14,6 +20,19 @@ This project was built agentically using [Claude Code](https://claude.com/claude
 - **MCP server** — drive it directly from Claude Code, Codex, or any MCP client. [docs/MCP-SERVER.md](./docs/MCP-SERVER.md)
 - **Multi-target** — one daemon driving several profiles at once. [docs/PROFILES.md](./docs/PROFILES.md)
 - **Portable skills** — domain knowledge as `SKILL.md` files any agent can pick up. [docs/SKILLS.md](./docs/SKILLS.md)
+
+## Examples
+
+An agent testing two release candidates on the same 512Ke through vcctrl,
+run straight from an AppleShare folder they were uploaded to. Each picture
+is the Mac's own 512×342 screen, cut out of the capture.
+
+| | |
+|---|---|
+| ![Geomys loading the gopher server at sdf.org](./docs/images/512ke-geomys-sdf.png) | ![Geomys showing a long text document from sdf.org](./docs/images/512ke-geomys-text.png) |
+| Geomys, a Gopher browser, loads sdf.org over MacIP. | A 22 KB text item, scrolled. |
+| ![Flynn connected to telehack.com over Telnet](./docs/images/512ke-flynn-telehack.png) | ![Flynn showing a finger meteogram for Oslo](./docs/images/512ke-flynn-finger.png) |
+| Flynn, a Telnet client, on telehack.com. | Flynn's finger client: the Oslo meteogram from graph.no. |
 
 ## How it works
 
