@@ -173,6 +173,9 @@ With `capabilities.pointer` (backend `video-diff`) configured, as on the
   selection rectangle, and its release can select two icons. Goto a solid
   part of the artwork, click, and zoom-check that only that icon is
   inverted. Then drag from the same spot.
+- **In a list view, grab the row's small icon, not its name.** A click on
+  the name can start renaming it, and then the drag never starts
+  (2026-10-22, real 512Ke).
 - **A click on "empty" space can hit a window behind** and raise it, so the
   next press grabs that window's title bar. Look before you click.
 - **The Trash's drop target is the can's body**; the lid and label edges
