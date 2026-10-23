@@ -1340,6 +1340,13 @@ def main(argv):
 
     cmd, rest = args[0], args[1:]
 
+    # `key --help` reached the target as a key named "--help" (2026-10-23),
+    # and `type --help` would have typed it. A help flag anywhere after the
+    # verb asks for usage, before any socket is touched.
+    if "-h" in rest or "--help" in rest:
+        sys.stdout.write(USAGE)
+        return 0
+
     if cmd == "profiles":
         sys.stdout.write(json.dumps({"ok": True, "profiles": list_profiles()},
                                     indent=2, sort_keys=True) + "\n")

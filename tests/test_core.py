@@ -6511,13 +6511,29 @@ def test_a_bad_argument_is_a_usage_error_not_a_traceback():
     print("\nclient: bad arguments")
     import subprocess
     path = os.path.join(HERE, os.pardir, "bin", "vcctrl-client")
-    for argv in (["mouse", "drag", "--help"], ["mouse", "goto", "10"],
+    for argv in (["mouse", "drag", "x"], ["mouse", "goto", "10"],
                  ["mouse", "move", "x", "1"]):
         r = subprocess.run([sys.executable, path] + argv,
                            capture_output=True, text=True, timeout=30)
         check("%s -> exit 2, usage, no traceback" % " ".join(argv),
               r.returncode == 2 and "usage error" in r.stderr
               and "Traceback" not in r.stderr,
+              (r.returncode, r.stderr[:200]))
+
+
+def test_a_help_flag_after_the_verb_prints_usage_and_sends_nothing():
+    """`key --help` went to the Mac as a key named "--help" (2026-10-23);
+    `type --help` would have typed it. Usage, exit 0, and no socket: the
+    socket path points at nothing, so any send would fail instead."""
+    print("\nclient: --help after a verb")
+    import subprocess
+    path = os.path.join(HERE, os.pardir, "bin", "vcctrl-client")
+    for argv in (["key", "--help"], ["type", "--help"], ["mouse", "drag", "-h"],
+                 ["key", "a", "--help"]):
+        r = subprocess.run([sys.executable, path, "--socket", "/nonexistent.sock"]
+                           + argv, capture_output=True, text=True, timeout=30)
+        check("%s -> exit 0, usage on stdout" % " ".join(argv),
+              r.returncode == 0 and "usage: vcctrl" in r.stdout and not r.stderr,
               (r.returncode, r.stderr[:200]))
 
 
