@@ -33,6 +33,16 @@ is the Mac's own 512×342 screen, cut out of the capture.
 | ![Flynn connected to telehack.com over Telnet](./docs/images/512ke-flynn-telehack.png) | ![Flynn showing a finger meteogram for Oslo](./docs/images/512ke-flynn-finger.png) |
 | Flynn, a Telnet client, on telehack.com. | Flynn's finger client: the Oslo meteogram from graph.no. |
 
+The same Mac's own Finder and desk accessories, driven through vcctrl's
+keyboard and mouse verbs.
+
+| | |
+|---|---|
+| ![The Finder window of the boot disk, lean608, with seven folders and files](./docs/images/512ke-finder-disk.png) | ![The Apple menu held open with Key Caps highlighted](./docs/images/512ke-apple-menu.png) |
+| The boot disk's window, opened with a click and Command-O. | The Apple menu, pressed and dragged to Key Caps with the button held. |
+| ![Key Caps showing the Option layer while Option is held](./docs/images/512ke-keycaps-option.png) | ![The Calculator desk accessory showing 524288](./docs/images/512ke-calculator.png) |
+| Key Caps with Option held: USB4VC's Ctrl arrives as Option. | 512*1024 typed into the Calculator. |
+
 ## How it works
 
 ```
