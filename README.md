@@ -32,8 +32,6 @@ it, and every command it sends lands in the Activity pane.
 | Geomys, a Gopher browser, run from an AppleShare folder, loads sdf.org over MacIP. | Flynn, a Telnet client, on telehack.com: `type figlet vcctrl`, then `key enter`. |
 | ![The web KVM with the Apple menu held open on Key Caps, and mouse_down and mouse_move in the Activity pane](./docs/images/webkvm-512ke-apple-menu.png) | ![The web KVM with Key Caps showing typed text, and the type command in the Activity pane](./docs/images/webkvm-512ke-keycaps-typing.png) |
 | A menu, pressed and dragged: `mouse_down`, `mouse_move`, still held. | `type` into Key Caps, at the Mac keyboard's own pace. |
-| ![The web KVM with the Calculator showing 524288 after the agent typed 512*1024=](./docs/images/webkvm-512ke-calculator.png) | |
-| 512*1024 typed into the Calculator. | |
 
 ## How it works
 
