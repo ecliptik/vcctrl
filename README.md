@@ -29,7 +29,7 @@ it, and every command it sends lands in the Activity pane.
 | | |
 |---|---|
 | ![The web KVM with Geomys showing the sdf.org gopher menu, and the agent's clicks and typing in the Activity pane](./docs/images/webkvm-512ke-geomys.png) | ![The web KVM with Flynn connected to telehack.com showing figlet output, and the agent's commands in the Activity pane](./docs/images/webkvm-512ke-flynn.png) |
-| Geomys, a Gopher browser, run from an AppleShare folder, loads sdf.org over MacIP. | Flynn, a Telnet client, on telehack.com: `type figlet vcctrl`, then `key enter`. |
+| [Geomys](https://github.com/ecliptik/geomys), a Gopher browser, run from an AppleShare folder, loads sdf.org over LocalTalk with [talkip](https://github.com/ecliptik/talkip). | [Flynn](https://github.com/ecliptik/flynn), a Telnet client, also on talkip, on telehack.com: `type figlet vcctrl`, then `key enter`. |
 | ![The web KVM with the Apple menu held open on Key Caps, and mouse_down and mouse_move in the Activity pane](./docs/images/webkvm-512ke-apple-menu.png) | ![The web KVM with Key Caps showing typed text, and the type command in the Activity pane](./docs/images/webkvm-512ke-keycaps-typing.png) |
 | A menu, pressed and dragged: `mouse_down`, `mouse_move`, still held. | `type` into Key Caps, at the Mac keyboard's own pace. |
 
