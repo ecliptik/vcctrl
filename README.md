@@ -22,27 +22,18 @@ pane and bench camera on the bare logic board.*
 
 ## Examples
 
-An agent testing two release candidates on the same 512Ke through vcctrl,
-run straight from an AppleShare folder they were uploaded to. Each picture
-is the Mac's own 512×342 screen, cut out of the capture.
-
-| | |
-|---|---|
-| ![Geomys loading the gopher server at sdf.org](./docs/images/512ke-geomys-sdf.png) | ![Geomys showing a long text document from sdf.org](./docs/images/512ke-geomys-text.png) |
-| Geomys, a Gopher browser, loads sdf.org over MacIP. | A 22 KB text item, scrolled. |
-| ![Flynn connected to telehack.com over Telnet](./docs/images/512ke-flynn-telehack.png) | ![Flynn showing a finger meteogram for Oslo](./docs/images/512ke-flynn-finger.png) |
-| Flynn, a Telnet client, on telehack.com. | Flynn's finger client: the Oslo meteogram from graph.no. |
-
-An agent driving the same Mac, seen in the web KVM. While it holds the
+An agent driving the same 512Ke, seen in the web KVM. While it holds the
 input lock the picture gets a dashed border, the command field says who has
 it, and every command it sends lands in the Activity pane.
 
 | | |
 |---|---|
+| ![The web KVM with Geomys showing the sdf.org gopher menu, and the agent's clicks and typing in the Activity pane](./docs/images/webkvm-512ke-geomys.png) | ![The web KVM with Flynn connected to telehack.com showing figlet output, and the agent's commands in the Activity pane](./docs/images/webkvm-512ke-flynn.png) |
+| Geomys, a Gopher browser, run from an AppleShare folder, loads sdf.org over MacIP. | Flynn, a Telnet client, on telehack.com: `type figlet vcctrl`, then `key enter`. |
 | ![The web KVM with the Apple menu held open on Key Caps, and mouse_down and mouse_move in the Activity pane](./docs/images/webkvm-512ke-apple-menu.png) | ![The web KVM with Key Caps showing typed text, and the type command in the Activity pane](./docs/images/webkvm-512ke-keycaps-typing.png) |
 | A menu, pressed and dragged: `mouse_down`, `mouse_move`, still held. | `type` into Key Caps, at the Mac keyboard's own pace. |
-| ![The web KVM with the Calculator showing 524288 after the agent typed 512*1024=](./docs/images/webkvm-512ke-calculator.png) | ![The web KVM's Status pane: target, board, picture, capture and sound readings](./docs/images/webkvm-512ke-status.png) |
-| 512*1024 typed into the Calculator. | The Status pane: what the daemon measures about the rig. |
+| ![The web KVM with the Calculator showing 524288 after the agent typed 512*1024=](./docs/images/webkvm-512ke-calculator.png) | |
+| 512*1024 typed into the Calculator. | |
 
 ## How it works
 
