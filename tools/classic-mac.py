@@ -376,6 +376,7 @@ def fuzzy_has(text, name):
 def wait_finder(seconds=150):
     """Wait until the Finder's menu bar is up (a cold boot takes about 80 s)."""
     deadline = time.time() + seconds
+    woken = False
     while time.time() < deadline:
         try:
             nat = to_native(shot("finder"))
@@ -385,6 +386,12 @@ def wait_finder(seconds=150):
         bar = text_of(ocr(nat.crop((0, 0, 260, 20)), psm=7))
         if re.search(r"file", bar, re.I) and re.search(r"edit|view|special", bar, re.I):
             return
+        if not woken:
+            # After Dark hides the menu bar (the Plus, 2026-10-23); a 1-count
+            # move doesn't wake it, 40 and back does.
+            drive("mouse", "move", "40", "0")
+            drive("mouse", "move", "-40", "0")
+            woken = True
         time.sleep(4)
     die("the Finder's menu bar did not come up within %d s" % seconds)
 
@@ -510,6 +517,10 @@ def mount_share():
 
 
 def main(argv):
+    # `shutdown --help` used to shut the Mac down (2026-10-23)
+    if "-h" in argv or "--help" in argv:
+        print(__doc__)
+        return 0
     if len(argv) < 2 or argv[1] not in ("shutdown", "mount-share"):
         print(__doc__)
         return 3

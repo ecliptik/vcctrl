@@ -2559,6 +2559,14 @@ def test_classic_mac_helper_reads_a_menu():
                                        "VCCTRL": "false"})
     check("mount-share refuses without its settings, before touching anything",
           r.returncode == 3 and "MAC_SERVER" in r.stdout, (r.returncode, r.stdout))
+    # `shutdown --help` started a real shutdown (2026-10-23): VCCTRL=false
+    # makes any call to the rig fail, so only the usage path can exit 0.
+    r = subprocess.run([sys.executable, path, "shutdown", "--help"],
+                       capture_output=True, text=True,
+                       env={"PATH": os.environ.get("PATH", ""), "VCCTRL": "false"})
+    check("shutdown --help prints the usage and touches nothing",
+          r.returncode == 0 and "classic-mac.py shutdown" in r.stdout,
+          (r.returncode, r.stdout[:120], r.stderr[:120]))
 
 
 def test_web_request_binds_cfg_to_its_own_profile():
