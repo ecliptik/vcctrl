@@ -6598,6 +6598,68 @@ def test_record_passes_the_daemons_refusal_through():
           "error" in meta, meta)
 
 
+def test_record_dials_the_daemon_on_its_own_host_not_the_control_url():
+    """The client runs ON the daemon host, so `record` must not dial
+    `control.web`, the name the control host uses.
+
+    Found 2026-11-04: on the gateway2000 daemon host `control.web` is a
+    tailnet name and the host resolves through the LAN's DNS, so every
+    `record` failed with "Name or service not known" whatever the caller's
+    own network could reach. A tailnet grant for the control host fixed the
+    deploy guard (which curls from the control host) and changed nothing here.
+    """
+    print("\nclient: record dials loopback on the daemon host")
+    c = _client()
+    vals = {"daemon.web.port": 8080, "daemon.web.bind": "127.0.0.1",
+            "control.web": "https://unresolvable.invalid"}
+    c._cfg_get = lambda path, fallback=None: vals.get(path, fallback)
+    check("the configured daemon port, on loopback",
+          c._local_web_base() == "http://127.0.0.1:8080", c._local_web_base())
+    check("never the control host's URL",
+          "unresolvable" not in c._local_web_base(), c._local_web_base())
+    vals["daemon.web.bind"] = "0.0.0.0"
+    check("a wildcard bind is still dialled on loopback",
+          c._local_web_base() == "http://127.0.0.1:8080", c._local_web_base())
+    vals["daemon.web.bind"] = "::1"
+    check("an IPv6 bind is bracketed",
+          c._local_web_base() == "http://[::1]:8080", c._local_web_base())
+    del vals["daemon.web.port"]
+    check("no daemon port configured falls back to control.web",
+          c._local_web_base() == "https://unresolvable.invalid",
+          c._local_web_base())
+
+    # END TO END through fetch_avi, with no VCCTRL_WEB: the request must reach
+    # a listener on the configured loopback port.
+    import http.server, threading
+    hits = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(200)
+            self.send_header("X-Buffer-Meta", json.dumps({"frames": 1}))
+            self.send_header("Content-Length", "4")
+            self.end_headers()
+            self.wfile.write(b"RIFF")
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    vals.update({"daemon.web.port": srv.server_port,
+                 "daemon.web.bind": "127.0.0.1"})
+    old = os.environ.pop("VCCTRL_WEB", None)
+    try:
+        data, meta = c.fetch_avi(None, None, since=5.0)
+    finally:
+        srv.shutdown()
+        if old is not None:
+            os.environ["VCCTRL_WEB"] = old
+    check("fetch_avi reached the daemon's own listener",
+          data == b"RIFF" and hits and hits[0].startswith("/buffer.avi"),
+          (data, meta, hits))
+
+
 def test_verify_input_exit_codes():
     """The exit code carries the READING, so a script can branch without
     parsing JSON -- and could-not-look must not read as a failure.

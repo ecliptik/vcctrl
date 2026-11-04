@@ -979,6 +979,34 @@ def write_avi(url_bytes, meta, path):
     return 0
 
 
+def _local_web_base():
+    """The daemon's own HTTP listener on this host, as seen from this host.
+
+    THIS CLIENT RUNS ON THE DAEMON HOST (the VM's bin/vcctrl forwards every
+    verb over ssh), so `control.web` -- the address the CONTROL host uses --
+    is the wrong name to dial from here. Found 2026-11-04: on the gateway2000
+    daemon host it is a tailnet name, the host resolves through the LAN's DNS,
+    and `record` failed with "Name or service not known" every time, from
+    every caller. The tailnet serve proxies to this same listener anyway, so
+    loopback is the same handler without the round trip off the box.
+
+    A wildcard bind is still reached on loopback. Falls back to `control.web`
+    only when no daemon port is configured at all (no hardcoded hostname; see
+    docs/CONFIG-PLAN.md phase 3).
+    """
+    port = _cfg_get("daemon.web.port", None)
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return _cfg_get("control.web", "")
+    bind = _cfg_get("daemon.web.bind", None) or "127.0.0.1"
+    if bind in ("0.0.0.0", "::", ""):
+        bind = "127.0.0.1"
+    if ":" in bind:
+        bind = "[%s]" % bind
+    return "http://%s:%d" % (bind, port)
+
+
 def fetch_avi(first, last, since=None, clip=False):
     """Pull /buffer.avi over HTTPS. Returns (bytes|None, meta).
 
@@ -990,8 +1018,7 @@ def fetch_avi(first, last, since=None, clip=False):
     import urllib.error
     import urllib.request
 
-    # No hardcoded hostname; see docs/CONFIG-PLAN.md phase 3.
-    base = os.environ.get("VCCTRL_WEB") or _cfg_get("control.web", "")
+    base = os.environ.get("VCCTRL_WEB") or _local_web_base()
     q = []
     if first is not None:
         q.append("from=%d" % first)
