@@ -12194,6 +12194,101 @@ def _guard_busy(state, events=None):
     return r.returncode, r.stderr
 
 
+def test_the_file_server_waits_for_its_address_instead_of_giving_up():
+    """A listen address that is not on the host YET is retried, not final.
+
+    Found live 2026-11-04: the daemon host's eth0 got its address seven
+    seconds after vcctrld tried to bind it. One attempt and no retry left the
+    server down for the daemon's whole run, and a dinspect scan ran, wrote its
+    report, and then failed at the fetch with "Connection refused".
+
+    192.0.2.1 (TEST-NET-1) is never assigned to a test host, so the first
+    bind fails with EADDRNOTAVAIL for real. Then a fake server class stands
+    in for "the address appeared", so the retry's success path is exercised
+    without needing to add an address to the host.
+    """
+    import errno as _errno, tempfile
+
+    tmp = tempfile.mkdtemp()
+    cap = vcctrld.FilesCapability(None)
+    cap.settings = {"root_dir": os.path.join(tmp, "fileserver"),
+                    "target_host": "192.0.2.1", "target_port": 2121}
+    cap._credentials = lambda: ("dosuser", "dospass")
+    saved = (cap.BIND_RETRY_EVERY_S, cap.BIND_RETRY_FOR_S)
+    cap.BIND_RETRY_EVERY_S, cap.BIND_RETRY_FOR_S = 0.05, 30.0
+    try:
+        cap.start()
+        err = vcctrld.FilesCapability._ftpd_error or ""
+        check("an address not on this host leaves no server bound",
+              cap._ftpd is None, cap._ftpd)
+        check("and says it is WAITING for the address, not that it failed",
+              "not an address on this host yet" in err and "retrying" in err,
+              err)
+        cap.stop()
+        time.sleep(0.2)
+        check("stop() ends the retry instead of leaving it running",
+              cap._ftpd is None, cap._ftpd)
+
+        # The success path: the address "appears" on the third attempt.
+        calls = []
+
+        class Appears(object):
+            socket = None
+
+            def __init__(self, addr, handler):
+                calls.append(addr)
+                if len(calls) < 3:
+                    raise OSError(_errno.EADDRNOTAVAIL,
+                                  "Cannot assign requested address")
+
+            def serve_forever(self, handle_exit=False):
+                pass
+
+            def close_all(self):
+                pass
+
+        vcctrld.FilesCapability._ftpd_error = "waiting"
+        cap._bind_when_address_appears(Appears, None, "192.0.2.1", 2121, tmp)
+        check("it binds once the address appears, on the attempt it can",
+              isinstance(cap._ftpd, Appears) and len(calls) == 3, calls)
+        check("and clears the waiting message, so the state reads ready",
+              vcctrld.FilesCapability._ftpd_error is None,
+              vcctrld.FilesCapability._ftpd_error)
+
+        # The window closes: an address that is simply WRONG in the config
+        # becomes a final, reported failure rather than a silent loop.
+        cap.BIND_RETRY_FOR_S = 0.2
+
+        class Never(Appears):
+            def __init__(self, addr, handler):
+                raise OSError(_errno.EADDRNOTAVAIL,
+                              "Cannot assign requested address")
+
+        cap._ftpd = None
+        cap._bind_when_address_appears(Never, None, "192.0.2.1", 2121, tmp)
+        err = vcctrld.FilesCapability._ftpd_error or ""
+        check("a window that closes leaves a final error naming the wait",
+              cap._ftpd is None and "of waiting for 192.0.2.1" in err, err)
+
+        # Anything other than EADDRNOTAVAIL is not waited out.
+        n = []
+
+        class Taken(Appears):
+            def __init__(self, addr, handler):
+                n.append(1)
+                raise OSError(_errno.EADDRINUSE, "Address already in use")
+
+        cap.BIND_RETRY_FOR_S = 30.0
+        cap._bind_when_address_appears(Taken, None, "192.0.2.1", 2121, tmp)
+        check("a port already in use fails at once, not after the window",
+              len(n) == 1 and "in use" in
+              (vcctrld.FilesCapability._ftpd_error or ""), n)
+    finally:
+        cap.BIND_RETRY_EVERY_S, cap.BIND_RETRY_FOR_S = saved
+        cap.stop()
+        vcctrld.FilesCapability._ftpd_error = None
+
+
 def test_deploy_refuses_while_the_target_is_powered():
     """A relay-on takes no lock and makes no harness traffic.
 

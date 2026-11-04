@@ -10877,13 +10877,109 @@ SET VLD=
             handler.passive_ports = range(60000, 60011)
             # BOUND TO THE ONE ADDRESS, never 0.0.0.0. Same value again, so
             # the bind and the advertisement cannot disagree.
-            self._ftpd = FTPServer((host, port), handler)
-            threading.Thread(target=self._serve_forever, daemon=True).start()
-            sys.stderr.write("file server on ftp://%s:%d/ root=%s\n"
-                             % (host, port, root))
+            self._bind(FTPServer, handler, host, port, root)
+        except OSError as exc:
+            if self._bind_errno(exc) != errno.EADDRNOTAVAIL:
+                FilesCapability._ftpd_error = "%s: %s" % (
+                    type(exc).__name__, exc)
+                self._ftpd = None
+                return
+            # THE ADDRESS IS NOT HERE YET, WHICH IS NOT THE SAME AS NEVER.
+            # Found live 2026-11-04: the daemon host booted, vcctrld bound at
+            # 09:07:10, and eth0 was handed its address at 09:07:17. One
+            # attempt, no retry, so the server stayed down for the whole run
+            # of the daemon, and every transfer failed with "Connection
+            # refused" -- which reads like the network, not like a server
+            # that gave up seven seconds too early. Binding to the one
+            # configured address (above) is what makes this race possible;
+            # 0.0.0.0 would have dodged it and been wrong in the way that
+            # comment describes. So: keep the one address, and wait for it.
+            self._ftpd = None
+            FilesCapability._ftpd_error = (
+                "%s is not an address on this host yet (%s); retrying the "
+                "bind every %gs for up to %gs"
+                % (host, exc.strerror or exc, self.BIND_RETRY_EVERY_S,
+                   self.BIND_RETRY_FOR_S))
+            # Created HERE, before the thread exists, so a stop() that lands
+            # before the thread's first line still reaches it.
+            self._bind_stop = threading.Event()
+            threading.Thread(
+                target=self._bind_when_address_appears,
+                args=(FTPServer, handler, host, port, root, self._bind_stop),
+                daemon=True).start()
         except Exception as exc:
             FilesCapability._ftpd_error = "%s: %s" % (type(exc).__name__, exc)
             self._ftpd = None
+
+    # How long a missing listen address is waited for. Long enough to cover
+    # a slow DHCP lease or carrier at boot (measured: 7 s on the daemon host,
+    # 2026-11-04); short enough that an address which is simply wrong in
+    # vcctrl.yaml becomes a final, reported failure rather than a retry
+    # loop nobody is watching.
+    BIND_RETRY_EVERY_S = 2.0
+    BIND_RETRY_FOR_S = 180.0
+
+    @staticmethod
+    def _bind_errno(exc):
+        """The errno of a failed bind, looking through pyftpdlib's wrapper.
+
+        The vendored pyftpdlib's bind_af_unspecified() catches the real
+        OSError and re-raises it as OSError(err) -- the original as the only
+        argument, so the outer exception's own errno is None. Reading
+        exc.errno alone makes every bind failure look like "not
+        EADDRNOTAVAIL", and the retry below never runs on the real server.
+        """
+        if exc.errno is not None:
+            return exc.errno
+        inner = exc.args[0] if exc.args else None
+        return getattr(inner, "errno", None)
+
+    def _bind(self, server_cls, handler, host, port, root):
+        """Bind, then serve. Raises whatever the bind raised."""
+        self._ftpd = server_cls((host, port), handler)
+        threading.Thread(target=self._serve_forever, daemon=True).start()
+        sys.stderr.write("file server on ftp://%s:%d/ root=%s\n"
+                         % (host, port, root))
+
+    def _bind_when_address_appears(self, server_cls, handler, host, port,
+                                   root, stop_event=None):
+        """Retry the bind until the address exists, the window ends, or
+        stop() is called.
+
+        Only EADDRNOTAVAIL is retried. Anything else (the port taken, a
+        permission refused) is a configuration fault that waiting will not
+        fix, and becomes the final error at once, the same as a first
+        attempt that failed that way.
+        """
+        stop_event = stop_event or threading.Event()
+        deadline = time.monotonic() + self.BIND_RETRY_FOR_S
+        started = time.monotonic()
+        while not stop_event.wait(self.BIND_RETRY_EVERY_S):
+            try:
+                self._bind(server_cls, handler, host, port, root)
+            except OSError as exc:
+                if (self._bind_errno(exc) == errno.EADDRNOTAVAIL
+                        and time.monotonic() < deadline):
+                    continue
+                FilesCapability._ftpd_error = (
+                    "%s: %s (after %.0fs of waiting for %s to appear on "
+                    "this host)" % (type(exc).__name__, exc,
+                                    time.monotonic() - started, host))
+                self._ftpd = None
+                sys.stderr.write("file server did not start: %s\n"
+                                 % FilesCapability._ftpd_error)
+                return
+            except Exception as exc:
+                FilesCapability._ftpd_error = "%s: %s" % (
+                    type(exc).__name__, exc)
+                self._ftpd = None
+                sys.stderr.write("file server did not start: %s\n"
+                                 % FilesCapability._ftpd_error)
+                return
+            FilesCapability._ftpd_error = None
+            sys.stderr.write("file server bound after %.0fs of waiting for "
+                             "%s\n" % (time.monotonic() - started, host))
+            return
 
 
     def _serve_forever(self):
@@ -10896,7 +10992,11 @@ SET VLD=
             FilesCapability._ftpd_error = "server stopped: %s" % exc
             sys.stderr.write("file server stopped: %s\n" % exc)
 
+    _bind_stop = None
+
     def stop(self):
+        if self._bind_stop is not None:
+            self._bind_stop.set()
         if self._ftpd is not None:
             try:
                 self._ftpd.close_all()
