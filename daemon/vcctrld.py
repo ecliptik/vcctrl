@@ -9084,6 +9084,36 @@ class NetJob(object):
     PROOF_SOURCE = "C:\\MTCP\\TCP.CFG"
     PROOF_NAME = "NETPROOF.TXT"
 
+    # THE BATCH IS STILL RUNNING WHEN ITS FILE ARRIVES, and the next command
+    # used to be typed into it. Found live 2026-11-04 on the gateway2000,
+    # twice in one 18-file fetch: the screen showed exactly
+    # `C:\MTCP\VCLIST.` and `C:\MTCP\VCCHK.B`. Keys typed while a batch runs
+    # wait in the 15-key BIOS buffer, and the rest of the command, Enter
+    # included, is dropped. The job then waited out its whole 180 s for a
+    # file nobody had asked for.
+    #
+    # What the server log and the input log measured that day:
+    #   STOR completes                 T
+    #   the FTP session closes         T + ~0.2 s   (FTP.EXE sent QUIT)
+    #   the daemon sees the file land  T + 0.5..1 s (two equal-size polls)
+    #   failed: next command typed     ~0.5..1 s after the close
+    #   worked: next command typed     ~1..1.5 s after the close
+    # Fifteen keys take ~0.66 s to type at the measured pace, so the batch's
+    # tail after FTP.EXE exits (ECHO., ECHO ... attempted, and the prompt,
+    # all drawn in mode 12h) is somewhere between ~1.2 s and ~2.1 s.
+    #
+    # So the gate is the session ending on THIS host's server -- an event,
+    # not a guess about the screen -- and then BATCH_TAIL_S, about twice the
+    # largest tail the evidence allows. The tail is still a duration, and it
+    # is named here with its evidence so the next person can change it on
+    # evidence too. What would remove it entirely is the BAT signalling its
+    # own end (RDYPULSE as its last line); that is a card change.
+    BATCH_TAIL_S = 4.0
+    # How long the session end itself is waited for after the file lands.
+    # Measured at ~0.2 s; a session that has not closed after this is one
+    # the batch is not going to finish quickly either.
+    SESSION_END_WAIT_S = 30.0
+
     def __init__(self, cap, driver, do_return=True, log=None):
         self.cap = cap
         self.d = driver
@@ -9110,6 +9140,31 @@ class NetJob(object):
         rec = dict(kw, phase=phase, text=text, t=time.time())
         self.log.append(rec)
         return rec
+
+    def _arrived(self, name, since, timeout):
+        """Wait for `name` to land, then for the batch that sent it to end.
+
+        True only if the file landed. Every typed command in these jobs is
+        followed by another one (the listing, the next file, the next push),
+        so the wait for the batch to finish lives here, after EVERY arrival,
+        rather than at the sites that happened to fail on 2026-11-04. See
+        BATCH_TAIL_S for the evidence.
+        """
+        if not self.cap._await_incoming(name, since, timeout):
+            return False
+        waiter = getattr(self.cap, "_await_session_end", None)
+        ended = (waiter(since, self.SESSION_END_WAIT_S)
+                 if waiter is not None else None)
+        if ended is None:
+            # NOT A FAILURE. The file is here and verified elsewhere; what is
+            # missing is the one witness that says FTP.EXE is done. Say so
+            # and wait the tail anyway, which is no worse than before.
+            self._say("settle", "%s landed but no FTP session end was seen "
+                                "within %gs; waiting %gs before typing again"
+                      % (name, self.SESSION_END_WAIT_S, self.BATCH_TAIL_S),
+                      warn=True)
+        self.d.sleep(self.BATCH_TAIL_S)
+        return True
 
     def _reboot_edge(self):
         """Send Ctrl-Alt-Del and wait for the reset edge, resending the
@@ -9273,8 +9328,8 @@ class NetJob(object):
         before = time.time()
         self.d.type_line("C:\\MTCP\\VCCHK.BAT %s %s"
                          % (self.PROOF_SOURCE, self.PROOF_NAME))
-        if self.cap._await_incoming(self.PROOF_NAME, before,
-                                    self.d.transfer_timeout()):
+        if self._arrived(self.PROOF_NAME, before,
+                         self.d.transfer_timeout()):
             self._say("attest", "NET confirmed: the target reached this host")
             # CONSUMED, LIKE THE LISTING. It has served its whole purpose the
             # instant it is seen, and leaving it behind is what put a
@@ -9620,10 +9675,9 @@ class TransferJob(NetJob):
         back = name + ".CHK"
         before = time.time()
         self.d.type_line("C:\\MTCP\\VCGET.BAT %s %s" % (name, self.dest))
-        if not self.cap._await_incoming(back, before,
-                                        self.d.transfer_timeout(
-                                            rec.get("bytes"),
-                                            round_trip=True)):
+        if not self._arrived(back, before,
+                             self.d.transfer_timeout(
+                                 rec.get("bytes"), round_trip=True)):
             # NOTHING CAME BACK, AND THAT IS TWO DIFFERENT FACTS: the
             # transfer failed, or the machine is wedged. Only the second one
             # means the next file would be typed into the dark.
@@ -9886,12 +9940,17 @@ class PullJob(NetJob):
         here has to decide when DOS is ready for a second command. The answer
         to that question cost this project a command truncated to fifteen
         characters, and there is still no honest way to ask it.
+
+        ONE COMMAND WITHIN THE BAT, NOT ACROSS THE JOB. This command is
+        itself the second one after the NET proof, and the next file's
+        VCCHK follows it -- which truncated twice on 2026-11-04. _arrived()
+        is what waits between them.
         """
         self._say("list", "reading %s" % self.out_dir, dir=self.out_dir)
         before = time.time()
         self.d.type_line("C:\\MTCP\\VCLIST.BAT %s" % self.out_dir)
-        if not self.cap._await_incoming(self.LISTING_NAME, before,
-                                        self.d.transfer_timeout()):
+        if not self._arrived(self.LISTING_NAME, before,
+                             self.d.transfer_timeout()):
             return None
         path = self.cap._incoming_path(self.LISTING_NAME)
         if path is None:
@@ -10040,8 +10099,8 @@ class PullJob(NetJob):
         """
         before = time.time()
         self.d.type_line("C:\\MTCP\\VCCHK.BAT %s %s" % (src, server_name))
-        if not self.cap._await_incoming(server_name, before,
-                                        self.d.transfer_timeout(bytes_one_way)):
+        if not self._arrived(server_name, before,
+                             self.d.transfer_timeout(bytes_one_way)):
             return None, ("no-return" if self.d.wait_prompt() else "no-prompt")
         path = self.cap._incoming_path(server_name)
         return (path, None) if path else (None, "no-return")
@@ -10748,6 +10807,29 @@ SET VLD=
 
     _ftpd = None
     _ftpd_error = None
+    # When the last logged-in FTP session ended (time.time()), or None.
+    # Written by the server thread, read by a transfer job's thread; one
+    # float assignment, so no lock.
+    _last_session_end = None
+
+    def _note_session_end(self, when=None):
+        self._last_session_end = time.time() if when is None else when
+
+    def _await_session_end(self, since, timeout, poll=0.1):
+        """The time a logged-in session ended at or after `since`, or None.
+
+        `since` is when the command was typed, so a session from an earlier
+        command cannot satisfy it. None after `timeout` means the end was not
+        seen, which the caller reports rather than treats as a failure.
+        """
+        deadline = time.time() + float(timeout)
+        while True:
+            t = self._last_session_end
+            if t is not None and t >= since:
+                return t
+            if time.time() >= deadline:
+                return None
+            time.sleep(poll)
 
     def start(self):
         """Report whatever _start_server() left behind, on EVERY path.
@@ -10862,8 +10944,24 @@ SET VLD=
                 # tidying the output of.
                 FTPHandler.log(self, msg, *a, **kw)
 
+            cap = self
+
+            def _on_disconnect(self):
+                """Record when a LOGGED-IN session ends: FTP.EXE is done.
+
+                The transfer jobs wait for this before typing the next
+                command -- see NetJob.BATCH_TAIL_S. Authenticated sessions
+                only, for the same reason _quiet_log filters on it: the
+                page's liveness probe connects and closes every few seconds
+                and would otherwise satisfy the wait on its own.
+                """
+                if getattr(self, "authenticated", False):
+                    cap._note_session_end()
+                FTPHandler.on_disconnect(self)
+
             handler = type("VcctrlFTPHandler", (FTPHandler,),
-                           {"log": _quiet_log})
+                           {"log": _quiet_log,
+                            "on_disconnect": _on_disconnect})
             handler.authorizer = auth
             # THE MASQUERADE IS THE CONFIGURED ADDRESS, NEVER A DETECTED ONE.
             # Passive mode advertises an address in its reply. This host has

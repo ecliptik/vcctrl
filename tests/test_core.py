@@ -12127,6 +12127,17 @@ def test_the_file_server_actually_serves_a_staged_file():
               (cap._ftpd.handler.masquerade_address,
                cap._ftpd.socket.getsockname()))
 
+        # A BARE CONNECT IS NOT A SESSION ENDING. The page's liveness probe
+        # does exactly this every few seconds, and if it counted, a transfer
+        # job's wait for FTP.EXE to finish would be satisfied by a browser.
+        t_probe = time.time()
+        with sk.create_connection(("127.0.0.1", port), timeout=5) as c:
+            c.recv(256)
+        check("an unauthenticated connect-and-close records no session end",
+              cap._await_session_end(t_probe, 1.0) is None,
+              cap._last_session_end)
+
+        t_login = time.time()
         ftp = ftplib.FTP()
         ftp.connect("127.0.0.1", port, timeout=10)
         ftp.login("dosuser", "dospass")
@@ -12169,6 +12180,13 @@ def test_the_file_server_actually_serves_a_staged_file():
                 ftp.quit()
             except Exception:
                 pass
+        # THE SIGNAL THE TRANSFER JOBS WAIT ON, through the real handler: a
+        # logged-in session that QUITs is recorded as ended, at or after the
+        # moment it started. See NetJob.BATCH_TAIL_S.
+        ended = cap._await_session_end(t_login, 5.0)
+        check("a logged-in session's end is recorded by the real handler",
+              ended is not None and ended >= t_login,
+              (ended, t_login))
     finally:
         cap.stop()
     check("stopping releases the server", cap._ftpd is None)
@@ -12538,6 +12556,12 @@ class FakeTarget(object):
             name = name.lower()
         with open(os.path.join(inc, name), "wb") as f:
             f.write(data)
+        # FTP.EXE quits after its put, and the real server records the
+        # logged-in session ending. NetJob._arrived waits for exactly that
+        # before typing again; a fake that never ended a session would make
+        # every arrival wait out SESSION_END_WAIT_S.
+        if not getattr(self, "no_session_end", False):
+            self.cap._note_session_end()
 
     def type_line(self, text):
         self.typed.append(text)
@@ -12960,6 +12984,104 @@ def test_a_no_return_leg_also_stops_the_pull_run_rather_than_typing_over_it():
           any("typing blind" in e["text"] for e in r["log"]), r["log"])
     check("the second file was never typed at the machine",
           not any("TWO.TXT" in t for t in d.typed), d.typed)
+
+
+def test_no_command_is_typed_into_a_batch_that_is_still_running():
+    """The next command waits for the last batch's FTP session to end, and
+    then for the batch's tail -- after EVERY arrival, in both directions.
+
+    Found live 2026-11-04 (gateway2000, an 18-file psdoom fetch): the
+    daemon typed `C:\\MTCP\\VCLIST.BAT ...` and later `C:\\MTCP\\VCCHK.BAT
+    C:\\PSDOOM\\M3.TXT M3.TXT` within a second of the previous upload landing,
+    while that batch was still printing. Fifteen keys fit in the BIOS buffer;
+    the screen showed `C:\\MTCP\\VCLIST.` and `C:\\MTCP\\VCCHK.B`, and each job
+    then waited its full 180 s. See NetJob.BATCH_TAIL_S for the timings.
+    """
+    print("\nno command typed into a running batch")
+    tail = vcctrld.NetJob.BATCH_TAIL_S
+    check("the tail is the measured ~2.1 s worst case with margin, not zero",
+          tail >= 3.0, tail)
+
+    def recorder(d):
+        events = []
+        orig_type, orig_sleep = d.type_line, d.sleep
+
+        def type_line(t):
+            events.append(("type", t))
+            return orig_type(t)
+
+        def sleep(sec):
+            events.append(("sleep", sec))
+            return orig_sleep(sec)
+
+        d.type_line, d.sleep = type_line, sleep
+        return events
+
+    def follows_an_arrival(t):
+        parts = t.split()
+        if "VCLIST.BAT" in t or "VCGET.BAT" in t:
+            return True
+        return ("VCCHK.BAT" in t and len(parts) >= 3
+                and parts[2] != vcctrld.NetJob.PROOF_NAME)
+
+    def unguarded(events):
+        bad = []
+        for i, (kind, val) in enumerate(events):
+            if kind == "type" and follows_an_arrival(val):
+                prev = events[i - 1] if i else None
+                if prev != ("sleep", tail):
+                    bad.append((val, prev))
+        return bad
+
+    # PULL: proof -> listing -> file -> file. The two failures that day were
+    # proof->listing and file->file.
+    cap, d = _mkpull(card={"ONE.TXT": b"x" * 20, "TWO.TXT": b"y" * 20})
+    ev = recorder(d)
+    r = vcctrld.PullJob(cap, d, names=["ONE.TXT", "TWO.TXT"]).run()
+    check("the pull still delivers both files", r["ok"] is True, r)
+    typed = [v for k, v in ev if k == "type" and follows_an_arrival(v)]
+    check("the listing and both fetches were typed", len(typed) == 3, typed)
+    check("every one of them waited out the previous batch's tail",
+          not unguarded(ev), unguarded(ev))
+
+    # PUSH: proof -> VCGET -> VCGET. Same hazard, and VCGET.BAT has the
+    # longest tail of the three BATs.
+    import tempfile
+    capP = _mkfiles(tempfile.mkdtemp())
+    _send(capP, "a.txt", b"payload-a")
+    _send(capP, "b.txt", b"payload-b")
+    capP.support = lambda: (True, None)
+    capP._reachable = lambda timeout=None: (True, None)
+    dP = FakeTarget(capP)
+    evP = recorder(dP)
+    rP = vcctrld.TransferJob(capP, dP).run()
+    check("the push still delivers", rP["ok"] is True, rP)
+    check("both VCGETs were typed",
+          sum(1 for k, v in evP if k == "type" and "VCGET.BAT" in v) == 2,
+          evP)
+    check("and neither was typed into the previous batch",
+          not unguarded(evP), unguarded(evP))
+
+    # NO SESSION END SEEN: reported, not fatal, and the tail is still waited.
+    cap3, d3 = _mkpull(card={"ONE.TXT": b"x" * 20})
+    d3.no_session_end = True
+    ev3 = recorder(d3)
+    job = vcctrld.PullJob(cap3, d3, names=["ONE.TXT"])
+    job.SESSION_END_WAIT_S = 0.2
+    r3 = job.run()
+    check("a missing session end does not fail the run", r3["ok"] is True, r3)
+    check("it is said in the log",
+          any(e["phase"] == "settle" and e.get("warn") for e in r3["log"]),
+          [e["text"] for e in r3["log"]])
+    check("and the tail is still waited before the next command",
+          not unguarded(ev3), unguarded(ev3))
+
+    # A SESSION THAT ENDED BEFORE THE COMMAND WAS TYPED IS NOT ITS END.
+    cap4 = _mkfiles(tempfile.mkdtemp())
+    cap4._note_session_end(time.time() - 100)
+    check("an earlier session's end does not satisfy the wait",
+          cap4._await_session_end(time.time(), 0.2) is None,
+          cap4._last_session_end)
 
 
 def test_leaving_the_machine_in_NET_is_said_out_loud():
