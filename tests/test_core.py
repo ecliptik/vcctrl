@@ -13442,6 +13442,14 @@ def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
             check("%s deletes %s right after the session that read it"
                   % (name, rsp), lines[lines.index(l) + 1] == "DEL " + rsp,
                   lines[lines.index(l) + 1])
+        # A FIXED MARKER AFTER EACH SESSION, because the output is gone.
+        # dosags' run-hw reboot guard (hw_guard.py) OCRs for FTP text to tell
+        # "stuck at the FTP log after a transfer" from a clean prompt. It
+        # says the session ENDED, never that it worked.
+        for l in ftp:
+            i = lines.index(l)
+            check("%s prints a fixed marker after each FTP session" % name,
+                  lines[i + 2] == "ECHO mTCP FTP session ended.", lines[i + 2])
         check("%s writes the password only into a response file" % name,
               all(l.endswith(".RSP") and l.startswith("ECHO dospass>")
                   for l in lines if "dospass" in l), name)

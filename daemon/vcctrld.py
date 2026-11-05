@@ -10479,6 +10479,7 @@ ECHO get %VGF% %VGD%\\%VGF%>> C:\\MTCP\\VCGET.RSP
 ECHO quit>> C:\\MTCP\\VCGET.RSP
 C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET.RSP > NUL
 DEL C:\\MTCP\\VCGET.RSP
+ECHO mTCP FTP session ended.
 REM THE VERIFICATION RIDES IN THE SAME BAT, AND THAT IS THE POINT.
 REM Typing it as a SECOND command needed the harness to know DOS was back at
 REM a prompt, and the only non-OCR readiness signal available tests whether
@@ -10498,6 +10499,7 @@ ECHO put %VGD%\\%VGF% %VGF%.CHK>> C:\\MTCP\\VCGET2.RSP
 ECHO quit>> C:\\MTCP\\VCGET2.RSP
 C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET2.RSP > NUL
 DEL C:\\MTCP\\VCGET2.RSP
+ECHO mTCP FTP session ended.
 ECHO.
 ECHO VCGET attempted: %VGD%\\%VGF%
 GOTO END
@@ -10528,6 +10530,7 @@ ECHO put %1 %2>> C:\\MTCP\\VCCHK.RSP
 ECHO quit>> C:\\MTCP\\VCCHK.RSP
 C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCCHK.RSP > NUL
 DEL C:\\MTCP\\VCCHK.RSP
+ECHO mTCP FTP session ended.
 ECHO.
 ECHO VCCHK attempted: %1
 GOTO END
@@ -10596,6 +10599,7 @@ ECHO put @@DESTPARENT@@\\VCLIST.TXT VCLIST.TXT>> C:\\MTCP\\VCLIST.RSP
 ECHO quit>> C:\\MTCP\\VCLIST.RSP
 C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCLIST.RSP > NUL
 DEL C:\\MTCP\\VCLIST.RSP
+ECHO mTCP FTP session ended.
 ECHO.
 ECHO VCLIST attempted: %VLD%
 SET VLD=
