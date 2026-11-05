@@ -47,6 +47,11 @@ capabilities:
       # in with the real VGA capture stick's own by-id path for this
       # board, e.g. via `ls -la /dev/v4l/by-id/`.
       device: /dev/v4l/by-id/REPLACE_ME-video-index0
+      # Off by default. On for a stick that drops off USB and stays off
+      # until reseated: after 15 s gone, power-cycle the port it was last
+      # seen on (learned from sysfs, never configured). Treats the outage,
+      # not the drops. See UsbPortRecovery in daemon/vcctrld.py.
+      # usb_recover: true
 
   audio:
     backend: alsa-ffmpeg

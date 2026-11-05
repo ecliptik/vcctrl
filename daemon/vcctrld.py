@@ -4246,6 +4246,164 @@ def avi_mjpeg(frames, fps, width, height):
     return b"RIFF" + struct.pack("<I", len(body) + 4) + b"AVI " + body
 
 
+class UsbPortRecovery(object):
+    """Power-cycles the USB port a capture device was last seen on, once the
+    kernel has stopped trying to bring it back.
+
+    WHAT THIS IS FOR. The MacroSilicon VGA stick drops off USB (-71 EPROTO,
+    "Cannot enable. Maybe the USB cable is bad?"). The kernel re-enumerates
+    it by itself most times. Sometimes its retries run out ("unable to
+    enumerate USB device") and the stick stays gone until a hand reseats it.
+    Measured 2026-11-05 during a dosags round: gone 08:59:23-09:02:07 PST,
+    back only because the operator reseated it. Reseating works because it
+    power-cycles the stick. Writing the port's sysfs `disable` does the same
+    from here.
+
+    WHAT IT IS NOT. A fix. It treats the end state, not the drops. A
+    round's cells are still spoiled by a drop; this shortens the outage from
+    "until someone notices" to under a minute.
+
+    THE PORT IS LEARNED, NOT CONFIGURED. It is read from the live device's
+    own sysfs chain (/dev/v4l/by-id/... -> videoN -> the USB device ->
+    its `port` link) while the device is present. The operator moves this
+    stick between ports, so a configured port would be wrong after the first
+    move, and cycling the WRONG port would drop the room camera instead. If
+    the daemon starts with the stick already gone, there is nothing learned
+    and it does nothing, saying so.
+
+    The trigger is ABSENCE for GRACE_S, not a guess about health. The
+    kernel's own retries finish in a few seconds (08:59:23 -> 08:59:27 for
+    the "unable to enumerate"), so 15 s is past them and short of anyone
+    waiting. An empty port (stick deliberately unplugged during a swap)
+    gets cycled too, which is harmless: nothing is attached to lose power.
+    Attempts are spaced and capped, so a dead stick costs five quiet tries
+    and an event, not a loop.
+    """
+
+    GRACE_S = 15.0
+    OFF_S = 3.0
+    MIN_INTERVAL_S = 60.0
+    MAX_TRIES = 5
+
+    def __init__(self, device, publish, sys_root="/sys", clock=time.time,
+                 sleep=time.sleep):
+        self.device = device
+        self.publish = publish
+        self.sys_root = sys_root
+        self.clock = clock
+        self.sleep = sleep
+        self.port = None
+        self.absent_since = None
+        self.tries = 0
+        self.last_cycle_t = None
+        self.last_error = None
+        self.gave_up = False
+        self.said_unlearned = False
+        self.cycles_total = 0
+        self.running = False
+
+    def learn(self):
+        """The port the device is on right now, or None. Every step of the
+        chain is a real sysfs link; any one missing means "can't tell", which
+        must never turn into a guess."""
+        try:
+            node = os.path.basename(os.path.realpath(self.device))
+            if not node.startswith("video"):
+                return None
+            iface = os.path.realpath(os.path.join(
+                self.sys_root, "class", "video4linux", node, "device"))
+            usbdev = os.path.dirname(iface)
+            port = os.path.join(usbdev, "port")
+            if not os.path.exists(os.path.join(port, "disable")):
+                return None
+            return os.path.realpath(port)
+        except OSError:
+            return None
+
+    def _write(self, value):
+        with open(os.path.join(self.port, "disable"), "w") as f:
+            f.write(value)
+
+    def cycle(self):
+        """Port power off, wait, on. The 'on' is attempted even if 'off'
+        failed half-way, so this can never be the thing that leaves a port
+        disabled."""
+        err = None
+        try:
+            self._write("1")
+            self.sleep(self.OFF_S)
+        except OSError as exc:
+            err = errstr(exc)
+        finally:
+            try:
+                self._write("0")
+            except OSError as exc:
+                err = err or errstr(exc)
+        return err
+
+    def tick(self):
+        now = self.clock()
+        if os.path.exists(self.device):
+            port = self.learn()
+            if port is not None:
+                self.port = port
+                self.said_unlearned = False
+            if self.absent_since is not None and self.tries:
+                self.publish("video.usb_recovered", port=self.port,
+                             tries=self.tries,
+                             absent_s=round(now - self.absent_since, 1))
+            self.absent_since = None
+            self.tries = 0
+            self.gave_up = False
+            return None
+        if self.absent_since is None:
+            self.absent_since = now
+        if now - self.absent_since < self.GRACE_S:
+            return None
+        if self.port is None:
+            if not self.said_unlearned:
+                self.said_unlearned = True
+                self.publish("video.usb_unlearned", device=self.device,
+                             why="the device has not been seen present since "
+                                 "the daemon started, so its port is unknown; "
+                                 "nothing was cycled")
+            return None
+        if self.tries >= self.MAX_TRIES:
+            if not self.gave_up:
+                self.gave_up = True
+                self.publish("video.usb_gave_up", port=self.port,
+                             tries=self.tries,
+                             absent_s=round(now - self.absent_since, 1))
+            return None
+        if (self.last_cycle_t is not None
+                and now - self.last_cycle_t < self.MIN_INTERVAL_S):
+            return None
+        self.last_cycle_t = now
+        self.tries += 1
+        self.cycles_total += 1
+        self.last_error = self.cycle()
+        self.publish("video.usb_cycled", port=self.port, try_n=self.tries,
+                     absent_s=round(now - self.absent_since, 1),
+                     error=self.last_error)
+        return self.last_error
+
+    def run(self):
+        self.running = True
+        while self.running:
+            try:
+                self.tick()
+            except Exception as exc:  # one bad pass must not end the watch
+                self.last_error = errstr(exc)
+            self.sleep(1.0)
+
+    def snapshot(self):
+        return {"port": self.port, "tries": self.tries,
+                "cycles_total": self.cycles_total,
+                "absent_s": (round(self.clock() - self.absent_since, 1)
+                             if self.absent_since is not None else None),
+                "gave_up": self.gave_up, "last_error": self.last_error}
+
+
 class VideoCapability(Capability):
     """Owns /dev/video0 for the life of the daemon and fans frames out.
 
@@ -4394,6 +4552,7 @@ class VideoCapability(Capability):
         # never told to actually run, or every such test spawns a real
         # ffmpeg (test_watchdogs_survive_one_pass).
         self._started = False
+        self.usb_recover = None
         self.last_frame_t = 0.0
         self.frames_total = 0
         self.state = "starting"
@@ -4529,9 +4688,17 @@ class VideoCapability(Capability):
         self._started = True
         self._acquire()
         threading.Thread(target=self._watchdog, daemon=True).start()
+        # Opt-in per profile: cycling a port is a real action on the
+        # daemon host, and only a profile whose stick is known to wedge off
+        # USB should get it. See UsbPortRecovery.
+        if CFG.default("capabilities.video.settings.usb_recover", False):
+            self.usb_recover = UsbPortRecovery(self.DEVICE, self._publish)
+            threading.Thread(target=self.usb_recover.run, daemon=True).start()
 
     def stop(self):
         self.running = False
+        if self.usb_recover is not None:
+            self.usb_recover.running = False
         self._release()
         self.h264.shutdown()
 
@@ -5568,6 +5735,10 @@ class VideoCapability(Capability):
                     # be the instrument's own state reported as the target's.
                     "device_present": os.path.exists(self.DEVICE),
                     "device": self.DEVICE,
+                    # None when this profile has not opted in; see
+                    # UsbPortRecovery.
+                    "usb_recover": (self.usb_recover.snapshot()
+                                    if self.usb_recover is not None else None),
                     # Whether "frozen" (below) is trustworthy evidence of no
                     # signal for THIS source -- see start()'s own comment.
                     "analog": self.ANALOG,

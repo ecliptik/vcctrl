@@ -5278,7 +5278,140 @@ def test_avi_preserves_stalls_rather_than_smoothing_them():
           fps == 10.0, fps)
 
 
+def test_usb_port_recovery_cycles_only_the_learned_port():
+    """The stick's port is learned from its own sysfs chain while present,
+    cycled only after GRACE_S absent, spaced, capped, and never left
+    disabled. Built on a fake /sys and /dev in a temp dir: nothing real is
+    touched."""
+    import tempfile
+    print("\nusb port recovery")
+    root = tempfile.mkdtemp(prefix="usbrec")
+    sysr = os.path.join(root, "sys")
+    hub = os.path.join(sysr, "devices", "xhci", "usb3")
+    portdir = os.path.join(hub, "3-0:1.0", "usb3-port2")
+    camport = os.path.join(hub, "3-0:1.0", "usb3-port1")
+    usbdev = os.path.join(hub, "3-2")
+    iface = os.path.join(usbdev, "3-2:1.0")
+    for d in (portdir, camport, iface, os.path.join(sysr, "class", "video4linux"),
+              os.path.join(root, "dev", "v4l", "by-id")):
+        os.makedirs(d, exist_ok=True)
+    for p in (portdir, camport):
+        with open(os.path.join(p, "disable"), "w") as f:
+            f.write("0")
+    os.symlink(portdir, os.path.join(usbdev, "port"))
+    vnode = os.path.join(sysr, "class", "video4linux", "video2")
+    os.makedirs(vnode)
+    os.symlink(iface, os.path.join(vnode, "device"))
+    devnode = os.path.join(root, "dev", "video2")
+    byid = os.path.join(root, "dev", "v4l", "by-id", "usb-MACROSILICON_ff02-video-index0")
+
+    def plug():
+        open(devnode, "w").close()
+        os.symlink(devnode, byid)
+
+    def unplug():
+        os.unlink(byid)
+        os.unlink(devnode)
+
+    now = [1000.0]
+    writes = []
+    events = []
+
+    def sleep(s):
+        now[0] += s
+
+    rec = vcctrld.UsbPortRecovery(byid, lambda k, **kw: events.append((k, kw)),
+                                  sys_root=sysr, clock=lambda: now[0], sleep=sleep)
+    real_write = rec._write
+
+    def spy(value):
+        writes.append(value)
+        real_write(value)
+    rec._write = spy
+
+    def disable():
+        return open(os.path.join(portdir, "disable")).read()
+
+    # Never seen: nothing learned, and absence alone cycles nothing.
+    rec.tick()
+    now[0] += 20
+    rec.tick()
+    check("a device never seen present is never cycled", writes == [], writes)
+    check("and it says why", [k for k, _ in events] == ["video.usb_unlearned"],
+          events)
+
+    plug()
+    rec.tick()
+    check("the port is learned from the device's own sysfs chain",
+          rec.port == os.path.realpath(portdir), rec.port)
+
+    unplug()
+    rec.tick()
+    now[0] += 10
+    rec.tick()
+    check("absent for less than GRACE_S: nothing yet", writes == [], writes)
+    now[0] += 6
+    rec.tick()
+    check("past GRACE_S: one off/on cycle of THAT port", writes == ["1", "0"],
+          writes)
+    check("the port is left enabled", disable() == "0", disable())
+    check("the camera's port is untouched",
+          open(os.path.join(camport, "disable")).read() == "0")
+    rec.tick()
+    now[0] += 30
+    rec.tick()
+    check("tries are spaced by MIN_INTERVAL_S", writes == ["1", "0"], writes)
+
+    now[0] += 31
+    rec.tick()
+    check("a second try after the interval", writes.count("1") == 2, writes)
+    plug()
+    rec.tick()
+    kinds = [k for k, _ in events]
+    check("coming back is reported, with the number of tries it took",
+          kinds[-1] == "video.usb_recovered" and events[-1][1]["tries"] == 2,
+          events[-1])
+    check("and the counters reset", rec.tries == 0 and rec.absent_since is None)
+
+    # A dead stick: capped, one give-up event, no loop.
+    unplug()
+    del writes[:]
+    rec.tick()
+    for _ in range(40):
+        now[0] += 61
+        rec.tick()
+    check("a stick that never returns costs MAX_TRIES cycles, no more",
+          writes.count("1") == rec.MAX_TRIES, writes.count("1"))
+    check("and one give-up event",
+          [k for k, _ in events].count("video.usb_gave_up") == 1)
+
+    # 'off' failing must still attempt 'on'.
+    plug()
+    rec.tick()
+    unplug()
+    del writes[:]
+
+    def failing(value):
+        writes.append(value)
+        if value == "1":
+            raise OSError(13, "Permission denied")
+        real_write(value)
+    rec._write = failing
+    rec.tick()
+    now[0] += 61
+    rec.tick()
+    check("a failed 'off' still writes 'on'", writes == ["1", "0"], writes)
+    check("and the error is reported, not swallowed",
+          events[-1][0] == "video.usb_cycled" and events[-1][1]["error"],
+          events[-1])
+
+    v = vcctrld.VideoCapability(None, vcctrld.Bus())
+    check("a profile that has not opted in reports usb_recover: None",
+          v._state()["usb_recover"] is None)
+
+
 if __name__ == "__main__":
+    test_usb_port_recovery_cycles_only_the_learned_port()
     test_key_table()
     test_concurrent_type()
     test_lock_scope()
