@@ -695,6 +695,19 @@ UNIT
 # Found the hard way -- see docs/lab/FINDINGS.md.
 sudo systemctl mask ctrl-alt-del.target
 
+# The same keyboard types into the Pi's own login prompts: every command sent
+# to the DOS box landed in tty1's getty as a failed login, logged verbatim in
+# the journal (69 in one boot, 2026-11-05) -- so anything typed at the target
+# was being copied into the Pi's logs. No getty on any VT, and no SysRq (an
+# Alt+SysRq+B at the DOS box would reboot the Pi). Serial console and ssh
+# remain for access.
+sudo systemctl mask --now getty@tty1.service
+sudo install -d -m 0755 /etc/systemd/logind.conf.d
+sudo install -m 0644 "$SRC/pi/files/logind-vcctrl-novt.conf" /etc/systemd/logind.conf.d/vcctrl-novt.conf
+sudo systemctl try-restart systemd-logind.service || true
+sudo install -m 0644 "$SRC/pi/files/90-vcctrl-nosysrq.conf" /etc/sysctl.d/90-vcctrl-nosysrq.conf
+sudo /usr/sbin/sysctl -q -p /etc/sysctl.d/90-vcctrl-nosysrq.conf || true
+
 # ---------------------------------------------------------------------------
 # HOST CONFIGURATION -- everything below was applied by hand during the Pi 5
 # migration and is folded in here so the machine is reproducible from a
