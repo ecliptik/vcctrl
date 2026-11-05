@@ -12387,6 +12387,78 @@ def test_the_file_server_actually_serves_a_staged_file():
     check("stopping releases the server", cap._ftpd is None)
 
 
+def test_the_file_server_refuses_addresses_allow_from_does_not_name():
+    """allow_from turns away everyone but the target, before USER/PASS.
+
+    Real server, real sockets. The whole 127/8 block is loopback on Linux,
+    so a client bound to 127.0.0.2 is a genuinely different peer address
+    without needing a second machine -- and 127.0.0.2 is neither the bind
+    address nor 127.0.0.1, the two this check always lets through.
+    """
+    import ftplib, socket as sk, tempfile
+    print("\nfile server: allow_from")
+
+    a = vcctrld.ftp_peer_allowed
+    check("no list: anyone (a rig that names no target keeps working)",
+          a("192.0.2.9", None, "192.0.2.1") and a("192.0.2.9", [], "x"))
+    check("the listed target is allowed", a("192.0.2.117", ["192.0.2.117"],
+                                            "192.0.2.139"))
+    check("an unlisted LAN host is refused",
+          not a("192.0.2.50", ["192.0.2.117"], "192.0.2.139"))
+    check("this host's own probe (the bind address) is always allowed",
+          a("192.0.2.139", ["192.0.2.117"], "192.0.2.139"))
+    check("loopback is always allowed",
+          a("127.0.0.1", ["192.0.2.117"], "x") and a("::1", ["192.0.2.117"], "x"))
+    check("an IPv4-mapped IPv6 peer is matched as its IPv4 address",
+          a("::ffff:192.0.2.117", ["192.0.2.117"], "x")
+          and not a("::ffff:192.0.2.50", ["192.0.2.117"], "x"))
+
+    tmp = tempfile.mkdtemp()
+    with sk.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    cap = vcctrld.FilesCapability(None)
+    cap.settings = {"root_dir": os.path.join(tmp, "fileserver"),
+                    "target_host": "127.0.0.1", "target_port": port,
+                    "allow_from": ["192.0.2.117"]}
+    cap._credentials = lambda: ("dosuser", "dospass")
+    before = vcctrld.FilesCapability._refused_total
+    cap.start()
+    check("the server started", cap._ftpd is not None,
+          vcctrld.FilesCapability._ftpd_error)
+    try:
+        c = sk.socket()
+        c.settimeout(5)
+        c.bind(("127.0.0.2", 0))
+        c.connect(("127.0.0.1", port))
+        banner = b""
+        try:
+            while True:
+                chunk = c.recv(256)
+                if not chunk:
+                    break
+                banner += chunk
+        except OSError:
+            pass
+        c.close()
+        check("a peer allow_from does not name gets 421, not a banner",
+              banner.startswith(b"421"), banner)
+        check("and the refusal is counted, with the address",
+              vcctrld.FilesCapability._refused_total == before + 1
+              and vcctrld.FilesCapability._refused_last["ip"] == "127.0.0.2",
+              vcctrld.FilesCapability._refused_last)
+
+        # CONTROL: the same server still lets this host in (the probe path),
+        # so the refusal above is the allowlist, not a broken server.
+        ftp = ftplib.FTP()
+        ftp.connect("127.0.0.1", port, timeout=10)
+        ftp.login("dosuser", "dospass")
+        check("this host can still log in", ftp.pwd() == "/", ftp.pwd())
+        ftp.quit()
+    finally:
+        cap.stop()
+
+
 def _guard_busy(state, events=None):
     """Run deploy.sh's real guard_busy() against a stubbed daemon.
 
@@ -13355,6 +13427,24 @@ def test_the_generated_bats_avoid_the_traps_this_card_has_already_sprung():
               % name, "C:\\MTCP\\FTP.EXE" in text, name)
         check("%s does not claim success, only an attempt" % name,
               "attempted" in text and "ERRORLEVEL" not in text.upper(), name)
+        # THE PASSWORD MUST NEVER REACH THE SCREEN. mTCP's FTP.EXE echoes
+        # what it reads from a redirected stdin, so "Password: <value>" sat on
+        # the Gateway's LCD -- where the room camera and the VGA capture
+        # record it, and port repos commit witness frames (2026-11-05). Every
+        # FTP session's output goes to NUL, and each response file, which
+        # holds the password, is deleted as soon as it has been read.
+        lines = text.split("\r\n")
+        ftp = [l for l in lines if "FTP.EXE" in l and not l.startswith("REM")]
+        check("%s sends every FTP session's output to NUL" % name,
+              ftp and all(l.rstrip().endswith("> NUL") for l in ftp), ftp)
+        for l in ftp:
+            rsp = l.split("< ", 1)[1].split()[0]
+            check("%s deletes %s right after the session that read it"
+                  % (name, rsp), lines[lines.index(l) + 1] == "DEL " + rsp,
+                  lines[lines.index(l) + 1])
+        check("%s writes the password only into a response file" % name,
+              all(l.endswith(".RSP") and l.startswith("ECHO dospass>")
+                  for l in lines if "dospass" in l), name)
 
     # MD ON 6.22 TAKES ONE LEVEL AT A TIME. `MD C:\XFER\IN` fails outright
     # when C:\XFER does not exist, and the transfer then lands nowhere with a

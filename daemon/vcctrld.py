@@ -8749,6 +8749,34 @@ def ftp_log_suppressed(msg, authenticated):
     return False
 
 
+def ftp_peer_allowed(remote_ip, allow_from, bind_host):
+    """May this address talk to the embedded FTP server at all?
+
+    THE PASSWORD IS NOT A SECRET IN ANY STRONG SENSE. It sits in plaintext in
+    the BATs on the target's CF card, crosses the LAN in plaintext on every
+    session, and was on the Gateway's screen -- and so in camera shots and
+    capture frames -- until 2026-11-05. So the server also checks WHO is
+    asking: with `capabilities.files.settings.allow_from` set, only those
+    addresses get a banner. A leaked password is then no use from anywhere
+    else on the network.
+
+    Always allowed, whatever the list says: loopback, and the server's own
+    bind address -- the daemon's liveness probe dials the server from this
+    host, and refusing it would report the server down while it is fine.
+
+    No list means no restriction. A rig that has not named its target keeps
+    working exactly as before rather than locking its own transfers out.
+    """
+    if not allow_from:
+        return True
+    ip = (remote_ip or "").split("%", 1)[0]
+    if ip.startswith("::ffff:"):
+        ip = ip[7:]
+    if ip in ("127.0.0.1", "::1") or ip == bind_host:
+        return True
+    return ip in set(str(a).strip() for a in allow_from)
+
+
 def packet_driver_reason(text):
     """Why packet_driver_seen() could not tell, where that is recognisable.
 
@@ -10449,7 +10477,8 @@ ECHO binary>> C:\\MTCP\\VCGET.RSP
 ECHO cd stage>> C:\\MTCP\\VCGET.RSP
 ECHO get %VGF% %VGD%\\%VGF%>> C:\\MTCP\\VCGET.RSP
 ECHO quit>> C:\\MTCP\\VCGET.RSP
-C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET.RSP > NUL
+DEL C:\\MTCP\\VCGET.RSP
 REM THE VERIFICATION RIDES IN THE SAME BAT, AND THAT IS THE POINT.
 REM Typing it as a SECOND command needed the harness to know DOS was back at
 REM a prompt, and the only non-OCR readiness signal available tests whether
@@ -10467,7 +10496,8 @@ ECHO binary>> C:\\MTCP\\VCGET2.RSP
 ECHO cd incoming>> C:\\MTCP\\VCGET2.RSP
 ECHO put %VGD%\\%VGF% %VGF%.CHK>> C:\\MTCP\\VCGET2.RSP
 ECHO quit>> C:\\MTCP\\VCGET2.RSP
-C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET2.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCGET2.RSP > NUL
+DEL C:\\MTCP\\VCGET2.RSP
 ECHO.
 ECHO VCGET attempted: %VGD%\\%VGF%
 GOTO END
@@ -10496,7 +10526,8 @@ ECHO binary>> C:\\MTCP\\VCCHK.RSP
 ECHO cd incoming>> C:\\MTCP\\VCCHK.RSP
 ECHO put %1 %2>> C:\\MTCP\\VCCHK.RSP
 ECHO quit>> C:\\MTCP\\VCCHK.RSP
-C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCCHK.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCCHK.RSP > NUL
+DEL C:\\MTCP\\VCCHK.RSP
 ECHO.
 ECHO VCCHK attempted: %1
 GOTO END
@@ -10563,7 +10594,8 @@ ECHO binary>> C:\\MTCP\\VCLIST.RSP
 ECHO cd incoming>> C:\\MTCP\\VCLIST.RSP
 ECHO put @@DESTPARENT@@\\VCLIST.TXT VCLIST.TXT>> C:\\MTCP\\VCLIST.RSP
 ECHO quit>> C:\\MTCP\\VCLIST.RSP
-C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCLIST.RSP
+C:\\MTCP\\FTP.EXE -port @@PORT@@ @@HOST@@ < C:\\MTCP\\VCLIST.RSP > NUL
+DEL C:\\MTCP\\VCLIST.RSP
 ECHO.
 ECHO VCLIST attempted: %VLD%
 SET VLD=
@@ -10982,6 +11014,23 @@ SET VLD=
     # Written by the server thread, read by a transfer job's thread; one
     # float assignment, so no lock.
     _last_session_end = None
+    # Connections turned away by allow_from: count, and the last one seen.
+    _refused_total = 0
+    _refused_last = None
+    _refused_logged = {}
+
+    def _note_refused(self, ip, now=None):
+        """Count a refused peer; journal it at most once a minute per address,
+        so a LAN scanner cannot fill the journal while every refusal is still
+        counted and the last one is still visible in the snapshot."""
+        now = time.time() if now is None else now
+        FilesCapability._refused_total += 1
+        FilesCapability._refused_last = {"ip": ip, "t": now}
+        last = FilesCapability._refused_logged.get(ip)
+        if last is None or now - last >= 60:
+            FilesCapability._refused_logged[ip] = now
+            print("ftp: refused a connection from %s (not in allow_from)" % ip,
+                  flush=True)
 
     def _note_session_end(self, when=None):
         self._last_session_end = time.time() if when is None else when
@@ -11130,9 +11179,25 @@ SET VLD=
                     cap._note_session_end()
                 FTPHandler.on_disconnect(self)
 
+            allow_from = (self.settings or {}).get("allow_from") or []
+            if isinstance(allow_from, str):
+                allow_from = [allow_from]
+
+            def _handle(self):
+                """Refuse anyone allow_from does not name, before the banner
+                -- so before a USER or PASS can even be tried. See
+                ftp_peer_allowed()."""
+                if not ftp_peer_allowed(self.remote_ip, allow_from, host):
+                    cap._note_refused(self.remote_ip)
+                    self.respond("421 This server only serves its target.")
+                    self.close_when_done()
+                    return
+                FTPHandler.handle(self)
+
             handler = type("VcctrlFTPHandler", (FTPHandler,),
                            {"log": _quiet_log,
-                            "on_disconnect": _on_disconnect})
+                            "on_disconnect": _on_disconnect,
+                            "handle": _handle})
             handler.authorizer = auth
             # THE MASQUERADE IS THE CONFIGURED ADDRESS, NEVER A DETECTED ONE.
             # Passive mode advertises an address in its reply. This host has
@@ -12349,6 +12414,10 @@ SET VLD=
             out["why"], out["reason"] = "unchecked", why
             return out
         out["available"] = True
+        # Who may connect, and who was turned away -- see ftp_peer_allowed().
+        out["allow_from"] = (self.settings or {}).get("allow_from") or None
+        out["refused"] = {"total": FilesCapability._refused_total,
+                          "last": FilesCapability._refused_last}
         return out
 
     def _files(self, req):

@@ -100,6 +100,10 @@ capabilities:
     settings:
       target_host: REPLACE_ME
       target_port: 2121
+      # The target's own IP. Unlisted addresses are refused before they can
+      # try the password (plaintext on the card and the LAN). This host and
+      # loopback are always allowed. Leave unset to allow anyone.
+      # allow_from: [REPLACE_ME]
       dest: "C:\\XFER\\IN"
       root_dir: /var/lib/vcctrl/fileserver
 
