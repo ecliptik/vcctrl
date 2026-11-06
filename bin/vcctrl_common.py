@@ -697,8 +697,20 @@ def select_boot_profile(digit, edge_timeout=60, ready_timeout=200):
     ready = time.time() - t0
     if wait_for_prompt(90) is None:
         return None
+    # CLEAR THE LINE HERE, NOT IN EACH CALLER. The blind digits that did not
+    # land at the menu are still in the BIOS buffer, and COMMAND.COM reads
+    # them the next time it reads anything -- so the first command a caller
+    # types arrives as `3CD C:\DOSAGS` and DOS answers "Bad command or file
+    # name". Measured 2026-11-05, dosags G1 GUSS1: the cell never ran its
+    # game. type_command() flushes before LONG commands only; a short one
+    # (CD, RUN.BAT) went straight in. The rule now lives where the stray
+    # keys are made, so every caller gets it. Nothing to clear when no
+    # digit was sent (the menu default).
+    if keys and flush_input_line() is None:
+        return None
     return {"edge_s": edge, "ready_s": ready, "attempts": attempts,
-            "keys": keys, "buffer_margin": KBD_BUFFER_KEYS - keys}
+            "keys": keys, "buffer_margin": KBD_BUFFER_KEYS - keys,
+            "flushed": bool(keys)}
 
 
 def spam_menu(digit):

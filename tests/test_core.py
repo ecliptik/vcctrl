@@ -15529,6 +15529,54 @@ def test_the_prompt_probe_does_not_touch_the_case_of_what_it_types_next():
           len(keys) == 2, keys)
 
 
+def test_select_boot_profile_clears_the_line_after_its_blind_digits():
+    """The leftover menu digits must not reach the caller's first command.
+
+    dosags G1 GUSS1, 2026-11-05: a stray "3" from the blind selection sat in
+    the BIOS buffer and the cell's first command ran as `3CD C:\\DOSAGS` --
+    "Bad command or file name", and the game never started. Driven, not read:
+    vc() is stubbed and the ORDER of what was sent is checked.
+    """
+    print("\nselect_boot_profile flushes the line")
+    import importlib.util as _il
+    import sys as _sys
+    path = os.path.join(HERE, os.pardir, "bin", "vcctrl_common.py")
+    spec = _il.spec_from_file_location("vcc_select", path)
+    vcc = _il.module_from_spec(spec)
+    _sys.modules["vcc_select"] = vcc
+    spec.loader.exec_module(vcc)
+
+    sent = []
+    vcc.vc = lambda *a, **kw: sent.append(tuple(str(x) for x in a))
+    vcc.arm_leds = lambda: True
+    vcc.wait_led = lambda name, want, t: 0.05
+    vcc.wait_for_prompt = lambda t=90: 0.1
+
+    r = vcc.select_boot_profile(3)
+    check("control: the selection succeeded", bool(r), r)
+    keys = [a for a in sent if a and a[0] == "key"]
+    menu = [i for i, a in enumerate(keys) if "3" in a[1:]]
+    esc = [i for i, a in enumerate(keys) if a[1:] == ("escape",)]
+    check("control: the blind digits were sent", menu, keys)
+    check("Esc is pressed AFTER the digits, to cancel what they left",
+          esc and menu and esc[0] > menu[-1], keys)
+    check("followed by Enter for a clean prompt",
+          esc and keys[esc[0] + 1][1:] == ("enter",), keys)
+    check("and the result says it flushed", r.get("flushed") is True, r)
+
+    del sent[:]
+    r = vcc.select_boot_profile(None)
+    keys = [a for a in sent if a and a[0] == "key"]
+    check("the menu default sends no digits and needs no flush",
+          bool(r) and not any(a[1:] == ("escape",) for a in keys)
+          and r.get("flushed") is False, (r, keys))
+
+    del sent[:]
+    vcc.wait_for_prompt = lambda t=90: 0.1 if t == 90 else None
+    check("a flush that cannot see a prompt fails the selection",
+          vcc.select_boot_profile(3) is None)
+
+
 def test_the_boot_menu_digit_is_not_a_keypad_key():
     """Num Lock must not be able to change which profile a cell boots.
 
