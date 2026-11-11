@@ -427,6 +427,38 @@ still desync the driver. The fix is to **resume**: complete the packet from
 the byte that failed. See `internal/USB4VC-MOUSE-FIRMWARE-PLAN.md`; it is a
 candidate, not yet requested.
 
+## 10b. A whole click in one call: `mouse press` (2026-11-11)
+
+Each `vcctrl` call from the control host is one ssh round trip, about
+0.15-0.20 s wall (measured from dosags round RH's input log). dosags'
+moving fixture needed four moves, a down and an up per click, every
+~1.2 s: six calls, ~1.6 s, and lateness piled up. `mouse press` (daemon
+command `mouse_press`) does the moves, the down, a dwell and the up inside
+one gated call:
+
+    vcctrl --as NAME mouse press --moves "dx,dy dx,dy ..." \
+        [--button left] [--dwell 0.2] [--pace 0.012]
+
+- Each move is sent exactly as `mouse move` would send it, with the pace
+  after it. On the uinput path that is one EV_REL per axis at the full size;
+  it is NOT split at +-127. Whether USB4VC clips a larger event is the
+  caller's measurement, so the caller splits.
+- The button is never left down by the call. Any failure after the press
+  was attempted sends a release. The reply's `release` field says whether
+  that went out: `not-needed`, `sent` or `failed: ...`. The per-step `steps`
+  list carries ok and `t_ms` for each step.
+- The dwell runs WITHOUT the device lock, so an emergency
+  `mouse release-all` lets go at once rather than waiting. The reply then
+  says `released_by_other`.
+- Arguments are checked before anything is sent: at most 32 moves, a dwell
+  of 0-5 s, and a known button. The dwell has the same `click_hold_s` floor
+  as `mouse click`, and the reply's `dwell_s` is the dwell actually used.
+- The input log records it as ONE `mouse_press` event whose detail holds
+  the button, the dwell and every move. A down/up pairing audit over the log
+  should count it as one balanced press.
+- The MCP server has no `vcctrl_mouse_press` tool yet; the CLI is the only
+  way in.
+
 ## 11. Open questions
 
 - What inhibits the aux clock mid-byte late in a dosags run, if that is

@@ -164,6 +164,14 @@ USAGE = """usage: vcctrl <command> [args]
                             see it move, put it back. Exit 0/1/2/3 as
                             verify-input, which it also answers on a target
                             with no LED channel
+  mouse press [--moves "dx,dy dx,dy ..."] [--button left|right|middle]
+              [--dwell S]   a whole click in ONE call (one round trip): each
+                            move in order, exactly as `mouse move` sends it
+                            (no splitting at +-127 -- do that yourself if the
+                            board clips), then down, dwell S (default one
+                            pace, max 5), up. --pace sets the gap after each
+                            move. Any failure after the press still sends the
+                            release; the JSON reply has per-step ok and t_ms.
   mouse wheel <dy>          scroll -- unmeasured whether PS/2 carries this
                             through to DOS at all, see docs/MOUSE.md sec 7
   leds                      read PS/2 LED return channel
@@ -1504,6 +1512,27 @@ def main(argv):
             req = {"cmd": "mouse_release_all"}
         elif rest[0] == "wheel":
             req = {"cmd": "mouse_wheel", "dy": int(rest[1])}
+        elif rest[0] == "press":
+            # Parsed here, in main's own frame, so a malformed --moves is a
+            # usage error (exit 2) like any other bad argument, and nothing
+            # reaches the daemon.
+            req = {"cmd": "mouse_press", "moves": [], "button": "left"}
+            j = 1
+            while j < len(rest):
+                if rest[j] == "--moves":
+                    req["moves"] = [[int(a) for a in m.split(",")]
+                                    for m in rest[j + 1].split()]
+                    if any(len(m) != 2 for m in req["moves"]):
+                        raise ValueError("--moves wants \"dx,dy dx,dy ...\"")
+                    j += 2
+                elif rest[j] == "--button":
+                    req["button"] = rest[j + 1]
+                    j += 2
+                elif rest[j] == "--dwell":
+                    req["dwell"] = float(rest[j + 1])
+                    j += 2
+                else:
+                    raise ValueError("mouse press: unexpected %r" % rest[j])
         elif rest[0] == "drag":
             req = {"cmd": "mouse_drag", "x1": int(rest[1]), "y1": int(rest[2]),
                    "x2": int(rest[3]), "y2": int(rest[4])}
@@ -1895,6 +1924,14 @@ def main(argv):
         if not j.get("ok"):
             return 1
         return 0 if j.get("complete") else 2
+    if not resp.get("ok") and req.get("cmd") == "mouse_press" and "steps" in resp:
+        # The per-step record IS the answer to "what reached the target",
+        # including whether the safety release went out. Print it all.
+        sys.stdout.write(json.dumps(resp, indent=2, sort_keys=True) + "\n")
+        sys.stderr.write("error: %s (at %s; release %s)\n"
+                         % (resp.get("error"), resp.get("failed_at"),
+                            resp.get("release")))
+        return 1
     if not resp.get("ok"):
         sys.stderr.write("error: %s\n" % resp.get("error"))
         return 1

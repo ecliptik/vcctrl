@@ -291,6 +291,12 @@ DEFAULT_PACE_S = float(CFG.default(
 # replacement: the hold is never shorter than the pace.
 CLICK_HOLD_S = CFG.default("capabilities.input.settings.click_hold_s", None)
 
+# mouse_press's bounds, checked before anything is sent. The dwell cap is a
+# guard against a typo holding a button for minutes (0.2 meant, 200 typed);
+# the moves cap keeps one call from occupying the device lock for long.
+MOUSE_PRESS_MAX_MOVES = 32
+MOUSE_PRESS_MAX_DWELL_S = 5.0
+
 # The least time between any two keyboard events (press or release), from
 # ANY caller -- type, key, combo, hold, and the browser's raw keydown/keyup,
 # which arrive at the operator's own typing speed and are never paced at all.
@@ -2051,42 +2057,48 @@ class Devices(object):
 
     def mouse_move(self, dx, dy, pace=DEFAULT_PACE_S):
         with self.lock:
-            if not self.hid_mode:
-                if MOUSE_MAX_STEP <= 0:
-                    if dx:
-                        self.mouse.write(e.EV_REL, e.REL_X, int(dx))
-                    if dy:
-                        self.mouse.write(e.EV_REL, e.REL_Y, int(dy))
-                    self.mouse.syn()
-                    time.sleep(pace)
-                    return
-                # Split so no event exceeds MOUSE_MAX_STEP on either axis, in
-                # equal-ish steps that sum exactly to the move asked for.
-                rx, ry = int(dx), int(dy)
-                n = max(1, -(-max(abs(rx), abs(ry)) // MOUSE_MAX_STEP))
-                for i in range(n):
-                    sx = rx * (i + 1) // n - rx * i // n
-                    sy = ry * (i + 1) // n - ry * i // n
-                    if sx:
-                        self.mouse.write(e.EV_REL, e.REL_X, sx)
-                    if sy:
-                        self.mouse.write(e.EV_REL, e.REL_Y, sy)
-                    self.mouse.syn()
-                    time.sleep(max(pace, MOUSE_STEP_GAP_S) if i < n - 1 else pace)
-                return
-            # A HID relative report is one SIGNED BYTE per axis (-127..127),
-            # unlike EV_REL which takes any int -- so a move bigger than that
-            # is split into several reports summing to the same total
-            # distance, rather than being silently clamped to a fifth of what
-            # was asked for.
-            rx, ry = int(dx), int(dy)
-            while rx or ry:
-                sx = max(-127, min(127, rx))
-                sy = max(-127, min(127, ry))
-                self._write_hid_mouse_report(sx, sy)
-                rx -= sx
-                ry -= sy
+            self._mouse_move_locked(dx, dy, pace)
+
+    def _mouse_move_locked(self, dx, dy, pace=DEFAULT_PACE_S):
+        """mouse_move's body. Caller holds self.lock. Split out so
+        mouse_press sends each of its moves exactly as a lone mouse_move
+        would, and cannot drift into a second copy of the chunking."""
+        if not self.hid_mode:
+            if MOUSE_MAX_STEP <= 0:
+                if dx:
+                    self.mouse.write(e.EV_REL, e.REL_X, int(dx))
+                if dy:
+                    self.mouse.write(e.EV_REL, e.REL_Y, int(dy))
+                self.mouse.syn()
                 time.sleep(pace)
+                return
+            # Split so no event exceeds MOUSE_MAX_STEP on either axis, in
+            # equal-ish steps that sum exactly to the move asked for.
+            rx, ry = int(dx), int(dy)
+            n = max(1, -(-max(abs(rx), abs(ry)) // MOUSE_MAX_STEP))
+            for i in range(n):
+                sx = rx * (i + 1) // n - rx * i // n
+                sy = ry * (i + 1) // n - ry * i // n
+                if sx:
+                    self.mouse.write(e.EV_REL, e.REL_X, sx)
+                if sy:
+                    self.mouse.write(e.EV_REL, e.REL_Y, sy)
+                self.mouse.syn()
+                time.sleep(max(pace, MOUSE_STEP_GAP_S) if i < n - 1 else pace)
+            return
+        # A HID relative report is one SIGNED BYTE per axis (-127..127),
+        # unlike EV_REL which takes any int -- so a move bigger than that
+        # is split into several reports summing to the same total
+        # distance, rather than being silently clamped to a fifth of what
+        # was asked for.
+        rx, ry = int(dx), int(dy)
+        while rx or ry:
+            sx = max(-127, min(127, rx))
+            sy = max(-127, min(127, ry))
+            self._write_hid_mouse_report(sx, sy)
+            rx -= sx
+            ry -= sy
+            time.sleep(pace)
 
     def mouse_wheel(self, dy, pace=DEFAULT_PACE_S):
         """Scroll. Chunked into signed-byte HID reports the same way
@@ -2210,6 +2222,113 @@ class Devices(object):
             if MOUSE_BUTTON_NUDGE:
                 self._reassert_edge()
 
+    def mouse_press(self, moves, button="left", dwell=None,
+                    pace=DEFAULT_PACE_S):
+        """Moves, then press, dwell, release: one whole click in ONE call.
+
+        WHY IT EXISTS: a caller clicking a moving target (dosags DRIVE 6,
+        2026-11-11) needed four moves, a down and an up per click, and each
+        separate vcctrl call costs one ssh round trip, ~0.15-0.20 s wall
+        measured from round RH's input log. Six calls was ~1.6 s for a click
+        that had to land every ~1.2 s. Here the round trip is paid once.
+
+        Each move goes out exactly as a lone mouse_move would send it
+        (_mouse_move_locked), with the same pace after it: on the uinput
+        path one EV_REL per axis of the full size, NOT split at +-127.
+        Splitting is the caller's business, because whether USB4VC clips a
+        big event is the caller's measurement, not something this verb
+        knows.
+
+        THE BUTTON IS NEVER LEFT DOWN BY THIS CALL. Any failure after the
+        press was attempted sends a release before returning. The result
+        says which step failed and whether that release went out. The
+        button is in held_mouse for the dwell, so a disconnect sweep or a
+        `mouse release-all` from another caller still finds it.
+
+        THE DEVICE LOCK IS NOT HELD THROUGH THE DWELL, on purpose: an
+        emergency mouse_release_all must be able to let go mid-dwell rather
+        than queue behind it. The up after it is then a harmless second
+        release, and the result says `released_by_other`.
+
+        Everything is validated before anything is sent, so a bad argument
+        never leaves half a click at the target.
+        """
+        code = MOUSE_BUTTONS.get(str(button).lower())
+        if code is None:
+            raise ValueError("unknown button: %s" % button)
+        try:
+            moves = [(int(dx), int(dy)) for dx, dy in (moves or [])]
+        except (TypeError, ValueError):
+            raise ValueError("moves must be a list of [dx, dy] integer pairs")
+        if len(moves) > MOUSE_PRESS_MAX_MOVES:
+            raise ValueError("at most %d moves per press, got %d"
+                             % (MOUSE_PRESS_MAX_MOVES, len(moves)))
+        dwell = pace if dwell is None else float(dwell)
+        if not 0 <= dwell <= MOUSE_PRESS_MAX_DWELL_S:
+            raise ValueError("dwell must be 0..%g s, got %g"
+                             % (MOUSE_PRESS_MAX_DWELL_S, dwell))
+        # The same floor mouse_click applies, for the same reason (a classic
+        # Mac samples the button once per vertical blank). Reported back as
+        # dwell_s, so a caller sees the dwell that actually happened.
+        dwell = max(dwell, float(CLICK_HOLD_S or 0))
+
+        steps = []
+        t0 = time.monotonic()
+
+        def mark(step, **kw):
+            kw["step"] = step
+            kw["ok"] = True
+            kw["t_ms"] = round((time.monotonic() - t0) * 1000.0, 1)
+            steps.append(kw)
+
+        stage = "move"
+        try:
+            with self.lock:
+                for dx, dy in moves:
+                    self._mouse_move_locked(dx, dy, pace)
+                    mark("move", dx=dx, dy=dy)
+                stage = "down"
+                self._mouse_button_press(code)
+                self.held_mouse.add(code)
+                if MOUSE_BUTTON_NUDGE:
+                    self._reassert_edge(pace)
+                mark("down", button=button)
+            stage = "dwell"
+            time.sleep(dwell)
+            stage = "up"
+            with self.lock:
+                by_other = code not in self.held_mouse
+                self._mouse_button_release(code)
+                self.held_mouse.discard(code)
+                if MOUSE_BUTTON_NUDGE:
+                    self._reassert_edge(pace)
+                time.sleep(pace)
+                mark("up", button=button)
+        except Exception as exc:
+            steps.append({"step": stage, "ok": False,
+                          "t_ms": round((time.monotonic() - t0) * 1000.0, 1),
+                          "error": "%s: %s" % (type(exc).__name__, exc)})
+            release = "not-needed"
+            if stage != "move":
+                # Release unconditionally once the press was attempted: a
+                # press that raised half-way may still have reached the wire.
+                try:
+                    with self.lock:
+                        self._mouse_button_release(code)
+                        self.held_mouse.discard(code)
+                    release = "sent"
+                except Exception as rexc:
+                    release = "failed: %s: %s" % (type(rexc).__name__, rexc)
+            return {"ok": False, "failed_at": stage,
+                    "error": "%s: %s" % (type(exc).__name__, exc),
+                    "release": release, "steps": steps,
+                    "dwell_s": dwell}
+        out = {"ok": True, "steps": steps, "dwell_s": dwell,
+               "elapsed_ms": round((time.monotonic() - t0) * 1000.0, 1)}
+        if by_other:
+            out["released_by_other"] = True
+        return out
+
     def _reassert_edge(self, pace=DEFAULT_PACE_S):
         """The 1-count nudge right and back after a button edge (see
         mouse_click's `reassert`). Caller holds self.lock."""
@@ -2282,7 +2401,7 @@ def usb4vc_holds_us():
 GATED_COMMANDS = frozenset([
     "key", "type", "hold", "combo", "keydown", "keyup", "release_all",
     "mouse_move", "mouse_click", "mouse_down", "mouse_up",
-    "mouse_release_all", "mouse_wheel",
+    "mouse_release_all", "mouse_wheel", "mouse_press",
     # PointerCapability's verbs all move the pointer.
     "cursor", "pointer_check", "mouse_goto", "mouse_drag", "mouse_px",
 ])
@@ -2745,6 +2864,7 @@ class InputCapability(Capability):
             "mouse_down": self._mouse_down, "mouse_up": self._mouse_up,
             "mouse_release_all": self._mouse_release_all,
             "mouse_wheel": self._mouse_wheel,
+            "mouse_press": self._mouse_press,
             # Read-only, and deliberately a COMMAND rather than a field on
             # /state.json: it is a constant, and every open tab polls state
             # every 1.5 s. Same argument as /wslog.json.
@@ -2825,6 +2945,11 @@ class InputCapability(Capability):
     def _mouse_wheel(self, req):
         self.devs.mouse_wheel(req.get("dy", 0), _pace(req))
         return {"ok": True}
+
+    def _mouse_press(self, req):
+        return self.devs.mouse_press(req.get("moves") or [],
+                                     req.get("button", "left"),
+                                     req.get("dwell"), _pace(req))
 
 
 class TargetEpoch(object):
@@ -14090,6 +14215,14 @@ def _summarise(cmd, req):
             " reassert" if req.get("reassert") else "")
     if cmd == "mouse_wheel":
         return str(req.get("dy", 0))
+    if cmd == "mouse_press":
+        # Every move, so a log read afterwards can rebuild where the click
+        # landed; truncated like `type`, because a log line is not a dump.
+        mv = " ".join("%s,%s" % tuple(m) for m in (req.get("moves") or [])
+                      if isinstance(m, (list, tuple)) and len(m) == 2)
+        t = "%s dwell=%s moves=%s" % (req.get("button", "left"),
+                                      req.get("dwell", "pace"), mv or "-")
+        return t if len(t) <= 80 else t[:77] + "..."
     return ""
 
 
@@ -14165,6 +14298,8 @@ def _narrate(cmd, req):
         return "Released all mouse buttons"
     if cmd == "mouse_wheel":
         return "Scrolling the mouse wheel"
+    if cmd == "mouse_press":
+        return "Clicked the " + req.get("button", "left") + " mouse button"
     if cmd == "power":
         return {"on": "Powering on", "off": "Powering off",
                 "cycle": "Power-cycling"}.get(req.get("action", "state"), "")

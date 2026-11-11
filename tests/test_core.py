@@ -980,6 +980,151 @@ def test_mouse_stats_absence_rule_and_loss_events():
         vcctrld.BoardCapability.MOUSE_STATS_FILE = orig
 
 
+def test_mouse_press_is_one_whole_click_and_never_leaves_the_button_down():
+    """mouse_press (dosags DRIVE 6, 2026-11-11): moves, down, dwell, up in
+    ONE call. Asserted on the emitted events, which USB4VC turns into
+    packets one-for-one, and on every way it can fail."""
+    print("\nmouse press")
+    d = make_devices()
+    r = d.mouse_press([(100, 0), (0, -88), (127, 127)], "left", 0.05, 0)
+    want = [(e.EV_REL, e.REL_X, 100), (e.EV_REL, e.REL_Y, -88),
+            (e.EV_REL, e.REL_X, 127), (e.EV_REL, e.REL_Y, 127),
+            (e.EV_KEY, e.BTN_LEFT, 1), (e.EV_KEY, e.BTN_LEFT, 0)]
+    check("moves in order, each one EV_REL per axis unsplit, then down, up",
+          d.log == want, d.log)
+    check("ok, with one step record per action",
+          r["ok"] and [x["step"] for x in r["steps"]]
+          == ["move", "move", "move", "down", "up"], r)
+    gap = r["steps"][4]["t_ms"] - r["steps"][3]["t_ms"]
+    check("the dwell really separates down from up", gap >= 45, gap)
+    check("nothing is left held", not d.held_mouse, d.held_mouse)
+
+    # Bad arguments send NOTHING -- half a click is worse than none.
+    for args, why in (((["x"],), "a move that is not a pair"),
+                      (([(1, 1)] * 33,), "more than 32 moves"),
+                      (([(1, 1)], "left", 6), "a dwell over 5 s"),
+                      (([(1, 1)], "left", -1), "a negative dwell"),
+                      (([(1, 1)], "nosuch"), "an unknown button")):
+        d = make_devices()
+        try:
+            d.mouse_press(*args)
+            check("refused: " + why, False, "no exception")
+        except ValueError:
+            check("refused before anything is sent: " + why, d.log == [], d.log)
+
+    class Flaky(FakeDev):
+        """Raises on the n-th write whose (type, code, value) matches."""
+        def __init__(self, log, match, nth=1):
+            FakeDev.__init__(self, log)
+            self.match, self.left = match, nth
+        def write(self, etype, code, value):
+            if self.match(etype, code, value):
+                self.left -= 1
+                if self.left == 0:
+                    raise OSError("uinput went away")
+            FakeDev.write(self, etype, code, value)
+
+    d = make_devices()
+    d.mouse = Flaky(d.log, lambda t, c, v: t == e.EV_REL, nth=2)
+    r = d.mouse_press([(5, 0), (6, 0), (7, 0)], "left", 0, 0)
+    check("a failed MOVE: not ok, failed_at move, no release needed",
+          not r["ok"] and r["failed_at"] == "move"
+          and r["release"] == "not-needed", r)
+    check("and no button event was ever sent",
+          all(t != e.EV_KEY for t, c, v in d.log), d.log)
+    check("the steps say the first move went and the second did not",
+          [(x["step"], x["ok"]) for x in r["steps"]]
+          == [("move", True), ("move", False)], r["steps"])
+
+    d = make_devices()
+    d.mouse = Flaky(d.log, lambda t, c, v: t == e.EV_KEY and v == 1)
+    r = d.mouse_press([(5, 0)], "left", 0, 0)
+    check("a failed PRESS still sends the release (it may have reached "
+          "the wire)", r["failed_at"] == "down" and r["release"] == "sent"
+          and d.log[-1] == (e.EV_KEY, e.BTN_LEFT, 0), (r, d.log))
+    check("and nothing is left held", not d.held_mouse, d.held_mouse)
+
+    d = make_devices()
+    d.mouse = Flaky(d.log, lambda t, c, v: t == e.EV_KEY and v == 0)
+    r = d.mouse_press([], "right", 0, 0)
+    check("a failed UP is retried as the safety release",
+          r["failed_at"] == "up" and r["release"] == "sent"
+          and d.log == [(e.EV_KEY, e.BTN_RIGHT, 1), (e.EV_KEY, e.BTN_RIGHT, 0)],
+          (r, d.log))
+
+    class NoUp(FakeDev):
+        def write(self, etype, code, value):
+            if etype == e.EV_KEY and value == 0:
+                raise OSError("gone")
+            FakeDev.write(self, etype, code, value)
+
+    d = make_devices()
+    d.mouse = NoUp(d.log)
+    r = d.mouse_press([], "left", 0, 0)
+    check("a release that also fails says so, not 'sent'",
+          r["release"].startswith("failed:"), r)
+
+    # An emergency release-all must not queue behind the dwell.
+    d = make_devices()
+    out = {}
+    th = threading.Thread(target=lambda: out.update(
+        r=d.mouse_press([(1, 0)], "left", 0.4, 0)))
+    th.start()
+    time.sleep(0.1)
+    t0 = time.monotonic()
+    n = d.mouse_release_all(0)
+    waited = time.monotonic() - t0
+    th.join()
+    check("release-all mid-dwell lets go at once", n == 1 and waited < 0.1,
+          (n, waited))
+    check("and the press reports it was released by someone else",
+          out["r"]["ok"] and out["r"].get("released_by_other"), out["r"])
+
+    # Through dispatch: gated like every input verb, and logged with its
+    # moves so the input log can say where the click landed.
+    d = make_devices()
+    reg = vcctrld.Registry(d)
+    check("mouse_press is a gated command",
+          "mouse_press" in vcctrld.GATED_COMMANDS)
+    vcctrld.handle(d, reg, {"cmd": "lock", "action": "acquire", "as": "A"})
+    r = vcctrld.handle(d, reg, {"cmd": "mouse_press", "as": "B", "pace": 0,
+                                "moves": [[1, 2]], "dwell": 0})
+    check("refused under another caller's lock, nothing sent",
+          r["ok"] is False and d.log == [], (r, d.log))
+    r = vcctrld.handle(d, reg, {"cmd": "mouse_press", "as": "A", "pace": 0,
+                                "moves": [[1, 2], [3, 4]], "dwell": 0.2,
+                                "button": "left"})
+    check("the holder's press goes through", r["ok"], r)
+    ev = [x for x in reg.input_log.query()["events"]
+          if x.get("cmd") == "mouse_press"]
+    check("the input log has button, dwell and every move",
+          ev and ev[-1]["detail"] == "left dwell=0.2 moves=1,2 3,4"
+          and ev[-1]["by"] == "A", ev)
+
+    # The CLI parses --moves into pairs, in main's frame (a usage error).
+    client_path = os.path.join(HERE, os.pardir, "bin", "vcctrl-client")
+    loader = SourceFileLoader("vcctrl_client_press", client_path)
+    spec = importlib.util.spec_from_loader("vcctrl_client_press", loader)
+    client = importlib.util.module_from_spec(spec)
+    loader.exec_module(client)
+    sent = []
+    client.call = lambda req: sent.append(req) or {"ok": True, "steps": []}
+    rc = client.main(["--as", "dosags", "--pace", "0.012", "mouse", "press",
+                      "--moves", "30,0 -127,88", "--button", "right",
+                      "--dwell", "0.2"])
+    check("the CLI sends one request with every field",
+          rc == 0 and sent == [{"cmd": "mouse_press",
+                                "moves": [[30, 0], [-127, 88]],
+                                "button": "right", "dwell": 0.2,
+                                "pace": 0.012, "as": "dosags"}], (rc, sent))
+    sent.clear()
+    try:
+        client.main(["mouse", "press", "--moves", "30 40,1"])
+        check("a malformed --moves is refused", False, "no exception")
+    except ValueError:
+        check("a malformed --moves is refused before sending", sent == [], sent)
+
+
 def test_mouse_click_reassert_repeats_each_edge():
     """Every PS/2 packet carries the absolute button state, so a nudge while
     held re-delivers a dropped press and one after re-delivers a dropped
