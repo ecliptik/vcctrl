@@ -77,6 +77,23 @@ SSH_OPTS=(
   -o ServerAliveCountMax=3
 )
 
+# ---------------------------------------------------------------------------
+# STDIN GOES TO THE PI ONLY FOR A COMMAND THAT READS IT.
+#
+# ssh copies its own stdin to the remote command whether or not that command
+# ever reads it. So every call through this wrapper used to drain the CALLER's
+# stdin. A `while read ...; do vcctrl mouse down ...; done <<<"$SCHED"` loop
+# lost its whole remaining schedule to the first call. That cost dosags round
+# RH's calibration cell 2026-11-11: 1 press of 40, every call reported ok.
+# Only two commands read stdin on the Pi: `type --secret` (the text) and
+# `share put - NAME` (the file). Everything else gets /dev/null, which also
+# covers the scp and cleanup ssh calls below.
+needs_stdin=0
+for a in "$@"; do
+  [[ "$a" == "-" || "$a" == "--secret" ]] && needs_stdin=1
+done
+(( needs_stdin )) || exec </dev/null
+
 if [[ $# -eq 0 ]]; then
   exec ssh "${SSH_OPTS[@]}" "$VCCTRL_HOST" vcctrl --help
 fi
