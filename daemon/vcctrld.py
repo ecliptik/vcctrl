@@ -7598,11 +7598,17 @@ class BoardCapability(Capability):
     # host_fe is here because stock and 0001 firmware only ACK a resend.
     MOUSE_LOSS = ("ev_buf_full", "pkt_inhibit", "pkt_timeout", "pkt_partial",
                   "ev_discarded", "edge_merged", "host_fe")
+    # Firmware 0.5.108's second page (patch 0002): packets the board had to
+    # RESUME. Not losses -- the packet arrived whole -- so a separate event,
+    # `mouse.resumed`, which marks exactly when the host stalled mid-packet.
+    MOUSE_RESUME = ("pkt_resumed", "inhibit_retry", "partial_waits",
+                    "superseded", "abandon_budget")
 
     def __init__(self, *a, **kw):
         super(BoardCapability, self).__init__(*a, **kw)
         self._last_id = _UNSET
         self._ms_prev = None
+        self._mr_prev = None
 
     def commands(self):
         return {"board": self._board, "profile": self._profile,
@@ -7635,6 +7641,9 @@ class BoardCapability(Capability):
                          if rec.get("t") else None)}
         if rec.get("supported") and isinstance(rec.get("counters"), dict):
             out["counters"] = rec["counters"]
+            # ABSENT on firmware without the page, never zeroed (same rule).
+            if isinstance(rec.get("resume"), dict):
+                out["resume"] = rec["resume"]
         else:
             out["reason"] = rec.get("reason")
         return out
@@ -7655,6 +7664,22 @@ class BoardCapability(Capability):
             self._ms_prev = None
             return None
         prev, self._ms_prev = self._ms_prev, c
+        r = rec.get("resume")
+        if isinstance(r, dict):
+            rprev, self._mr_prev = self._mr_prev, r
+            if rprev is not None:
+                rmoved = {}
+                for k in self.MOUSE_RESUME:
+                    if k in r and k in rprev:
+                        d = (int(r[k]) - int(rprev[k])) & 0xffff
+                        if d:
+                            rmoved[k] = d
+                if rmoved and self.bus:
+                    self.bus.publish("mouse.resumed", _input=True,
+                                     polled_t=rec.get("t"),
+                                     max_wait_ms=r.get("max_wait_ms"), **rmoved)
+        else:
+            self._mr_prev = None
         if prev is None:
             return {}
         moved = {}

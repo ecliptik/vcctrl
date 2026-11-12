@@ -928,6 +928,51 @@ def test_mousestats_poller_reads_either_nop_and_backs_off_on_stock():
           ns["_VC_MS"]["next"])
 
 
+def test_mouse_stats_resume_page_passes_through_and_logs_mouse_resumed():
+    """Firmware 0.5.108 (patch 0002) adds a `resume` page. It is ABSENT on
+    older firmware, never zeroed; when present, a moved counter becomes a
+    `mouse.resumed` row in the input log (a packet the host stalled mid-way
+    and the board finished), never a `mouse.dropped` (nothing was lost)."""
+    import tempfile
+    import json as _json
+    print("\nmouse_stats: 0.5.108 resume page")
+    d = tempfile.mkdtemp(prefix="mr")
+    reg = vcctrld.Registry(make_devices())
+    board = reg.caps["board"]
+    p = os.path.join(d, "mouse_stats.json")
+    board.MOUSE_STATS_FILE = p
+    base = {"ev_in": 0, "pkt_inhibit": 0, "pkt_partial": 0, "edge_merged": 0,
+            "host_fe": 0, "ev_buf_full": 0, "pkt_timeout": 0,
+            "ev_discarded": 0}
+
+    def write(resume=None, **c):
+        rec = {"supported": True, "t": time.time(), "counters": dict(base, **c)}
+        if resume is not None:
+            rec["resume"] = resume
+        _json.dump(rec, open(p, "w"))
+
+    write(ev_in=5)
+    r = vcctrld.handle(reg.devs, reg, {"cmd": "mouse_stats"})
+    check("0.5.107: no resume key in the answer", "resume" not in r, r)
+    z = {"pkt_resumed": 0, "inhibit_retry": 0, "partial_waits": 0,
+         "superseded": 0, "abandon_budget": 0, "max_wait_ms": 0}
+    write(resume=z, ev_in=10)
+    board._mouse_stats_step()
+    write(resume=dict(z, pkt_resumed=1, partial_waits=4, max_wait_ms=318),
+          ev_in=16)
+    moved = board._mouse_stats_step()
+    check("a resume is not a loss", moved == {}, moved)
+    rows = [e for e in reg.input_log.query()["events"]
+            if e["kind"] in ("mouse.resumed", "mouse.dropped")]
+    check("one mouse.resumed row with deltas and max_wait_ms",
+          len(rows) == 1 and rows[0]["kind"] == "mouse.resumed"
+          and rows[0]["pkt_resumed"] == 1 and rows[0]["partial_waits"] == 4
+          and rows[0]["max_wait_ms"] == 318, rows)
+    r = vcctrld.handle(reg.devs, reg, {"cmd": "mouse_stats"})
+    check("0.5.108: resume page passed through",
+          r.get("resume", {}).get("pkt_resumed") == 1, r)
+
+
 def test_mouse_stats_absence_rule_and_loss_events():
     import tempfile
     import json as _json
