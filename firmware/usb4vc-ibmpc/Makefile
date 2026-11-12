@@ -2,7 +2,9 @@
 #
 #   ./fetch.sh                  once: pinned upstream source + ST startup
 #   make VARIANT=stock          upstream ae3813d, UNMODIFIED -- the baseline
-#   make VARIANT=counters       + patches/*.patch, applied in order
+#   make VARIANT=counters       + 0001 (counters; on the board since 2026-09-25)
+#   make VARIANT=resume         + 0001 + 0002 (resume an interrupted packet; 0.5.108)
+#   make VARIANT=onebyone       + 0003 (one queued event per packet; 0.5.109)
 #
 # Output: build/<VARIANT>/ibmpc.hex (and .elf, .bin, .map).
 #
@@ -46,7 +48,17 @@ CSRC := $(foreach m,$(HAL),$(SRC)/Drivers/STM32F0xx_HAL_Driver/Src/stm32f0xx_$(m
 OBJS := $(patsubst $(SRC)/%.c,$(OUT)/obj/%.o,$(CSRC)) $(OUT)/obj/startup.o \
         $(OUT)/obj/gcc_compat.o
 
-PATCHES := $(if $(filter stock,$(VARIANT)),,$(sort $(wildcard patches/*.patch)))
+# Each variant names its own patches. A new patch file must not change what an
+# existing variant builds: `counters` is what has been on the board since
+# 2026-09-25, and a rebuild of it has to reproduce that image.
+PATCHES_stock :=
+PATCHES_counters := patches/0001-mouse-delivery-counters.patch
+PATCHES_resume := $(PATCHES_counters) patches/0002-mouse-resume.patch
+PATCHES_onebyone := $(PATCHES_resume) patches/0003-mouse-one-event-per-packet.patch
+ifeq ($(filter $(VARIANT),stock counters resume onebyone),)
+$(error unknown VARIANT=$(VARIANT): use stock, counters, resume or onebyone)
+endif
+PATCHES := $(PATCHES_$(VARIANT))
 
 all: $(OUT)/ibmpc.hex
 	@$(SIZE) $(OUT)/ibmpc.elf

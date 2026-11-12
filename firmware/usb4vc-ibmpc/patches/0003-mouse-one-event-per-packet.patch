@@ -1,0 +1,172 @@
+vcctrl local patch 0003: one event per packet, at the spacing it was sent
+
+Against 0002 (resume). Reports as firmware 0.5.109.
+
+Stock firmware, and 0001/0002, sum every queued mouse event into one PS/2
+packet. The host's driver clamps the pointer at the screen edge PER PACKET,
+so a paced "drive into the corner, then step back" press only works if its
+steps arrive as separate packets. Measured 2026-11-11 (dosags round RK, cell
+RKM1, firmware 0.5.108): 0002 held one packet through a 1,247 ms host stall
+and delivered it whole. But the press's three later moves had queued behind
+it, and they were then summed into one packet ((85,15) in place of
+(127,-127), (-42,127), (0,15)). The corner clamp never happened, and that
+press landed out of band (vcctrl docs/MOUSE.md sec. 10).
+
+dosags' game log then showed press 91's click applied at press 92's landing
+point: the backlog left in one burst, inside one ~33 ms game poll.
+
+This patch, while the queue holds fewer than 14 events:
+  - takes one queued event per packet, in FIFO order. A button edge is never
+    merged with, or reordered against, the moves around it.
+  - makes each packet wait at least the gap that separated its event from the
+    previous one when they ARRIVED (timestamped in the SPI interrupt), capped
+    at 250 ms. A backlog after a stall is replayed with its original spacing,
+    and the idle gaps between presses shrink to the cap, which drains it.
+    With no backlog the gap has already elapsed, so it adds no delay.
+At 14 or more (one short of overflowing the 16-deep buffer) it consolidates
+as 0002 does: summing, but stopping at a button change. A single event over
++-127 is still clipped as before. Counters and both SPI pages are unchanged from 0002.
+
+It also raises 0002's wait budget for a packet that has NOT started yet from
+1 s to 5 s, the same as for a partial one. Round RK measured host holds of up
+to 2,216 ms, and a hold that began just before a packet's first byte would
+otherwise drop that event, possibly a button edge, after 1 s.
+
+diff --git a/Src/main.c b/Src/main.c
+index 3bef745..1380beb 100644
+--- a/Src/main.c
++++ b/Src/main.c
+@@ -84,7 +84,7 @@ const uint8_t version_minor = 5;
+ // board reports it is not stock (PB INFO / `vcctrl board`). Higher than any
+ // 0.5.x upstream ever shipped, so USB4VC's own OLED-menu updater does not
+ // quietly replace it with stock -- only an explicit newer minor would.
+-const uint8_t version_patch = 108;
++const uint8_t version_patch = 109;
+ uint8_t hw_revision;
+ 
+ uint8_t spi_transmit_buf[SPI_BUF_SIZE];
+@@ -134,6 +134,7 @@ enum {
+   VC_R_NCOUNTERS
+ };
+ volatile uint16_t vc_resume_stats[VC_R_NCOUNTERS];
++volatile uint32_t vc_ev_arrival[MOUSE_EVENT_BUFFER_SIZE];   // patch 0003
+ // The stats reply's own buffer. It never touches spi_transmit_buf, which may
+ // be holding a keyboard-LED request the Pi has not collected yet --
+ // overwriting that would lose an LED change the harness waits on. Armed for
+@@ -337,6 +338,11 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+     latest_mouse_event.button_side = backup_spi1_recv_buf[16];
+     latest_mouse_event.button_extra = backup_spi1_recv_buf[17];
+     vc_mouse_stats[VC_EV_IN]++;
++    // vcctrl local patch 0003: when this event arrived, so a backlog can be
++    // replayed with the spacing it was sent with. Written at `head`, the slot
++    // mouse_buf_add is about to fill; if the buffer is full that slot is the
++    // unused one, so nothing is overwritten.
++    vc_ev_arrival[my_mouse_buf.head] = micros();
+     if(mouse_buf_add(&my_mouse_buf, &latest_mouse_event))
+       vc_mouse_stats[VC_EV_BUF_FULL]++;
+   }
+@@ -439,10 +445,71 @@ void cap_to_127(int32_t *number)
+     *number = -127;
+ }
+ 
++/*
++ * vcctrl local patch 0003: ONE EVENT, ONE PACKET, AT THE SPACING IT WAS SENT.
++ *
++ * Stock firmware sums every queued event into one packet, which made sense
++ * for a 1000 Hz USB mouse feeding a 200 Hz PS/2 port. vcctrl sends paced
++ * moves that must reach the host as separate packets: the driver clamps the
++ * pointer at the screen edge PER PACKET, and a game that polls about every
++ * 33 ms sums whatever arrived between two polls.
++ *
++ * Measured 2026-11-11, dosags round RK, cell RKM1, firmware 0.5.108. Patch
++ * 0002 held one packet through a 1,247 ms host stall and delivered it whole.
++ * But the press's later moves had queued behind it and were summed into one
++ * packet, and the next press's moves arrived in the same burst. The game
++ * applied press 91's click at press 92's landing point.
++ *
++ * So, while the queue is not about to overflow:
++ *   - one queued event per packet, in order. A button edge is never merged
++ *     with, or reordered against, the moves around it.
++ *   - each packet waits until at least the gap that separated its event from
++ *     the previous one when they ARRIVED, capped at VC_SPACING_CAP_US. A
++ *     backlog after a stall is therefore replayed with its original spacing
++ *     (a press's 50 ms move pace and its 200 ms dwell stay intact). The idle
++ *     gaps between presses are shortened to the cap, which is how the
++ *     backlog drains. With no backlog the arrival gap has already elapsed,
++ *     so this adds no delay.
++ * Only when the queue holds VC_CONSOLIDATE_DEPTH events, one short of
++ * overflowing (ev_buf_full drops), does it consolidate as 0002 did: summing,
++ * but stopping at a button change. A single event over +-127 is clipped as
++ * before.
++ */
++#define VC_CONSOLIDATE_DEPTH 14
++#define VC_SPACING_CAP_US 250000
++uint32_t vc_last_sent_arrival;   // arrival time of the last event sent
++uint32_t vc_last_sent_at;        // micros() when it was taken off the queue
++uint8_t vc_sent_any;
++
++uint8_t vc_mouse_buf_depth(mouse_buf* mbuf)
++{
++  return (uint8_t)((mbuf->head + MOUSE_EVENT_BUFFER_SIZE - mbuf->tail) % MOUSE_EVENT_BUFFER_SIZE);
++}
++
++// May the event at the head of the queue go out now?
++uint8_t vc_spacing_ok(mouse_buf* mbuf, uint32_t now_us)
++{
++  if(!vc_sent_any || vc_mouse_buf_depth(mbuf) >= VC_CONSOLIDATE_DEPTH)
++    return 1;
++  uint32_t gap = vc_ev_arrival[mbuf->tail] - vc_last_sent_arrival;
++  if(gap > VC_SPACING_CAP_US)
++    gap = VC_SPACING_CAP_US;
++  return (now_us - vc_last_sent_at) >= gap;
++}
++
+ uint8_t get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
+ {
+   uint8_t n = 0;
+   uint8_t prev_buttons = 0;
++  uint8_t vc_one_only = vc_mouse_buf_depth(mbuf) < VC_CONSOLIDATE_DEPTH;
++  // The pacing reference is the arrival time of the FIRST event taken. When
++  // consolidating, the later ones are folded into its packet.
++  if(mouse_buf_peek(mbuf) != NULL)
++  {
++    vc_last_sent_arrival = vc_ev_arrival[mbuf->tail];
++    vc_last_sent_at = micros();
++    vc_sent_any = 1;
++  }
+   cme_result->movement_x = 0;
+   cme_result->movement_y = 0;
+   cme_result->scroll_vertical = 0;
+@@ -469,7 +536,7 @@ uint8_t get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
+     // never OR-ed into a hold. Since 0002 holds an interrupted packet until it
+     // completes, events can queue for longer behind it, which made this merge
+     // more likely, not less. edge_merged therefore stays 0 by construction.
+-    if(n > 0 && buttons != prev_buttons)
++    if(n > 0 && (buttons != prev_buttons || vc_one_only))
+       break;
+     prev_buttons = buttons;
+     n++;
+@@ -528,7 +595,11 @@ uint32_t last_mouse_movement;
+  * The watchdog (IWDG, ~3.3 s) is safe: the main loop keeps running.
+  */
+ #define VC_RESUME_BYTE_WAIT_MS 2
+-#define VC_RESUME_BUDGET_UNSENT_MS 1000
++// patch 0003: was 1000 in 0002. Round RK measured host holds of 2,216 ms,
++// and a hold that starts just before a packet's first byte would drop that
++// event (possibly a button edge) after 1 s. Nothing has gone out in that
++// case, so a longer wait cannot desync the host. Match the partial budget.
++#define VC_RESUME_BUDGET_UNSENT_MS 5000
+ #define VC_RESUME_BUDGET_PARTIAL_MS 5000
+ ps2_outgoing_buf vc_pend;
+ uint8_t vc_pend_active;
+@@ -637,6 +708,10 @@ void ps2mouse_update(void)
+   if(mouse_buf_peek(&my_mouse_buf) == NULL)
+     return;
+ 
++  // vcctrl local patch 0003: keep the spacing the events arrived with.
++  if(!vc_spacing_ok(&my_mouse_buf, micros()))
++    return;
++
+   uint8_t vc_n = get_consolidated_mouse_event(&my_mouse_buf, &consolidated_mouse_event);
+ 
+   if(ps2mouse_get_outgoing_data(&consolidated_mouse_event, &my_ps2_outbuf))

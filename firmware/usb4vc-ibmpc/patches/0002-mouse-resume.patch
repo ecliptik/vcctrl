@@ -1,0 +1,308 @@
+vcctrl local patch 0002: resume an interrupted PS/2 mouse packet
+
+Against 0001 (mouse delivery counters), which is against dekuNukem/USB4VC
+firmware/ibmpc at ae3813d. Reports as firmware 0.5.108.
+
+Stock firmware abandons a mouse packet on a mid-byte host inhibit, or on a
+bus held more than 200 ms between bytes. If a byte had already gone out, the
+host holds part of a packet. CuteMouse 2.1b4 keeps those bytes, so every
+later packet is read shifted for as long as the driver runs. Measured
+2026-11-11 on the Gateway 2000 (dosags round RJ, cells RJM1 and RJM2): every
+click after the first pkt_partial landed at the bottom-left of the screen
+until the cell ended (vcctrl docs/MOUSE.md sec. 10).
+
+This patch:
+  - keeps the built packet, and the index of the next byte, until the host
+    has all of it. A mid-byte inhibit resends that same byte (the host
+    discards an incomplete one). A bus that is not idle is waited out, and
+    then only the REMAINING bytes are sent.
+  - waits without blocking: each pass tries for 2 ms, then returns to the
+    main loop, so the keyboard is still serviced. Stock blocked both for up
+    to 200 ms per byte.
+  - still gives a packet up in two cases, counted as a loss on the layout-1
+    page exactly as before: when the host sends a command (a PS/2 device
+    drops its output then), or when the wait budget runs out (1 s if no byte
+    went out, 5 s once one had).
+  - stops consolidating at a button change, so a press and its release are
+    never OR-ed into a hold. edge_merged therefore stays 0. Movement is
+    summed and capped at +-127 exactly as before, so a move over 127 is
+    still clipped. Callers calibrated against that are unaffected.
+  - adds a second counter page. MOSI 0x41 -> MISO 0xC1, layout 1:
+      bytes 0-3: 0xCD, seq echo, 0xC1, layout
+      bytes 4-15: 6 x uint16 LE: pkt_resumed, inhibit_retry, partial_waits,
+                  superseded, abandon_budget, max_wait_ms
+    The 0x40 page is unchanged in layout AND meaning (pkt_* loss counters
+    still mean "never fully delivered"). A Pi that only knows 0x40 keeps
+    working.
+
+Not done here: 0xFE (resend) still only ACKs; host_fe has never moved on this
+rig. ps2kb.c is untouched.
+
+diff --git a/Inc/helpers.h b/Inc/helpers.h
+index 3078eff..8d04114 100644
+--- a/Inc/helpers.h
++++ b/Inc/helpers.h
+@@ -35,6 +35,11 @@
+ #define SPI_MOSI_MSG_TYPE_VC_MOUSE_STATS_REQUEST 0x40
+ #define SPI_MISO_MSG_TYPE_VC_MOUSE_STATS 0xC0
+ #define VC_MOUSE_STATS_LAYOUT 1
++// vcctrl local patch 0002: the resume counters, on their own page so the
++// layout-1 page above (and every Pi reading it) is unchanged.
++#define SPI_MOSI_MSG_TYPE_VC_RESUME_STATS_REQUEST 0x41
++#define SPI_MISO_MSG_TYPE_VC_RESUME_STATS 0xC1
++#define VC_RESUME_STATS_LAYOUT 1
+ 
+ #define BTN_LEFT    0x110
+ #define BTN_RIGHT   0x111
+diff --git a/Src/main.c b/Src/main.c
+index 8bb9c80..3bef745 100644
+--- a/Src/main.c
++++ b/Src/main.c
+@@ -84,7 +84,7 @@ const uint8_t version_minor = 5;
+ // board reports it is not stock (PB INFO / `vcctrl board`). Higher than any
+ // 0.5.x upstream ever shipped, so USB4VC's own OLED-menu updater does not
+ // quietly replace it with stock -- only an explicit newer minor would.
+-const uint8_t version_patch = 107;
++const uint8_t version_patch = 108;
+ uint8_t hw_revision;
+ 
+ uint8_t spi_transmit_buf[SPI_BUF_SIZE];
+@@ -119,6 +119,21 @@ enum {
+   VC_NCOUNTERS
+ };
+ volatile uint16_t vc_mouse_stats[VC_NCOUNTERS];
++/*
++ * vcctrl local patch 0002: how often a packet had to be RESUMED, on the 0x41
++ * page. With 0002 the layout-1 loss counters above keep their meaning -- a
++ * packet that never fully reached the host -- and should almost never move.
++ */
++enum {
++  VC_R_PKT_RESUMED,     // packets completed after an interruption
++  VC_R_INHIBIT_RETRY,   // bytes resent after a mid-byte host inhibit
++  VC_R_PARTIAL_WAITS,   // passes spent waiting with part of a packet out
++  VC_R_SUPERSEDED,      // pending packet dropped: the host sent a command
++  VC_R_ABANDON_BUDGET,  // pending packet dropped: its wait budget ran out
++  VC_R_MAX_WAIT_MS,     // longest build-to-complete time of a resumed packet
++  VC_R_NCOUNTERS
++};
++volatile uint16_t vc_resume_stats[VC_R_NCOUNTERS];
+ // The stats reply's own buffer. It never touches spi_transmit_buf, which may
+ // be holding a keyboard-LED request the Pi has not collected yet --
+ // overwriting that would lose an LED change the harness waits on. Armed for
+@@ -382,6 +397,21 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+     }
+     vc_stats_pending = 2;
+   }
++  else if(backup_spi1_recv_buf[SPI_BUF_INDEX_MSG_TYPE] == SPI_MOSI_MSG_TYPE_VC_RESUME_STATS_REQUEST)
++  {
++    memset(vc_stats_tx_buf, 0, SPI_BUF_SIZE);
++    vc_stats_tx_buf[SPI_BUF_INDEX_MAGIC] = SPI_MISO_MAGIC;
++    vc_stats_tx_buf[SPI_BUF_INDEX_SEQNUM] = backup_spi1_recv_buf[SPI_BUF_INDEX_SEQNUM];
++    vc_stats_tx_buf[SPI_BUF_INDEX_MSG_TYPE] = SPI_MISO_MSG_TYPE_VC_RESUME_STATS;
++    vc_stats_tx_buf[3] = VC_RESUME_STATS_LAYOUT;
++    for (int i = 0; i < VC_R_NCOUNTERS; i++)
++    {
++      uint16_t v = vc_resume_stats[i];
++      vc_stats_tx_buf[4 + 2 * i] = v & 0xff;
++      vc_stats_tx_buf[5 + 2 * i] = v >> 8;
++    }
++    vc_stats_pending = 2;
++  }
+   else if(backup_spi1_recv_buf[SPI_BUF_INDEX_MSG_TYPE] == SPI_MOSI_MSG_TYPE_SET_PROTOCOL)
+   {
+     for (int i = 3; i < SPI_BUF_SIZE; ++i)
+@@ -434,8 +464,13 @@ uint8_t get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
+       | (this_mouse_event->button_middle ? 4 : 0)
+       | (this_mouse_event->button_side ? 8 : 0)
+       | (this_mouse_event->button_extra ? 16 : 0);
++    // vcctrl local patch 0002: STOP at a button change. The event stays
++    // queued and goes out as its own packet, so a press and its release are
++    // never OR-ed into a hold. Since 0002 holds an interrupted packet until it
++    // completes, events can queue for longer behind it, which made this merge
++    // more likely, not less. edge_merged therefore stays 0 by construction.
+     if(n > 0 && buttons != prev_buttons)
+-      vc_mouse_stats[VC_EDGE_MERGED]++;
++      break;
+     prev_buttons = buttons;
+     n++;
+     cme_result->movement_x += this_mouse_event->movement_x;
+@@ -455,6 +490,108 @@ uint8_t get_consolidated_mouse_event(mouse_buf* mbuf, mouse_event* cme_result)
+ }
+ 
+ uint32_t last_mouse_movement;
++
++/*
++ * vcctrl local patch 0002: RESUME an interrupted mouse packet; never abandon
++ * one half-sent.
++ *
++ * Stock firmware pops the queued events, builds one 3- or 4-byte packet and
++ * gives up on it the moment the host inhibits the clock mid-byte or holds the
++ * bus for more than 200 ms between bytes. When that happens after a byte has
++ * already gone out, the host has received part of a packet. CuteMouse 2.1b4
++ * keeps those bytes, so every later packet is read shifted by one or two
++ * bytes for as long as the driver runs. Measured on the Gateway 2000,
++ * 2026-11-11 (dosags rounds RJ, cells RJM1/RJM2): every click after the first
++ * pkt_partial landed at the screen's bottom-left until the cell ended.
++ *
++ * So the packet is kept, with the index of the next byte to send, until the
++ * host has every byte:
++ *   - host inhibits mid-byte (PS2_ERROR_HOST_INHIBIT): the host discards an
++ *     incomplete byte, so that SAME byte goes again, then the rest. That is
++ *     the PS/2 device rule.
++ *   - bus not idle (PS2_ERROR_TIMEOUT): wait for it and send the REMAINING
++ *     bytes. Bytes already clocked out were received; sending them again
++ *     would shift the frame exactly as abandoning did.
++ * The wait is NOT a blocking loop. Each pass tries for VC_RESUME_BYTE_WAIT_MS
++ * and then returns to the main loop, so the keyboard is still serviced while
++ * the mouse waits. Stock firmware blocked both for up to 200 ms per byte.
++ *
++ * Two ways a pending packet is still given up, both counted as a loss on the
++ * layout-1 page (pkt_inhibit / pkt_timeout, plus pkt_partial if any byte had
++ * gone out):
++ *   - the host sends a command (reset, disable, ...). A PS/2 device drops its
++ *     output on a host command, and the host re-synchronises on the reply.
++ *   - the wait budget runs out: VC_RESUME_BUDGET_UNSENT_MS if nothing had
++ *     gone out (nothing to desync, so this is as stock, only longer), or
++ *     VC_RESUME_BUDGET_PARTIAL_MS once a byte had (much longer, because
++ *     giving up then desynchronises the driver).
++ * The watchdog (IWDG, ~3.3 s) is safe: the main loop keeps running.
++ */
++#define VC_RESUME_BYTE_WAIT_MS 2
++#define VC_RESUME_BUDGET_UNSENT_MS 1000
++#define VC_RESUME_BUDGET_PARTIAL_MS 5000
++ps2_outgoing_buf vc_pend;
++uint8_t vc_pend_active;
++uint8_t vc_pend_idx;      // next byte to send
++uint8_t vc_pend_hit;      // interrupted at least once after starting
++uint32_t vc_pend_start;   // HAL_GetTick() when the packet was built
++
++void vc_pend_drop(uint8_t last_result)
++{
++  if(last_result == PS2_ERROR_HOST_INHIBIT)
++    vc_mouse_stats[VC_PKT_INHIBIT]++;
++  else
++    vc_mouse_stats[VC_PKT_TIMEOUT]++;
++  if(vc_pend_idx > 0)
++    vc_mouse_stats[VC_PKT_PARTIAL]++;
++  vc_pend_active = 0;
++  last_mouse_movement = micros();
++}
++
++void vc_pend_service(void)
++{
++  uint8_t r = PS2_OK;
++  PCARD_BUSY_HI();
++  while(vc_pend_idx < vc_pend.size)
++  {
++    r = ps2mouse_write(vc_pend.data[vc_pend_idx], VC_RESUME_BYTE_WAIT_MS);
++    if(r == PS2_OK)
++    {
++      vc_pend_idx++;
++      continue;
++    }
++    // A wait before the FIRST byte is ordinary bus traffic, as in stock
++    // firmware; only an interruption once the packet has started is a resume.
++    if(vc_pend_idx > 0 || r == PS2_ERROR_HOST_INHIBIT)
++      vc_pend_hit = 1;
++    if(r == PS2_ERROR_HOST_INHIBIT)
++      vc_resume_stats[VC_R_INHIBIT_RETRY]++;
++    if(vc_pend_idx > 0)
++      vc_resume_stats[VC_R_PARTIAL_WAITS]++;
++    uint32_t budget = vc_pend_idx ? VC_RESUME_BUDGET_PARTIAL_MS : VC_RESUME_BUDGET_UNSENT_MS;
++    if(HAL_GetTick() - vc_pend_start > budget)
++    {
++      vc_resume_stats[VC_R_ABANDON_BUDGET]++;
++      vc_pend_drop(r);
++    }
++    PCARD_BUSY_LOW();
++    return;   // try again on the next pass; the keyboard gets its turn first
++  }
++  vc_mouse_stats[VC_PKT_OK]++;
++  if(vc_pend_hit)
++  {
++    vc_resume_stats[VC_R_PKT_RESUMED]++;
++    uint32_t w = HAL_GetTick() - vc_pend_start;
++    if(w > 0xffff)
++      w = 0xffff;
++    if(w > vc_resume_stats[VC_R_MAX_WAIT_MS])
++      vc_resume_stats[VC_R_MAX_WAIT_MS] = (uint16_t)w;
++  }
++  vc_pend_active = 0;
++  last_mouse_movement = micros();
++  PCARD_BUSY_LOW();
++}
++
+ void ps2mouse_update(void)
+ {
+   ps2mouse_bus_status = ps2mouse_get_bus_status();
+@@ -465,6 +602,11 @@ void ps2mouse_update(void)
+   }
+   else if(ps2mouse_bus_status == PS2_BUS_REQ_TO_SEND)
+   {
++    if(vc_pend_active)
++    {
++      vc_resume_stats[VC_R_SUPERSEDED]++;
++      vc_pend_drop(PS2_ERROR_TIMEOUT);
++    }
+     PCARD_BUSY_HI();
+     if(ps2mouse_read(&ps2mouse_host_cmd, 10) == PS2_OK)
+     {
+@@ -481,6 +623,13 @@ void ps2mouse_update(void)
+     return;
+   }
+ 
++  // vcctrl local patch 0002: finish the packet already in flight first.
++  if(vc_pend_active)
++  {
++    vc_pend_service();
++    return;
++  }
++
+   // 5ms, PS/2 tops out at 200Hz
+   if(micros() - last_mouse_movement <= 5000)
+     return;
+@@ -489,7 +638,6 @@ void ps2mouse_update(void)
+     return;
+ 
+   uint8_t vc_n = get_consolidated_mouse_event(&my_mouse_buf, &consolidated_mouse_event);
+-  // mouse buffer now empty
+ 
+   if(ps2mouse_get_outgoing_data(&consolidated_mouse_event, &my_ps2_outbuf))
+   {
+@@ -498,30 +646,12 @@ void ps2mouse_update(void)
+   }
+ 
+   vc_mouse_stats[VC_PKT_BUILT]++;
+-  PCARD_BUSY_HI();
+-  uint8_t vc_result = ps2mouse_send_update(&my_ps2_outbuf);
+-  if(vc_result == PS2_OK)
+-    vc_mouse_stats[VC_PKT_OK]++;
+-  else
+-  {
+-    if(vc_result == PS2_ERROR_HOST_INHIBIT)
+-      vc_mouse_stats[VC_PKT_INHIBIT]++;
+-    else
+-      vc_mouse_stats[VC_PKT_TIMEOUT]++;
+-    if(ps2mouse_bytes_sent > 0)
+-      vc_mouse_stats[VC_PKT_PARTIAL]++;
+-  }
+-  if(vc_result != PS2_OK)
+-  {
+-    uint32_t enter_time = HAL_GetTick();
+-    while(ps2mouse_get_bus_status() != PS2_BUS_IDLE)
+-    {
+-      if(HAL_GetTick() - enter_time > PS2MOUSE_WRITE_DEFAULT_TIMEOUT_MS)
+-        break;
+-    }
+-  }
+-  last_mouse_movement = micros();
+-  PCARD_BUSY_LOW();
++  memcpy(&vc_pend, &my_ps2_outbuf, sizeof(vc_pend));
++  vc_pend_idx = 0;
++  vc_pend_hit = 0;
++  vc_pend_start = HAL_GetTick();
++  vc_pend_active = 1;
++  vc_pend_service();
+ }
+ 
+ uint8_t ps2kb_update(void)

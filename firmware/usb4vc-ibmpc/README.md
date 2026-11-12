@@ -16,6 +16,11 @@ witness anywhere.
 | `STM32F072C8_FLASH.ld` | GCC linker script. ST ships none for this part; upstream builds with Keil. |
 | `gcc_compat.c` | `_write()` → upstream's `fputc()`, so the SPI-error dump still reaches USART1 under newlib. Built into every variant. |
 | `patches/0001-mouse-delivery-counters.patch` | Counters only. Changes nothing that is sent. Reports as **0.5.107**. The header documents the SPI layout. |
+| `patches/0002-mouse-resume.patch` | On top of 0001: an interrupted packet is **resumed** from the byte that failed, never abandoned half-sent, and consolidation stops at a button change. Adds a second counter page (SPI 0x41). Reports as **0.5.108**. `make VARIANT=resume`. Not flashed yet. |
+| `patches/0003-mouse-one-event-per-packet.patch` | On top of 0002: one queued event per packet, in order, replayed with the spacing it arrived with (gaps capped at 250 ms). Consolidates only one short of overflow. Reports as **0.5.109**. `make VARIANT=onebyone`. Not flashed yet. |
+| `test/run-onebyone.sh` | Host test of 0003's queueing and spacing, using the real ring buffer and consolidation code from the patched sources. |
+| `test/run.sh` | Host-side test of 0002's state machine. It cuts the real functions out of the patched `main.c` and runs them against a scripted PS/2 bus. Needs `make VARIANT=resume` first. |
+| `test/mousestats_v2_test.py` | Runs the rpi_app block from `tools/patch-usb4vc-mousestats.py` (v2) against a fake board for both 0.5.107 and 0.5.108. |
 | `pi-flash.py` | Runs on the daemon host: `probe` / `backup` / `write` / `info`. Upstream's own bootloader entry and `stm32flash` call, plus guards. |
 | `../../vendor/usb4vc/PBFW_IBMPC_PBID1_V0_5_7.hex` | The stock release: the **rollback image**. |
 
@@ -38,6 +43,7 @@ the control host; the daemon host has no internet.
     ./fetch.sh
     make VARIANT=stock
     make VARIANT=counters
+    make VARIANT=resume && test/run.sh
 
 Verified 2026-09-25, arm-none-eabi-gcc 14.2.1:
 - both variants build with **no compiler warnings**;
@@ -132,3 +138,56 @@ package.
 then start usb4vc. A failed write erases the application, not the ROM
 bootloader, so writing again with a good image always recovers the board,
 provided `probe` worked.
+
+## 0002 resume: built 2026-11-11, not yet on the board
+
+Why: dosags round RJ (2026-11-11). In cells RJM1 and RJM2, every click after
+the first `pkt_partial` landed at the screen's bottom-left until the cell
+ended. The board had abandoned a packet after part of it went out, and
+CuteMouse 2.1b4 kept the partial bytes, so it read every later packet
+shifted. The trigger repeats at the same press in every MS3 cell (about 49 s
+and 95 s after room 2 loads, from a host-side stall). That makes back-to-back
+MS3 the stress test for this patch.
+
+- Built with arm-none-eabi-gcc 14.2.1, no compiler warnings. 29,028 B flash,
+  3,048 B RAM. `build/resume/ibmpc.hex` sha256 `d714fdb7…ad123b9`,
+  reproducible.
+- The Makefile now gives each variant its own patch list. A rebuilt
+  `counters` is still byte-identical to the image on the board (`98a8b9aa…`).
+- `test/run.sh`: 11 checks pass. With the stock behaviour put back (abandon
+  on the first timeout), 6 of them fail.
+- The 0x40 counter page keeps its layout and its meaning, so the v1 rpi_app
+  block already applied keeps working on 0.5.108. To read the 0x41 page,
+  `tools/patch-usb4vc-mousestats.py` now carries a v2 block. It upgrades an
+  exact v1 block in place and refuses a block that was edited by hand.
+  Tested against a copy of the Pi's real `usb4vc_usb_scan.py`: v1 was
+  recognised, the upgrade applied, and running it again is a no-op. On
+  0.5.107 it stops asking for 0x41 after 5 misses.
+- vcctrld passes the page through as `resume` in `vcctrl mouse-stats`. It is
+  absent on older firmware, never zeroed. A moved resume counter is logged
+  as a `mouse.resumed` row in the input log. It is NOT `mouse.dropped`,
+  because the packet arrived whole.
+- To install, all at flash time: deploy vcctrl, upgrade the rpi_app block
+  (`sudo python3 tools/patch-usb4vc-mousestats.py`), then flash 0.5.108.
+  `systemctl start usb4vc` after the flash loads the new block.
+- Untested on hardware. Flash it with the runbook below, check it with the
+  powered check, and then run back-to-back MS3. Pass: no `pkt_partial`, and
+  0x41's `pkt_resumed` moving at the press where the partial used to happen.
+
+## 0.5.108 on the board (2026-11-11 22:36Z) and why 0003 followed
+
+0.5.108 was flashed with the operator at the bench. Round RK, cells RKM1 and
+RKM2:
+- Every host stall was RESCUED: 636, 1,247 and 1,323 ms holds completed, with
+  pkt_partial 0 and no frame slip. 0002 works.
+- RKM1 still voided on ONE press, #91, the one that spanned the 1,247 ms stall.
+  Its later moves had queued behind the held packet and were summed into one
+  packet, which defeats the driver's per-packet corner clamp. The next press's
+  moves then left in the same burst, and the game applied press 91's click at
+  press 92's landing point.
+
+0003 (0.5.109) sends one event per packet, in order, and replays a backlog
+with its original spacing. `test/run-onebyone.sh`: 8 checks pass. With the
+0002 behaviour put back, 5 of them fail. 0003 also raises the wait budget for a packet that has not started from 1 s to
+5 s, because RKP2 measured a 2,216 ms hold. `test/run.sh onebyone` checks it.
+Image sha256 `bdde915d…9ebb`. Untested on hardware.

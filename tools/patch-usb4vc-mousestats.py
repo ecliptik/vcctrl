@@ -39,6 +39,7 @@ import sys
 DEFAULT = "/home/pi/usb4vc/rpi_app/usb4vc_usb_scan.py"
 
 MARKER = "vcctrl mouse stats"
+MARKER_V2 = "vcctrl mouse stats v2"
 
 # Module level: define the poller just before get_pboard_info, which it
 # mirrors. Loop: call it just before the PBOARD INTERRUPT block, where `now`
@@ -46,7 +47,10 @@ MARKER = "vcctrl mouse stats"
 ANCHOR_DEF = "def get_pboard_info():\n"
 ANCHOR_CALL = "        # ----------------- PBOARD INTERRUPT -----------------\n"
 
-BLOCK_DEF = '''# --- vcctrl mouse stats: protocol-board mouse delivery counters ------------
+# The v1 block EXACTLY as deployed 2026-09-25, kept so an rpi_app patched
+# with it is recognised and upgraded in place, never patched twice. Do not
+# edit: an installed block that differs from this is refused, not guessed at.
+BLOCK_DEF_V1 = '''# --- vcctrl mouse stats: protocol-board mouse delivery counters ------------
 # Local patch, see vcctrl tools/patch-usb4vc-mousestats.py. Wrapped so a
 # failure here can never take down input injection.
 _VC_MS_NAMES = ('ev_in', 'ev_buf_full', 'pkt_built', 'pkt_ok', 'pkt_inhibit',
@@ -113,6 +117,111 @@ def _vc_mouse_stats_poll(now):
 
 '''
 
+BLOCK_DEF = '''# --- vcctrl mouse stats v2: protocol-board mouse delivery counters ---------
+# Local patch, see vcctrl tools/patch-usb4vc-mousestats.py. Wrapped so a
+# failure here can never take down input injection.
+_VC_MS_NAMES = ('ev_in', 'ev_buf_full', 'pkt_built', 'pkt_ok', 'pkt_inhibit',
+                'pkt_timeout', 'pkt_partial', 'ev_discarded', 'edge_merged',
+                'host_cmd', 'host_fe', 'host_ff', 'host_f5', 'kb_inhibit_retry')
+_VC_MS_LOSS = ('ev_buf_full', 'pkt_inhibit', 'pkt_timeout', 'pkt_partial',
+               'ev_discarded', 'edge_merged', 'host_fe')
+# Page 2 (firmware 0.5.108+, patch 0002): how often a packet was RESUMED.
+_VC_MR_NAMES = ('pkt_resumed', 'inhibit_retry', 'partial_waits', 'superseded',
+                'abandon_budget', 'max_wait_ms')
+_VC_MS = {'next': 0.0, 'seq': 0, 'prev': None, 'misses': 0,
+          'rprev': None, 'rmisses': 0}
+_VC_MS_DIR = '/run/usb4vc'
+
+def _vc_mouse_stats_write(rec):
+    import json as _vc_json
+    os.makedirs(_VC_MS_DIR, exist_ok=True)
+    _vc_tmp = os.path.join(_VC_MS_DIR, '.mouse_stats.json.tmp')
+    with open(_vc_tmp, 'w') as _vc_f:
+        _vc_json.dump(rec, _vc_f)
+    # Rename, so a reader never parses a half-written file as truth.
+    os.replace(_vc_tmp, os.path.join(_VC_MS_DIR, 'mouse_stats.json'))
+
+def _vc_mouse_page(req_type, reply_type):
+    st = _VC_MS
+    st['seq'] = (st['seq'] % 255) + 1              # never 0: stock traffic is 0
+    xfer_when_not_busy([SPI_MOSI_MAGIC, st['seq'], req_type] + [0] * 29)
+    time.sleep(0.001)
+    r1 = xfer_when_not_busy(list(nop_spi_msg_template))
+    time.sleep(0.001)
+    r2 = xfer_when_not_busy(list(nop_spi_msg_template))
+    for r in (r2, r1):
+        if (r and len(r) >= 32 and r[0] == 0xcd and r[1] == st['seq']
+                and r[2] == reply_type and r[3] == 1):
+            return r
+    return None
+
+def _vc_mouse_resume_poll():
+    # Firmware older than 0.5.108 does not answer 0x41. After 5 misses in a
+    # row, stop asking until rpi_app restarts (a flash restarts it).
+    st = _VC_MS
+    if st['rmisses'] >= 5:
+        return None
+    r = _vc_mouse_page(0x41, 0xc1)
+    if r is None:
+        st['rmisses'] += 1
+        return None
+    st['rmisses'] = 0
+    rr = {}
+    for i, name in enumerate(_VC_MR_NAMES):
+        rr[name] = r[4 + 2 * i] | (r[5 + 2 * i] << 8)
+    prev = st['rprev']
+    if prev is not None:
+        moved = {}
+        for k in _VC_MR_NAMES[:5]:
+            d = (rr[k] - prev[k]) & 0xffff
+            if d:
+                moved[k] = d
+        if moved:
+            print(int(time.time()), 'VC MOUSE RESUME', moved,
+                  'max_wait_ms', rr['max_wait_ms'])
+    st['rprev'] = rr
+    return rr
+
+def _vc_mouse_stats_poll(now):
+    st = _VC_MS
+    try:
+        resp = _vc_mouse_page(0x40, 0xc0)
+        if resp is None:
+            st['misses'] += 1
+            if st['misses'] == 5:
+                _vc_mouse_stats_write({
+                    'supported': False, 't': time.time(),
+                    'reason': 'no reply to request 0x40 in 5 tries -- stock '
+                              'firmware, or a board without the counters'})
+            st['next'] = now + (30.0 if st['misses'] >= 5 else 1.0)
+            return
+        st['misses'] = 0
+        rec = {}
+        for i, name in enumerate(_VC_MS_NAMES):
+            rec[name] = resp[4 + 2 * i] | (resp[5 + 2 * i] << 8)
+        out = {'supported': True, 'layout': 1, 't': time.time(),
+               'counters': rec}
+        rr = _vc_mouse_resume_poll()
+        if rr is not None:
+            out['resume'] = rr
+        _vc_mouse_stats_write(out)
+        prev = st['prev']
+        if prev is not None:
+            moved = {}
+            for k in _VC_MS_LOSS:
+                d = (rec[k] - prev[k]) & 0xffff
+                if d:
+                    moved[k] = d
+            if moved:
+                print(int(time.time()), 'VC MOUSE LOSS', moved)
+        st['prev'] = rec
+        st['next'] = now + 1.0
+    except Exception as _vc_e:
+        print('vcctrl mouse stats poll failed:', _vc_e)
+        st['next'] = now + 30.0
+
+'''
+
 BLOCK_CALL = '''        # vcctrl mouse stats: only while no input is flowing, so a poll never
         # delays an event by more than the few ms it takes.
         if now >= _VC_MS['next'] and now - last_usb_event > 0.05:
@@ -132,8 +241,26 @@ def main(argv):
         sys.stderr.write("cannot read %s: %s\n" % (path, exc))
         return 2
 
+    if MARKER_V2 in src:
+        print("already applied (v2): %s" % path)
+        return 0
     if MARKER in src:
-        print("already applied: %s" % path)
+        # v1 is on: upgrade it in place, but only if it is EXACTLY the v1
+        # block. Anything else was edited by hand, and is refused.
+        if src.count(BLOCK_DEF_V1) != 1 or src.count(BLOCK_CALL) != 1:
+            sys.stderr.write(
+                "an older vcctrl mouse-stats block is in %s but does not match\n"
+                "  the known v1 text. Refusing to guess; restore usb4vc_usb_scan.py\n"
+                "  from upstream and re-apply.\n" % path)
+            return 3
+        if check:
+            sys.stderr.write(
+                "v1 applied to %s; v2 (also reads firmware 0.5.108's resume\n"
+                "  counters) is available. Upgrade with:\n"
+                "    sudo python3 %s\n" % (path, sys.argv[0]))
+            return 1
+        open(path, "w").write(src.replace(BLOCK_DEF_V1, BLOCK_DEF, 1))
+        print("upgraded v1 -> v2: %s" % path)
         return 0
     if check:
         sys.stderr.write(
